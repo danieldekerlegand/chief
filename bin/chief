@@ -61,7 +61,7 @@ Usage:
                               'chief run' RESUMEs each from its committed passes state. An armed
                               usage-limit window is a separate hold and is NOT lifted.
   chief version               print the version
-  chief update                self-update the installed engine (git pull; CHIEF_VERSION pins a tag)
+  chief update                self-update the installed engine (hard-reset to origin; CHIEF_VERSION pins a tag)
   chief help                  this message
 
 run flags:
@@ -310,17 +310,25 @@ cmd_update() {
     echo "chief: $SELF is not a git checkout — reinstall with the install.sh one-liner instead." >&2
     exit 1
   fi
-  local ver="${CHIEF_VERSION:-}" before after
+  local ver="${CHIEF_VERSION:-main}" before after target beforeroot afterroot
   before="$(git -C "$SELF" rev-parse --short HEAD 2>/dev/null || echo '?')"
-  echo "→ updating chief in $SELF${ver:+ (pin $ver)}"
-  git -C "$SELF" fetch --quiet --tags origin || { echo "chief: 'git fetch' failed (offline?)." >&2; exit 1; }
-  if [ -n "$ver" ]; then
-    git -C "$SELF" checkout --quiet "$ver" || { echo "chief: 'git checkout $ver' failed (unknown tag/branch?)." >&2; exit 1; }
-  fi
-  git -C "$SELF" pull --quiet --ff-only 2>/dev/null || true   # no-op on a detached tag
+  beforeroot="$(git -C "$SELF" rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)"
+  echo "→ updating chief in $SELF (${ver})"
+  git -C "$SELF" fetch --quiet --tags --force origin || { echo "chief: 'git fetch' failed (offline?)." >&2; exit 1; }
+  # Resolve $ver to a concrete target: a branch on origin, else a tag/sha of that name.
+  if   git -C "$SELF" rev-parse --verify --quiet "origin/$ver" >/dev/null 2>&1; then target="origin/$ver"
+  elif git -C "$SELF" rev-parse --verify --quiet "$ver"        >/dev/null 2>&1; then target="$ver"
+  else echo "chief: '$ver' is not a branch or tag on origin." >&2; exit 1; fi
+  # Track the remote EXACTLY (hard-reset, not ff-only): the install prefix keeps no
+  # local commits, and a re-rooted / force-pushed history cannot be fast-forwarded —
+  # that silent failure is what froze installs on a stale version. Reset crosses it.
+  git -C "$SELF" reset --hard --quiet "$target" || { echo "chief: 'git reset' to $target failed." >&2; exit 1; }
   chmod +x "$SELF/bin/chief" "$SELF/engine/"*.sh 2>/dev/null || true
   after="$(git -C "$SELF" rev-parse --short HEAD 2>/dev/null || echo '?')"
-  if [ "$before" = "$after" ]; then echo "✓ already up to date — chief $VERSION ($after)"
+  afterroot="$(git -C "$SELF" rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)"
+  if [ "$before" = "$after" ]; then echo "✓ already up to date — chief $(cat "$SELF/VERSION" 2>/dev/null || echo '?') ($after)"
+  elif [ -n "$beforeroot" ] && [ "$beforeroot" != "$afterroot" ]; then
+    echo "✓ updated chief $before → $(cat "$SELF/VERSION" 2>/dev/null || echo '?') ($after) — reset across a re-rooted history"
   else echo "✓ updated chief $before → $(cat "$SELF/VERSION" 2>/dev/null || echo '?') ($after)"; fi
 }
 

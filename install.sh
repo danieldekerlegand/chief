@@ -19,8 +19,15 @@ done
 mkdir -p "$PREFIX" "$BINDIR"
 if [ -d "$SRC/.git" ]; then
   echo "→ updating $SRC ($VERSION)"
-  git -C "$SRC" fetch --quiet origin && git -C "$SRC" checkout --quiet "$VERSION" 2>/dev/null || true
-  git -C "$SRC" pull --quiet --ff-only 2>/dev/null || true
+  # Track the remote EXACTLY. The install prefix holds no local commits worth keeping,
+  # and a fast-forward pull cannot cross a force-push or a re-rooted (unrelated) history
+  # — it fails silently and freezes the install on a stale VERSION. Hard-reset instead.
+  git -C "$SRC" fetch --quiet --tags --force origin || true
+  if git -C "$SRC" rev-parse --verify --quiet "origin/$VERSION" >/dev/null 2>&1; then
+    git -C "$SRC" reset --hard --quiet "origin/$VERSION"
+  else
+    git -C "$SRC" reset --hard --quiet "$VERSION"   # a tag or a sha, not a branch
+  fi
 else
   echo "→ cloning $REPO_URL ($VERSION) → $SRC"
   git clone --quiet --branch "$VERSION" "$REPO_URL" "$SRC" 2>/dev/null || git clone --quiet "$REPO_URL" "$SRC"
