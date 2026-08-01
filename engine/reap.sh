@@ -29,6 +29,17 @@
 #      the repo (`<repo>-<cksum>-<epoch>-<pid>`), so a sweep can scope itself to
 #      ONE repo's runs. This is what catches the driver, whose own cwd is wherever
 #      the operator happened to be standing.
+#   3. THE INHERITED MARKER, that same $CHIEF_RUN_ID read back out of a candidate's
+#      ENVIRONMENT. Keys 1 and 2 are both escapable in principle — chdir out of the
+#      worktree, exec with a boring argv — but an exported variable is inherited by
+#      every descendant through both. It is the residual case, and it is cheap: the
+#      export already exists, this only reads it. Same run id, so the same repo
+#      scoping applies. Union, not replacement: matching ANY of the three keys makes
+#      a process a candidate, so neither of the other two can regress.
+#      Where a host will not show another process's environment (macOS since SIP
+#      accepts `ps -E` and silently prints none), this key degrades to nothing and
+#      keys 1 and 2 carry the sweep — the availability is PROBED, never assumed, so
+#      an empty read is reported as "the key is inactive" and never as "no orphans".
 #
 # SCOPING — what this must never kill:
 #   · another repo's run, or another driver's tree (scope by worktree root / run-id
@@ -108,6 +119,76 @@ chief_pids_cwd_under() {   # $1 = dir
   lsof -u "$(id -u)" -a -d cwd -F pn 2>/dev/null | awk -v dir="$dir" '
     /^p/ { p = substr($0, 2); next }
     /^n/ { n = substr($0, 2); if (n == dir || index(n, dir "/") == 1) print p, n }'
+}
+
+# Can this host show us ANOTHER process's environment at all? PROBED, not assumed,
+# because the two ways it can be answered differ in kind:
+#   · Linux: /proc/<pid>/environ, readable for this user's own processes, exact.
+#   · macOS: nothing. `ps -E` is accepted and simply prints no environment (SIP),
+#     for another process AND for this one — which is what the probe below detects.
+# Echoes the mechanism to use — "proc" | "ps" | "" when unavailable. Cached per
+# shell; the internal "-" is "probed and unavailable", distinct from "not yet
+# probed", and is stripped on the way out.
+CHIEF_ENV_KEY_MODE=""
+chief_env_key_mode() {
+  local plain full kv
+  if [ -z "$CHIEF_ENV_KEY_MODE" ]; then
+    CHIEF_ENV_KEY_MODE="-"
+    kv=""
+    if [ -r /proc/self/environ ]; then
+      IFS= read -r -d '' kv < /proc/self/environ 2>/dev/null || true
+    fi
+    if [ -n "$kv" ]; then
+      CHIEF_ENV_KEY_MODE="proc"
+    else
+      # `-E` appends the environment to the command column where it works at all.
+      # Compare against the same read without it: identical output means it added
+      # nothing, and an env-keyed sweep here would find nothing however many
+      # orphans there are.
+      plain="$(ps -o command= -p "$$" 2>/dev/null | head -1)"
+      full="$(ps -E -o command= -p "$$" 2>/dev/null | head -1)"
+      [ -n "$full" ] && [ "$full" != "$plain" ] && CHIEF_ENV_KEY_MODE="ps"
+    fi
+  fi
+  printf '%s' "${CHIEF_ENV_KEY_MODE#-}"
+  return 0
+}
+
+# Every process of THIS user whose ENVIRONMENT carries a CHIEF_RUN_ID with the given
+# prefix, as "<pid> <runid>" lines. The prefix is the run-id scope key 2 uses
+# (`<repo>-<cksum>-`), so this sweep is scoped to one repo's runs exactly as the argv
+# sweep is. Silent — and empty — where chief_env_key_mode reports no mechanism.
+#
+# OUR OWN run id is never emitted. A host-wide sweep (`chief reap`, prefix '') would
+# otherwise match every process of the run this very sweep is running inside — and
+# inheritance means that is the whole tree, not just the engine frames key 2 sees. If
+# we carry the id, that run is live by construction; the registry check below is the
+# wrong place to learn it, because a sweep run with a hermetic $CHIEF_RUNS (the test
+# suite does exactly this) cannot see the real run's file.
+chief_pids_env_marked() {  # $1 = run id prefix ('' = any chief run)
+  local want="${1:-}" self="${CHIEF_RUN_ID:-}" d p v kv
+  case "$(chief_env_key_mode)" in
+    proc)
+      for d in /proc/[0-9]*; do
+        [ -r "$d/environ" ] || continue      # another user's, or already gone
+        p="${d#/proc/}"; v=""
+        while IFS= read -r -d '' kv; do
+          case "$kv" in CHIEF_RUN_ID=*) v="${kv#CHIEF_RUN_ID=}"; break ;; esac
+        done < "$d/environ" 2>/dev/null
+        [ -n "$v" ] || continue
+        [ -n "$self" ] && [ "$v" = "$self" ] && continue
+        case "$v" in "$want"*) printf '%s %s\n' "$p" "$v" ;; esac
+      done
+      ;;
+    ps)
+      ps -E -o pid=,command= -U "$(id -u)" 2>/dev/null | awk -v want="$want" -v self="$self" '
+        { for (i = 2; i <= NF; i++) if (index($i, "CHIEF_RUN_ID=") == 1) {
+            v = substr($i, 14)
+            if (v != self && (want == "" || index(v, want) == 1)) print $1, v
+            break } }'
+      ;;
+  esac
+  return 0
 }
 
 chief_pids_tagged() {  # $1 = argv substring -> pids of THIS user carrying it
@@ -242,6 +323,18 @@ EOF
     for p in $(chief_pids_tagged "$marker"); do
       _chief_cand_add "$p" "chief engine process · run $(chief_pid_tag "$p")"
     done
+    # Key 3 — the same run id, inherited through the environment. Reaches the process
+    # that escaped BOTH of the others: chdir'd out of the worktree AND wearing a
+    # boring argv (a server in a temp dir, a bare `yes`). A union with the two above:
+    # _chief_cand_add keeps the first reason recorded, so a process the cwd or argv
+    # key already found is unaffected.
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      pid="${line%% *}"; rest="${line#* }"
+      _chief_cand_add "$pid" "inherited run marker · run $rest"
+    done <<EOF
+$(chief_pids_env_marked "${marker#"$CHIEF_RUN_MARKER"}")
+EOF
   fi
   # Whatever the agent spawned that then wandered off the worktree (a build in a
   # temp dir, a server in /). Parentage is the only relation that reaches those.
@@ -482,6 +575,10 @@ chief_reap_main() {
   chief_find_orphans "$CHIEF_WT_ROOT_ALL" "$CHIEF_RUN_MARKER"
   if [ -z "$CHIEF_ORPHANS" ]; then
     echo "chief reap: no orphaned chief processes (worktrees: $CHIEF_WT_ROOT_ALL)"
+    # An empty env read is not evidence of an empty host — say which keys actually ran.
+    [ -n "$(chief_env_key_mode)" ] || echo "  (this platform will not show another" \
+      "process's environment, so the inherited-\$CHIEF_RUN_ID key was inactive —" \
+      "cwd + argv carried this sweep)"
     return 0
   fi
   # shellcheck disable=SC2086
