@@ -36,6 +36,18 @@
 #      export already exists, this only reads it. Same run id, so the same repo
 #      scoping applies. Union, not replacement: matching ANY of the three keys makes
 #      a process a candidate, so neither of the other two can regress.
+#      Be honest about how much this is actually carrying: a field census of 176
+#      orphans across three repos found key 1 covering MORE than expected — the bare
+#      `yes` load-generators (whose cwd `lsof` still reported after the worktree was
+#      deleted) and a whole server + npm/tsx tree both sat squarely inside it. The
+#      167 leaked integration-test servers that ran out of a temp dir were the
+#      suspected escapees, but their cwd was never recorded before they were killed,
+#      so whether they beat key 1 is UNVERIFIED. This key is therefore belt-and-
+#      braces, not a proven hole: it exists for the process that escapes BOTH of the
+#      others — chdir'd out of the worktree AND wearing an argv that says nothing —
+#      which is the one shape inheritance can still see. test/teardown.sh part 4
+#      builds exactly that process (detached from the tree, `sleep` for a command
+#      line, in a temp dir) and pins that this key finds it and stops it.
 #      Where a host will not show another process's environment (macOS since SIP
 #      accepts `ps -E` and silently prints none), this key degrades to nothing and
 #      keys 1 and 2 carry the sweep — the availability is PROBED, never assumed, so
