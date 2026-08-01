@@ -27,6 +27,17 @@
 #      tasklist in flight, pid to kill — rather than "no active runs"; and a second
 #      `chief run` on that repo must refuse.
 #
+# And one part more (77), for the orphan the first two markers cannot see at all:
+#
+#   4. THE ESCAPED DESCENDANT. Part 2's tree is boring in ARGV but still sitting in
+#      the worktree, so the cwd key finds it. The residual field shape escapes BOTH —
+#      a server the agent left behind in a temp dir, double-forked away from the
+#      tree, with `sleep` for a command line. Nothing about it says "chief" except
+#      the $CHIEF_RUN_ID it inherited, and this part proves that is enough to find
+#      it AND enough to stop it — while an identical process WITHOUT the marker, an
+#      operator's shell that inherited one, and a live registered run's whole tree
+#      are all left alone.
+#
 # Hermetic like test/{ratelimit,reapscope}.sh: chief installed from this checkout
 # into a temp $CHIEF_PREFIX with its own $CHIEF_RUNS/$CHIEF_REPOS, a fake `claude` on
 # PATH, no network. It signals only its own runs — the one real reap it performs is
@@ -150,6 +161,9 @@ CHIEF="$BIN/chief"
 #     can therefore never end this turn: the teardown must escalate to KILL after its
 #     bounded grace, and that grace is the window in which the ordering sampler gets
 #     to watch the records sit there while the tree is provably still alive (part 1).
+# With $TD_ESCAPE set (part 4 only) it leaves one more thing behind: a descendant that
+# walks out of the worktree, detaches from the tree entirely, and takes a boring argv —
+# the one shape neither the cwd key nor the argv key can see.
 mkdir -p "$WORK/fakebin"
 cat > "$WORK/fakebin/claude" <<'FAKE'
 #!/usr/bin/env bash
@@ -160,6 +174,18 @@ name="$(jq -r '.branchName' "$PRD" | sed 's#^chief/##')"
 d="${TD_SIG:?}"
 ( exec -a sleep sleep 900 ) >/dev/null 2>&1 &   # a grandchild that holds no pipe open
 echo "$!" > "$d/$name.child.pid"
+if [ -n "${TD_ESCAPE:-}" ]; then
+  # The escapee (part 4). DOUBLE FORK: the middle subshell writes the pid and exits at
+  # once, so the survivor re-parents to init and no chief process is left above it —
+  # without that, the descendant walk would reach it from the tree and the env key
+  # would not be what matched. It chdir's out of the worktree and execs a bare `sleep`,
+  # so all it carries of chief is the $CHIEF_RUN_ID it inherited. The .envid file is
+  # that inherited value, recorded by the process itself — it stands in for the
+  # platform read on hosts that will not show another process's environment.
+  ( ( cd "$TD_ESCAPE" || exit 1; exec -a sleep sleep 900 ) </dev/null >/dev/null 2>&1 &
+    printf '%s' "${CHIEF_RUN_ID-}" > "$d/$!.envid"
+    echo "$!" > "$d/$name.escape.pid" ) &
+fi
 echo "$$" > "$d/$name.claude.pid"
 : > "$d/$name.turn"                             # "I am mid-iteration" — the test waits on this
 trap '' TERM                                    # wedged: only a hard kill ends this turn
@@ -167,13 +193,13 @@ while :; do sleep 1; done
 FAKE
 chmod +x "$WORK/fakebin/claude"
 
-# ── a repo with three tasklists (one real run per part) ──────────────────────
+# ── a repo with four tasklists (one real run per part) ───────────────────────
 REPO="$WORK/tdrepo"; mkdir -p "$REPO"; cd "$REPO"
 git init -q -b main 2>/dev/null || { git init -q && git checkout -q -b main; }
 git commit -q --allow-empty -m init
 "$CHIEF" init >/dev/null || fail "chief init failed"
 rm -f tasks/chief/example.json
-for n in td-a td-b td-c; do
+for n in td-a td-b td-c td-d; do
   cat > "tasks/chief/$n.json" <<JSON
 { "project":"$n","branchName":"chief/$n","description":"an agent turn that never ends",
   "iters":3,"dependsOn":[],"touches":[],"warmup":[],
@@ -192,14 +218,15 @@ git add -A && git commit -q -m "teardown: fixtures"
 # tty does. (That the driver's own background subshells then IGNORE that INT, and
 # must be reaped with TERM/KILL, is the mechanism behind the observed orphan.)
 GRACE=4            # CHIEF_TEARDOWN_GRACE: TERM → KILL, short enough for a test
-RUN_SHIM=""; RUN_PGID=""; RUN_DRV=""; RUN_FILE=""; DRV_REPO=""; DRV_WT=""; DRV_MARKER=""
+TD_ESCAPE=""       # part 4 only: where the escaping descendant goes to hide
+RUN_SHIM=""; RUN_PGID=""; RUN_DRV=""; RUN_FILE=""; RUN_ID=""; DRV_REPO=""; DRV_WT=""; DRV_MARKER=""
 start_run() {   # $1 = tasklist name, $2 = log path
   local name="$1" log="$2" mypg f
   LASTLOG="$log"
-  rm -f "$SIG/$name.turn" "$SIG/$name.claude.pid" "$SIG/$name.child.pid"
+  rm -f "$SIG/$name.turn" "$SIG/$name.claude.pid" "$SIG/$name.child.pid" "$SIG/$name.escape.pid"
   rm -f "$CHIEF_RUNS"/*.run 2>/dev/null || true
   set -m
-  TD_SIG="$SIG" PATH="$WORK/fakebin:$PATH" CHIEF_TEARDOWN_GRACE="$GRACE" \
+  TD_SIG="$SIG" TD_ESCAPE="$TD_ESCAPE" PATH="$WORK/fakebin:$PATH" CHIEF_TEARDOWN_GRACE="$GRACE" \
     "$CHIEF" run "$name" >"$log" 2>&1 &
   RUN_SHIM=$!
   set +m
@@ -217,6 +244,7 @@ start_run() {   # $1 = tasklist name, $2 = log path
   for f in "$CHIEF_RUNS"/*.run; do [ -e "$f" ] && RUN_FILE="$f"; done
   [ -n "$RUN_FILE" ] || fail "the live run registered no <pid>.run file in $CHIEF_RUNS"
   RUN_DRV="$(sed -n 's/^pid=//p'    "$RUN_FILE" | head -1)"
+  RUN_ID="$(sed -n 's/^runid=//p'   "$RUN_FILE" | head -1)"
   DRV_REPO="$(sed -n 's/^repo=//p'  "$RUN_FILE" | head -1)"
   DRV_WT="$(sed -n 's/^wt=//p'      "$RUN_FILE" | head -1)"
   DRV_MARKER="$(sed -n 's/^marker=//p' "$RUN_FILE" | head -1)"
@@ -454,4 +482,138 @@ chief_find_orphans "$DRV_WT" "$DRV_MARKER"
 [ -z "$CHIEF_ORPHANS" ] || fail "this test left chief work running: $CHIEF_ORPHANS"
 echo "   ok  unregistered driver named with its repo + in-flight tasklist; a second driver refused; SIGTERM reaped the tree"
 
-echo "TEARDOWN PASS — Ctrl-C reaps the tree before releasing the records (never the reverse); a SIGKILLed run's boring-argv tree is still found and stopped; a live driver with no run file is reported, not hidden"
+# ══ PART 4 — the descendant that escaped BOTH markers ════════════════════════
+# Part 2's orphans are invisible to ARGV but still standing in the worktree, so key 1
+# (cwd) finds them. This is the residual shape: a process the agent spawned that
+# chdir'd into a temp dir, detached from the tree, and exec'd something with nothing
+# to say for itself. Neither key can see it — asserted here directly, not assumed —
+# and the only thing left tying it to chief is the $CHIEF_RUN_ID it inherited.
+#
+# Every assertion below runs on every platform. Where the host will not show another
+# process's environment (macOS), the one thing it cannot do — the platform READ — is
+# scripted from the .envid files the decoys recorded of their OWN environment, and
+# every gate beneath it runs for real against these real, live processes. That keeps
+# the POSITIVE control (the escapee is matched, and dies) everywhere: the negatives
+# below it would prove nothing on their own.
+echo "teardown: part 4 — an escaped, detached descendant, reaped by the inherited marker"
+ESC="$WORK/escape"; mkdir -p "$ESC"
+TD_ESCAPE="$ESC"
+start_run td-d "$WORK/d.log"
+drv="$RUN_DRV"; runfile="$RUN_FILE"; runid="$RUN_ID"
+watch="$(tree_engine_pids td-d)"
+assert_engine_tree "$watch"
+
+waitfile "$SIG/td-d.escape.pid" 60 || fail "the agent never left an escaping descendant behind"
+esc="$(cat "$SIG/td-d.escape.pid")"
+PIDS="$PIDS $esc"
+alive "$esc" || fail "the escaping descendant (pid $esc) is not running"
+
+# The fixture is only worth anything if it really is invisible to keys 1 and 2.
+[ "$(ps -o ppid= -p "$esc" 2>/dev/null | tr -d ' ')" = "1" ] \
+  || fail "the escapee (pid $esc) is still parented into the run tree — the descendant walk would reach it and the env key would not be what matched"
+case "$(cmd_of "$esc")" in
+  *--chief-run=*|*"$PREFIX"*) fail "the escapee's argv gives it away ($(cmd_of "$esc")) — the fixture does not reproduce the residual case" ;;
+esac
+if chief_pids_cwd_under "$DRV_WT" | grep -q "^$esc "; then
+  fail "key 1 (cwd) can see the escapee (pid $esc) — it never left the worktree, so this part proves nothing"
+fi
+if chief_pids_tagged "$DRV_MARKER" | grep -qx "$esc"; then
+  fail "key 2 (argv) can see the escapee (pid $esc) — its command line is not boring enough"
+fi
+esc_env="$(cat "$SIG/$esc.envid" 2>/dev/null || echo)"
+[ "$esc_env" = "$runid" ] \
+  || fail "the escapee inherited '\$CHIEF_RUN_ID=$esc_env', not this run's id ($runid) — there is no third key to match on"
+
+# The two companions, in the same temp dir and equally boring, that must NOT be reaped:
+# the same process WITHOUT the marker (so a match proves the marker is what matched),
+# and a shell somebody is typing into that inherited one.
+( unset CHIEF_RUN_ID; cd "$ESC" || exit 1; exec -a sleep sleep 900 ) </dev/null >/dev/null 2>&1 &
+twin=$!; PIDS="$PIDS $twin"; disown "$twin" 2>/dev/null || true
+: > "$SIG/$twin.envid"                      # read, and carried no marker
+mkfifo "$WORK/d.stdin"
+( export CHIEF_RUN_ID="$runid"; cd "$ESC" || exit 1
+  exec bash --norc --noprofile -i ) < "$WORK/d.stdin" >/dev/null 2>&1 &
+esc_shell=$!; PIDS="$PIDS $esc_shell"; disown "$esc_shell" 2>/dev/null || true
+printf '%s' "$runid" > "$SIG/$esc_shell.envid"
+exec 9> "$WORK/d.stdin"                     # hold it open so the shell keeps waiting
+sleep 0.5
+alive "$twin"      || fail "could not stage the unmarked twin"
+alive "$esc_shell" || fail "could not stage the interactive-shell decoy"
+
+# Stand in for the platform read where there is none — from what each decoy recorded of
+# its own environment, so the twin is excluded because it genuinely carries no marker.
+if [ -z "$(chief_env_key_mode)" ]; then
+  echo "   ..  this platform will not show another process's environment; the platform READ is scripted from the decoys' own \$CHIEF_RUN_ID, every gate below it is real"
+  chief_pids_env_marked() {   # $1 = run-id prefix — the real function's contract, exactly
+    local want="${1:-}" self="${CHIEF_RUN_ID:-}" f p v
+    for f in "$SIG"/*.envid; do
+      [ -e "$f" ] || continue
+      p="$(basename "$f" .envid)"
+      chief_pid_alive "$p" || continue
+      v="$(cat "$f" 2>/dev/null || echo)"
+      [ -n "$v" ] || continue
+      [ -n "$self" ] && [ "$v" = "$self" ] && continue
+      case "$v" in "$want"*) printf '%s %s\n' "$p" "$v" ;; esac
+    done
+    return 0
+  }
+fi
+
+# While the run is LIVE and REGISTERED, none of this is an orphan — not the tree, and
+# not the escapee whose marker names a run that is still going.
+chief_protected_reset
+chief_find_orphans "$DRV_WT" "$DRV_MARKER"
+if [ -n "$CHIEF_ORPHANS" ]; then
+  chief_report_orphans "   listed while the run was live:" 2>&1 | head -12 >&2
+  fail "a LIVE registered run's processes were listed for reaping:$CHIEF_ORPHANS"
+fi
+echo "   ok  live registered run: its tree and the marker-carrying escapee are all protected"
+
+# Now strand it, exactly as part 2 does — SIGKILL, no teardown, no records worth having.
+kill -9 "$drv"
+waitdead "$drv" 20 || fail "the driver survived SIGKILL"
+sleep 1
+alive "$esc" || fail "the escapee died with its driver — it must OUTLIVE the run, or there is nothing to reap"
+rm -f "$runfile"                        # the dead run's stale record (monitor prunes it on sight)
+
+chief_protected_reset
+chief_find_orphans "$DRV_WT" "$DRV_MARKER"
+case " $CHIEF_ORPHANS " in
+  *" $esc "*) ;;
+  *) fail "the escaped descendant (pid $esc, $(cmd_of "$esc")) was not found — a process that leaves the worktree and takes a boring argv is invisible again: '$CHIEF_ORPHANS'" ;;
+esac
+why="$(printf '%s\n' "$CHIEF_ORPHAN_INFO" | awk -F'\t' -v p="$esc" '$1==p {print $2; exit}')"
+case "$why" in
+  "[env]  inherited run marker · run $runid") ;;
+  *) fail "the escapee was matched as '$why' — this part only means something if the INHERITED MARKER is the key that found it" ;;
+esac
+case " $CHIEF_ORPHANS " in *" $twin "*)
+  fail "the same process WITHOUT the marker (pid $twin) was matched too — the env key reached wider than itself, and the match above proves nothing" ;;
+esac
+case " $CHIEF_ORPHANS " in *" $esc_shell "*)
+  fail "an operator's interactive shell that inherited the marker (pid $esc_shell) was going to be reaped" ;;
+esac
+
+# …and it is actually STOPPED. Scoped to this test's own worktree root and run-marker
+# prefix, like part 2: a host-wide reap here would be correct code with an unacceptable
+# blast radius, since this prefix's registry knows none of the developer's live runs.
+: > "$WORK/reap4.log"
+chief_reap_orphans "$DRV_WT" "$DRV_MARKER" "the SIGKILLed td-d run" 3 2>>"$WORK/reap4.log" || true
+waitdead "$esc" 15 || fail "the escaped descendant (pid $esc) was reported and then survived the reap:
+$(cat "$WORK/reap4.log")"
+grep -q "inherited run marker" "$WORK/reap4.log" \
+  || fail "the reap never said WHY it matched the escapee — an operator cannot audit a kill they cannot read:
+$(cat "$WORK/reap4.log")"
+alive "$twin"      || fail "the unmarked twin (pid $twin) was reaped — the sweep killed by shape, not by marker"
+alive "$esc_shell" || fail "an operator's shell (pid $esc_shell) was reaped by a real sweep, not just spared by a dry one"
+
+# Nothing from this part may be left running either.
+exec 9>&-
+kill -9 "$twin" "$esc_shell" 2>/dev/null || true
+sleep 1
+chief_protected_reset
+chief_find_orphans "$DRV_WT" "$DRV_MARKER"
+[ -z "$CHIEF_ORPHANS" ] || fail "this part left chief work running: $CHIEF_ORPHANS"
+echo "   ok  escaped descendant found by \$CHIEF_RUN_ID alone and stopped; its unmarked twin and an operator's shell untouched"
+
+echo "TEARDOWN PASS — Ctrl-C reaps the tree before releasing the records (never the reverse); a SIGKILLed run's boring-argv tree is still found and stopped; a live driver with no run file is reported, not hidden; and the descendant that walked out of the worktree is reaped by the marker it inherited"
