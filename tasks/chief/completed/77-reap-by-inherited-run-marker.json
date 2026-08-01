@@ -1,0 +1,61 @@
+{
+  "name": null,
+  "project": "chief",
+  "branchName": "chief/77-reap-by-inherited-run-marker",
+  "description": "Add a THIRD identification key to `engine/reap.sh`: the `$CHIEF_RUN_ID` that `engine/driver.sh` already exports to the whole tree but never matches on. `75` shipped two keys — cwd inside `$WT_ROOT/<tasklist>`, and the `--chief-run=<run-id>` argv marker on driver/agent frames — and a field census showed they cover more than expected: of 176 orphans found across three repos, the 4 `yes` load-generators (cwd = the Talos worktree, still reported by `lsof` even after the worktree was deleted) and the `insimul-server` + npm/tsx tree (cwd = the workspace worktree) both sit squarely inside key 1. The residual case is the process that escapes BOTH: one that chdir'd out of the worktree AND carries a boring argv. 167 leaked `serve_a2a.py` / `serve_mcp.py` cuneiform integration-test servers were the suspected instance — they ran from `/var/folders/.../T/cuneiform-xsystem-run-N/` — but their cwd was never recorded before they were killed, so whether they escaped key 1 is UNVERIFIED. This tasklist is therefore belt-and-braces, not a proven hole: an exported environment variable is inherited by every descendant regardless of chdir or argv, which makes it the only key that cannot be escaped, and the export already exists so the plumbing cost is near zero. Scope is `engine/reap.sh` plus its test; `76` already handles leaked worktree DIRECTORIES and is not touched here.",
+  "parked": false,
+  "dependsOn": [],
+  "touches": [
+    "engine",
+    "docs"
+  ],
+  "iters": 4,
+  "warmup": [],
+  "mergedToMain": "bd030a6",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Match on the inherited run marker",
+      "description": "`engine/driver.sh` already does `export CHIEF_RUN_ID` (~L157) and `engine/reap.sh`'s header already states the marker is 'exported as $CHIEF_RUN_ID to the whole tree' — but nothing reads it back. Make it a real key beside cwd and argv.",
+      "acceptanceCriteria": [
+        "`chief_find_orphans` gains a third identification key: a candidate whose ENVIRONMENT carries `CHIEF_RUN_ID=<run-id>` is attributable to that run even when its cwd is outside `$WT_ROOT` and its argv carries no `--chief-run=` marker",
+        "The three keys are a union, not a replacement: a process matching any one of cwd / argv / env is a candidate, so `75`'s existing coverage cannot regress",
+        "The environment read is portable across the platforms the engine supports and degrades to nothing rather than erroring where it is unavailable — the header's existing wording for the cwd key ('degrades to nothing and the argv marker still carries the sweep') is the model. Verify the macOS path in particular: reading another process's environment there is more restricted than `/proc/<pid>/environ` on Linux, and a silently-empty read must not be mistaken for 'no orphans'",
+        "The run-id scoping that `75` established still holds — the id encodes `<repo>-<cksum>-<epoch>-<pid>`, so an env-keyed sweep can still scope itself to ONE repo's runs",
+        "Bash 3.2 compatible (no arrays, no process substitution, no GNU-only `ps` flags), consistent with the rest of `reap.sh`",
+        "Editing `engine/` bumps `VERSION` (`test/version-bump.sh`); `bash -n` + `shellcheck -S error` clean"
+      ],
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "The new key must not widen the blast radius",
+      "description": "Environment inheritance is exactly what makes this key strong and exactly what makes it dangerous: anything launched from a shell that inherited `CHIEF_RUN_ID` carries it too, including an operator's own terminal if they ever source it.",
+      "acceptanceCriteria": [
+        "`75`'s protected set is applied unchanged to env-keyed candidates: a registered live run's driver and every descendant, a live driver that merely lost its run file, this process and its ancestors, and any process of another user are never reaped",
+        "The protected set is still computed BEFORE and AGAIN AFTER the candidate scan, and a pid must be absent from both — env matching must not open a race that `75` closed",
+        "A stale marker cannot cause a kill: a process carrying a `CHIEF_RUN_ID` whose run is still live and registered is protected, not reaped, and the run-id's epoch/pid components are used to reject ids that name no known run",
+        "An interactive shell that inherited the marker is not reaped — a developer who opens a terminal from an agent's environment must not lose it; this case is asserted by a test, not argued",
+        "The dry-run path (`chief reap -n`) reports env-keyed candidates distinctly from cwd- and argv-keyed ones, so an operator can see WHY each process was matched before anything is signalled"
+      ],
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Regression test for the escaped-cwd orphan",
+      "description": "Extend the hermetic suite `75` established (`test/teardown.sh`, alongside `smoke`/`ratelimit`/`noworkguard`/`pause`) with the case neither existing key can see.",
+      "acceptanceCriteria": [
+        "A test spawns a descendant that chdir's OUTSIDE the worktree and carries an uninformative argv — the shape of a test-spawned server in a temp dir, and of a bare `yes` — and asserts it is identified and reaped by the env key alone",
+        "A companion case asserts the negative: the same process WITHOUT the inherited marker is left alone, proving the key is what matched and not a broadened pattern",
+        "A case asserts an interactive shell carrying the marker survives (US-2), and one asserts a live registered run's descendants survive",
+        "The test is hermetic — scripted fake `claude` on PATH, temp prefixes, never touching the real `~/.chief` — and joins the behavioral subset the verify hook runs and CI",
+        "The existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass",
+        "`engine/reap.sh`'s header documents the third key beside the two it already describes, including the honest note that cwd covers more than expected and env exists for the process that escapes it"
+      ],
+      "passes": true,
+      "notes": ""
+    }
+  ]
+}
