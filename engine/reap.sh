@@ -40,6 +40,8 @@
 #      accepts `ps -E` and silently prints none), this key degrades to nothing and
 #      keys 1 and 2 carry the sweep — the availability is PROBED, never assumed, so
 #      an empty read is reported as "the key is inactive" and never as "no orphans".
+#      Inheritance is also what makes key 3 the DANGEROUS one, so it alone is gated —
+#      see "the inherited marker's blast radius" below.
 #
 # SCOPING — what this must never kill:
 #   · another repo's run, or another driver's tree (scope by worktree root / run-id
@@ -269,6 +271,95 @@ chief_protected_pids() {
   return 0
 }
 
+# ── the inherited marker's blast radius ──────────────────────────────────────
+#
+# Keys 1 and 2 are EARNED: a cwd inside chief's own directory, or an argv the engine
+# stamped on itself. Key 3 is INHERITED, and inheritance is indiscriminate — every
+# descendant carries $CHIEF_RUN_ID through chdir, exec and argv, forever, including a
+# terminal an operator opened out of an agent's environment. That reach is the whole
+# point of the key and also the whole risk of it, so key 3 — and ONLY key 3 — passes
+# three gates before a pid becomes a candidate:
+#
+#   a. the id must NAME A RUN. `<repo>-<cksum>-<epoch>-<pid>`: an id whose cksum,
+#      epoch or driver-pid field is missing or non-numeric is not something this
+#      engine minted, so it is not evidence of anything.
+#   b. the run it names must be DEAD. A marker on a live run's process is stale
+#      bookkeeping at worst, never a licence to kill.
+#   c. the carrier must not be somebody's SHELL.
+#
+# All three only ever REMOVE an env-keyed candidate — none of them can subtract from
+# what the cwd or argv key found, so 75's coverage cannot regress.
+
+# The two fields that make an id name a RUN rather than just a string: which driver
+# minted it, and when. (`chief_run_id_cksum`, which names the repo, is defined with
+# the registry helpers below.)
+chief_run_id_pid()   { local k="${1:-}"; printf '%s' "${k##*-}"; }
+chief_run_id_epoch() { local k="${1:-}"; k="${k%-*}"; printf '%s' "${k##*-}"; }
+
+# Gate (a). A CHIEF_RUN_ID an operator exported by hand, or a value some other tool
+# happens to use, must not be a licence to kill — it has to parse as one of ours.
+chief_run_id_wellformed() {   # $1 = run id
+  local id="${1:-}" f
+  case "$id" in *-*-*-*) ;; *) return 1 ;; esac      # <repo>-<cksum>-<epoch>-<pid>
+  for f in "$(chief_run_id_cksum "$id")" "$(chief_run_id_epoch "$id")" "$(chief_run_id_pid "$id")"; do
+    case "$f" in ''|*[!0-9]*) return 1 ;; esac
+  done
+  [ "$(chief_run_id_pid "$id")" -gt 1 ] || return 1
+  return 0
+}
+
+# Gate (b). Both answers compare the WHOLE id, epoch included — that is what tells two
+# runs of the same repo apart, and what makes pid reuse unable to fake a live run: a
+# recycled pid would have to be wearing the same marker to pass.
+chief_run_id_live() {         # $1 = run id -> 0 when the run it names is still running
+  local id="${1:-}" pid runs f rp
+  pid="$(chief_run_id_pid "$id")"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  runs="${CHIEF_RUNS:-$CHIEF_PREFIX_DEFAULT/runs}"
+  for f in "$runs"/*.run; do                # registered: a run file claiming this id
+    [ -e "$f" ] || continue
+    [ "$(sed -n 's/^runid=//p' "$f" 2>/dev/null | head -1)" = "$id" ] || continue
+    rp="$(sed -n 's/^pid=//p' "$f" 2>/dev/null | head -1)"
+    chief_pid_alive "$rp" && return 0
+  done
+  # Unregistered but alive — the run file is a bookkeeping artefact, the process table
+  # is the fact. This is the same "lost its run file" case the protected set spares.
+  chief_pid_alive "$pid" && [ "$(chief_pid_tag "$pid")" = "$id" ] && return 0
+  return 1
+}
+
+# Gate (c). Does this pid look like a person's own interactive shell? Inheritance
+# reaches one the moment somebody opens a terminal out of an agent's environment, and
+# reaping it takes their session and — through the descendant walk — their editor.
+#
+# The test is on SHAPE, not on a tty (a driver started under nohup has none either):
+# a shell invoked with no SCRIPT OPERAND — `-zsh`, `bash`, `bash --norc -i` — is a
+# shell somebody is typing into. Every shell the engine runs carries an operand and
+# cannot be spelled without one: driver.sh and agent.sh are `bash <path> --chief-run=…`
+# and a tool step is `bash -c <command>`. So the gate costs the sweep nothing real.
+#
+# Deliberately one-way and deliberately generous. It narrows what INHERITANCE alone
+# may claim, not what chief's own directory may: a terminal opened INSIDE the worktree
+# is still key 1's, exactly as it was before this key existed.
+chief_is_interactive_shell() {   # $1 = pid
+  local pid="${1:-}" cmd
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null | head -1)"
+  [ -n "$cmd" ] || return 1
+  # A subshell so `set -f` (a command line may contain a glob) stays local.
+  ( set -f
+    # shellcheck disable=SC2086
+    set -- $cmd
+    b="${1#-}"; b="${b##*/}"                # a login shell wears a leading '-'
+    case "$b" in sh|bash|zsh|ksh|ksh93|dash|ash|fish|csh|tcsh) ;; *) exit 1 ;; esac
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in -*) ;; *) exit 1 ;; esac  # an operand — a script, not a prompt
+      shift
+    done
+    exit 0 )
+}
+
 # ── identification ───────────────────────────────────────────────────────────
 
 # "<repo> · <tasklist>" for a path inside the worktree root, so a reap can name the
@@ -314,24 +405,34 @@ chief_find_orphans() {
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       pid="${line%% *}"; rest="${line#* }"
-      _chief_cand_add "$pid" "working in $(chief_run_label "$rest")"
+      _chief_cand_add "$pid" "[cwd]  working in $(chief_run_label "$rest")"
     done <<EOF
 $(chief_pids_cwd_under "$scope")
 EOF
   fi
   if [ -n "$marker" ]; then
     for p in $(chief_pids_tagged "$marker"); do
-      _chief_cand_add "$p" "chief engine process · run $(chief_pid_tag "$p")"
+      _chief_cand_add "$p" "[argv] chief engine process · run $(chief_pid_tag "$p")"
     done
     # Key 3 — the same run id, inherited through the environment. Reaches the process
     # that escaped BOTH of the others: chdir'd out of the worktree AND wearing a
     # boring argv (a server in a temp dir, a bare `yes`). A union with the two above:
     # _chief_cand_add keeps the first reason recorded, so a process the cwd or argv
     # key already found is unaffected.
+    #
+    # The three gates are here and nowhere else — see "the inherited marker's blast
+    # radius". A `continue` here removes nothing: a pid the cwd or argv key already
+    # recorded keeps its candidacy and its reason.
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       pid="${line%% *}"; rest="${line#* }"
-      _chief_cand_add "$pid" "inherited run marker · run $rest"
+      chief_run_id_wellformed "$rest" || continue      # (a) names no run chief minted
+      if chief_run_id_live "$rest"; then               # (b) a stale marker cannot kill
+        _chief_protect_tree "$(chief_run_id_pid "$rest")"
+        continue
+      fi
+      chief_is_interactive_shell "$pid" && continue    # (c) somebody's terminal
+      _chief_cand_add "$pid" "[env]  inherited run marker · run $rest"
     done <<EOF
 $(chief_pids_env_marked "${marker#"$CHIEF_RUN_MARKER"}")
 EOF
@@ -340,7 +441,7 @@ EOF
   # temp dir, a server in /). Parentage is the only relation that reaches those.
   for p in $_chief_cand; do
     chief_scan_descendants "$p"
-    for q in $CHIEF_DESCENDANTS; do _chief_cand_add "$q" "child of pid $p"; done
+    for q in $CHIEF_DESCENDANTS; do _chief_cand_add "$q" "[tree] child of pid $p"; done
   done
 
   chief_protected_pids                     # snapshot 2 — after the scan
@@ -392,10 +493,15 @@ chief_reap_pids() {    # $1 = pids  $2 = label  [$3 = grace seconds]
   return 0
 }
 
-# The shared report: what was found, and which run each pid belonged to.
+# The shared report: what was found, WHICH KEY matched it, and which run each pid
+# belonged to. The key tag is not decoration — [env] is the one match that rests on
+# inheritance alone rather than on chief's own directory or its own argv, so an
+# operator reading a dry run can tell at a glance which findings to look twice at.
 chief_report_orphans() {   # $1 = headline
   local line pid why
   echo "$1" >&2
+  echo "       keys: [cwd] cwd inside a chief worktree · [argv] --chief-run= marker" \
+       "· [env] inherited \$CHIEF_RUN_ID · [tree] descendant of a match" >&2
   printf '%s\n' "$CHIEF_ORPHAN_INFO" | while IFS=$'\t' read -r pid why; do
     [ -n "$pid" ] || continue
     printf '       · pid %-7s %s\n' "$pid" "$why" >&2
