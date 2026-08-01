@@ -1,0 +1,23 @@
+{
+  "project": "minimal",
+  "branchName": "chief/foundation",
+  "description": "Demo tasklist: shared foundation the features build on.",
+  "iters": 2,
+  "dependsOn": [],
+  "touches": [
+    "core"
+  ],
+  "warmup": [],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "foundation story",
+      "description": "do the foundation work",
+      "acceptanceCriteria": [
+        "it works"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

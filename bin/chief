@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+# chief — autonomous tasklist runner (worktree-isolated, dependency/conflict-aware).
+set -uo pipefail
+
+# Resolve this script through any symlink chain FIRST — install.sh links a shim
+# (e.g. ~/.local/bin/chief -> ~/.chief/src/bin/chief), and an unresolved
+# BASH_SOURCE would point $SELF at the bindir's parent, not the real tool root,
+# breaking $ENGINE/$TEMPLATES/$VERSION on every installed run.
+_src="${BASH_SOURCE[0]}"
+while [ -h "$_src" ]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+SELF="$(cd -P "$(dirname "$_src")/.." && pwd)"             # tool root: <root>/bin/chief
+unset _src _dir
+ENGINE="$SELF/engine"
+TEMPLATES="$SELF/templates"
+VERSION="$(cat "$SELF/VERSION" 2>/dev/null || echo unknown)"
+# Host-wide run registry (shared by every repo). The driver drops a <pid>.run
+# file here per active run; `chief ps`/`chief monitor` read it. Overridable via
+# CHIEF_RUNS; defaults under the install prefix (~/.chief).
+CHIEF_RUNS="${CHIEF_RUNS:-${CHIEF_PREFIX:-$HOME/.chief}/runs}"
+# Known-repos registry: every repo `chief` has touched (init or run), one absolute
+# path per line. The desktop UI reads this to list repos for history + new tasklists
+# (active runs already self-register in CHIEF_RUNS). Deduped, best-effort.
+CHIEF_REPOS="${CHIEF_REPOS:-${CHIEF_PREFIX:-$HOME/.chief}/repos}"
+export CHIEF_RUNS CHIEF_REPOS
+
+register_repo() {   # $1 = absolute repo root; append if not already present
+  local root="$1" dir; dir="$(dirname "$CHIEF_REPOS")"
+  [ -n "$root" ] || return 0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  [ -f "$CHIEF_REPOS" ] && grep -qxF "$root" "$CHIEF_REPOS" 2>/dev/null && return 0
+  printf '%s\n' "$root" >> "$CHIEF_REPOS" 2>/dev/null || true
+}
+
+usage() {
+  cat <<EOF
+chief $VERSION — autonomous tasklist runner (worktree-isolated, dep/conflict-aware).
+
+Usage:
+  chief init                  scaffold .chief/ + tasks/chief/ in the current repo
+  chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
+  chief list                  list tasklists with pass status
+  chief ps                    show active runs across ALL repos (one-shot table). Also flags an
+                              UNREGISTERED driver — one that is running with no run file, which
+                              used to read as 'no active runs' — naming its repo, the tasklists
+                              in flight, and the pid to kill.
+  chief monitor [interval]    live-refresh that view (default 2s; Ctrl-C to exit)
+  chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
+                              still spending quota) with no live, registered run behind
+                              them. -n reports without signalling. Never touches a live
+                              run, another user's processes, or your own claude sessions.
+  chief pause [--all]         withhold AGENT TURNS: launch no tasklist and start no new agent
+                              iteration — but DRAIN, never kill: the iteration in flight runs to
+                              completion so its commits land, a tasklist whose agent loop already
+                              finished still verifies + merges, and the rest park as 'paused' with
+                              branch and worktree kept. --all = every run in the registry.
+  chief resume [--all]        lift the pause and re-arm parked tasklists as pending, so the next
+                              'chief run' RESUMEs each from its committed passes state. An armed
+                              usage-limit window is a separate hold and is NOT lifted.
+  chief version               print the version
+  chief update                self-update the installed engine (git pull; CHIEF_VERSION pins a tag)
+  chief help                  this message
+
+run flags:
+  -p, --parallel N   run up to N tasklists at once (default 1)
+  -n, --dry-run      print the schedule and exit (no git, no agents)
+      --no-merge     complete branches but don't merge into the base
+
+pause/resume flags:
+  -a, --all          apply to every run in the host-wide registry (path below) — sibling repos
+                     share one account, so the quota decision is usually fleet-wide. Both commands
+                     are idempotent (exit 0 on a no-op) and never touch the usage-limit self-heal.
+
+Project config: <repo>/.chief/config   ·   Run registry: $CHIEF_RUNS   ·   Docs: $SELF/docs/
+EOF
+}
+
+find_project() {
+  local d="$PWD"
+  while [ "$d" != "/" ]; do
+    [ -f "$d/.chief/config" ] && { echo "$d"; return 0; }
+    d="$(dirname "$d")"
+  done
+  return 1
+}
+
+load_project() {
+  CHIEF_PROJECT="$(find_project)" || { echo "ERROR: no .chief/config found from $PWD upward. Run 'chief init' first." >&2; exit 1; }
+  register_repo "$CHIEF_PROJECT"
+  # defaults (a project's .chief/config may override any of these)
+  CHIEF_TOOL=claude; CHIEF_TASKS_DIR=tasks/chief; CHIEF_STATE_DIR=.chief/state
+  CHIEF_VERIFY=.chief/verify.sh; CHIEF_AGENT_CONTEXT=.chief/agent-context.md
+  CHIEF_AUTO_MERGE=1; CHIEF_BASE_BRANCH=main
+  # shellcheck disable=SC1091
+  source "$CHIEF_PROJECT/.chief/config"
+  CHIEF_HOME="$ENGINE"
+  export CHIEF_PROJECT CHIEF_HOME CHIEF_TOOL CHIEF_TASKS_DIR CHIEF_STATE_DIR \
+         CHIEF_VERIFY CHIEF_AGENT_CONTEXT CHIEF_AUTO_MERGE CHIEF_BASE_BRANCH
+}
+
+cmd_init() {
+  local root="$PWD" f
+  # Guard against the classic footgun: initializing in $HOME (or at the install
+  # prefix). There, the project's `.chief/` dir IS `~/.chief` — the install prefix
+  # that holds src/runs/repos — so project config collides with the engine, and
+  # find_project would treat home as a project from almost anywhere.
+  local prefix="${CHIEF_PREFIX:-$HOME/.chief}"
+  if [ "$root" = "$HOME" ] || [ "$root/.chief" = "$prefix" ] || [ "$root" = "$prefix" ]; then
+    echo "ERROR: refusing to 'chief init' here — <repo>/.chief would collide with the Chief" >&2
+    echo "       install prefix ($prefix). cd into a project repo (not your home dir) first." >&2
+    exit 1
+  fi
+  # Chief operates on git branches/worktrees/merges — warn if this isn't a repo yet.
+  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || echo "  note: not a git repo yet — run 'git init' before 'chief run' (it needs a clean git tree on the base branch)." >&2
+  mkdir -p "$root/.chief" "$root/tasks/chief/completed"
+  for f in config verify.sh agent-context.md; do
+    if [ -e "$root/.chief/$f" ]; then echo "  keep  .chief/$f (exists)"
+    else cp "$TEMPLATES/$f" "$root/.chief/$f"; echo "  init  .chief/$f"; fi
+  done
+  chmod +x "$root/.chief/verify.sh" 2>/dev/null || true
+  [ -e "$root/tasks/chief/example.json" ] || { cp "$TEMPLATES/tasklist.example.json" "$root/tasks/chief/example.json"; echo "  init  tasks/chief/example.json"; }
+  grep -qxF '.chief/state/' "$root/.gitignore" 2>/dev/null || { echo '.chief/state/' >> "$root/.gitignore"; echo "  gitignore  .chief/state/"; }
+  register_repo "$root"
+  echo "✓ chief initialized. Edit .chief/{config,verify.sh,agent-context.md}, add tasklists, then: chief run"
+}
+
+cmd_list() {
+  load_project
+  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n c t
+  for f in "$d"/*.json; do [ -e "$f" ] || continue
+    n="$(basename "$f" .json)"
+    t="$(jq '.userStories|length' "$f" 2>/dev/null || echo '?')"
+    c="$(jq '[.userStories[]|select(.passes)]|length' "$f" 2>/dev/null || echo '?')"
+    printf '  %2s/%-3s %s%s\n' "$c" "$t" "$n" "$([ "$(jq -r '.parked//false' "$f" 2>/dev/null)" = true ] && echo '  (parked)')"
+  done
+  for f in "$d"/completed/*.json; do [ -e "$f" ] || continue; printf '  done     %s\n' "$(basename "$f" .json)"; done
+}
+
+cmd_run() {
+  local parallel=1 dry=0 merge="" ; local names=()
+  while [ "$#" -gt 0 ]; do case "$1" in
+    -p|--parallel) parallel="$2"; shift 2 ;;
+    -p*)           parallel="${1#-p}"; shift ;;
+    -n|--dry-run)  dry=1; shift ;;
+    --no-merge)    merge=0; shift ;;
+    -*)            echo "unknown flag: $1" >&2; exit 2 ;;
+    *)             names+=("$1"); shift ;;
+  esac; done
+  load_project
+  PARALLEL="$parallel" DRY_RUN="$dry" ${merge:+AUTO_MERGE_MAIN="$merge"} \
+    bash "$ENGINE/driver.sh" ${names[@]+"${names[@]}"}
+}
+
+cmd_ps()      { bash "$ENGINE/monitor.sh" once ; }
+cmd_monitor() { bash "$ENGINE/monitor.sh" watch "${1:-2}" ; }
+# Host-wide orphan sweep. Deliberately NOT gated on load_project: the whole point is
+# that an orphan can be stopped without starting a new run on the repo that stranded
+# it (the old sweep only ever ran at driver startup, so an orphan spent unwatched
+# until someone happened to re-run that repo).
+cmd_reap()    { bash "$ENGINE/reap.sh" "$@" ; }
+
+# ── operator pause / resume (the human's quota lever) ────────────────────────
+# The pause is a FLAG FILE under a repo's scheduler state — <state>/parallel/.paused —
+# polled by the driver's launch gate and by agent.sh's iteration boundary (see the
+# OPERATOR PAUSE block in engine/driver.sh). Arming it withholds AGENT TURNS: no
+# tasklist launches and no new iteration starts. It DRAINS rather than kills — the
+# iteration in flight always runs to completion so its commits land, and a tasklist
+# whose agent loop already finished still verifies and merges (finishing that is
+# agent-free, and parking it would strand a finished branch and its dependents).
+# Drained tasklists park in state `paused` keeping branch AND worktree, so the next
+# run RESUMEs each from its committed passes state.
+#
+# Kept strictly apart from the USAGE-LIMIT window (<state>/parallel/.limit-pause-until):
+# that one is an account-wide deadline Chief waits out and lifts by itself. Neither
+# command below ever reads or writes it, and neither touches <name>.retries — spending
+# the usage-limit re-dispatch budget on a human's decision would let a few manual
+# pauses silently exhaust the self-heal.
+pause_dir_of()  { printf '%s/parallel' "$1"; }              # $1 = a repo's state root
+pause_file_of() { printf '%s/parallel/.paused' "$1"; }
+run_field()     { sed -n "s/^$1=//p" "$2" 2>/dev/null | head -1; }   # monitor.sh's field()
+stamp_at()      { date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null || echo "$1"; }
+
+# Tasklists under state root $1 whose coarse scheduler state is exactly $2.
+states_matching() {
+  local f
+  for f in "$1"/parallel/*.state; do
+    [ -e "$f" ] || continue
+    [ "$(cat "$f" 2>/dev/null)" = "$2" ] || continue
+    printf '%s ' "$(basename "$f" .state)"
+  done
+  return 0
+}
+
+pause_one() {   # $1 = state root, $2 = label
+  local pf since running
+  pf="$(pause_file_of "$1")"
+  if [ -f "$pf" ]; then
+    since="$(cat "$pf" 2>/dev/null || echo)"
+    case "$since" in ''|*[!0-9]*) since="" ;; esac
+    echo "  = $2 is already paused${since:+ (since ~$(stamp_at "$since"))} — nothing to do"
+    return 0
+  fi
+  # An idle repo may never have had a run: only the driver creates parallel/.
+  mkdir -p "$(pause_dir_of "$1")" 2>/dev/null \
+    || { echo "chief pause: cannot create $(pause_dir_of "$1")" >&2; return 1; }
+  # The stamp is informational (the monitor dates the hold); PRESENCE is the gate.
+  date +%s > "$pf" 2>/dev/null || { echo "chief pause: cannot write $pf" >&2; return 1; }
+  echo "  ⏸ $2 PAUSED — no tasklist launches, no new agent iteration starts"
+  running="$(states_matching "$1" running)"
+  if [ -n "$running" ]; then
+    echo "     draining: ${running% } — the iteration in flight finishes and its commits land;"
+    echo "     a tasklist whose agent loop is already done still verifies + merges, then parks."
+  fi
+  return 0
+}
+
+resume_one() {  # $1 = state root, $2 = label
+  local pf lifted=0 parked="" f n limit
+  pf="$(pause_file_of "$1")"
+  if [ -f "$pf" ]; then
+    rm -f "$pf" 2>/dev/null || { echo "chief resume: cannot remove $pf" >&2; return 1; }
+    lifted=1
+  fi
+  # Re-arm what the drain parked: `paused` -> `pending`, so the next `chief run`
+  # RESUMEs each branch from its committed passes state with nothing rebuilt. The
+  # state files outlive the run, so this works with no driver alive.
+  for f in "$1"/parallel/*.state; do
+    [ -e "$f" ] || continue
+    [ "$(cat "$f" 2>/dev/null)" = paused ] || continue
+    n="$(basename "$f" .state)"
+    printf 'pending' > "$f" 2>/dev/null || continue
+    command -v live_set >/dev/null 2>&1 && live_set "$1/parallel/$n.live.json" name="$n" state=pending phase=resumed
+    parked="$parked $n"
+  done
+  if [ "$lifted" = 0 ] && [ -z "$parked" ]; then
+    echo "  = $2 is not paused — nothing to resume"
+    return 0
+  fi
+  if [ "$lifted" = 1 ]; then echo "  ▶ $2 RESUMED — the operator pause is lifted"
+  else                       echo "  ▶ $2 was not paused, but had tasklists parked from an earlier pause"; fi
+  [ -n "$parked" ] && echo "     re-armed as pending:$parked — 'chief run' picks each up from its committed passes state"
+  # A usage-limit window is a DIFFERENT hold with its own lifetime: resume lifts the
+  # human's decision only, never the account's.
+  limit="$(cat "$1/parallel/.limit-pause-until" 2>/dev/null || echo)"
+  case "$limit" in ''|*[!0-9]*) limit="" ;; esac
+  [ -n "$limit" ] && [ "$limit" -gt "$(date +%s)" ] \
+    && echo "     note: a usage-limit window is still armed until ~$(stamp_at "$limit") — the run waits that one out itself"
+  return 0
+}
+
+apply_one() {   # $1 = pause|resume, $2 = state root, $3 = label
+  case "$1" in
+    pause) pause_one  "$2" "$3" ;;
+    *)     resume_one "$2" "$3" ;;
+  esac
+}
+
+# Both commands are idempotent, exit 0 on a no-op, and work whether or not a run is
+# live: pausing an idle repo PRE-ARMS it, and `chief run` on a pre-armed repo reports
+# the pause instead of launching. `--all` arms every run in the host-wide registry —
+# concurrent runs across sibling repos share one account, so the quota decision is
+# usually fleet-wide rather than per-repo.
+cmd_pause_resume() {
+  local verb="$1"; shift
+  local all=0 rc=0
+  while [ "$#" -gt 0 ]; do case "$1" in
+    -a|--all) all=1; shift ;;
+    -*)       echo "unknown flag: $1  (usage: chief $verb [--all])" >&2; exit 2 ;;
+    *)        echo "chief $verb takes no arguments  (usage: chief $verb [--all])" >&2; exit 2 ;;
+  esac; done
+  # live.sh only defines functions; resume uses it to keep the liveliness record in
+  # step with the state file it re-arms. Missing (older install) -> silently skipped.
+  # shellcheck disable=SC1091
+  [ "$verb" = resume ] && [ -f "$ENGINE/live.sh" ] && source "$ENGINE/live.sh"
+
+  if [ "$all" = 1 ]; then
+    local f repo st pid live seen="" n=0
+    echo "chief $verb --all — every run registered in $CHIEF_RUNS:"
+    for f in "$CHIEF_RUNS"/*.run; do
+      [ -e "$f" ] || continue
+      repo="$(run_field repo "$f")"; st="$(run_field state "$f")"; pid="$(run_field pid "$f")"
+      [ -n "$st" ] || { [ -n "$repo" ] && st="$repo/.chief/state"; }
+      [ -n "$st" ] || continue
+      case " $seen " in *" $st "*) continue ;; esac    # one repo, many run files
+      seen="$seen $st"
+      # A dead pid's record is a run that already exited; arming its repo is still
+      # the right move (it pre-arms the next run), so say which it is rather than skip.
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then live=" (live run pid $pid)"; else live=" (no live run)"; fi
+      apply_one "$verb" "$st" "$(basename "${repo:-$st}")$live" || rc=1
+      n=$(( n + 1 ))
+    done
+    if [ "$n" = 0 ]; then
+      echo "  = no runs registered — nothing to $verb"
+      echo "    (run 'chief $verb' from inside a repo — it works with no run active too)"
+    fi
+    exit "$rc"
+  fi
+
+  load_project
+  apply_one "$verb" "$CHIEF_PROJECT/$CHIEF_STATE_DIR" "$(basename "$CHIEF_PROJECT")" || rc=1
+  exit "$rc"
+}
+
+cmd_update() {
+  if [ ! -d "$SELF/.git" ]; then
+    echo "chief: $SELF is not a git checkout — reinstall with the install.sh one-liner instead." >&2
+    exit 1
+  fi
+  local ver="${CHIEF_VERSION:-}" before after
+  before="$(git -C "$SELF" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  echo "→ updating chief in $SELF${ver:+ (pin $ver)}"
+  git -C "$SELF" fetch --quiet --tags origin || { echo "chief: 'git fetch' failed (offline?)." >&2; exit 1; }
+  if [ -n "$ver" ]; then
+    git -C "$SELF" checkout --quiet "$ver" || { echo "chief: 'git checkout $ver' failed (unknown tag/branch?)." >&2; exit 1; }
+  fi
+  git -C "$SELF" pull --quiet --ff-only 2>/dev/null || true   # no-op on a detached tag
+  chmod +x "$SELF/bin/chief" "$SELF/engine/"*.sh 2>/dev/null || true
+  after="$(git -C "$SELF" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  if [ "$before" = "$after" ]; then echo "✓ already up to date — chief $VERSION ($after)"
+  else echo "✓ updated chief $before → $(cat "$SELF/VERSION" 2>/dev/null || echo '?') ($after)"; fi
+}
+
+cmd="${1:-help}"; shift 2>/dev/null || true
+case "$cmd" in
+  init)                 cmd_init ;;
+  run)                  cmd_run "$@" ;;
+  list)                 cmd_list ;;
+  ps)                   cmd_ps ;;
+  monitor|watch)        cmd_monitor "$@" ;;
+  reap)                 cmd_reap "$@" ;;
+  pause)                cmd_pause_resume pause "$@" ;;
+  resume)               cmd_pause_resume resume "$@" ;;
+  version|-v|--version) echo "chief $VERSION" ;;
+  update)               cmd_update ;;
+  help|-h|--help)       usage ;;
+  *)                    echo "unknown command: $cmd" >&2; usage; exit 2 ;;
+esac

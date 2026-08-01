@@ -1,0 +1,90 @@
+name: ci
+
+# Lints the shell, then proves the whole tool works end-to-end (install → init →
+# agent loop → verify → merge) via the offline smoke test. Runs on macOS too:
+# its default /bin/bash is 3.2, which is chief's compatibility floor.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools (shellcheck, jq)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck jq
+          else
+            command -v shellcheck >/dev/null || brew install shellcheck
+            command -v jq         >/dev/null || brew install jq
+          fi
+
+      - name: Report bash version (macOS should be 3.2 — the compat floor)
+        run: bash --version | head -1
+
+      - name: Syntax check (bash -n)
+        run: |
+          for f in bin/chief engine/*.sh install.sh test/*.sh templates/verify.sh; do
+            echo "bash -n $f"; bash -n "$f"
+          done
+
+      - name: ShellCheck (errors only — the scripts use deliberate word-splitting)
+        run: shellcheck -S error bin/chief engine/*.sh install.sh test/*.sh templates/verify.sh
+
+      - name: End-to-end smoke test (offline, deterministic)
+        run: bash test/smoke.sh
+
+      - name: Token-limit pause+resume under the parallel driver
+        run: bash test/ratelimit.sh
+
+      - name: Usage-limit pause is a distinct state (never 'failed', never blocks dependents)
+        run: bash test/limitstate.sh
+
+      - name: Usage-limit self-heal (scheduler waits out the window and re-dispatches, bounded)
+        run: bash test/limitresume.sh
+
+      - name: Usage-limit pause is legible in `chief ps` (paused + retry ETA, not failed/hung)
+        run: bash test/limitmonitor.sh
+
+      - name: Operator pause drains at a safe checkpoint, parks, and resumes from committed state
+        run: bash test/pause.sh
+
+      - name: Fine-grained liveliness record + `chief ps` (progress · stalled · paused)
+        run: bash test/liveliness.sh
+
+      - name: Live-monitor registry (ps/monitor) under the parallel driver
+        run: bash test/monitor.sh
+
+      - name: Teardown — an interrupt reaps the tree before releasing the records
+        run: bash test/teardown.sh
+
+      - name: Orphan reaper — finds the engine by cwd + run marker, never a live run
+        run: bash test/reapscope.sh
+
+      - name: No-work guard (false-complete must not merge/retire)
+        run: bash test/noworkguard.sh
+
+      - name: Pickup-time base integration (a resumed branch follows base; conflicts go to the agent)
+        run: bash test/stale-resume.sh
+
+      - name: Conflict forensics (a merge-phase conflict names the files and the colliding sibling)
+        run: bash test/conflict-forensics.sh
+
+      - name: Under-tagged touches audit (co-scheduled tasklists that edited the same file are reported)
+        run: bash test/touches-audit.sh
+
+
+      - name: Dry-run schedule of the bundled example
+        working-directory: examples/minimal
+        run: |
+          "$GITHUB_WORKSPACE/bin/chief" run -n -p 3

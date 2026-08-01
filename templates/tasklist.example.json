@@ -1,0 +1,23 @@
+{
+  "project": "my-project",
+  "branchName": "chief/example",
+  "description": "PARKED reference tasklist — 'chief run' skips it, so it never runs or merges on its own. To get started, copy this file to tasks/chief/<your-name>.json, remove the \"parked\" flag, and write your own userStories. (To watch this demo run in isolation: chief run example.)",
+  "parked": true,
+  "iters": 3,
+  "dependsOn": [],
+  "touches": [],
+  "warmup": [],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Add a hello function",
+      "description": "Create a small function that returns a greeting, with a test.",
+      "acceptanceCriteria": [
+        "A hello(name) function exists and returns 'Hello, <name>!'.",
+        "A test covers the happy path and passes."
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

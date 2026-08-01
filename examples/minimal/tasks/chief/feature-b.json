@@ -1,0 +1,25 @@
+{
+  "project": "minimal",
+  "branchName": "chief/feature-b",
+  "description": "Demo feature B (needs foundation; disjoint from A).",
+  "iters": 2,
+  "dependsOn": [
+    "foundation"
+  ],
+  "touches": [
+    "module-b"
+  ],
+  "warmup": [],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "feature-b story",
+      "description": "do the feature-b work",
+      "acceptanceCriteria": [
+        "it works"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
