@@ -44,6 +44,9 @@ jobs:
       - name: End-to-end smoke test (offline, deterministic)
         run: bash test/smoke.sh
 
+      - name: Provider/model selection
+        run: bash test/provider.sh
+
       - name: Token-limit pause+resume under the parallel driver
         run: bash test/ratelimit.sh
 

@@ -1,8 +1,10 @@
 # .chief/config — Chief project configuration (sourced as bash by the engine).
 # Uncomment/edit to override the defaults shown.
 
-CHIEF_TOOL=claude                # AI CLI that drives the agent loop: claude | amp
-# CHIEF_BASE_BRANCH=main         # integration branch
+CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode
+# CHIEF_MODEL=                    # optional provider-specific model override
+# CHIEF_TOOL=claude               # legacy alias; use CHIEF_PROVIDER instead
+# CHIEF_BASE_BRANCH=main          # integration branch
 # CHIEF_TASKS_DIR=tasks/chief    # where tasklist JSONs live (+ completed/)
 # CHIEF_STATE_DIR=.chief/state   # gitignored per-run runtime state
 # CHIEF_VERIFY=.chief/verify.sh  # branch verification hook (exit 0 = pass; empty = skip)

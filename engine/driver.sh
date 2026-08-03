@@ -96,7 +96,8 @@
 #
 # Env vars (shared with run-all.sh unless noted):
 #   PARALLEL=N            max tasklists running at once (default 2). NEW.
-#   TOOL=claude|amp       AI tool (default claude)
+#   CHIEF_PROVIDER=claude|devin|opencode  AI provider (default claude; amp remains a legacy alias)
+#   CHIEF_MODEL=<model>                  optional provider-specific model override
 #   AUTO_MERGE_MAIN=1     verify+merge each completed branch (default 1)
 #   NO_VERIFY=0           skip the pre-merge verification gate (not advised)
 #   STRICT_VERIFY=0       fail on any verify failure incl. ones pre-existing on main
@@ -194,7 +195,9 @@ BASE_BRANCH="${CHIEF_BASE_BRANCH:-main}"
 VERIFY_HOOK=""; [ -n "${CHIEF_VERIFY:-}" ] && VERIFY_HOOK="$REPO/$CHIEF_VERIFY"
 mkdir -p "$COMPLETED" "$SNAP" "$WT_ROOT" "$STATE"
 
-TOOL="${CHIEF_TOOL:-${TOOL:-claude}}"
+PROVIDER="${CHIEF_PROVIDER:-${CHIEF_TOOL:-${TOOL:-claude}}}"
+MODEL="${CHIEF_MODEL:-}"
+TOOL="$PROVIDER"                         # compatibility name used in status output
 PARALLEL="${PARALLEL:-1}"                   # default sequential; -p N for concurrency
 AUTO_MERGE_MAIN="${CHIEF_AUTO_MERGE:-${AUTO_MERGE_MAIN:-1}}"
 NO_VERIFY="${NO_VERIFY:-0}"
@@ -800,7 +803,7 @@ audit_findings() {   # one WARNING block per under-tagged pair ($1: only this na
 # dependency + conflict + concurrency logic before a real, hours-long run.
 # ---------------------------------------------------------------------------
 if [ "$DRY_RUN" = "1" ]; then
-  echo "DRY RUN — PARALLEL=$PARALLEL — pending:$NAMES" | sed 's/  */ /g'
+  echo "DRY RUN — provider=$PROVIDER${MODEL:+ model=$MODEL} — PARALLEL=$PARALLEL — pending:$NAMES" | sed 's/  */ /g'
   # The gate is checked inline: op_paused() is defined with the scheduler helpers,
   # far below this early-exit block.
   [ -f "$OPERATOR_PAUSE_FILE" ] && echo "  ⏸ an OPERATOR PAUSE is armed — a real run would launch NONE of this until 'chief resume'."
@@ -1122,6 +1125,8 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "repo=$REPO"
   echo "base=$BASE_BRANCH"
   echo "parallel=$PARALLEL"
+  echo "provider=$PROVIDER"
+  echo "model=$MODEL"
   echo "tool=$TOOL"
   echo "automerge=$AUTO_MERGE_MAIN"
   echo "limitmax=$RATE_LIMIT_REDISPATCH_MAX"   # monitor.sh renders "re-dispatch n/max"
@@ -1344,7 +1349,8 @@ run_worker() {
       # because the agent's $CHIEF_PROJECT is the worktree, while the pause is a
       # property of the REPO's run — one flag, every worker, no per-worktree copy
       # that could go stale against `chief resume`.
-      ( cd "$wt" && CHIEF_PROJECT="$wt" CHIEF_HOME="$ENGINE" CHIEF_TOOL="$TOOL" \
+      ( cd "$wt" && CHIEF_PROJECT="$wt" CHIEF_HOME="$ENGINE" \
+          CHIEF_PROVIDER="$PROVIDER" CHIEF_MODEL="$MODEL" CHIEF_TOOL="$TOOL" \
           CHIEF_STATE_DIR="$STATE_REL" CHIEF_TASKS_DIR="$TASKS_REL" \
           CHIEF_AGENT_CONTEXT="${CHIEF_AGENT_CONTEXT:-}" CHIEF_ITER_HOOK="$hook" \
           CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" \

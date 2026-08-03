@@ -42,6 +42,9 @@ chief $VERSION — autonomous tasklist runner (worktree-isolated, dep/conflict-a
 Usage:
   chief init                  scaffold .chief/ + tasks/chief/ in the current repo
   chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
+                              --provider claude|devin|opencode (default claude)
+                              --model MODEL (provider-specific model override)
+                              --claude, --devin, --opencode provider shortcuts
   chief list                  list tasklists with pass status
   chief ps                    show active runs across ALL repos (one-shot table). Also flags an
                               UNREGISTERED driver — one that is running with no run file, which
@@ -91,14 +94,21 @@ load_project() {
   CHIEF_PROJECT="$(find_project)" || { echo "ERROR: no .chief/config found from $PWD upward. Run 'chief init' first." >&2; exit 1; }
   register_repo "$CHIEF_PROJECT"
   # defaults (a project's .chief/config may override any of these)
-  CHIEF_TOOL=claude; CHIEF_TASKS_DIR=tasks/chief; CHIEF_STATE_DIR=.chief/state
+  CHIEF_TOOL=claude; CHIEF_PROVIDER=claude; CHIEF_MODEL=""
+  CHIEF_TASKS_DIR=tasks/chief; CHIEF_STATE_DIR=.chief/state
   CHIEF_VERIFY=.chief/verify.sh; CHIEF_AGENT_CONTEXT=.chief/agent-context.md
   CHIEF_AUTO_MERGE=1; CHIEF_BASE_BRANCH=main
   # shellcheck disable=SC1091
   source "$CHIEF_PROJECT/.chief/config"
+  # CHIEF_TOOL is the pre-provider compatibility name. Preserve configurations
+  # that selected amp while making provider the canonical setting.
+  if [ "${CHIEF_PROVIDER:-claude}" = claude ] && [ "${CHIEF_TOOL:-claude}" != claude ]; then
+    CHIEF_PROVIDER="$CHIEF_TOOL"
+  fi
   CHIEF_HOME="$ENGINE"
-  export CHIEF_PROJECT CHIEF_HOME CHIEF_TOOL CHIEF_TASKS_DIR CHIEF_STATE_DIR \
-         CHIEF_VERIFY CHIEF_AGENT_CONTEXT CHIEF_AUTO_MERGE CHIEF_BASE_BRANCH
+  export CHIEF_PROJECT CHIEF_HOME CHIEF_TOOL CHIEF_PROVIDER CHIEF_MODEL \
+         CHIEF_TASKS_DIR CHIEF_STATE_DIR CHIEF_VERIFY CHIEF_AGENT_CONTEXT \
+         CHIEF_AUTO_MERGE CHIEF_BASE_BRANCH
 }
 
 cmd_init() {
@@ -141,17 +151,32 @@ cmd_list() {
 }
 
 cmd_run() {
-  local parallel=1 dry=0 merge="" ; local names=()
+  local parallel=1 dry=0 merge="" provider="" model="" ; local names=()
   while [ "$#" -gt 0 ]; do case "$1" in
     -p|--parallel) parallel="$2"; shift 2 ;;
     -p*)           parallel="${1#-p}"; shift ;;
     -n|--dry-run)  dry=1; shift ;;
     --no-merge)    merge=0; shift ;;
+    --provider)    provider="$2"; shift 2 ;;
+    --provider=*)  provider="${1#*=}"; shift ;;
+    --model)       model="$2"; shift 2 ;;
+    --model=*)     model="${1#*=}"; shift ;;
+    --claude)      provider=claude; shift ;;
+    --devin)       provider=devin; shift ;;
+    --opencode)    provider=opencode; shift ;;
+    --tool)        provider="$2"; shift 2 ;; # compatibility with pre-provider releases
+    --tool=*)      provider="${1#*=}"; shift ;;
     -*)            echo "unknown flag: $1" >&2; exit 2 ;;
     *)             names+=("$1"); shift ;;
   esac; done
   load_project
-  PARALLEL="$parallel" DRY_RUN="$dry" ${merge:+AUTO_MERGE_MAIN="$merge"} \
+  provider="${provider:-$CHIEF_PROVIDER}"; model="${model:-$CHIEF_MODEL}"
+  case "$provider" in
+    claude|devin|opencode|amp) ;;
+    *) echo "invalid provider '$provider' (choose claude, devin, or opencode)" >&2; exit 2 ;;
+  esac
+  CHIEF_PROVIDER="$provider" CHIEF_MODEL="$model" \
+    PARALLEL="$parallel" DRY_RUN="$dry" ${merge:+AUTO_MERGE_MAIN="$merge"} \
     bash "$ENGINE/driver.sh" ${names[@]+"${names[@]}"}
 }
 

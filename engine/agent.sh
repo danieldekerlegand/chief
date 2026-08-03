@@ -1,6 +1,6 @@
 #!/bin/bash
 # Chief Wiggum - Long-running AI agent loop
-# Usage: ./chief.sh [--tool amp|claude] [max_iterations]
+# Usage: ./agent.sh [--provider claude|devin|opencode] [--model MODEL] [max_iterations]
 #
 # EXIT CODES — engine/driver.sh keys off these; keep them stable.
 #   0  the PRD completed: the agent emitted <promise>COMPLETE</promise>.
@@ -26,16 +26,36 @@
 set -e
 
 # Parse arguments
-TOOL="${CHIEF_TOOL:-claude}"
+PROVIDER="${CHIEF_PROVIDER:-${CHIEF_TOOL:-claude}}"
+MODEL="${CHIEF_MODEL:-}"
+TOOL="$PROVIDER"                         # compatibility name in status output
 MAX_ITERATIONS=10
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --provider=*)
+      PROVIDER="${1#*=}"
+      shift
+      ;;
+    --model)
+      MODEL="$2"
+      shift 2
+      ;;
+    --model=*)
+      MODEL="${1#*=}"
+      shift
+      ;;
     --tool)
+      PROVIDER="$2"
       TOOL="$2"
       shift 2
       ;;
     --tool=*)
+      PROVIDER="${1#*=}"
       TOOL="${1#*=}"
       shift
       ;;
@@ -57,9 +77,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Validate tool choice
-if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
-  echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
+# Validate provider choice
+if [[ "$PROVIDER" != "claude" && "$PROVIDER" != "devin" && "$PROVIDER" != "opencode" && "$PROVIDER" != "amp" ]]; then
+  echo "Error: Invalid provider '$PROVIDER'. Must be 'claude', 'devin', or 'opencode'."
   exit 1
 fi
 ENGINE="${CHIEF_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -266,7 +286,32 @@ _is_rate_limit() {
   return 1
 }
 
-echo "Starting Chief — Tool: $TOOL — budget $MAX_ITERATIONS iters (extends while progressing; hard cap $HARD_MAX; stall limit $STALL_LIMIT)"
+# Run one provider in non-interactive mode. The prompt is supplied on stdin by the
+# caller so every provider receives the same Chief instructions and project context.
+_run_provider() {
+  case "$PROVIDER" in
+    claude)
+      if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --model "$MODEL"
+      else claude --dangerously-skip-permissions --print
+      fi
+      ;;
+    devin)
+      if [ -n "$MODEL" ]; then devin --permission-mode bypass --respect-workspace-trust false --print --model "$MODEL"
+      else devin --permission-mode bypass --respect-workspace-trust false --print
+      fi
+      ;;
+    opencode)
+      if [ -n "$MODEL" ]; then opencode run --model "$MODEL"
+      else opencode run
+      fi
+      ;;
+    amp)
+      amp --dangerously-allow-all
+      ;;
+  esac
+}
+
+echo "Starting Chief — Provider: $PROVIDER${MODEL:+ (model: $MODEL)} — budget $MAX_ITERATIONS iters (extends while progressing; hard cap $HARD_MAX; stall limit $STALL_LIMIT)"
 
 prev_pass=$(_passes); prev_head=$(_head)
 i=0; stall=0; waits=0
@@ -293,18 +338,12 @@ while :; do
   live_set "$LIVE" phase=agent-turn iter="$i" story="$(_story)" \
     passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" retry_at=0
 
-  # Run the selected tool with the composed chief prompt. The TOOL's own exit
-  # status is preserved (PIPESTATUS, not tee's) — _is_rate_limit uses it to
-  # classify structured/terse limit errors that carry no recognizable phrasing.
+  # Run the selected provider with the composed Chief prompt. The provider's own
+  # exit status is preserved (PIPESTATUS, not tee's) for limit classification.
   TOOL_RC=0
-  live_set "$LIVE" phase=claude-waiting
+  live_set "$LIVE" phase=provider-waiting
   _beat_start
-  if [[ "$TOOL" == "amp" ]]; then
-    OUTPUT=$(amp --dangerously-allow-all < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
-  else
-    # Claude Code: --dangerously-skip-permissions for autonomous operation, --print for output.
-    OUTPUT=$(claude --dangerously-skip-permissions --print < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
-  fi
+  OUTPUT=$(_run_provider < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
   _beat_stop
   live_set "$LIVE" phase=agent-turn story="$(_story)" passing="$(_passes)" total="$(_total)"
 

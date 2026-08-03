@@ -1,7 +1,7 @@
 # chief
 
-**chief** is an autonomous **tasklist runner** for AI coding agents (Claude Code /
-amp). You write a tasklist — user stories with explicit **acceptance criteria** —
+**chief** is an autonomous **tasklist runner** for AI coding agents (Claude Code,
+Devin, and OpenCode). You write a tasklist — user stories with explicit **acceptance criteria** —
 and `chief` drives an agent through them one story at a time: **implement → verify
 → commit → mark done**, looping fresh agent instances until the whole tasklist is
 complete, then rebasing, re-verifying, and merging the branch.
@@ -56,8 +56,8 @@ Installer environment overrides: `CHIEF_REPO`, `CHIEF_VERSION` (branch/tag),
 `CHIEF_PREFIX` (default `~/.chief`), `CHIEF_BINDIR` (default `~/.local/bin`).
 
 **Dependencies:** `git` and `jq` are required; `node` is used opportunistically
-(there's a `jq` fallback for everything). `claude` (Claude Code) or `amp` provides
-the actual agent.
+(there's a `jq` fallback for everything). `claude` (Claude Code), `devin`, or
+`opencode` provides the actual agent.
 
 ## Quickstart
 
@@ -73,7 +73,15 @@ chief list                     # tasklists + how many stories pass
 chief run -n -p 3              # DRY RUN — print the schedule waves, spawn nothing
 chief run                      # sequential (one tasklist at a time, still worktree-isolated)
 chief run -p 3                 # up to 3 tasklists at once
+chief run --devin --model opus  # use Devin with a model override
+chief run --provider opencode --model opencode/glm-4.7-free
 ```
+
+Claude Code remains the default provider. Use `--provider claude|devin|opencode`
+(or the `--claude`, `--devin`, and `--opencode` shortcuts) and optionally
+`--model MODEL`; the same settings can be persisted as `CHIEF_PROVIDER` and
+`CHIEF_MODEL` in `.chief/config`. The older `CHIEF_TOOL`/`--tool` setting remains
+accepted for compatibility with existing projects.
 
 `chief init` is safe to re-run: it keeps any `.chief/` files you've already edited.
 
@@ -192,6 +200,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | --- | --- |
 | `chief init` | Scaffold `.chief/` + `tasks/chief/` in the current repo. |
 | `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = concurrency (default 1). |
+| `chief run --provider P --model M` | Select Claude (default), Devin, or OpenCode and optionally override its model. |
 | `chief run -n` | Dry run: print the schedule waves and exit (no git, no agents). |
 | `chief run --no-merge` | Complete branches but don't merge into the base. |
 | `chief list` | List tasklists with pass status. |
