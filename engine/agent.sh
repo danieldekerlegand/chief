@@ -296,8 +296,11 @@ _run_provider() {
       fi
       ;;
     devin)
-      if [ -n "$MODEL" ]; then devin --permission-mode bypass --respect-workspace-trust false --print --model "$MODEL"
-      else devin --permission-mode bypass --respect-workspace-trust false --print
+      # devin's --print mode reads the prompt from --prompt-file (or a -- <PROMPT> arg),
+      # NOT from stdin like claude/opencode — without it, it panics "print mode requires
+      # a prompt" every iteration. PROMPT_FILE is the same file the caller pipes on stdin.
+      if [ -n "$MODEL" ]; then devin --permission-mode bypass --respect-workspace-trust false --print --model "$MODEL" --prompt-file "$PROMPT_FILE"
+      else devin --permission-mode bypass --respect-workspace-trust false --print --prompt-file "$PROMPT_FILE"
       fi
       ;;
     opencode)
@@ -342,6 +345,12 @@ while :; do
   # exit status is preserved (PIPESTATUS, not tee's) for limit classification.
   TOOL_RC=0
   live_set "$LIVE" phase=provider-waiting
+  # CHIEF_VERBOSE traces the exact provider invocation into the log — which provider,
+  # which model, and the composed prompt it's being handed — so a misconfigured
+  # provider/model shows up plainly instead of as a silent stall.
+  [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] provider=%s%s · prompt=%s (%s lines)\n' \
+    "$PROVIDER" "${MODEL:+ model=$MODEL}" "$PROMPT_FILE" \
+    "$(wc -l < "$PROMPT_FILE" 2>/dev/null | tr -d ' ')" >&2
   _beat_start
   OUTPUT=$(_run_provider < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
   _beat_stop

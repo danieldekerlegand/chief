@@ -51,6 +51,9 @@ Usage:
                               used to read as 'no active runs' — naming its repo, the tasklists
                               in flight, and the pid to kill.
   chief monitor [interval]    live-refresh that view (default 2s; Ctrl-C to exit)
+  chief logs [name] [-f]      hook into a live run's output — tail a tasklist's per-iteration log
+                              (the agent's stdout, gate output, stall notes). Defaults to the
+                              running tasklist; -f/--follow streams it live, -n N sets the tail size
   chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
                               still spending quota) with no live, registered run behind
                               them. -n reports without signalling. Never touches a live
@@ -70,6 +73,8 @@ Usage:
 run flags:
   -p, --parallel N   run up to N tasklists at once (default 1)
   -n, --dry-run      print the schedule and exit (no git, no agents)
+  -V, --verbose      trace each provider invocation into the log (provider · model · prompt) —
+                     also settable as CHIEF_VERBOSE=1 in the environment or .chief/config
       --no-merge     complete branches but don't merge into the base
 
 pause/resume flags:
@@ -151,11 +156,12 @@ cmd_list() {
 }
 
 cmd_run() {
-  local parallel=1 dry=0 merge="" provider="" model="" ; local names=()
+  local parallel=1 dry=0 merge="" provider="" model="" verbose="" ; local names=()
   while [ "$#" -gt 0 ]; do case "$1" in
     -p|--parallel) parallel="$2"; shift 2 ;;
     -p*)           parallel="${1#-p}"; shift ;;
     -n|--dry-run)  dry=1; shift ;;
+    -V|--verbose)  verbose=1; shift ;;
     --no-merge)    merge=0; shift ;;
     --provider)    provider="$2"; shift 2 ;;
     --provider=*)  provider="${1#*=}"; shift ;;
@@ -175,13 +181,81 @@ cmd_run() {
     claude|devin|opencode|amp) ;;
     *) echo "invalid provider '$provider' (choose claude, devin, or opencode)" >&2; exit 2 ;;
   esac
+  # Export the optional toggles instead of splicing "VAR=val" via ${x:+…} into the
+  # command's assignment-prefix position — an EXPANSION there isn't recognized as an
+  # assignment, so bash tries to RUN it ("AUTO_MERGE_MAIN=0: command not found").
+  [ -n "$verbose" ] && export CHIEF_VERBOSE=1    # inherited by the driver, forwarded to agent.sh
+  [ -n "$merge" ]   && export AUTO_MERGE_MAIN="$merge"
   CHIEF_PROVIDER="$provider" CHIEF_MODEL="$model" \
-    PARALLEL="$parallel" DRY_RUN="$dry" ${merge:+AUTO_MERGE_MAIN="$merge"} \
+    PARALLEL="$parallel" DRY_RUN="$dry" \
     bash "$ENGINE/driver.sh" ${names[@]+"${names[@]}"}
 }
 
 cmd_ps()      { bash "$ENGINE/monitor.sh" once ; }
 cmd_monitor() { bash "$ENGINE/monitor.sh" watch "${1:-2}" ; }
+
+# chief logs [name] [-f] [-n N] — hook into a live run's output. Each tasklist's
+# per-iteration output is teed to <state>/parallel/<name>.log; this tails it so you
+# can watch what an agent is actually doing (the provider's stdout, gate output,
+# stall notes) without stopping the run.
+cmd_logs() {
+  local follow="" name="" lines=200 rf p g
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f|--follow)  follow=1 ;;
+      -n|--lines)   shift; lines="${1:-200}" ;;
+      -*)           echo "chief logs: unknown flag: $1" >&2; return 2 ;;
+      *)            name="$1" ;;
+    esac; shift
+  done
+
+  # Resolve the run's state dir: the repo under $PWD if it has run state, else the
+  # sole live run in the registry (ambiguous → list and ask the operator to choose).
+  local state="" proj live=() sd="${CHIEF_STATE_DIR:-.chief/state}"
+  if proj="$(find_project 2>/dev/null)" && [ -d "$proj/$sd/parallel" ]; then
+    state="$proj/$sd"
+  else
+    for rf in "$CHIEF_RUNS"/*.run; do
+      [ -e "$rf" ] || continue
+      p="$(run_field pid "$rf")"
+      [ -n "$p" ] && kill -0 "$p" 2>/dev/null && live+=("$rf")
+    done
+    case "${#live[@]}" in
+      1) state="$(run_field state "${live[0]}")" ;;
+      0) echo "chief logs: no active run (cd into a repo with a run, or start one)"; return 1 ;;
+      *) echo "chief logs: multiple active runs — cd into the one you want:"
+         for rf in "${live[@]}"; do printf '  %s\n' "$(basename "$(run_field repo "$rf")")"; done
+         return 1 ;;
+    esac
+  fi
+  local pdir="$state/parallel"
+  [ -d "$pdir" ] || { echo "chief logs: no run state under $pdir"; return 1; }
+
+  # Default to the running tasklist when unambiguous; otherwise list what's available.
+  if [ -z "$name" ]; then
+    local running=()
+    for g in "$pdir"/*.state; do
+      [ -e "$g" ] || continue
+      [ "$(cat "$g" 2>/dev/null)" = running ] && running+=("$(basename "${g%.state}")")
+    done
+    if [ "${#running[@]}" -eq 1 ]; then name="${running[0]}"
+    else
+      echo "tasklist logs under $pdir:"
+      for g in "$pdir"/*.log; do [ -e "$g" ] && printf '  %s\n' "$(basename "${g%.log}")"; done
+      echo "pick one:  chief logs <name> [-f]"
+      return 0
+    fi
+  fi
+
+  local log="$pdir/$name.log"
+  [ -f "$log" ] || { echo "chief logs: no log for '$name' (looked in $log)"; return 1; }
+  if [ -n "$follow" ]; then
+    printf '── following %s · %s (Ctrl-C to stop) ──\n' "$name" "$log"
+    exec tail -n "$lines" -f "$log"
+  else
+    tail -n "$lines" "$log"
+  fi
+}
 # Host-wide orphan sweep. Deliberately NOT gated on load_project: the whole point is
 # that an orphan can be stopped without starting a new run on the repo that stranded
 # it (the old sweep only ever ran at driver startup, so an orphan spent unwatched
@@ -364,6 +438,7 @@ case "$cmd" in
   list)                 cmd_list ;;
   ps)                   cmd_ps ;;
   monitor|watch)        cmd_monitor "$@" ;;
+  logs|tail)            cmd_logs "$@" ;;
   reap)                 cmd_reap "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;
   resume)               cmd_pause_resume resume "$@" ;;

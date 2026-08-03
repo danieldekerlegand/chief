@@ -62,7 +62,9 @@ git add .chief/state/prd.json && git commit -q -m provider-test
 echo '<promise>COMPLETE</promise>'
 SH
 chmod +x "$WORK/fakebin/devin" "$WORK/fakebin/opencode"
-run_agent devin '--permission-mode bypass --respect-workspace-trust false --print --model test-model'
+# devin's --print reads the prompt from --prompt-file, NOT stdin; assert it's passed
+# (without it devin panics "print mode requires a prompt" and every iteration stalls).
+run_agent devin '--permission-mode bypass --respect-workspace-trust false --print --model test-model --prompt-file'
 run_agent opencode 'run --model test-model'
 
 echo "PROVIDER PASS — CLI, config, and provider command selection"

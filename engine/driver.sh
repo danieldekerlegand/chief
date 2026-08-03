@@ -1353,7 +1353,7 @@ run_worker() {
           CHIEF_PROVIDER="$PROVIDER" CHIEF_MODEL="$MODEL" CHIEF_TOOL="$TOOL" \
           CHIEF_STATE_DIR="$STATE_REL" CHIEF_TASKS_DIR="$TASKS_REL" \
           CHIEF_AGENT_CONTEXT="${CHIEF_AGENT_CONTEXT:-}" CHIEF_ITER_HOOK="$hook" \
-          CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" \
+          CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" CHIEF_VERBOSE="${CHIEF_VERBOSE:-}" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a

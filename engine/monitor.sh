@@ -409,18 +409,21 @@ render() {
     pid="$(field pid "$f")"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || continue
 
-    local repo base par tool state staterel tasks wt names label started limitmax
+    local repo base par tool model state staterel tasks wt names label started limitmax pm
     repo="$(field repo "$f")";       base="$(field base "$f")"
     par="$(field parallel "$f")";    tool="$(field tool "$f")"
+    model="$(field model "$f")"
     state="$(field state "$f")";     staterel="$(field staterel "$f")"
     tasks="$(field tasks "$f")";     wt="$(field wt "$f")"
     names="$(field names "$f")";     started="$(field started "$f")"
     limitmax="$(field limitmax "$f")"
     [ -n "$staterel" ] || staterel=".chief/state"
     label="$(basename "$repo")"
+    # provider, plus its model when one was selected: "devin · claude-opus-5-high"
+    pm="${tool:-claude}"; [ -n "$model" ] && pm="$pm · $model"
 
     printf '\n%s%s%s  %s(pid %s · -p%s · %s · %s · →%s)%s\n' \
-      "$BOLD" "$label" "$RST" "$DIM" "$pid" "${par:-1}" "${tool:-claude}" "$(elapsed "${started:-}")" "${base:-main}" "$RST"
+      "$BOLD" "$label" "$RST" "$DIM" "$pid" "${par:-1}" "$pm" "$(elapsed "${started:-}")" "${base:-main}" "$RST"
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
