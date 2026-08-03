@@ -67,4 +67,9 @@ chmod +x "$WORK/fakebin/devin" "$WORK/fakebin/opencode"
 run_agent devin '--permission-mode bypass --respect-workspace-trust false --print --model test-model --prompt-file'
 run_agent opencode 'run --model test-model'
 
+# `chief models`: claude prints its stable family aliases; an unknown provider is rejected.
+out="$("$CHIEF" models claude 2>&1)"
+case "$out" in *opus*sonnet*haiku*fable*) ;; *) echo "$out" >&2; fail "chief models claude missing family aliases" ;; esac
+if "$CHIEF" models bogus >/dev/null 2>&1; then fail "chief models accepted an unknown provider"; fi
+
 echo "PROVIDER PASS — CLI, config, and provider command selection"

@@ -54,6 +54,8 @@ Usage:
   chief logs [name] [-f]      hook into a live run's output — tail a tasklist's per-iteration log
                               (the agent's stdout, gate output, stall notes). Defaults to the
                               running tasklist; -f/--follow streams it live, -n N sets the tail size
+  chief models [provider]     list the models you can pass to --model: live from the provider for
+                              devin/opencode, the stable family aliases for claude (no arg = all)
   chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
                               still spending quota) with no live, registered run behind
                               them. -n reports without signalling. Never touches a live
@@ -256,6 +258,32 @@ cmd_logs() {
     tail -n "$lines" "$log"
   fi
 }
+
+# chief models [provider] — what to pass to --model. Delegates to each provider's own
+# enumeration where it has one (devin, opencode — the lists are account-specific and
+# change often, so never hardcode them); claude has no listing command, so print its
+# stable family aliases. Outside/custom models: use the opencode provider.
+_models_claude() {
+  cat <<'EOF'
+claude — model aliases (each resolves to the newest version of its family):
+  opus · sonnet · haiku · fable    (also: default, opusplan, or a full model id e.g. claude-opus-5)
+  claude has no model-listing command; for outside/custom models, use the opencode provider.
+EOF
+}
+cmd_models() {
+  case "${1:-}" in
+    claude)   _models_claude ;;
+    devin)    if command -v devin    >/dev/null 2>&1; then devin models list;            else echo "devin CLI not on PATH";    return 1; fi ;;
+    opencode) if command -v opencode >/dev/null 2>&1; then opencode models ${2:+"$2"};   else echo "opencode CLI not on PATH"; return 1; fi ;;
+    ""|all|help)
+      _models_claude
+      echo
+      echo "devin    — live, per-account list:  chief models devin        (= devin models list)"
+      echo "opencode — live list:               chief models opencode     (= opencode models [provider])"
+      ;;
+    *) echo "chief models: unknown provider '$1' (claude | devin | opencode)" >&2; return 2 ;;
+  esac
+}
 # Host-wide orphan sweep. Deliberately NOT gated on load_project: the whole point is
 # that an orphan can be stopped without starting a new run on the repo that stranded
 # it (the old sweep only ever ran at driver startup, so an orphan spent unwatched
@@ -439,6 +467,7 @@ case "$cmd" in
   ps)                   cmd_ps ;;
   monitor|watch)        cmd_monitor "$@" ;;
   logs|tail)            cmd_logs "$@" ;;
+  models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;
   resume)               cmd_pause_resume resume "$@" ;;
