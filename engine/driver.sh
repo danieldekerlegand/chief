@@ -1263,6 +1263,30 @@ run_worker() {
     if [ -n "$sub" ]; then
       local _ex; _ex="$(git -C "$wt" rev-parse --git-path info/exclude 2>/dev/null)"
       [ -n "$_ex" ] && ! grep -qxF '.chief/' "$_ex" 2>/dev/null && echo '.chief/' >> "$_ex" 2>/dev/null || true
+
+      # NESTED SUBMODULES. `git worktree add` writes tracked files but leaves a
+      # nested submodule as an EMPTY DIRECTORY — the worktree gets the gitlink and
+      # no content. A repo that mounts a dependency that way (insimul/babylon
+      # mounts packages/core, which ~264 of its files import) would hand the agent
+      # a tree whose imports cannot resolve, and every build would fail for a
+      # reason that has nothing to do with the story it was given.
+      #
+      # Scoped to submodule work-repos on purpose. A top-level PROJECT is often a
+      # meta-repo whose submodules are the projects themselves — initializing all
+      # of them for a docs tasklist would check out gigabytes nobody asked for.
+      # A project repo that genuinely mounts a dependency as a submodule needs the
+      # same treatment; do it explicitly rather than paying that cost by default.
+      #
+      # Non-fatal, but never silent: an empty directory that reads as a checkout
+      # is exactly the failure this exists to prevent, so a failure to populate
+      # is announced rather than left for the agent to trip over.
+      if [ -f "$wt/.gitmodules" ]; then
+        if git -C "$wt" submodule update --init --recursive >/dev/null 2>&1; then
+          echo ">> $name: initialized nested submodule(s) in the worktree"
+        else
+          echo "!! $name: could not init nested submodule(s) in $wt — a mounted dependency is an EMPTY directory; builds that import it will fail"
+        fi
+      fi
     fi
     # Seed the ISOLATED runtime state (gitignored) from the BRANCH's committed
     # tasklist — carries the passes-state on a resume; equals the pristine template
