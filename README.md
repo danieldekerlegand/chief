@@ -246,14 +246,13 @@ tree at once.
 
 ## Status
 
-**v0.4** — extracted from a production setup where it drives real multi-tasklist
+**v0.7.36** — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
-crash recovery), and offline end-to-end tests. A desktop app for monitoring and
-managing jobs lives in [`app/`](app/). Known limit: parallel drivers rely on the
-merge floor rather than perfect conflict tags (by design — see above). The monitor
-and desktop app are per host/user; runs on other machines don't appear.
+crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the
+merge floor rather than perfect conflict tags (by design — see above). The run monitor
+is per host/user; runs on other machines don't appear.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+Apache-2.0 — see [`LICENSE`](LICENSE).
