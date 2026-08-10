@@ -44,7 +44,7 @@ run_sh() {
 BASH_SUITE=(
   smoke ratelimit limitstate limitresume limitmonitor pause liveliness monitor teardown reapscope reapenv noworkguard noworkguard-jsononly
   stale-resume conflict-forensics touches-audit
-  crossrepo submodule nested-submodule per-tasklist-verify retire-dirty-tasklist
+  crossrepo submodule nested-submodule nested-submodule-pointer per-tasklist-verify retire-dirty-tasklist
   version-bump
 )
 for t in "${BASH_SUITE[@]}"; do run_sh "$t"; done

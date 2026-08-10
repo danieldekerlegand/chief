@@ -129,8 +129,56 @@ run_verify() {
   verify_branch "$cwd"
 }
 
+# bump_submodule_chain PROJECT SUB NAME SHA — stage the submodule-pointer bump for SUB,
+# which may be NESTED (e.g. `babylon/packages/core`, a submodule OF a submodule).
+#
+# WHY THIS IS NOT `git -C PROJECT add SUB`. That is what it used to be, and for a nested
+# submodule it does not work:
+#
+#     $ git -C <project> add babylon/packages/core
+#     fatal: Pathspec 'babylon/packages/core' is in submodule 'babylon'
+#
+# The project tracks `babylon` as a gitlink; the inner pointer belongs to babylon's index,
+# not the project's. Because the call was error-suppressed the failure was INVISIBLE: the
+# branch merged into the submodule's base, the pointer never moved at any level, and the
+# run still reported MERGED. A whole class of silent-failure bugs in this file has the same
+# shape (see the retire-verification below), so this one fails LOUDLY instead.
+#
+# Walks real repo boundaries with `rev-parse --show-superproject-working-tree` rather than
+# splitting the path on `/` — path segments are not repo boundaries (`packages` above is a
+# plain directory), so a string split would stage the wrong thing.
+#
+# Each intermediate hop is committed in the repo that owns it, pathspec-scoped so a
+# concurrent worker's unrelated staged work is never swept into it. The TOP-LEVEL segment
+# is left STAGED in the project for the caller's retire commit to fold in — preserving the
+# existing one-commit-per-tasklist shape. Returns non-zero with a reason on any failure.
+bump_submodule_chain() {
+  local project="$1" sub="$2" name="$3" sha="$4"
+  local cur super rel
+  project="$(cd "$project" 2>/dev/null && pwd -P)" || { echo "  !! bump: project path unreadable"; return 1; }
+  cur="$(cd "$project/$sub" 2>/dev/null && pwd -P)" || { echo "  !! bump: '$sub' unreadable under $project"; return 1; }
+  while :; do
+    super="$(git -C "$cur" rev-parse --show-superproject-working-tree 2>/dev/null || true)"
+    [ -z "$super" ] && break                       # no superproject: we are at the top
+    super="$(cd "$super" 2>/dev/null && pwd -P)" || { echo "  !! bump: superproject of '$cur' unreadable"; return 1; }
+    rel="${cur#"$super"/}"
+    git -C "$super" add -- "$rel" 2>/dev/null || { echo "  !! bump: could not stage '$rel' in $super"; return 1; }
+    # The project's stage is the caller's to commit.
+    [ "$super" = "$project" ] && return 0
+    # Nothing staged means the pointer was already current — not an error, just nothing to do.
+    if ! git -C "$super" diff --cached --quiet -- "$rel" 2>/dev/null; then
+      git -C "$super" commit -q -m "chore(chief): $name — bump $rel to the merged sha" -- "$rel" 2>/dev/null \
+        || { echo "  !! bump: could not commit '$rel' in $super"; return 1; }
+    fi
+    cur="$super"
+  done
+  echo "  !! bump: '$sub' has no superproject — not a submodule of $project"
+  return 1
+}
+
 finalize_merged() {
   local name="$1" branch="$2" sha="$3" work_repo="${4:-$CHIEF_PROJECT}" sub="${5:-}"
+  local bump_failed=0
   # Prefer the run's snapshot (carries the agent's passes/notes); fall back to the
   # pristine template. NOTE: snapshots live in $SNAP (.chief/state/snapshots), NOT
   # under $STATE (.chief/state/parallel) — using $STATE here silently always fell
@@ -154,7 +202,16 @@ finalize_merged() {
   git -C "$CHIEF_PROJECT" rm -q -f --ignore-unmatch "$TASKS_REL/$name.json" 2>/dev/null || true
   git -C "$CHIEF_PROJECT" add "$TASKS_REL/completed/$name.json" 2>/dev/null || true
   if [ -n "$sub" ]; then
-    git -C "$CHIEF_PROJECT" add "$sub" 2>/dev/null || true    # bump the submodule pointer to the merged sha
+    # NOT error-suppressed, deliberately: a pointer bump that silently no-ops leaves the
+    # submodule's base advanced and every enclosing pointer stale, while the run still
+    # says MERGED. That is the exact failure this function's other guards exist to prevent.
+    if ! bump_submodule_chain "$CHIEF_PROJECT" "$sub" "$name" "$sha"; then
+      echo "  !! $name: SUBMODULE POINTER NOT BUMPED for '$sub' — the merge landed in the"
+      echo "     submodule but the project still points at the old sha. Fix by hand:"
+      echo "       git -C $CHIEF_PROJECT/$sub log --oneline -1     # the merged sha"
+      echo "       then stage the pointer in each enclosing repo and commit."
+      bump_failed=1
+    fi
     git -C "$CHIEF_PROJECT" commit -q -m "chore(chief): $name complete @$sha — bump $sub + record + retire" 2>/dev/null || true
   else
     git -C "$CHIEF_PROJECT" commit -q -m "chore(chief): $name complete @$sha — record + retire" 2>/dev/null || true
@@ -174,5 +231,38 @@ finalize_merged() {
   [ -f "$CHIEF_PROJECT/$TASKS_REL/$name.json" ] && \
     echo "  !! RETIRE FAILED for $name — $TASKS_REL/$name.json still present despite a merged record." \
          "It will look 'pending' but be skipped. Remove it by hand: git rm -f $TASKS_REL/$name.json" >&2
+  # VERIFY THE BUMP, for the same reason the retire is verified: do not trust the call,
+  # check the effect. Walks the chain and asserts every enclosing repo's RECORDED gitlink
+  # equals the child's HEAD — which is what "the pointer moved" actually means, at every
+  # level. A stale link here means the merged code is unreachable from the project.
+  if [ -n "$sub" ] && ! verify_submodule_chain "$CHIEF_PROJECT" "$sub"; then
+    bump_failed=1
+  fi
+  [ "$bump_failed" = "1" ] && \
+    echo "  !! POINTER STALE for $name ('$sub') — the merge is in the submodule but the project" \
+         "does not reference it. Nothing else will see this work until the pointers are bumped." >&2
   git -C "$work_repo" branch -d "$branch" >/dev/null 2>&1 || true
+}
+
+# verify_submodule_chain PROJECT SUB — post-condition for bump_submodule_chain. For every
+# hop from SUB up to PROJECT, the enclosing repo's committed gitlink must equal the child's
+# HEAD. Prints each mismatch; returns non-zero if any hop is stale.
+verify_submodule_chain() {
+  local project="$1" sub="$2" cur super rel recorded head rc=0
+  project="$(cd "$project" 2>/dev/null && pwd -P)" || return 1
+  cur="$(cd "$project/$sub" 2>/dev/null && pwd -P)" || return 1
+  while :; do
+    super="$(git -C "$cur" rev-parse --show-superproject-working-tree 2>/dev/null || true)"
+    [ -z "$super" ] && break
+    super="$(cd "$super" 2>/dev/null && pwd -P)" || return 1
+    rel="${cur#"$super"/}"
+    head="$(git -C "$cur" rev-parse HEAD 2>/dev/null || true)"
+    recorded="$(git -C "$super" ls-tree HEAD -- "$rel" 2>/dev/null | awk '{print $3}')"
+    if [ -z "$recorded" ] || [ "$recorded" != "$head" ]; then
+      echo "  !! stale pointer: $super records '$rel' at ${recorded:-<none>}, but its HEAD is ${head:-<unknown>}" >&2
+      rc=1
+    fi
+    cur="$super"
+  done
+  return $rc
 }
