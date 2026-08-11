@@ -1,0 +1,36 @@
+{
+  "project": "chief",
+  "branchName": "chief/79-desktop-monitor-app-decision",
+  "description": "chief's README once referenced a desktop monitoring app at `app/` that does not exist in-tree (the dangling reference was already removed in a docs fix). This tasklist RESOLVES the open question rather than leaving it implicit: does chief ship its own desktop monitor, or is the desktop/GUI surface deliberately chief-cloud's (the private control plane already builds a Tauri app over `chiefd`), leaving the open runner CLI-only? The likely answer is the latter — chief stays a CLI + `chief ps`/`monitor`/`logs`, and chief-cloud owns the GUI — but that boundary should be decided and written down, not left as a phantom. This is a small decision/ADR tasklist: record the decision, ensure no dangling `app/` references remain, and (if the decision is CLI-only) point users at chief-cloud for a GUI. Scope: `docs/` + `README.md` (a decision record; no engine change unless the decision is to build).",
+  "parked": false,
+  "dependsOn": [],
+  "touches": ["docs"],
+  "iters": 3,
+  "warmup": [],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Decide and record the desktop-monitor boundary",
+      "description": "Make the call explicit: chief CLI-only (GUI = chief-cloud) vs. a chief-native desktop app. Record it as a short decision note.",
+      "acceptanceCriteria": [
+        "A short decision record in `docs/` states the decision and its rationale — defaulting to: chief is the open CLI runner (`chief ps`/`monitor`/`logs` + the machine-readable status stream from `81`), and the desktop/GUI monitoring surface is chief-cloud's Tauri app over `chiefd`; the open runner stays daemon-free and GUI-free by design",
+        "The relationship is stated clearly: what chief provides (CLI + status stream a GUI consumes) vs. what chief-cloud provides (the desktop app + control-plane), so there is no ambiguity about where a monitoring GUI lives",
+        "If instead the decision is to build a chief-native app, the record says so and this tasklist's scope is explicitly re-opened (but the recommended and default resolution is CLI-only)"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "No dangling references; point users to the GUI",
+      "description": "Ensure the docs are internally consistent with the decision.",
+      "acceptanceCriteria": [
+        "`git grep -n 'app/'` (and the README) carries no dangling reference to a nonexistent chief desktop app; any monitoring-GUI mention points to chief-cloud",
+        "The README's monitoring section reflects the decision (CLI monitoring here; GUI via chief-cloud), consistent with the `docs/monitoring.md` content",
+        "Docs-only change (no `bin/`/`engine/` edit under the default CLI-only decision, so no VERSION bump is required); `jq`/`bash -n` clean on anything edited that warrants it"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

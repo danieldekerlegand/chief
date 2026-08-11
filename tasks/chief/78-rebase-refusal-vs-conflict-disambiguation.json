@@ -1,0 +1,50 @@
+{
+  "project": "chief",
+  "branchName": "chief/78-rebase-refusal-vs-conflict-disambiguation",
+  "description": "The merge phase currently treats ANY non-zero `git rebase` exit as a REBASE-CONFLICT: `engine/driver.sh` runs the rebase, and on failure captures `git diff --name-only --diff-filter=U` and aborts (the ~L346 `rebase_or_note` path). But a rebase can exit non-zero for reasons that are NOT a content collision — a dirty/locked worktree, a git refusal ('cannot rebase: you have unstaged changes'), a leftover `rebase-merge`/`MERGE_HEAD` state, or a config/ownership error — in which cases `--diff-filter=U` reports ZERO conflicted files. This was observed in the field: three talos branches strictly ahead of main (main an ancestor, so a rebase is a genuine no-op) were all labelled REBASE-CONFLICT with 'git reported none' conflicted files, blocking merges that had no real conflict. This tasklist teaches the merge phase to distinguish a REAL content conflict (≥1 `--diff-filter=U` path) from a rebase that was REFUSED for another reason, and to report/handle each correctly — so a dirty or locked worktree does not masquerade as a merge conflict. Scope: `engine/driver.sh` (the rebase/merge phase) + its test.",
+  "parked": false,
+  "dependsOn": [],
+  "touches": ["engine"],
+  "iters": 5,
+  "warmup": [],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Distinguish a refused rebase from a real content conflict",
+      "description": "At the rebase failure point in `engine/driver.sh`, a non-zero exit with zero `--diff-filter=U` paths is NOT a content conflict — it is a refusal (dirty/locked worktree, leftover rebase/merge state, ownership/config). Classify the two and label them distinctly.",
+      "acceptanceCriteria": [
+        "When `git rebase <base>` exits non-zero AND `git diff --name-only --diff-filter=U` lists ≥1 path, the outcome is still reported as REBASE-CONFLICT exactly as today (no regression to the real-conflict path)",
+        "When it exits non-zero with ZERO conflicted paths, the outcome is reported as a distinct state (e.g. REBASE-REFUSED / not a content conflict) whose message names the likely cause (unstaged/uncommitted changes, a leftover `rebase-merge`/`rebase-apply`/`MERGE_HEAD`/`CHERRY_PICK_HEAD` state, or dubious-ownership) rather than 'conflict with git reported none'",
+        "The rebase is still aborted cleanly and the branch is left exactly as the agent left it (attached, un-rebased) in BOTH cases — this story changes the classification + message, not the safety behavior",
+        "A pre-flight check detects the obvious refusal causes (a dirty worktree, or a leftover rebase/merge state dir under the git-dir) before attempting the rebase, so the common case is diagnosed rather than inferred from a bare non-zero exit",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "The snapshot/note reflects the true cause",
+      "description": "The `.rebase-conflict.md` snapshot the merge phase writes should not assert a content collision when there was none.",
+      "acceptanceCriteria": [
+        "For a refused (non-content) rebase, the written operator note states it was a refusal and names the cause + the fix (e.g. clean/commit the worktree, clear the leftover rebase state), instead of the content-conflict resolution steps",
+        "For a real content conflict, the existing snapshot content (conflicted files, colliders, 'resolve inside the rebase' guidance) is unchanged",
+        "A strictly-ahead branch (base is an ancestor → rebase is a no-op) is never reported as either a conflict or a refusal — it rebases cleanly and proceeds to merge (this is the exact field case that motivated the tasklist)"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Regression test for the spurious conflict",
+      "description": "Pin the distinction with a hermetic test alongside the existing suite.",
+      "acceptanceCriteria": [
+        "A hermetic test asserts: a branch with a REAL content conflict against a moved base is reported REBASE-CONFLICT with the conflicted files; a branch whose rebase is REFUSED by a dirty/locked worktree (zero `--diff-filter=U` paths) is reported as the distinct refusal state, not a conflict; and a strictly-ahead branch merges with no conflict/refusal at all",
+        "The test is hermetic (scripted fake provider on PATH, temp `CHIEF_*` prefixes) and joins the behavioral subset the verify hook + CI run",
+        "Editing `engine/` bumps `VERSION` (`test/version-bump.sh`); existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
