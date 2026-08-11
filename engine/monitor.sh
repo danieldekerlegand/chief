@@ -211,6 +211,18 @@ clock() {     # $1 = epoch -> "14:22"  (BSD date, then GNU date, then the raw ep
 # <name>.retries (re-dispatches spent). Any of them may be absent — the pause is
 # still legible without an ETA, which is the whole point of the line. It closes
 # with the heartbeat age, so a pause that has stopped ticking is visible too.
+# Retry annotation. driver.sh writes <name>.attempts when a FAILED tasklist is re-armed
+# (see RETRY ON FAILURE there); it is absent until a first retry, so an untouched tasklist
+# renders exactly as before. Shown for running rows (this is attempt 2 of 3) and for failed
+# ones (it used all 3), because "failed" means something different once retries are spent.
+retry_note() {  # $1 name  $2 stateroot  $3 cap ("" if unknown) -> "attempt n/max" or ""
+  local n="$1" sd="$2/parallel" cap="$3" tries
+  tries="$(cat "$sd/$n.attempts" 2>/dev/null || echo 0)"
+  case "$tries" in ''|*[!0-9]*) tries=0 ;; esac
+  [ "$tries" -lt 2 ] && return 0
+  case "$cap" in ''|*[!0-9]*) printf 'attempt %s' "$tries" ;; *) printf 'attempt %s/%s' "$tries" "$cap" ;; esac
+}
+
 limit_note() {  # $1 name  $2 stateroot  $3 cap ("" if unknown) -> one line
   local n="$1" sd="$2/parallel" cap="$3" at now left tries note age pa
   at="$(cat "$sd/$n.retry-at" 2>/dev/null || echo)"
@@ -409,7 +421,7 @@ render() {
     pid="$(field pid "$f")"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || continue
 
-    local repo base par tool model state staterel tasks wt names label started limitmax pm
+    local repo base par tool model state staterel tasks wt names label started limitmax retrymax pm
     repo="$(field repo "$f")";       base="$(field base "$f")"
     par="$(field parallel "$f")";    tool="$(field tool "$f")"
     model="$(field model "$f")"
@@ -417,6 +429,7 @@ render() {
     tasks="$(field tasks "$f")";     wt="$(field wt "$f")"
     names="$(field names "$f")";     started="$(field started "$f")"
     limitmax="$(field limitmax "$f")"
+    retrymax="$(field retrymax "$f")"
     [ -n "$staterel" ] || staterel=".chief/state"
     label="$(basename "$repo")"
     # provider, plus its model when one was selected: "devin · claude-opus-5-high"
@@ -427,7 +440,7 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale
+    local n st glyph gl lbl br prog act live age stale rn
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
       # The record also carries the coarse state (set_state writes both), so a row
@@ -447,7 +460,9 @@ render() {
       br="$(branch_of "$n" "$tasks")"
       prog="$(stories "$n" "$wt" "$staterel" "$state" "$tasks")"
       [ "$prog" = '?/?' ] && prog="$(live_prog "$n" "$state")"
-      printf '   %b %-22s %-9s %-7s %s%s%s\n' "$gl" "$n" "$lbl" "$prog" "$DIM" "$br" "$RST"
+      rn="$(retry_note "$n" "$state" "$retrymax")"
+      printf '   %b %-22s %-9s %-7s %s%s%s%s\n' "$gl" "$n" "$lbl" "$prog" "$DIM" "$br" \
+        "$([ -n "$rn" ] && printf ' · %s' "$rn")" "$RST"
       if [ "$st" = rate-limited ]; then
         printf '       %s↳ %s%s\n' "$CYN" "$(limit_note "$n" "$state" "$limitmax")" "$RST"
       elif [ "$st" = paused ]; then

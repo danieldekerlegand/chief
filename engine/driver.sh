@@ -216,6 +216,20 @@ AGENT_RC_PAUSED=3
 # separate family from agent.sh's RATE_LIMIT_* per-worker knobs: those govern how
 # long ONE agent loop sleeps mid-story, these govern how many times the SCHEDULER
 # re-launches a tasklist that gave up.
+# RETRY ON FAILURE — bounded, and deliberately not universal.
+#
+# A tasklist that fails is left to rot until an operator notices, and it decays while it
+# waits: every sibling that merges in the meantime puts it further behind its base. Seen in
+# production 2026-08-10 — 124-items-equipment-economy failed a flaky 5s test timeout, sat
+# for ~7 hours while 8 tasklists merged, and turned from "re-run it" into a 23-commit
+# rebase with real conflicts. The failure was transient; the cost of not retrying was not.
+#
+# RETRY_MAX is total ATTEMPTS per tasklist per run (not retries on top of the first), so 3
+# means it may run three times. 1 or 0 disables it. A re-armed tasklist goes back to
+# 'pending' and run_worker's normal RESUME path reuses its branch and committed passes
+# state — nothing is rebuilt, and integrate_base rebases it onto whatever landed meanwhile,
+# which is precisely the decay this exists to stop.
+RETRY_MAX="${RETRY_MAX:-3}"
 RATE_LIMIT_REDISPATCH_MAX="${RATE_LIMIT_REDISPATCH_MAX:-3}"
 RATE_LIMIT_REDISPATCH_WAIT="${RATE_LIMIT_REDISPATCH_WAIT:-3600}"
 RATE_LIMIT_REDISPATCH_MAX_WAIT="${RATE_LIMIT_REDISPATCH_MAX_WAIT:-21600}"
@@ -1130,6 +1144,7 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "tool=$TOOL"
   echo "automerge=$AUTO_MERGE_MAIN"
   echo "limitmax=$RATE_LIMIT_REDISPATCH_MAX"   # monitor.sh renders "re-dispatch n/max"
+  echo "retrymax=$RETRY_MAX"                     # monitor.sh renders "attempt n/max"
   echo "started=$(date +%s)"
   echo "state=$STATE_ROOT"
   echo "staterel=$STATE_REL"
@@ -1563,7 +1578,7 @@ rm -f "$LIMIT_PAUSE_FILE"
 rm -f "$STATE/.cosched"     # the co-scheduling relation is per-run, not cumulative
 for n in $NAMES; do
   set_state "$n" pending
-  rm -f "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" \
+  rm -f "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
         "$STATE/$n.files" "$STATE/$n.touches"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
 done
@@ -1601,6 +1616,32 @@ fi
 # All state on the filesystem, integers only — bash 3.2, no associative arrays.
 _int()          { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 retries_used()  { _int "$(cat "$STATE/$1.retries" 2>/dev/null)"; }
+# Attempts spent on FAILURE retries. Deliberately a separate counter from .retries (the
+# usage-limit re-dispatch budget): one tasklist can hit a usage limit AND fail its gate,
+# and spending one budget on the other would silently shorten both.
+attempts_used() { _int "$(cat "$STATE/$1.attempts" 2>/dev/null)"; }
+
+# Which failures are worth another agent. An allowlist, NOT "anything that is not done" —
+# a retry costs a full agent run, so it is spent only where a second attempt can plausibly
+# succeed:
+#
+#   VERIFY-FAILED    the gate failed. Flaky (a timeout under load) or fixable — and the
+#                    agent is re-engaged with the failure log persisted for it to read.
+#   MERGE-CONFLICT   the branch collided with what landed while it worked. Chief's pickup
+#   REBASE-CONFLICT  path already re-engages the agent to integrate; this gets it there
+#                    automatically instead of waiting for an operator.
+#   INCOMPLETE       ran out of iterations with stories left; more iterations may finish.
+#   EMPTY-NO-WORK    claimed COMPLETE with no commits. A second pass may do real work.
+#
+# NOT retried: CHECKOUT-FAILED, WORKTREE-FAILED, BAD-REPO and UNKNOWN are environmental or
+# configuration faults. The tree, the repo or the tasklist is wrong, and running the agent
+# again cannot fix any of them — it would just burn tokens against a broken setup.
+retryable_status() {
+  case "$1" in
+    VERIFY-FAILED*|MERGE-CONFLICT*|REBASE-CONFLICT*|INCOMPLETE*|EMPTY-NO-WORK*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 retry_at_of()   { _int "$(cat "$STATE/$1.retry-at" 2>/dev/null)"; }
 pause_until()   { _int "$(cat "$LIMIT_PAUSE_FILE" 2>/dev/null)"; }
 eta()           { date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null || echo "$1"; }
@@ -1703,6 +1744,21 @@ reap() {   # collect any finished workers, update state
     esac
     echo "  ● $n finished → $st"
     rm -f "$STATE/$n.pid"
+    # RETRY. After the state is settled and the pid is reaped, so a re-armed tasklist is
+    # indistinguishable from a fresh 'pending' one to the scheduler below. Only failures
+    # are considered — a pause is not a failure and must never spend this budget.
+    if [ "$(get_state "$n")" = "failed" ] && [ "$RETRY_MAX" -gt 1 ] && retryable_status "$st"; then
+      local spent; spent="$(attempts_used "$n")"
+      [ "$spent" -lt 1 ] && spent=1                      # the run that just ended was attempt 1
+      if [ "$spent" -lt "$RETRY_MAX" ]; then
+        printf '%s' "$(( spent + 1 ))" > "$STATE/$n.attempts"
+        set_state "$n" pending
+        echo "    ↻ retrying $n (attempt $(( spent + 1 ))/$RETRY_MAX) — $st"
+      else
+        printf '%s' "$spent" > "$STATE/$n.attempts"
+        echo "    ✗ $n exhausted its retries ($spent/$RETRY_MAX) — leaving it failed"
+      fi
+    fi
   done
 }
 
@@ -1783,7 +1839,8 @@ echo; echo "==================================================================="
 echo "  Parallel run summary"
 ran=""; paused=""; parked=""
 for n in $NAMES; do
-  printf '   - %-32s %s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )"
+  printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
+    "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
   [ -f "$STATE/$n.why" ] && sed 's/^/       ↳ /' "$STATE/$n.why"
   case "$(get_state "$n")" in
     done|failed) ran=1 ;;
@@ -1792,6 +1849,18 @@ for n in $NAMES; do
   esac
 done
 echo "   (logs: $STATE/<name>.log)"
+# Retried tasklists, said once and plainly. A tasklist that failed on its LAST attempt
+# looks identical to one that failed on its first unless the count is reported — and the
+# difference matters: the first is worth re-running, the second needs a human to read why.
+retried=""; for n in $NAMES; do [ "$(attempts_used "$n")" -gt 1 ] && retried="$retried $n"; done
+if [ -n "$retried" ]; then
+  echo "   (retried after failing:$retried)"
+  for n in $retried; do
+    printf '    · %-30s attempt %s/%s — %s\n' "$n" "$(attempts_used "$n")" "$RETRY_MAX" \
+      "$( [ "$(get_state "$n")" = done ] && echo "recovered" || echo "still failing; read $STATE_REL/$n.log" )"
+  done
+  [ "$RETRY_MAX" -le 1 ] && echo "    retry on failure is OFF (RETRY_MAX=$RETRY_MAX)."
+fi
 # A usage-limit pause is not a failure and must not read like one: say plainly that
 # the branch is intact, how much of the self-heal budget it spent, and that a re-run
 # picks up where it stopped. A run that ends here ran out of RE-DISPATCHES, not road.
