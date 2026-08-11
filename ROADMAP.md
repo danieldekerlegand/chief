@@ -144,7 +144,7 @@ would be a convenience, not a correctness need.
 - **1/1 tasklist merged** (`77-reap-by-inherited-run-marker`); **0 pending**. Records live in
   [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
 - **7 proposed tasklists** (`chief/78`–`chief/84`) back the Planned / hardening rows + the Embeddable-engine phase above
-  — **neither authored yet** (no `tasks/chief/*.json`); they are roadmap stubs numbered from the
+  — **now authored** (`tasks/chief/*.json`, `passes:false`, unrun); numbered from the
   current max (`77`). The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
   not discrete tasklists.
 - Chief is self-hosting: new work is written as `tasks/chief/NN-slug.json` and driven with chief
