@@ -98,6 +98,29 @@ ongoing bars are continuous upkeep, not discrete tasklists.
 | 🚧 | Provider breadth — the multi-provider seam (Claude / Devin / OpenCode / Amp) is shipped; keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
 | 🚧 | bash-3.2 compatibility upkeep — hold the bash 3.2 + shellcheck-clean bar as the engine grows; CI on Ubuntu + macOS is the guard | — |
 
+### Embeddable engine (Chief inside other projects) — ⬜ proposed
+
+The **core of a cross-cutting program**: make chief invocable and observable as an *embedded
+execution engine* inside sibling projects — Cuneiform Riju instances first, then the
+Insimul / Formant / Lugh / Praxis / Vita vibe-coding surfaces. Today chief is driven through the
+interactive CLI (`bin/chief run`) and its state lives on the filesystem; a host app can already tail
+`~/.chief/runs/`, but there is no stable programmatic entry point, no structured event stream, and no
+supported roadmap→tasklist path for an operator agent to call. This phase turns the existing engine
+(`engine/driver.sh` scheduler+worker, `engine/agent.sh` iteration, the `--provider` seam that already
+dispatches OpenCode) into something a parent process can start, watch, and feed — **without
+reimplementing the loop**. The rows are additive seams around the shipped engine, not a rewrite.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ⬜ | Headless / library / programmatic invocation — a stable non-interactive entry point + documented exit contract so a host app can start a `driver.sh` run and read its result without the interactive `bin/chief` CLI (env/flags in, deterministic exit codes + run-id out) · M | `chief/80-headless-programmatic-invocation` *(proposed)* |
+| ⬜ | Machine-readable run + tasklist status stream — emit structured (JSON) run / tasklist / story lifecycle events off the run registry so an external UI (chief-cloud, or a host like Cuneiform) can visualize complete vs. incomplete work live · M | `chief/81-machine-readable-status-stream` *(proposed)* |
+| ⬜ | OpenCode + self-hosted / local-inference presets ("cost-avoidance mode") — first-class, preset-driven config that points heavy agentic testing at local inference via the existing OpenCode dispatch (accepting lower coding quality to avoid API cost); document the local-inference path as a supported mode · S/M | `chief/82-local-inference-cost-avoidance-preset` *(proposed)* |
+| ⬜ | Roadmap → tasklist generation helper — a supported way to turn a product roadmap into `tasks/chief/NN-slug.json` tasklists programmatically (numbered bands · `branchName` · `dependsOn`), callable by the operation agents embedding chief · M | `chief/83-roadmap-to-tasklist-generator` *(proposed)* |
+| ⬜ | Run-inside-a-container — make the worktree / path / git assumptions hold when chief runs inside a container or Riju workspace, so an embedded run behaves the same as a host run · S/M | `chief/84-run-inside-a-container` *(proposed)* |
+
+**Depends on:** none — chief is the provider here. **Consumed by** chief-cloud (the status stream)
+and cuneiform / insimul / formant / lugh / praxis / vita (the embedding hosts).
+
 ### By design — never a tasklist
 
 Deliberate non-goals, not backlog:
@@ -120,7 +143,7 @@ would be a convenience, not a correctness need.
 
 - **1/1 tasklist merged** (`77-reap-by-inherited-run-marker`); **0 pending**. Records live in
   [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
-- **2 proposed tasklists** (`chief/78`–`chief/79`) back the concrete Planned / hardening rows above
+- **7 proposed tasklists** (`chief/78`–`chief/84`) back the Planned / hardening rows + the Embeddable-engine phase above
   — **neither authored yet** (no `tasks/chief/*.json`); they are roadmap stubs numbered from the
   current max (`77`). The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
   not discrete tasklists.
