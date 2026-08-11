@@ -43,7 +43,7 @@ implements their work) and contract definitions (those live in `koine`).
   with provider + model shown; `chief logs [-f]` tails a run; `CHIEF_VERBOSE`/`--verbose`.
 - **Self-installing/updating** via `install.sh` + `chief update`; CI (shellcheck + `bash -n` + the
   behavioral suite) runs on Ubuntu and macOS (bash 3.2 is the compatibility floor).
-- **Chief program:** 1 tasklist merged (`77`); **nothing pending**.
+- **Chief program:** 1/1 built-program tasklists merged (`77`); 7 proposed forward tasklists authored (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
 
 ---
 
@@ -141,8 +141,9 @@ would be a convenience, not a correctness need.
 
 ## Chief Tasklist Status
 
-- **1/1 tasklist merged** (`77-reap-by-inherited-run-marker`); **0 pending**. Records live in
-  [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
+- **1/1 built-program tasklists merged** (`77-reap-by-inherited-run-marker`); **7 proposed forward
+  tasklists authored** (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
+  Records live in [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
 - **7 proposed tasklists** (`chief/78`–`chief/84`) back the Planned / hardening rows + the Embeddable-engine phase above
   — **now authored** (`tasks/chief/*.json`, `passes:false`, unrun); numbered from the
   current max (`77`). The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
