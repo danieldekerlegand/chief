@@ -35,8 +35,12 @@ implements their work) and contract definitions (those live in `koine`).
 - **Engine** (`engine/driver.sh` · `agent.sh` · `monitor.sh` · `lib.sh` · `live.sh` · `reap.sh`) +
   **CLI** (`bin/chief`): `init · run · list · ps · monitor · logs · models · reap · pause · resume
   · version · update`.
-- **Multi-provider:** Claude Code (default), Devin, and OpenCode via `--provider`/`--model` (or
-  `CHIEF_PROVIDER`/`CHIEF_MODEL` in `.chief/config`); legacy `CHIEF_TOOL`/`--tool` still accepted.
+- **Multi-provider:** Claude Code (default), Devin, OpenCode, and Amp via `--provider`/`--model`
+  (or `CHIEF_PROVIDER`/`CHIEF_MODEL` in `.chief/config`); legacy `CHIEF_TOOL`/`--tool` still
+  accepted. Amp is **dispatch-only** today: accepted by both validators with a first-class
+  `_run_provider` case (`engine/agent.sh`) — *not* the "legacy alias" an old `driver.sh` comment
+  claims — but with no model-override wiring, no `chief models` case, and no README/template
+  coverage; `85` settles its status.
 - **Safe by construction:** worktree isolation per tasklist, a serialized rebase → verify → merge
   floor, a no-work guard (EMPTY-NO-WORK), verify-failure re-engagement, mid-merge crash recovery,
   and orphan reaping keyed on the inherited `$CHIEF_RUN_ID` (`77`, merged).
@@ -44,7 +48,7 @@ implements their work) and contract definitions (those live in `koine`).
   with provider + model shown; `chief logs [-f]` tails a run; `CHIEF_VERBOSE`/`--verbose`.
 - **Self-installing/updating** via `install.sh` + `chief update`; CI (shellcheck + `bash -n` + the
   behavioral suite) runs on Ubuntu and macOS (bash 3.2 is the compatibility floor).
-- **Chief program:** 1/1 built-program tasklists merged (`77`); 7 proposed forward tasklists authored (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
+- **Chief program:** 1/1 built-program tasklists merged (`77`); 10 proposed forward tasklists authored (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
 
 ---
 
@@ -93,14 +97,16 @@ means the capability predates self-hosting or is continuous steady-state, not a 
 ### Planned / hardening — ⬜ modest, capability-oriented
 
 Chief is shipping and self-hosting; remaining work is hardening and breadth, not core function. The
-two concrete items would be self-hosted tasklists (numbered from the current max, `77`); the two
+concrete items are self-hosted tasklists (numbered from the current max, `77`); the two
 ongoing bars are continuous upkeep, not discrete tasklists.
 
 | Status | Milestone | Tasklist |
 |---|---|---|
 | ⬜ | Rebase-refusal vs. real content-conflict disambiguation — the merge phase labels **any** non-zero `git rebase` as `REBASE-CONFLICT` (`engine/driver.sh` §1492), so a worktree that merely *refuses* / is dirty-or-locked masquerades as a content collision (a spurious failure observed in practice); distinguish the two so a branch isn't parked on a false positive · S/M | `chief/78-rebase-refusal-vs-conflict-disambiguation` *(proposed)* |
 | ⬜ | Desktop monitor-app decision — resolve the referenced-but-absent `app/` desktop GUI over the run registry: either land a thin monitor app or drop the reference · S (decision) / M (if built) | `chief/79-desktop-monitor-app-decision` *(proposed)* |
-| 🚧 | Provider breadth — the multi-provider seam (Claude / Devin / OpenCode / Amp) is shipped; keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
+| 🚧 | Provider breadth — the multi-provider seam dispatches Claude / Devin / OpenCode / Amp; Amp is dispatch-only (no model override, no `chief models` case, no docs/tests — `85` reconciles it); keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
+| ⬜ | Provider onboarding harness — a documented onboarding recipe + a hermetic, roster-driven scripted-fake conformance test, so a new agent CLI = one `_run_provider` dispatch case + one registered fixture; settles Amp's first-class-vs-legacy contradiction (promote or retire, no third state) · S/M | `chief/85-provider-onboarding-harness` *(proposed)* |
+| ⬜ | Doc-sync gate — a grep-based, hermetic verify/CI check asserting README's version string == `VERSION` and the README command table covers every `bin/chief` subcommand (the exact drift class re-synced by hand on 2026-08-11, commit `995263c`) · S | `chief/86-doc-sync-gate` *(proposed)* |
 | 🚧 | bash-3.2 compatibility upkeep — hold the bash 3.2 + shellcheck-clean bar as the engine grows; CI on Ubuntu + macOS is the guard | — |
 
 ### Embeddable engine (Chief inside other projects) — ⬜ proposed
@@ -118,10 +124,11 @@ reimplementing the loop**. The rows are additive seams around the shipped engine
 | Status | Milestone | Tasklist |
 |---|---|---|
 | ⬜ | Headless / library / programmatic invocation — a stable non-interactive entry point + documented exit contract so a host app can start a `driver.sh` run and read its result without the interactive `bin/chief` CLI (env/flags in, deterministic exit codes + run-id out) · M | `chief/80-headless-programmatic-invocation` *(proposed)* |
-| ⬜ | Machine-readable run + tasklist status stream — emit structured (JSON) run / tasklist / story lifecycle events off the run registry so an external UI (chief-cloud, or a host like Cuneiform) can visualize complete vs. incomplete work live · M | `chief/81-machine-readable-status-stream` *(proposed)* |
+| ⬜ | Machine-readable run + tasklist status stream — emit structured (JSON) run / tasklist / story lifecycle events off the run registry so an external UI (chief-cloud, or a host like Cuneiform) can visualize complete vs. incomplete work live; includes optional, nullable usage/cost/limit fields when the provider exposes them (the data source chief-cloud's `82` cost ledger persists) · M | `chief/81-machine-readable-status-stream` *(proposed)* |
 | ⬜ | OpenCode + self-hosted / local-inference presets ("cost-avoidance mode") — first-class, preset-driven config that points heavy agentic testing at local inference via the existing OpenCode dispatch (accepting lower coding quality to avoid API cost); document the local-inference path as a supported mode · S/M | `chief/82-local-inference-cost-avoidance-preset` *(proposed)* |
 | ⬜ | Roadmap → tasklist generation helper — a supported way to turn a product roadmap into `tasks/chief/NN-slug.json` tasklists programmatically (numbered bands · `branchName` · `dependsOn`), callable by the operation agents embedding chief · M | `chief/83-roadmap-to-tasklist-generator` *(proposed)* |
 | ⬜ | Run-inside-a-container — make the worktree / path / git assumptions hold when chief runs inside a container or Riju workspace, so an embedded run behaves the same as a host run · S/M | `chief/84-run-inside-a-container` *(proposed)* |
+| ⬜ | Account/credential selection seam — start a run *under a designated account*: a per-run credential env file (`chief run --account-env <file>` / `CHIEF_ACCOUNT_ENV_FILE`) applied around the provider invocation only, documented + hermetically tested, secrets never in logs/registry/state; the runner-side prerequisite chief-cloud's `91-account-pooling-and-capacity-balancing` builds on (chief does no pooling itself) · S/M | `chief/87-account-credential-seam` *(proposed)* |
 
 **Depends on:** none — chief is the provider here. **Consumed by** chief-cloud (the status stream)
 and cuneiform / insimul / formant / lugh / praxis / vita (the embedding hosts).
@@ -134,22 +141,22 @@ Deliberate non-goals, not backlog:
 |---|---|---|
 | ⬜ | No AI auto-conflict-resolution — a real content conflict stops that tasklist for a human, by design | never |
 | ⬜ | `touches` tags stay advisory — the **merge floor**, not perfect tagging, is the correctness guarantee (under-tagging costs a wasted rebase, over-tagging costs parallelism; neither costs correctness) | never |
+| ⬜ | Cross-host run aggregation — the monitor + registry stay per host/user; the fleet-wide view across machines is **chief-cloud's** (its daemon + control plane aggregate over chief's on-disk state and, once `81` lands, its event stream), never a chief feature | never — chief-cloud's |
 
 ### Loose wishlist — ⬜ not yet scoped
 
-No large future threads are parked — chief is a tool and its scope stays deliberately small. The one
-genuinely-open minor thread, noted in passing: **cross-host run aggregation** — the monitor +
-registry are per host/user today, so runs on other machines don't appear; a shared/aggregated view
-would be a convenience, not a correctness need.
+Empty. No future threads are parked — chief is a tool and its scope stays deliberately small; every
+known item is either an authored tasklist, an ongoing bar, or a **By design** non-goal above
+(cross-host run aggregation moved there: it is chief-cloud's, not a chief convenience).
 
 ---
 
 ## Chief Tasklist Status
 
-- **1/1 built-program tasklists merged** (`77-reap-by-inherited-run-marker`); **7 proposed forward
+- **1/1 built-program tasklists merged** (`77-reap-by-inherited-run-marker`); **10 proposed forward
   tasklists authored** (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
   Records live in [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
-- **7 proposed tasklists** (`chief/78`–`chief/84`) back the Planned / hardening rows + the Embeddable-engine phase above
+- **10 proposed tasklists** (`chief/78`–`chief/87`) back the Planned / hardening rows + the Embeddable-engine phase above
   — **now authored** (`tasks/chief/*.json`, `passes:false`, unrun); numbered from the
   current max (`77`). The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
   not discrete tasklists.

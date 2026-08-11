@@ -44,6 +44,19 @@
       ],
       "passes": false,
       "notes": ""
+    },
+    {
+      "id": "US-4",
+      "title": "Surface usage/cost/limit fields when the provider exposes them",
+      "description": "chief-cloud's `82-run-history-analytics-and-cost-persistence` persists a spend/quota ledger and needs a runner-side data source. Project the usage signals the engine ALREADY observes — rate-limit detection, the `.limit-retry-at` reset ETA, `rate-limited`/`waits` phases in the live records, and any usage/cost figures a provider CLI prints in a parseable form — into optional, explicitly nullable fields on the event stream. Observation-only: no new provider API polling, no new state machine.",
+      "acceptanceCriteria": [
+        "Events carry an optional usage block (e.g. `usage`: tokens/cost per turn where the provider's output surfaces them, `limit`: {hit, retry_at, waits} from the engine's existing rate-limit accounting) populated ONLY when the provider exposes the signal; when it doesn't, the fields are null/absent and the event remains schema-valid",
+        "The schema doc from US-2 documents every usage/cost/limit field as nullable and provider-dependent, and names this block as the data source chief-cloud's `82-run-history-analytics-and-cost-persistence` persists",
+        "Population is a projection of what the engine already observes (`_is_rate_limit` outcomes, `$STATE/.limit-retry-at`, live-record `waits`/`retry_at`, parseable provider stdout) — no new provider API calls, no polling loops",
+        "The hermetic test from US-3 gains both cases: a scripted provider that emits a usage-limit message yields events with the limit fields populated, and one that emits nothing usage-shaped yields null/absent fields — both validating against the versioned schema; `bash -n` + `shellcheck -S error` stay clean"
+      ],
+      "passes": false,
+      "notes": ""
     }
   ]
 }
