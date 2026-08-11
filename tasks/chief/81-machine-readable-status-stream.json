@@ -1,0 +1,49 @@
+{
+  "project": "chief",
+  "branchName": "chief/81-machine-readable-status-stream",
+  "description": "`bin/chief ps`/`monitor` render the run registry (`$CHIEF_RUNS/*.run` + the per-tasklist `$STATE/<name>.live.json`) for a human terminal, and chief-cloud's daemon tails the same files. There is no structured EVENT stream a host can subscribe to: to learn that a story merged or a tasklist went VERIFY-FAILED, a consumer must poll and diff the live JSON itself. This tasklist emits structured NDJSON run/tasklist/story lifecycle events off the SAME transition points the engine already writes state at, so chief-cloud and embedding hosts (Cuneiform) can visualize complete-vs-incomplete work live. Additive only — `ps`/`monitor`/`logs` and the `.live.json` files are unchanged. Builds on 80's run-id + JSON conventions. Scope: `engine/driver.sh` (emit events where it already updates `<name>.live.json`), `bin/chief` (a follow/subscribe surface), `docs/`.",
+  "parked": false,
+  "dependsOn": ["80-headless-programmatic-invocation"],
+  "touches": ["engine"],
+  "iters": 6,
+  "warmup": [],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Emit NDJSON lifecycle events off the existing transitions",
+      "description": "Project the state transitions the driver already performs into an append-only event log — do not build a second state machine.",
+      "acceptanceCriteria": [
+        "The engine writes an append-only NDJSON event log per run at a documented path (e.g. `$CHIEF_RUNS/<run-id>.events.jsonl`), one JSON object per transition: run-started / run-finished, tasklist launched / merged / verify-failed / rebase-conflict / blocked, and story passed",
+        "Each event carries the run-id, tasklist name, story id (where applicable), the state, and a timestamp; events are versioned with a `schema`/`v` field so a consumer can evolve with it",
+        "Events are emitted at the SAME points in `engine/driver.sh` that already write `<name>.live.json` — the stream is a projection of transitions that already happen, adding no new scheduling logic",
+        "Bash 3.2 compatible; NDJSON is well-formed (each line independently valid via `jq`); `bash -n` + `shellcheck -S error` clean"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "A subscribe/read surface + documented consumer contract",
+      "description": "Give hosts a live way to consume the stream, analogous to `chief logs -f`, and document the schema as the contract chief-cloud reads.",
+      "acceptanceCriteria": [
+        "A documented live-consume surface exists (e.g. `chief events [--follow] [<run-id>]`) that tails the NDJSON and writes each event to stdout as it lands",
+        "`docs/` (extend `docs/monitoring.md` or add a doc) documents the event path, the versioned schema, and a consumer example — explicitly named as the contract chief-cloud + embedding hosts read",
+        "Backward-compatible: `ps` / `monitor` / `logs` and the `.live.json` records are unchanged; the event stream is purely additive"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Test the stream hermetically",
+      "description": "Pin the event sequence + shape with a hermetic test in the existing suite.",
+      "acceptanceCriteria": [
+        "A hermetic test asserts a scripted run emits the expected event sequence for a merged tasklist AND for a verify-failed one; every line is valid JSON carrying run-id + state; the `schema`/`v` field is present",
+        "The test is hermetic (scripted fake provider on PATH, temp `CHIEF_*` prefixes) and joins the behavioral subset the verify hook + CI run",
+        "Editing `engine/`/`bin/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "project": "chief",
+  "branchName": "chief/83-roadmap-to-tasklist-generator",
+  "description": "An operator agent embedding chief (Cuneiform's roadmap → tasklists → `chief run` loop) needs to turn a product roadmap into `tasks/chief/NN-slug.json` tasklists PROGRAMMATICALLY — with the numbered bands, `branchName: chief/NN-slug`, `dependsOn` (filename-minus-.json, cross-repo `<repo>:<name>`), and `touches` conventions correct — rather than hand-writing JSON. This tasklist adds a supported generator: given a structured roadmap (phases → items), it emits schema-valid tasklist files per `docs/tasklist-schema.md`, callable by an embedding host. It is the operation the Cuneiform Chief-in-Riju phase (cuneiform G8) calls. Scope: a generator command/helper (under `bin/`/`engine/`), `docs/`, and a hermetic test.",
+  "parked": false,
+  "dependsOn": [],
+  "touches": ["engine"],
+  "iters": 6,
+  "warmup": [],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A generator that emits schema-valid tasklists from a roadmap",
+      "description": "Given a structured roadmap input, emit one schema-valid `tasks/chief/NN-slug.json` per item.",
+      "acceptanceCriteria": [
+        "A supported command/helper (e.g. `chief gen <roadmap-file>`, or a documented `engine/` script) takes a structured roadmap (phases → items, each with title / description / scope / optional deps) and emits one `tasks/chief/<NN-slug>.json` per item, each valid against `docs/tasklist-schema.md`: `project`, `branchName: chief/<NN-slug>`, `description`, and `userStories` each with `acceptanceCriteria` + `passes:false`",
+        "Numbering is non-colliding: the generator inspects existing `tasks/chief/*.json` + `tasks/chief/completed/*.json` and continues the band ABOVE the current max",
+        "It writes files for review by default and never overwrites an existing tasklist without an explicit `--force`; a `--dry-run`/stdout mode emits without writing",
+        "Bash 3.2 compatible (or, if a helper language is used, it ships with the engine and needs no new runtime beyond `jq`); `bash -n` + `shellcheck -S error` clean on any shell it adds"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "Faithful to the tasklist conventions",
+      "description": "The generated files must obey the exact conventions the schema doc and the tasklist gate enforce.",
+      "acceptanceCriteria": [
+        "Generated `branchName` == `chief/<name>`; `dependsOn` entries are filenames-minus-`.json` (never branch names), cross-repo-qualified `<repo>:<name>` where the roadmap declares a cross-repo dependency — matching `docs/tasklist-schema.md` and `docs/cross-repo-dependencies.md`",
+        "`touches` and `iters` are populated from the roadmap item where given, with sensible defaults otherwise",
+        "Every generated file passes `jq -e .` and the tasklist gate: valid JSON, `branchName == chief/NN-slug`, `mergedToMain` absent (not yet merged)"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Document the input shape + test the generator",
+      "description": "Document the roadmap input contract an embedding agent produces, and pin the generator with a fixture test.",
+      "acceptanceCriteria": [
+        "`docs/` documents the roadmap input shape and the generator contract (the operation an embedding agent calls to author tasklists)",
+        "A hermetic test runs the generator on a small fixture roadmap and asserts the emitted files are schema-valid, numbered in a non-colliding band, carry correct `branchName`/`dependsOn`, and round-trip through `jq`",
+        "Editing `bin/`/`engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
