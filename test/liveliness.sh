@@ -166,14 +166,14 @@ case "$lp" in */.chief/state/parallel/lv.live.json) ;; *) fail "record at an une
 # 2b) …and it was already live, mid-turn, with the fields the monitor needs.
 snap="$WORK/live.snap"
 jq -e . "$snap" >/dev/null 2>&1 || { cat "$snap" >&2; fail "the mid-run record is not valid JSON"; }
-for kv in name=lv state=running phase=claude-waiting story=US-1 iter=1; do
+for kv in name=lv state=running phase=provider-waiting story=US-1 iter=1; do
   got="$(live_get "$snap" "${kv%%=*}")"
   [ "$got" = "${kv#*=}" ] || { cat "$snap" >&2; fail "mid-run ${kv%%=*} = '$got', want '${kv#*=}'"; }
 done
 hb="$(live_get "$snap" heartbeat)"
 case "$hb" in ''|0|*[!0-9]*) fail "mid-run record has no heartbeat" ;; esac
 [ "$(( $(date +%s) - hb ))" -lt 600 ] || fail "the mid-run heartbeat is not a recent epoch"
-echo "   ok  mid-turn record: state=running phase=claude-waiting story=US-1 iter=1"
+echo "   ok  mid-turn record: state=running phase=provider-waiting story=US-1 iter=1"
 
 # 2c) `chief ps`, run from inside that same turn, SURFACED it — phase, story,
 #     iteration and a time-since-activity — and stayed plain text when piped.
@@ -181,7 +181,7 @@ ps_out="$(cat "$LV_PS" 2>/dev/null || echo)"
 has_ps() { case "$ps_out" in *"$1"*) ;; *) printf '%s\n' "--- chief ps (mid-run) ---" "$ps_out" >&2; fail "$2" ;; esac; }
 has_ps 'lv'             "the running tasklist is missing from mid-run \`chief ps\`"
 has_ps 'running'        "the tasklist didn't render as running"
-has_ps 'claude-waiting' "\`chief ps\` didn't show the fine-grained phase"
+has_ps 'provider-waiting' "\`chief ps\` didn't show the fine-grained phase"
 has_ps 'US-1'           "\`chief ps\` didn't show the current story"
 has_ps 'iter 1'         "\`chief ps\` didn't show the current iteration"
 has_ps ' ago'           "\`chief ps\` didn't show a time-since-last-activity"

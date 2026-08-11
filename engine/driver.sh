@@ -1630,15 +1630,34 @@ attempts_used() { _int "$(cat "$STATE/$1.attempts" 2>/dev/null)"; }
 #   MERGE-CONFLICT   the branch collided with what landed while it worked. Chief's pickup
 #   REBASE-CONFLICT  path already re-engages the agent to integrate; this gets it there
 #                    automatically instead of waiting for an operator.
-#   INCOMPLETE       ran out of iterations with stories left; more iterations may finish.
-#   EMPTY-NO-WORK    claimed COMPLETE with no commits. A second pass may do real work.
+# THE PRINCIPLE: retry INTEGRATION failures, never PRODUCTION failures. The three above
+# all mean "the work exists and is plausibly good, but the step that lands it failed" —
+# a gate that flaked, or a base that moved underneath it. A second agent run genuinely
+# fixes those. The ones below mean "the agent did not produce the work", which running the
+# same agent again does not fix; it just spends the budget twice to learn the same thing.
 #
-# NOT retried: CHECKOUT-FAILED, WORKTREE-FAILED, BAD-REPO and UNKNOWN are environmental or
-# configuration faults. The tree, the repo or the tasklist is wrong, and running the agent
-# again cannot fix any of them — it would just burn tokens against a broken setup.
+# NOT retried, and each for its own reason:
+#
+#   INCOMPLETE       the agent spent its ENTIRE iteration budget and still did not finish.
+#                    The most expensive thing to retry and the least likely to be
+#                    transient — another `iters` worth of tokens to reach the same wall.
+#                    Raising `iters` is the operator's call, not something Chief should do
+#                    silently by tripling the budget.
+#   EMPTY-NO-WORK    the false-complete guard fired: the agent claimed COMPLETE having
+#                    committed nothing. That is a misbehaving agent, and the run should
+#                    surface it rather than quietly paying for two more of the same.
+#   CHECKOUT-FAILED  environmental or configuration faults. The tree, the repo or the
+#   WORKTREE-FAILED  tasklist is wrong, and running the agent again cannot fix any of
+#   BAD-REPO         them — it would just burn tokens against a broken setup.
+#   UNKNOWN
+#
+# INCOMPLETE and EMPTY-NO-WORK are also load-bearing for the SCHEDULER: a genuine stall is
+# TERMINAL, which is what blocks its dependents, while a usage-limit pause is not. Making
+# either retryable blurs that distinction and leaves dependents neither blocked nor
+# progressing — caught by test/limitstate.sh, which is how both got here.
 retryable_status() {
   case "$1" in
-    VERIFY-FAILED*|MERGE-CONFLICT*|REBASE-CONFLICT*|INCOMPLETE*|EMPTY-NO-WORK*) return 0 ;;
+    VERIFY-FAILED*|MERGE-CONFLICT*|REBASE-CONFLICT*) return 0 ;;
     *) return 1 ;;
   esac
 }

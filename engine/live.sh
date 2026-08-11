@@ -24,7 +24,7 @@
 #     can read the record even where jq is absent.
 #
 # PHASE VOCABULARY (the fine-grained sub-phase; the coarse lifecycle is `state`):
-#   agent.sh   agent-turn · claude-waiting · writing · rate-limited-waiting · stalled ·
+#   agent.sh   agent-turn · provider-waiting · writing · rate-limited-waiting · stalled ·
 #              operator-paused
 #   driver.sh  worktree · warmup · reconcile · merge-wait · rebasing · verifying ·
 #              merging · merged · done · operator-paused
