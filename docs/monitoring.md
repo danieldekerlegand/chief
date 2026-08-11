@@ -70,7 +70,7 @@ column:
 ## Two pauses, one glyph — which one is holding the run?
 
 `⏸` covers a **usage-limit** pause (state `rate-limited` — Chief waits out the
-window and re-dispatches, [runbook](failure-recovery-runbook.md)) and an **operator**
+window and re-dispatches, see [Interruptions & resume](drivers-and-safety.md#interruptions--resume)) and an **operator**
 pause (state `paused` — a human ran [`chief pause`](drivers-and-safety.md#pausing-a-run-the-operators-quota-lever),
 and only `chief resume` lifts it). Confusing them is the difference between "wait 28
 minutes" and "wait for a person", so the label and the note say which:
