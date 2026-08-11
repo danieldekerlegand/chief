@@ -48,7 +48,7 @@ implements their work) and contract definitions (those live in `koine`).
   with provider + model shown; `chief logs [-f]` tails a run; `CHIEF_VERBOSE`/`--verbose`.
 - **Self-installing/updating** via `install.sh` + `chief update`; CI (shellcheck + `bash -n` + the
   behavioral suite) runs on Ubuntu and macOS (bash 3.2 is the compatibility floor).
-- **Chief program:** 1/1 built-program tasklists merged (`77`); 14 proposed forward tasklists authored (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged. The runnable head is the **agent-output quality & alignment** band (`88`–`91`), which should land before large tasklist backlogs are executed.
+- **Chief program:** 1/1 built-program tasklists merged (`77`); 15 proposed forward tasklists authored (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged. The runnable head is the **agent-output quality & alignment** band (`88`–`91`), which should land before large tasklist backlogs are executed; the opt-in merge queue (`92`) is deliberately sequenced *behind* it.
 
 ---
 
@@ -119,6 +119,34 @@ four rows close the gaps. **Run these before executing large tasklist backlogs.*
 > code) as review policy; and the framing *"you don't have too many PRs, you have too many bad PRs"* for
 > any throughput decision.
 
+### Merge throughput — ⬜ proposed, sequenced *after* the quality band
+
+Added 2026-08-11 by **decision D1** in [`../ADOPT-DECIDE-REGISTER.md`](../ADOPT-DECIDE-REGISTER.md).
+**Chief's merge floor is no longer unique** (finding F7): [Gastown](https://github.com/steveyegge/gastown)
+(17,551★, MIT, active) ships a **Bors-style batch-then-bisect merge queue** — its "Refinery" batches
+pending merge requests, rebases them as a stack on `main`, **verifies the batch tip once**, and on
+failure **binary-bisects** to isolate the culprit, merging only the passers. That amortizes verification
+across N merges instead of paying it N times, which is materially better at the ~360-tasklist scale this
+portfolio is heading to.
+
+**The decision was (a) opt-in mode, not replacement.** The serialized rebase → re-verify → `--no-ff`
+floor **stays the default and remains the correctness guarantee**; batching is opted into per run.
+Two constraints are load-bearing and are encoded in the tasklist: **bisect assumes deterministic
+verification**, and `88`'s ratchet adds a non-boolean, path-dependent axis whose delta measured on a
+*batch tip* is **not trivially attributable to one branch** — so the tasklist must either attribute it
+mechanically or reject the batch wholesale and fall back to serialized; and `91`'s `review`-policy
+overlap zones must not be smuggled into `main` inside a batch. Hence the sequencing: this runs **after
+`88`–`91`**, not beside them.
+
+**What is being adopted is one mechanism, not the project.** Gastown's own docs say it lacks
+*dependency resolution across tasks* and acceptance-criteria ledgers — precisely chief's differentiators
+(`dependsOn`/`touches` scheduling, the per-story `passes` ledger, the cross-repo run registry). Take the
+Refinery's batching + bisect; keep everything else.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ⬜ | **Opt-in batch-then-bisect merge queue** — batch N merge-ready branches, verify the tip once, binary-bisect on failure and merge only the passers; default-off, serialized floor unchanged when absent; flaky-gate detection falls back to serialized; ratchet regressions are attributed per-branch or the batch is rejected wholesale; `review`-zone branches never ride a batch · M/L | `chief/92-opt-in-batch-then-bisect-merge-queue` *(proposed)* |
+
 ### Planned / hardening — ⬜ modest, capability-oriented
 
 Chief is shipping and self-hosting; remaining work is hardening and breadth, not core function. The
@@ -178,14 +206,16 @@ known item is either an authored tasklist, an ongoing bar, or a **By design** no
 
 ## Chief Tasklist Status
 
-- **1/1 built-program tasklists merged** (`77-reap-by-inherited-run-marker`); **14 proposed forward
+- **1/1 built-program tasklists merged** (`77-reap-by-inherited-run-marker`); **15 proposed forward
   tasklists authored** (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
   Records live in [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
-- **14 proposed tasklists** (`chief/78`–`chief/91`) back the quality & alignment band, the
-  Planned / hardening rows, and the Embeddable-engine phase above — **now authored**
-  (`tasks/chief/*.json`, `passes:false`, unrun); numbered from the current max (`77`).
+- **15 proposed tasklists** (`chief/78`–`chief/92`) back the quality & alignment band, the
+  Planned / hardening rows, the Embeddable-engine phase, and the merge-throughput row above —
+  **now authored** (`tasks/chief/*.json`, `passes:false`, unrun); numbered from the current max (`77`).
   **Priority order:** `88`–`91` (quality & alignment) first — they change how every later tasklist
-  is gated and reviewed. The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
+  is gated and reviewed — then `92` (opt-in batch-then-bisect), which `dependsOn` `88` and `91`
+  because it has to say what a ratchet delta and an overlap-zone approval mean inside a batch.
+  The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
   not discrete tasklists.
 - Chief is self-hosting: new work is written as `tasks/chief/NN-slug.json` and driven with chief
   itself. A `completed/` record means it merged — verify actual engine changes, not just `passes`
