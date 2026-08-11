@@ -6,7 +6,7 @@
 > tasklist of user stories + acceptance criteria into merged, verified work with no silent bad
 > merges — across any repo, any agent provider.*
 
-**Status:** Shipping & self-hosting (v0.7.36) — in active hardening + provider-breadth mode · **Last updated:** 2026-08-10
+**Status:** Shipping & self-hosting (v0.8.0 — see [`VERSION`](VERSION)) — in active hardening + provider-breadth mode · **Last updated:** 2026-08-11
 
 This is the single canonical roadmap. Chief is a tool, not a product, and is **self-hosting** — its
 own work is driven by chief against tasklists in [`tasks/chief/`](tasks/chief/); this file tracks
@@ -32,8 +32,9 @@ implements their work) and contract definitions (those live in `koine`).
 
 - **Runs on stock bash 3.2+ · git · jq** (`node` optional; `jq` fallback for everything). No build
   step, no daemon, no root. State lives on the filesystem, so an interrupted run just resumes.
-- **Engine** (`engine/driver.sh` · `agent.sh` · `monitor.sh` · `lib.sh` · `reap.sh`) + **CLI**
-  (`bin/chief`): `init · run · list · ps · monitor · logs · models · version · update`.
+- **Engine** (`engine/driver.sh` · `agent.sh` · `monitor.sh` · `lib.sh` · `live.sh` · `reap.sh`) +
+  **CLI** (`bin/chief`): `init · run · list · ps · monitor · logs · models · reap · pause · resume
+  · version · update`.
 - **Multi-provider:** Claude Code (default), Devin, and OpenCode via `--provider`/`--model` (or
   `CHIEF_PROVIDER`/`CHIEF_MODEL` in `.chief/config`); legacy `CHIEF_TOOL`/`--tool` still accepted.
 - **Safe by construction:** worktree isolation per tasklist, a serialized rebase → verify → merge
@@ -67,6 +68,10 @@ means the capability predates self-hosting or is continuous steady-state, not a 
 | ✅ | Resume & resilience — branch reuse, dead-pid lock auto-clear, `RATE_LIMIT_RETRY` pause/resume, `RESET=1` | — |
 | ✅ | Merge-safety hardening — no-work guard, verify-failure re-engagement, mid-merge crash recovery | — |
 | ✅ | Orphan reaping — reap by cwd, argv `--chief-run` marker, and inherited `$CHIEF_RUN_ID` (belt-and-braces) | `77-reap-by-inherited-run-marker` |
+| ✅ | Operator pause/resume — `chief pause`/`chief resume` (`--all` = fleet-wide) with **drain** semantics: the iteration in flight runs to completion, a finished agent loop still verifies + merges, the rest park as `paused` with branch + worktree kept | — |
+| ✅ | Liveliness records — a per-tasklist fine-grained record (`engine/live.sh`: iteration · story · phase · last activity) next to the coarse state, surfaced by `chief ps`/`chief monitor` so "running" vs. hung is visible | — |
+| ✅ | Driver-level usage-limit re-dispatch — the scheduler waits out a `rate-limited` tasklist and re-dispatches it itself, bounded by `RATE_LIMIT_REDISPATCH_MAX` (no operator needed; separate from the per-worker `RATE_LIMIT_RETRY` knobs) | — |
+| ✅ | Bounded failed-tasklist retry — integration failures (VERIFY-FAILED / MERGE-CONFLICT / REBASE-CONFLICT) re-arm as `pending` up to `RETRY_MAX` total attempts, shown in `ps`/`monitor`; production failures stay failed | — *(shipped as engine work, commit `90dfc27`)* |
 
 ### Fabric, breadth & observability — ✅ shipped
 

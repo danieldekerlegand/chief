@@ -9,7 +9,8 @@ the parallel-safety model are in `docs/`.
 ## What belongs here
 
 - The **engine** (`engine/driver.sh` scheduler+worker, `engine/agent.sh` one iteration,
-  `engine/monitor.sh` run registry, `engine/lib.sh` shared helpers) and the **CLI** (`bin/chief`).
+  `engine/monitor.sh` run registry, `engine/lib.sh` shared helpers, `engine/live.sh` per-tasklist
+  liveliness records, `engine/reap.sh` orphan reaping) and the **CLI** (`bin/chief`).
 - The hermetic **test suite** (`test/*.sh`), the `chief init` **templates** (`templates/`), and the
   **docs** (`docs/`).
 
@@ -58,12 +59,14 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · version · update
+bin/chief            # CLI: init · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · logs · models · reap · pause · resume · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
   monitor.sh         #   active-run registry view  (chief ps / chief monitor)
   lib.sh             #   shared helpers: run_verify / verify_branch, locks, state I/O
+  live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
+  reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it)
 templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json)
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)

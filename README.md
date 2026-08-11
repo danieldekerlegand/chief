@@ -206,11 +206,17 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief list` | List tasklists with pass status. |
 | `chief ps` | One-shot table of active runs across all repos. |
 | `chief monitor [interval]` | Live-refreshing run view (default 2s; Ctrl-C to exit). |
+| `chief logs [name] [-f]` | Tail a tasklist's per-iteration log from a live run (`-f` follows; `-n N` sets the tail size). |
+| `chief models [provider]` | List the models you can pass to `--model` (live from devin/opencode; stable aliases for claude). |
+| `chief reap [-n] [--grace N]` | Stop orphaned chief work — agent trees with no live, registered run behind them (`-n` reports only). |
+| `chief pause [--all]` | Withhold agent turns — drain, never kill: in-flight iterations finish, the rest park as paused. |
+| `chief resume [--all]` | Lift the pause and re-arm parked tasklists as pending for the next `chief run`. |
 | `chief update` | Self-update the installed engine (`CHIEF_VERSION` pins a tag). |
 | `chief version` · `chief help` | Version / usage. |
 
 ## Docs
 
+- [`ROADMAP.md`](ROADMAP.md) — the roadmap: shipped capabilities vs. planned work.
 - [`docs/tasklist-schema.md`](docs/tasklist-schema.md) — the tasklist JSON format.
 - [`docs/drivers-and-safety.md`](docs/drivers-and-safety.md) — sequential vs
   parallel, `dependsOn`/`touches`/`warmup`, and the safety model.
@@ -223,16 +229,19 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 
 ## Development
 
-Three offline, deterministic tests drive the real runtime with a scripted fake
-agent (no network, no real AI). CI (`.github/workflows/ci.yml`) runs shellcheck +
-`bash -n` + all three on **Ubuntu and macOS** — macOS's default bash 3.2 is the
-compatibility floor.
+Offline, deterministic tests drive the real runtime with a scripted fake agent
+(no network, no real AI). CI (`.github/workflows/ci.yml`) runs shellcheck +
+`bash -n` + the suite on **Ubuntu and macOS** — macOS's default bash 3.2 is the
+compatibility floor. The four core tests:
 
 - `test/smoke.sh` — install → init → agent loop → verify → merge → retire.
 - `test/ratelimit.sh` — token/usage-limit pause+resume survives the parallel driver.
 - `test/monitor.sh` — the run registry + `chief ps` reflect a live run, then clean up.
 - `test/noworkguard.sh` — a false-complete (COMPLETE + zero commits) is caught as
   `EMPTY-NO-WORK`, never merged or retired.
+
+Beyond the core four, `test/` holds focused tests for pause/resume, liveliness,
+reaping, providers, submodule handling, retry-on-failure, and more.
 
 ```sh
 bash test/smoke.sh      # installs the COMMITTED state — commit engine changes first
@@ -246,7 +255,7 @@ tree at once.
 
 ## Status
 
-**v0.7.36** — extracted from a production setup where it drives real multi-tasklist
+**v0.8.0** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the
