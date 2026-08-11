@@ -49,49 +49,70 @@ implements their work) and contract definitions (those live in `koine`).
 
 ## Milestones
 
-Chief was extracted from a production multi-tasklist setup, then generalized. Phases are
-capability bands, not a linear rewrite.
+One list, everything: shipped capabilities, the ongoing steady-state bars, and the modest planned
+hardening. Chief was extracted from a production multi-tasklist setup, then generalized, so the
+shipped rows are **capability bands, not a linear rewrite** — most predate self-hosting and carry no
+single tasklist. Status legend: **✅ shipped · 🚧 partial / ongoing · ⬜ planned**. The Tasklist
+column names the Chief tasklist that delivered a row (✅) or the *(proposed)* one that would; **—**
+means the capability predates self-hosting or is continuous steady-state, not a discrete tasklist.
 
-| Phase | Capability | Status |
+### Core harness — ✅ shipped
+
+| Status | Milestone | Tasklist |
 |---|---|---|
-| Core loop | fresh-agent story loop (implement → verify → commit → `passes:true`), COMPLETE stop condition | ✅ |
-| Worktree isolation | per-tasklist git worktree + gitignored `.chief/state/`; loops can't corrupt each other | ✅ |
-| The merge floor | serialized rebase → re-verify → `--no-ff` merge; interference degrades to a caught failure, never a silent bad merge | ✅ |
-| Concurrency scheduler | `-p N`, `dependsOn` ordering, `touches` conflict-domains, `chief run -n` dry-run waves | ✅ |
-| Resume & resilience | branch reuse, dead-pid lock auto-clear, `RATE_LIMIT_RETRY` pause/resume, `RESET=1` | ✅ |
-| Merge-safety hardening | no-work guard, verify-failure re-engagement, mid-merge crash recovery | ✅ |
-| Orphan reaping | reap by cwd, argv `--chief-run` marker, and inherited `$CHIEF_RUN_ID` (belt-and-braces) | ✅ `77-reap-by-inherited-run-marker` |
-| Host-wide monitor | run registry + `chief ps`/`chief monitor`, pruning dead runs | ✅ |
-| Cross-repo deps | wait on another repo's tasklist via `"<repo>:<tasklist>"` | ✅ |
-| Nested submodules | merge bumps submodule pointers at every level, fails loudly on breakage | ✅ |
-| Multi-provider | Claude / Devin / OpenCode selection + per-run model override; `chief models` | ✅ |
-| Observability polish | `chief logs [-f]`, `--verbose`/`CHIEF_VERBOSE`, provider+model in `ps`/`monitor` | ✅ |
-| Self-install/update | `install.sh` (idempotent) + `chief update` (version-pinnable) | ✅ |
-| Hermetic test suite | offline scripted-agent tests (smoke · ratelimit · monitor · noworkguard), CI on Ubuntu+macOS | ✅ |
-| Rebase-refusal disambiguation | tell a worktree-refused rebase apart from a real content conflict | ⬜ planned (see Remaining) |
-| Desktop monitor app | GUI for monitoring/managing jobs | ⬜ planned (README references `app/`; not yet in-tree) |
+| ✅ | Core loop — fresh-agent story loop (implement → verify → commit → `passes:true`), COMPLETE stop condition | — |
+| ✅ | Worktree isolation — per-tasklist git worktree + gitignored `.chief/state/`; loops can't corrupt each other | — |
+| ✅ | The merge floor — serialized rebase → re-verify → `--no-ff` merge; interference degrades to a caught failure, never a silent bad merge | — |
+| ✅ | Concurrency scheduler — `-p N`, `dependsOn` ordering, `touches` conflict-domains, `chief run -n` dry-run waves | — |
+| ✅ | Resume & resilience — branch reuse, dead-pid lock auto-clear, `RATE_LIMIT_RETRY` pause/resume, `RESET=1` | — |
+| ✅ | Merge-safety hardening — no-work guard, verify-failure re-engagement, mid-merge crash recovery | — |
+| ✅ | Orphan reaping — reap by cwd, argv `--chief-run` marker, and inherited `$CHIEF_RUN_ID` (belt-and-braces) | `77-reap-by-inherited-run-marker` |
 
----
+### Fabric, breadth & observability — ✅ shipped
 
-## Remaining / Next
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ✅ | Host-wide monitor — run registry + `chief ps`/`chief monitor`, pruning dead runs | — |
+| ✅ | Cross-repo deps — wait on another repo's tasklist via `"<repo>:<tasklist>"` | — |
+| ✅ | Nested submodules — merge bumps submodule pointers at every level, fails loudly on breakage | — |
+| ✅ | Multi-provider — Claude / Devin / OpenCode selection + per-run model override; `chief models` | — |
+| ✅ | Observability polish — `chief logs [-f]`, `--verbose`/`CHIEF_VERBOSE`, provider+model in `ps`/`monitor` | — |
 
-Chief is shipping and self-hosting; remaining work is hardening and breadth, not core function.
+### Install, test & CI — ✅ shipped
 
-1. **Rebase-refusal vs. real conflict** ⬜ (one-off, next hardening tasklist) — the merge phase can
-   report a spurious `REBASE-CONFLICT` when the worktree merely *refuses* a rebase; distinguish that
-   from a genuine content conflict so branches aren't parked on a false positive.
-2. **Desktop monitor/management app** ⬜ (one-off) — README points at `app/` for a GUI over the run
-   registry; the directory isn't in-tree yet. Either land it or drop the reference.
-3. **Provider breadth — ongoing** 🚧 — keep the `--provider` roster current as agent CLIs evolve
-   (Claude / Devin / OpenCode today; new providers behind the same seam).
-4. **Compatibility floor upkeep — ongoing** 🚧 — hold the bash 3.2 + shellcheck-clean bar as the
-   engine grows; CI on Ubuntu + macOS is the guard.
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ✅ | Self-install/update — `install.sh` (idempotent) + `chief update` (version-pinnable) | — |
+| ✅ | Hermetic test suite — offline scripted-agent tests (smoke · ratelimit · monitor · noworkguard), CI on Ubuntu + macOS | — |
 
-### Known limits (by design)
-- Parallel drivers rely on the **merge floor**, not perfect `touches` tags: under-tagging costs a
-  wasted rebase, over-tagging costs parallelism — neither costs correctness.
-- No AI auto-conflict-resolution: a real conflict stops that tasklist for a human.
-- The monitor + registry are **per host/user**; runs on other machines don't appear.
+### Planned / hardening — ⬜ modest, capability-oriented
+
+Chief is shipping and self-hosting; remaining work is hardening and breadth, not core function. The
+two concrete items would be self-hosted tasklists (numbered from the current max, `77`); the two
+ongoing bars are continuous upkeep, not discrete tasklists.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ⬜ | Rebase-refusal vs. real content-conflict disambiguation — the merge phase labels **any** non-zero `git rebase` as `REBASE-CONFLICT` (`engine/driver.sh` §1492), so a worktree that merely *refuses* / is dirty-or-locked masquerades as a content collision (a spurious failure observed in practice); distinguish the two so a branch isn't parked on a false positive · S/M | `chief/78-rebase-refusal-vs-conflict-disambiguation` *(proposed)* |
+| ⬜ | Desktop monitor-app decision — resolve the referenced-but-absent `app/` desktop GUI over the run registry: either land a thin monitor app or drop the reference · S (decision) / M (if built) | `chief/79-desktop-monitor-app-decision` *(proposed)* |
+| 🚧 | Provider breadth — the multi-provider seam (Claude / Devin / OpenCode / Amp) is shipped; keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
+| 🚧 | bash-3.2 compatibility upkeep — hold the bash 3.2 + shellcheck-clean bar as the engine grows; CI on Ubuntu + macOS is the guard | — |
+
+### By design — never a tasklist
+
+Deliberate non-goals, not backlog:
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ⬜ | No AI auto-conflict-resolution — a real content conflict stops that tasklist for a human, by design | never |
+| ⬜ | `touches` tags stay advisory — the **merge floor**, not perfect tagging, is the correctness guarantee (under-tagging costs a wasted rebase, over-tagging costs parallelism; neither costs correctness) | never |
+
+### Loose wishlist — ⬜ not yet scoped
+
+No large future threads are parked — chief is a tool and its scope stays deliberately small. The one
+genuinely-open minor thread, noted in passing: **cross-host run aggregation** — the monitor +
+registry are per host/user today, so runs on other machines don't appear; a shared/aggregated view
+would be a convenience, not a correctness need.
 
 ---
 
@@ -99,6 +120,10 @@ Chief is shipping and self-hosting; remaining work is hardening and breadth, not
 
 - **1/1 tasklist merged** (`77-reap-by-inherited-run-marker`); **0 pending**. Records live in
   [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
+- **2 proposed tasklists** (`chief/78`–`chief/79`) back the concrete Planned / hardening rows above
+  — **neither authored yet** (no `tasks/chief/*.json`); they are roadmap stubs numbered from the
+  current max (`77`). The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
+  not discrete tasklists.
 - Chief is self-hosting: new work is written as `tasks/chief/NN-slug.json` and driven with chief
   itself. A `completed/` record means it merged — verify actual engine changes, not just `passes`
   flags.
