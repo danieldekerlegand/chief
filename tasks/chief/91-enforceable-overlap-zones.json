@@ -1,0 +1,54 @@
+{
+  "project": "chief",
+  "branchName": "chief/91-enforceable-overlap-zones",
+  "description": "Chief's `touches` field lists the conflict domains the parallel scheduler serializes on — but it is ADVISORY by design, and the docs say so plainly: the merge floor (rebase → re-verify → --no-ff) is the correctness guarantee, tags are a hint. That was a defensible call when the only risk being managed was textual conflict. The independent 2026 scaling research names a second risk the merge floor does NOT catch: parallel agents each hold a different slice of context, so they produce 'individually correct code that breaks when combined' — a green rebase and a green verify on each branch says nothing about whether the two branches' designs agree. The recommended mitigation is an OVERLAP ZONE REGISTRY: a declared set of high-impact files/services where a change triggers MANDATORY human review regardless of automated results. That is `touches`, promoted from hint to policy. The same research supplies the other half: the AgenticFlict dataset finds larger diffs correlate with higher conflict probability, so 'controlling change size is the lever' — chief currently has no size budget per story at all. This tasklist adds both: a per-repo overlap-zone registry that can force review on designated domains, and a per-story diff-size budget that flags oversized changes. Neither weakens the merge floor; both add a policy layer above it. Scope: `engine/driver.sh` (scheduler + merge phase), `.chief/config` + `templates/`, `docs/drivers-and-safety.md`. See ../AGENTIC-ENGINEERING-ADVISORY.md §2.6 and §5.",
+  "parked": false,
+  "dependsOn": [],
+  "touches": ["engine"],
+  "iters": 6,
+  "warmup": [
+    "grep -n 'touches' docs/drivers-and-safety.md | head -20",
+    "cat docs/tasklist-schema.md"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "An overlap-zone registry that can force review",
+      "description": "Let a repo declare high-impact domains where a green gate is not sufficient authority to merge.",
+      "acceptanceCriteria": [
+        "A per-repo registry (in `.chief/config` or a sibling file, documented) declares overlap zones as path patterns and/or `touches` domain names, each with a policy: `serialize` (today's behavior) or `review` (serialize AND require explicit human approval before merge)",
+        "A tasklist whose branch modifies a `review`-policy zone does NOT auto-merge on a green verify: it lands in a distinct awaiting-approval state, visible in `chief ps`/`monitor`, and merges only on explicit approval — the merge floor still runs first, so approval is asked for a branch that is already rebased and green, never instead of the gate",
+        "Approval is recorded durably and survives process death (a restart must not re-ask for an approval already granted), consistent with chief's filesystem-resumable model",
+        "When `89`'s plan-review checkpoint is enabled for the same tasklist, the two do not double-prompt: an overlap-zone approval and a plan approval are distinct decisions at distinct times, and the docs state which is asked when",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "A per-story diff-size budget",
+      "description": "Large diffs raise conflict probability and are the thing the research says to control; make oversize visible and optionally blocking.",
+      "acceptanceCriteria": [
+        "A configurable per-story diff-size budget (changed lines and/or changed files, per repo, with a documented default) is evaluated at commit/merge time; exceeding it is surfaced in the story's record and in `ps`/`monitor` output",
+        "The budget's ENFORCEMENT is configurable: warn (default) or block-pending-approval — a hard block by default would break legitimate large refactors, so the default must not be obstructive while still making oversize visible",
+        "The check reads the branch's real diff against `$CHIEF_BASE_BRANCH` (the same scope the verify hook uses), so a story that touches many files legitimately (a rename sweep) can be distinguished in the message from one that grew unbounded",
+        "Guidance in `docs/` connects the budget to the vertical-slice principle: prefer several small end-to-end stories over one horizontal layer-at-a-time story, citing that reviewing 100-200 lines and resteering is far cheaper than reviewing 2,000+"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Document the policy layer and pin it with tests",
+      "description": "The safety model doc must state clearly what is a guarantee and what is a policy.",
+      "acceptanceCriteria": [
+        "`docs/drivers-and-safety.md` gains an overlap-zone section that PRESERVES the existing honest framing (the merge floor is the correctness guarantee; `touches` remains a scheduling hint) and adds the new layer above it: zones with a `review` policy are a deliberate human gate for cross-branch design divergence, which no automated gate detects",
+        "A hermetic test asserts: a branch touching a `serialize`-policy zone behaves exactly as today (no regression); a branch touching a `review`-policy zone rebases, verifies green, then WAITS for approval and merges only after it; a granted approval survives a simulated restart; an oversized diff is flagged under `warn` and withheld under `block`",
+        "Editing `engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

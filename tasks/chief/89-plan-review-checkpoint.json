@@ -1,0 +1,54 @@
+{
+  "project": "chief",
+  "branchName": "chief/89-plan-review-checkpoint",
+  "description": "Chief has no human checkpoint between 'acceptance criteria written' and 'merged to main'. The review-leverage hierarchy from the context-engineering research is explicit about what that costs: reviewing RESEARCH catches misunderstandings that would generate THOUSANDS of bad lines, reviewing a PLAN catches lines that would generate HUNDREDS of bad code lines, and reviewing CODE is 1:1 — so the cheapest place to steer is the plan, and chief currently guards none of them ('30 minutes of planning saves hours of review'). This tasklist adds an optional PLAN CHECKPOINT: before implementing a story, the agent emits a plan; a human approves, annotates, or rejects it; only an approved plan proceeds to code. The review surface is ADOPTED, NOT BUILT — plannotator (github.com/backnotprop/plannotator, ~7.6k stars, Apache-2.0 OR MIT, actively maintained) is a local browser annotation surface that already hooks Claude Code AND OpenCode (two of chief's four providers) via ExitPlanMode/PermissionRequest and returns structured feedback to the agent. Building our own plan-review UI would be exactly the wheel-reinvention this ecosystem is trying to avoid. This is also 12-factor-agents #7 ('contact humans with tool calls') realized in the harness. CRITICAL CONSTRAINT: chief's unattended, resumable, provider-agnostic character must survive — plan review is OPT-IN per tasklist, and an absent reviewer PARKS the tasklist (reusing the operator-pause drain semantics already in the engine), never blocks the scheduler and never silently proceeds. Scope: `engine/agent.sh` (a plan phase), `engine/driver.sh` (a pending-review state), the tasklist schema, `docs/`. See ../AGENTIC-ENGINEERING-ADVISORY.md §3.3 and §6.1.",
+  "parked": false,
+  "dependsOn": [],
+  "touches": ["engine"],
+  "iters": 8,
+  "warmup": [
+    "sed -n '300,420p' engine/agent.sh",
+    "cat docs/tasklist-schema.md"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A plan phase that emits a reviewable artifact",
+      "description": "Before implementing a story, the agent produces a plan: what it will change, where, and how it will verify — the 'program design' layer (file-tree diff, call-stack sketch, key signatures), not prose.",
+      "acceptanceCriteria": [
+        "When plan review is enabled for a tasklist, the story's iteration runs a PLAN step before any edit: the agent emits a structured plan artifact (files it will create/modify, the change per file, the verification it will run per phase) to a documented path under `.chief/state/` alongside the existing snapshots",
+        "The plan artifact is committed-or-persisted such that it survives process death and is available on resume — consistent with chief's filesystem-resumable model (a plan that vanishes on restart would force re-review)",
+        "The plan step is bounded: it consumes at most one iteration and its failure to produce a well-formed artifact is reported as a distinct, actionable state rather than falling through to implementation",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "Human approval via plannotator, with honest degradation",
+      "description": "Route the plan to plannotator for annotation; gate implementation on the verdict. Never invent a review UI.",
+      "acceptanceCriteria": [
+        "With plannotator available, an enabled story's plan is handed to it for review and chief consumes the structured verdict: APPROVED proceeds to implementation, REJECTED-WITH-FEEDBACK re-runs the plan step with the annotations in context (bounded by a retry budget), and the annotations are persisted with the plan artifact",
+        "Integration is by the documented plannotator surface (its hook/CLI contract) and is NOT vendored or reimplemented; the dependency is optional and its absence is detected, not assumed",
+        "DEGRADATION IS EXPLICIT AND SAFE: with plan review enabled but no reviewer reachable (plannotator absent, non-interactive host, or no response within a configured window), the tasklist PARKS in a distinct state that reuses the operator-pause drain semantics — finished work still verifies and merges, no new agent turn starts, the scheduler continues with other tasklists, and `chief ps`/`monitor` shows the awaiting-review state distinctly from `paused` and `rate-limited`",
+        "A reviewer's approval survives a restart: resuming a parked-for-review tasklist does not re-ask for a verdict already given"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Opt-in per tasklist, documented, tested",
+      "description": "Make it a tasklist-level choice with a sane default, so unattended runs and the 40%-of-tasks-are-one-shot reality both stay served.",
+      "acceptanceCriteria": [
+        "The tasklist schema gains an optional review field (e.g. `\"review\": \"plan\"` | `\"none\"`, default `\"none\"`) documented in `docs/tasklist-schema.md`; enabling it for a tasklist is a visible, reviewable diff",
+        "`docs/` explains the review-leverage rationale (research > plan > code), when to enable plan review (large/architectural tasklists) and when not to (one-shots, refactors, doc fixes) — matching the research's own ~40%/medium/large distribution guidance",
+        "A hermetic test covers all three paths with a scripted fake reviewer: approved → implementation proceeds; rejected-with-feedback → the plan step re-runs with annotations and the retry budget is honored; no reviewer → the tasklist parks in the awaiting-review state, the scheduler proceeds with siblings, and a later approval resumes it",
+        "Editing `engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

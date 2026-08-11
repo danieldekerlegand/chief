@@ -48,7 +48,7 @@ implements their work) and contract definitions (those live in `koine`).
   with provider + model shown; `chief logs [-f]` tails a run; `CHIEF_VERBOSE`/`--verbose`.
 - **Self-installing/updating** via `install.sh` + `chief update`; CI (shellcheck + `bash -n` + the
   behavioral suite) runs on Ubuntu and macOS (bash 3.2 is the compatibility floor).
-- **Chief program:** 1/1 built-program tasklists merged (`77`); 10 proposed forward tasklists authored (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
+- **Chief program:** 1/1 built-program tasklists merged (`77`); 14 proposed forward tasklists authored (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged. The runnable head is the **agent-output quality & alignment** band (`88`–`91`), which should land before large tasklist backlogs are executed.
 
 ---
 
@@ -93,6 +93,31 @@ means the capability predates self-hosting or is continuous steady-state, not a 
 |---|---|---|
 | ✅ | Self-install/update — `install.sh` (idempotent) + `chief update` (version-pinnable) | — |
 | ✅ | Hermetic test suite — offline scripted-agent tests (smoke · ratelimit · monitor · noworkguard), CI on Ubuntu + macOS | — |
+
+### Agent-output quality & alignment — ⬜ **highest priority**
+
+Added 2026-08-11 from the context-engineering / "software factory" research
+(see [`../AGENTIC-ENGINEERING-ADVISORY.md`](../AGENTIC-ENGINEERING-ADVISORY.md)). The finding:
+**chief's merge gate is a binary test oracle, which is exactly the reward shape the RLVR critique
+indicts** — *"there is no penalty for eroding codebase maintainability"* — and chief has **no human
+checkpoint between "acceptance criteria written" and "merged to main."** That is the lights-off
+factory architecture, whose documented outcome is +242.7% incidents per PR and a rewrite after
+~4 months. Chief already implements the *good* half of the methodology by design (fresh agent per
+story = intentional compaction, `progress.txt` artifacts, one-story units, filesystem resume); these
+four rows close the gaps. **Run these before executing large tasklist backlogs.**
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ⬜ | **Code-quality ratchet gate** — give `verify.sh` a second, deterministic axis: complexity / duplication / decomposition / dependency-graph metrics measured as **deltas vs. base**, ratchet semantics (may improve, may not regress), committed baseline + explicit re-baseline. No model judgment anywhere in the gate. Modeled on talos's ratchet and SlopCodeBench's 41 deterministic measures · M/L | `chief/88-code-quality-ratchet-gate` *(proposed)* |
+| ⬜ | **Plan-review checkpoint** — opt-in per tasklist: the agent emits a plan, a human approves/annotates, only an approved plan reaches code. Review surface is **adopted, not built** ([plannotator](https://github.com/backnotprop/plannotator), Apache-2.0/MIT, already hooks Claude Code + OpenCode). Absent reviewer **parks** via the existing pause-drain semantics — never blocks the scheduler, never silently proceeds · M/L | `chief/89-plan-review-checkpoint` *(proposed)* |
+| ⬜ | **Research-phase artifact** — once per tasklist, sub-agents produce a structured, human-editable research document (target files, data flow, root cause, conventions) that every story then consumes. The highest-leverage review point ("a misunderstanding generates *thousands* of bad lines") and a compaction artifact that buys back per-story context · M | `chief/90-research-phase-artifact` *(proposed)* |
+| ⬜ | **Enforceable overlap zones + diff-size budget** — promote `touches` from advisory hint to policy: declared high-impact domains require human approval even on a green gate (the merge floor catches textual conflict, not cross-branch *design* divergence); plus a per-story diff-size budget, since larger diffs measurably raise conflict probability (AgenticFlict) · M | `chief/91-enforceable-overlap-zones` *(proposed)* |
+
+> **Doctrine adopted alongside these:** [12-factor-agents](https://github.com/humanlayer/12-factor-agents)
+> (chief already satisfies #6 launch/pause/resume, #8 own-your-control-flow, #10 small-focused-agents,
+> #11 trigger-from-anywhere, #12 stateless-reducer); the **review-leverage hierarchy** (research > plan >
+> code) as review policy; and the framing *"you don't have too many PRs, you have too many bad PRs"* for
+> any throughput decision.
 
 ### Planned / hardening — ⬜ modest, capability-oriented
 
@@ -153,12 +178,14 @@ known item is either an authored tasklist, an ongoing bar, or a **By design** no
 
 ## Chief Tasklist Status
 
-- **1/1 built-program tasklists merged** (`77-reap-by-inherited-run-marker`); **10 proposed forward
+- **1/1 built-program tasklists merged** (`77-reap-by-inherited-run-marker`); **14 proposed forward
   tasklists authored** (`tasks/chief/*.json`, `passes:false`, unrun) — pending a run, not merged.
   Records live in [`tasks/chief/completed/`](tasks/chief/completed/) (each stamped `mergedToMain`).
-- **10 proposed tasklists** (`chief/78`–`chief/87`) back the Planned / hardening rows + the Embeddable-engine phase above
-  — **now authored** (`tasks/chief/*.json`, `passes:false`, unrun); numbered from the
-  current max (`77`). The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
+- **14 proposed tasklists** (`chief/78`–`chief/91`) back the quality & alignment band, the
+  Planned / hardening rows, and the Embeddable-engine phase above — **now authored**
+  (`tasks/chief/*.json`, `passes:false`, unrun); numbered from the current max (`77`).
+  **Priority order:** `88`–`91` (quality & alignment) first — they change how every later tasklist
+  is gated and reviewed. The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep,
   not discrete tasklists.
 - Chief is self-hosting: new work is written as `tasks/chief/NN-slug.json` and driven with chief
   itself. A `completed/` record means it merged — verify actual engine changes, not just `passes`
