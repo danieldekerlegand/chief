@@ -42,7 +42,7 @@ run_sh() {
 # ── 1. The bash engine + packaging suite ─────────────────────────────────────
 # Order mirrors CI (cheap/behavioral first), then the cross-repo and packaging
 BASH_SUITE=(
-  smoke provider provider-conformance ratelimit limitstate limitresume limitmonitor pause liveliness monitor teardown reapscope reapenv noworkguard noworkguard-jsononly headless events container
+  smoke provider provider-conformance ratelimit limitstate limitresume limitmonitor pause liveliness monitor teardown reapscope reapenv noworkguard noworkguard-jsononly headless events container account-env
   stale-resume conflict-forensics rebase-refusal touches-audit
   gen doc-sync
   crossrepo submodule nested-submodule nested-submodule-pointer retry-on-failure per-tasklist-verify retire-dirty-tasklist
