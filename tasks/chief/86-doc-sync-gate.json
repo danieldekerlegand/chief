@@ -1,10 +1,14 @@
 {
   "project": "chief",
+  "category": "fix",
   "branchName": "chief/86-doc-sync-gate",
-  "description": "README drifts from the engine silently: on 2026-08-11 the README's version string and command table had to be re-synced BY HAND against `VERSION` and `bin/chief` (commit `995263c` 'docs: sync README/ROADMAP/CLAUDE.md with the engine at HEAD'). The engine already enforces version discipline (`test/version-bump.sh`: editing `bin/`/`engine/` must bump `VERSION`) but nothing asserts the DOCS caught up — so the exact drift class recurs. This tasklist adds a hermetic, grep-based doc-sync check asserting (1) the README's stated version equals the `VERSION` file and (2) the README command-reference table covers every `bin/chief` subcommand, wired into `.chief/verify.sh` and CI so the drift blocks a merge instead of waiting for a human audit. Grep/`sed`/`awk` over tracked files only — no network, no agent, hermetic by construction. Scope: `test/` (the check), `.chief/verify.sh` (path-scoped wiring), `.github/workflows/ci.yml`; a `test/`-plus-`.chief/` change alone does not require a `VERSION` bump, but if `bin/`/`engine/` are touched, bump it.",
+  "description": "README drifts from the engine silently: on 2026-08-11 the README's version string and command table had to be re-synced BY HAND against `VERSION` and `bin/chief` (commit `995263c` 'docs: sync README/ROADMAP/CLAUDE.md with the engine at HEAD'). The engine already enforces version discipline (`test/version-bump.sh`: editing `bin/`/`engine/` must bump `VERSION`) but nothing asserts the DOCS caught up \u2014 so the exact drift class recurs. This tasklist adds a hermetic, grep-based doc-sync check asserting (1) the README's stated version equals the `VERSION` file and (2) the README command-reference table covers every `bin/chief` subcommand, wired into `.chief/verify.sh` and CI so the drift blocks a merge instead of waiting for a human audit. Grep/`sed`/`awk` over tracked files only \u2014 no network, no agent, hermetic by construction. Scope: `test/` (the check), `.chief/verify.sh` (path-scoped wiring), `.github/workflows/ci.yml`; a `test/`-plus-`.chief/` change alone does not require a `VERSION` bump, but if `bin/`/`engine/` are touched, bump it.",
   "parked": false,
   "dependsOn": [],
-  "touches": ["engine", "ci"],
+  "touches": [
+    "engine",
+    "ci"
+  ],
   "iters": 4,
   "warmup": [],
   "userStories": [
@@ -14,7 +18,7 @@
       "description": "One script that fails, with a message naming the exact drift, whenever README lags the engine on version or command coverage.",
       "acceptanceCriteria": [
         "`test/doc-sync.sh` exists and exits non-zero when the version string README states (the `**vX.Y.Z**` occurrence(s) that claim the current version) differs from the contents of `VERSION`, printing both values",
-        "It derives the subcommand roster from `bin/chief`'s command dispatch (the `case \"$cmd\"` arms — including alias arms like `monitor|watch`, counting an alias group as covered if its primary name is documented) rather than from a hand-maintained list, and exits non-zero naming any subcommand absent from README's command-reference table",
+        "It derives the subcommand roster from `bin/chief`'s command dispatch (the `case \"$cmd\"` arms \u2014 including alias arms like `monitor|watch`, counting an alias group as covered if its primary name is documented) rather than from a hand-maintained list, and exits non-zero naming any subcommand absent from README's command-reference table",
         "Purely grep/sed/awk over tracked files: no network, no agent invocation, no `~/.chief` access; deterministic under `bash 3.2`; `bash -n` + `shellcheck -S error` clean",
         "Self-test evidence: the script passes on the current tree, and demonstrably fails when fed a doctored README (shown via a temp-copy negative check inside the test or its commit message)"
       ],

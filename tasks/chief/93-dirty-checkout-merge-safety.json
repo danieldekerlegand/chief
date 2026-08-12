@@ -1,10 +1,15 @@
 {
   "project": "chief",
+  "category": "fix",
   "branchName": "chief/93-dirty-checkout-merge-safety",
-  "description": "The merge phase rebases in the OPERATOR'S checkout, so one uncommitted line anywhere in the repo fails the merge — and because a refused rebase is classified REBASE-CONFLICT, it is then re-dispatched to the agent for the full RETRY_MAX. Observed twice in one afternoon in cuneiform: 011 and 012 each completed all their stories, each failed to merge over a single modified tracked file (`docs/roadmap/README.md`, 1 insertion), and each burned 3/3 attempts before being left failed — six wasted agent iterations for work that was already done, plus two blocked dependents. 78 makes the failure DIAGNOSABLE; this makes it not happen, and makes it cheap when it does. The operator was editing their own repo while a run was in flight, which is a reasonable way to work: `chief run` checks the tree ONCE at startup and nothing re-checks it at merge time, so the gate cannot actually protect the merge it exists to protect.",
+  "description": "The merge phase rebases in the OPERATOR'S checkout, so one uncommitted line anywhere in the repo fails the merge \u2014 and because a refused rebase is classified REBASE-CONFLICT, it is then re-dispatched to the agent for the full RETRY_MAX. Observed twice in one afternoon in cuneiform: 011 and 012 each completed all their stories, each failed to merge over a single modified tracked file (`docs/roadmap/README.md`, 1 insertion), and each burned 3/3 attempts before being left failed \u2014 six wasted agent iterations for work that was already done, plus two blocked dependents. 78 makes the failure DIAGNOSABLE; this makes it not happen, and makes it cheap when it does. The operator was editing their own repo while a run was in flight, which is a reasonable way to work: `chief run` checks the tree ONCE at startup and nothing re-checks it at merge time, so the gate cannot actually protect the merge it exists to protect.",
   "parked": false,
-  "dependsOn": ["78-rebase-refusal-vs-conflict-disambiguation"],
-  "touches": ["engine"],
+  "dependsOn": [
+    "78-rebase-refusal-vs-conflict-disambiguation"
+  ],
+  "touches": [
+    "engine"
+  ],
   "iters": 6,
   "warmup": [
     "sed -n '1495,1520p' engine/driver.sh",
@@ -19,7 +24,7 @@
       "title": "A refused rebase is never re-dispatched to the agent",
       "description": "Re-running an agent cannot clean an operator's working tree, so retrying a refusal spends a full iteration to fail identically. Make the retry decision read 78's new classification.",
       "acceptanceCriteria": [
-        "`retryable_status` (engine/driver.sh:1660) returns FALSE for the refusal state 78 introduces, while REBASE-CONFLICT with ≥1 conflicted path stays retryable exactly as today — the retry exists because a real conflict decays as base moves, and a refusal has no such property",
+        "`retryable_status` (engine/driver.sh:1660) returns FALSE for the refusal state 78 introduces, while REBASE-CONFLICT with \u22651 conflicted path stays retryable exactly as today \u2014 the retry exists because a real conflict decays as base moves, and a refusal has no such property",
         "A refused tasklist is left failed after ONE attempt, and the run summary's reason names the precondition (the dirty/locked checkout) plus the operator fix, rather than 'exhausted its retries (3/3)' which reads as a hard problem",
         "The dependents of a refused tasklist are still BLOCKED with the same message shape as today (this story changes what is retried, not the dependency semantics)",
         "A hermetic test asserts the attempt count: a branch whose rebase is REFUSED runs its agent exactly ONCE, and a branch with a real content conflict still retries up to RETRY_MAX",
@@ -34,9 +39,9 @@
       "description": "Decide and implement how the merge phase integrates without depending on the state of the operator's working tree.",
       "acceptanceCriteria": [
         "The merge phase (engine/driver.sh:~1500, the `git checkout \"$branch\"` + `git rebase \"$work_base\"` pair inside the merge lock) no longer fails because the operator's checkout has uncommitted TRACKED changes to files the merge does not touch",
-        "The approach is chosen explicitly between (a) `git rebase --autostash`, (b) an explicit stash/restore around the critical section, and (c) performing the rebase+verify+merge in a dedicated worktree so the operator's checkout is never checked out onto the branch at all — with the decision and the rejected alternatives recorded in the story notes. (c) is the structural fix and (a) is one flag; whichever is chosen must state why",
-        "OPERATOR DATA IS NEVER LOST: if the chosen approach stashes, the restore runs on EVERY exit path including the failure and abort arms (the existing `trap … EXIT` + `$STATE/$name.critical` marker is the precedent), and a restore that cannot replay cleanly leaves the stash INTACT and names it in the run output rather than dropping it. A test kills the driver mid-critical-section and asserts the operator's uncommitted change is still recoverable",
-        "A genuine content conflict still behaves exactly as it does today — this story removes a precondition, it does not change conflict handling",
+        "The approach is chosen explicitly between (a) `git rebase --autostash`, (b) an explicit stash/restore around the critical section, and (c) performing the rebase+verify+merge in a dedicated worktree so the operator's checkout is never checked out onto the branch at all \u2014 with the decision and the rejected alternatives recorded in the story notes. (c) is the structural fix and (a) is one flag; whichever is chosen must state why",
+        "OPERATOR DATA IS NEVER LOST: if the chosen approach stashes, the restore runs on EVERY exit path including the failure and abort arms (the existing `trap \u2026 EXIT` + `$STATE/$name.critical` marker is the precedent), and a restore that cannot replay cleanly leaves the stash INTACT and names it in the run output rather than dropping it. A test kills the driver mid-critical-section and asserts the operator's uncommitted change is still recoverable",
+        "A genuine content conflict still behaves exactly as it does today \u2014 this story removes a precondition, it does not change conflict handling",
         "A hermetic test asserts the field case end to end: an operator checkout with a modified tracked file the branch does not touch, a branch strictly ahead of main, merge succeeds and the operator's modification survives the run unchanged",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped"
       ],
@@ -48,10 +53,10 @@
       "title": "The startup cleanliness gate says what it actually protects",
       "description": "Reconcile the startup check with the merge-time reality now that the merge no longer depends on a clean tree.",
       "acceptanceCriteria": [
-        "The startup gate's refusal message and `FORCE=1` escape hatch are re-stated for what they now protect — the AGENT's view of the repo at launch — rather than implying they protect the merge, which they never did (they are checked once, and nothing re-checks at merge time)",
-        "If US-2 lands (c) (merge in a dedicated worktree), evaluate whether the startup gate should still block at all or merely warn, and record the decision — a gate that stops a run for a condition the run no longer depends on is friction without protection",
+        "The startup gate's refusal message and `FORCE=1` escape hatch are re-stated for what they now protect \u2014 the AGENT's view of the repo at launch \u2014 rather than implying they protect the merge, which they never did (they are checked once, and nothing re-checks at merge time)",
+        "If US-2 lands (c) (merge in a dedicated worktree), evaluate whether the startup gate should still block at all or merely warn, and record the decision \u2014 a gate that stops a run for a condition the run no longer depends on is friction without protection",
         "`FORCE=1` remains able to start a run on a dirty tree, and the docs (README/docs) say plainly that editing the repo DURING a run is safe for the merge phase once this lands, since that is the workflow that produced the field failures",
-        "No behaviour change is asserted for a clean tree — a run that starts clean behaves byte-identically"
+        "No behaviour change is asserted for a clean tree \u2014 a run that starts clean behaves byte-identically"
       ],
       "passes": false,
       "notes": ""
@@ -61,8 +66,8 @@
       "title": "`chief run` must not silently override an env-set DRY_RUN",
       "description": "An independent invocation footgun found in the same session: DRY_RUN=1 in the environment is discarded, so a command intended as a simulation performs a real run.",
       "acceptanceCriteria": [
-        "`bin/chief run` sets `local dry=0` and then passes `DRY_RUN=\"$dry\"` to the driver, which OVERRIDES an inherited `DRY_RUN=1` with `0` — so `DRY_RUN=1 chief run` silently performs a REAL run. Fix it so an env-set `DRY_RUN` is honoured (the `--dry-run`/`-n` flag still wins when passed), matching the driver's own `DRY_RUN=\"${DRY_RUN:-0}\"` convention at engine/driver.sh:205",
-        "Audit the other toggles forwarded the same way in that block (PARALLEL, CHIEF_PROVIDER, CHIEF_MODEL, AUTO_MERGE_MAIN, CHIEF_VERBOSE) and apply the same rule — a flag overrides the environment, an unset flag does not clobber it — or record why a given one should differ",
+        "`bin/chief run` sets `local dry=0` and then passes `DRY_RUN=\"$dry\"` to the driver, which OVERRIDES an inherited `DRY_RUN=1` with `0` \u2014 so `DRY_RUN=1 chief run` silently performs a REAL run. Fix it so an env-set `DRY_RUN` is honoured (the `--dry-run`/`-n` flag still wins when passed), matching the driver's own `DRY_RUN=\"${DRY_RUN:-0}\"` convention at engine/driver.sh:205",
+        "Audit the other toggles forwarded the same way in that block (PARALLEL, CHIEF_PROVIDER, CHIEF_MODEL, AUTO_MERGE_MAIN, CHIEF_VERBOSE) and apply the same rule \u2014 a flag overrides the environment, an unset flag does not clobber it \u2014 or record why a given one should differ",
         "A test asserts `DRY_RUN=1 chief run` spawns no agent, creates no worktree and no branch: this was observed in the field launching a real tasklist that was then only caught by the appearance of a worktree",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped"
       ],
