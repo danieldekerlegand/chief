@@ -98,6 +98,9 @@ jobs:
       - name: Under-tagged touches audit (co-scheduled tasklists that edited the same file are reported)
         run: bash test/touches-audit.sh
 
+      - name: Roadmap -> tasklists generator (contract enforced, conventions correct)
+        run: bash test/gen.sh
+
 
       - name: Dry-run schedule of the bundled example
         working-directory: examples/minimal

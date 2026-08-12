@@ -41,6 +41,15 @@ chief $VERSION — autonomous tasklist runner (worktree-isolated, dep/conflict-a
 
 Usage:
   chief init                  scaffold .chief/ + tasks/chief/ in the current repo
+  chief gen ROADMAP.json      generate tasklists from a roadmap document — one schema-valid
+                              tasks/chief/NN-slug.json per roadmap item, numbered in the next
+                              free band, with branchName/dependsOn/touches per the conventions.
+                              The programmatic way for an embedding host to author tasklists.
+                              -n/--dry-run emits NDJSON to stdout and writes nothing; --force
+                              overwrites; --out DIR stages elsewhere. An unknown roadmap field
+                              is an error (--allow-unknown warns instead). Input contract
+                              (phases[] → items[] with title/description required and scope/
+                              deps/touches/iters optional): docs/roadmap-input.md
   chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
                               --provider claude|devin|opencode (default claude)
                               --model MODEL (provider-specific model override)
@@ -165,6 +174,14 @@ cmd_init() {
   grep -qxF '.chief/state/' "$root/.gitignore" 2>/dev/null || { echo '.chief/state/' >> "$root/.gitignore"; echo "  gitignore  .chief/state/"; }
   register_repo "$root"
   echo "✓ chief initialized. Edit .chief/{config,verify.sh,agent-context.md}, add tasklists, then: chief run"
+}
+
+# chief gen <roadmap.json> — roadmap document → tasklists (engine/gen.sh). The
+# generator needs the project only for its tasks dir + numbering band, so --help
+# answers without one.
+cmd_gen() {
+  case "${1:-}" in -h|--help|'') ;; *) load_project ;; esac
+  bash "$ENGINE/gen.sh" "$@"
 }
 
 cmd_list() {
@@ -634,6 +651,7 @@ case "$cmd" in
   init)                 cmd_init ;;
   run)                  cmd_run "$@" ;;
   list)                 cmd_list ;;
+  gen|generate)         cmd_gen "$@" ;;
   ps)                   cmd_ps ;;
   monitor|watch)        cmd_monitor "$@" ;;
   logs|tail)            cmd_logs "$@" ;;
