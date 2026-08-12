@@ -57,7 +57,7 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   # pollution). monitor.sh is deliberately excluded here (timing-sensitive under the
   # parallel load verify runs beneath); CI still covers it and the full suite.
   if [ "${CHIEF_VERIFY_TESTS:-1}" = "1" ]; then
-    for t in smoke ratelimit limitstate limitresume limitmonitor pause liveliness teardown reapscope reapenv noworkguard headless events stale-resume conflict-forensics rebase-refusal touches-audit gen; do
+    for t in smoke ratelimit limitstate limitresume limitmonitor pause liveliness teardown reapscope reapenv noworkguard headless events container stale-resume conflict-forensics rebase-refusal touches-audit gen; do
       say "behavioral — test/$t.sh"
       bash "test/$t.sh" || block "test/$t.sh failed"
     done

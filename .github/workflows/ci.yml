@@ -83,6 +83,9 @@ jobs:
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 
+      - name: Container-shaped conditions (no $HOME, relocated worktrees, dubious ownership, foreign PID ns)
+        run: bash test/container.sh
+
       - name: NDJSON event stream (per-run log, versioned schema, merged + verify-failed sequences)
         run: bash test/events.sh
 

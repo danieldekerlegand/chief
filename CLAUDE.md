@@ -81,7 +81,8 @@ templates/           # scaffolded into a repo by `chief init` (config · verify.
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
 test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git + jq)
-docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety model
+docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
+                     # model · containers.md (running chief in a container/Riju workspace)
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
 VERSION              # engine version — bump on any engine/bin/install change
 ```

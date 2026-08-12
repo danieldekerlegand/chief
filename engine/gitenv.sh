@@ -37,7 +37,8 @@
 #     the operator's real identity untouched.
 #
 # Bash 3.2 compatible. Sourced by engine/driver.sh (whose exports every child git
-# inherits) and by bin/chief for the same diagnosis at init time.
+# inherits) and by bin/chief for the same diagnosis at init time. What an embedding
+# host sets, and what each knob below degrades to, is docs/containers.md.
 
 # Why git will not operate on $1 — 'ok' | 'ownership' | 'norepo' | 'nogit'.
 # The message is git's own; we only classify it, so a rewording upstream degrades to
@@ -84,7 +85,7 @@ chief_git_safe_dirs() {   # $1 = repo dir  [$2 = worktree root]
 # taken; returns non-zero (with the diagnosis on stdout) when git still refuses.
 # Idempotent — a second call on a working repo is a probe and nothing else.
 chief_git_ensure_ownership() {   # $1 = repo dir  [$2 = worktree root]
-  local repo="${1:-.}" wt="${2:-}" state p
+  local repo="${1:-.}" wt="${2:-}" state p noglob
   state="$(chief_git_probe "$repo")"
   case "$state" in
     ok)    return 0 ;;
@@ -93,7 +94,18 @@ chief_git_ensure_ownership() {   # $1 = repo dir  [$2 = worktree root]
             echo "       Run \`git status\` in it to see git's own message."; return 1 ;;
   esac
   # ownership: the container case this file exists for.
+  #
+  # `set -f` around the loop is load-bearing, not tidiness. chief_git_safe_dirs
+  # legitimately prints `*` (the blanket mode), and an UNQUOTED expansion of that
+  # word is pathname expansion: the trust list silently became the file names in the
+  # cwd — `tasks`, `bin`, `README.md` — none of which is a repo, so `*` trusted
+  # nothing and the blanket opt-out did not work at all. The word-splitting the loop
+  # relies on (one path per line) is kept; only globbing is turned off, and only if
+  # it was on, so a caller that had already disabled it is left as it was.
+  noglob=0
+  case $- in *f*) ;; *) set -f; noglob=1 ;; esac
   for p in $(chief_git_safe_dirs "$repo" "$wt"); do chief_git_trust_dir "$p"; done
+  if [ "$noglob" = 1 ]; then set +f; fi
   if [ "$(chief_git_probe "$repo")" = ok ]; then
     echo "  (git: trusting $repo via safe.directory — CHIEF_GIT_SAFE_DIRECTORY is set)"
     return 0
