@@ -53,7 +53,7 @@
         "A hermetic test asserts the ratchet: a branch that adds a deeply-nested duplicated block regresses a tracked metric and is BLOCKED; a branch that refactors it away IMPROVES the metric and is ALLOWED; a language with no analyzer reports UNMEASURED rather than passing silently",
         "Editing `bin/`/`engine/` bumps `VERSION` (`test/version-bump.sh`); existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
