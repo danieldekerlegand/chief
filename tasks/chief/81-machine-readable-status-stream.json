@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "feature",
   "branchName": "chief/81-machine-readable-status-stream",
-  "description": "`bin/chief ps`/`monitor` render the run registry (`$CHIEF_RUNS/*.run` + the per-tasklist `$STATE/<name>.live.json`) for a human terminal, and chief-cloud's daemon tails the same files. There is no structured EVENT stream a host can subscribe to: to learn that a story merged or a tasklist went VERIFY-FAILED, a consumer must poll and diff the live JSON itself. This tasklist emits structured NDJSON run/tasklist/story lifecycle events off the SAME transition points the engine already writes state at, so chief-cloud and embedding hosts (Cuneiform) can visualize complete-vs-incomplete work live. Additive only \u2014 `ps`/`monitor`/`logs` and the `.live.json` files are unchanged. Builds on 80's run-id + JSON conventions. Scope: `engine/driver.sh` (emit events where it already updates `<name>.live.json`), `bin/chief` (a follow/subscribe surface), `docs/`.",
+  "description": "`bin/chief ps`/`monitor` render the run registry (`$CHIEF_RUNS/*.run` + the per-tasklist `$STATE/<name>.live.json`) for a human terminal, and chief-cloud's daemon tails the same files. There is no structured EVENT stream a host can subscribe to: to learn that a story merged or a tasklist went VERIFY-FAILED, a consumer must poll and diff the live JSON itself. This tasklist emits structured NDJSON run/tasklist/story lifecycle events off the SAME transition points the engine already writes state at, so chief-cloud and embedding hosts (Cuneiform) can visualize complete-vs-incomplete work live. Additive only — `ps`/`monitor`/`logs` and the `.live.json` files are unchanged. Builds on 80's run-id + JSON conventions. Scope: `engine/driver.sh` (emit events where it already updates `<name>.live.json`), `bin/chief` (a follow/subscribe surface), `docs/`.",
   "parked": false,
   "dependsOn": [
     "80-headless-programmatic-invocation"
@@ -16,14 +16,14 @@
     {
       "id": "US-1",
       "title": "Emit NDJSON lifecycle events off the existing transitions",
-      "description": "Project the state transitions the driver already performs into an append-only event log \u2014 do not build a second state machine.",
+      "description": "Project the state transitions the driver already performs into an append-only event log — do not build a second state machine.",
       "acceptanceCriteria": [
         "The engine writes an append-only NDJSON event log per run at a documented path (e.g. `$CHIEF_RUNS/<run-id>.events.jsonl`), one JSON object per transition: run-started / run-finished, tasklist launched / merged / verify-failed / rebase-conflict / blocked, and story passed",
         "Each event carries the run-id, tasklist name, story id (where applicable), the state, and a timestamp; events are versioned with a `schema`/`v` field so a consumer can evolve with it",
-        "Events are emitted at the SAME points in `engine/driver.sh` that already write `<name>.live.json` \u2014 the stream is a projection of transitions that already happen, adding no new scheduling logic",
+        "Events are emitted at the SAME points in `engine/driver.sh` that already write `<name>.live.json` — the stream is a projection of transitions that already happen, adding no new scheduling logic",
         "Bash 3.2 compatible; NDJSON is well-formed (each line independently valid via `jq`); `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -32,7 +32,7 @@
       "description": "Give hosts a live way to consume the stream, analogous to `chief logs -f`, and document the schema as the contract chief-cloud reads.",
       "acceptanceCriteria": [
         "A documented live-consume surface exists (e.g. `chief events [--follow] [<run-id>]`) that tails the NDJSON and writes each event to stdout as it lands",
-        "`docs/` (extend `docs/monitoring.md` or add a doc) documents the event path, the versioned schema, and a consumer example \u2014 explicitly named as the contract chief-cloud + embedding hosts read",
+        "`docs/` (extend `docs/monitoring.md` or add a doc) documents the event path, the versioned schema, and a consumer example — explicitly named as the contract chief-cloud + embedding hosts read",
         "Backward-compatible: `ps` / `monitor` / `logs` and the `.live.json` records are unchanged; the event stream is purely additive"
       ],
       "passes": false,
@@ -53,12 +53,12 @@
     {
       "id": "US-4",
       "title": "Surface usage/cost/limit fields when the provider exposes them",
-      "description": "chief-cloud's `82-run-history-analytics-and-cost-persistence` persists a spend/quota ledger and needs a runner-side data source. Project the usage signals the engine ALREADY observes \u2014 rate-limit detection, the `.limit-retry-at` reset ETA, `rate-limited`/`waits` phases in the live records, and any usage/cost figures a provider CLI prints in a parseable form \u2014 into optional, explicitly nullable fields on the event stream. Observation-only: no new provider API polling, no new state machine.",
+      "description": "chief-cloud's `82-run-history-analytics-and-cost-persistence` persists a spend/quota ledger and needs a runner-side data source. Project the usage signals the engine ALREADY observes — rate-limit detection, the `.limit-retry-at` reset ETA, `rate-limited`/`waits` phases in the live records, and any usage/cost figures a provider CLI prints in a parseable form — into optional, explicitly nullable fields on the event stream. Observation-only: no new provider API polling, no new state machine.",
       "acceptanceCriteria": [
         "Events carry an optional usage block (e.g. `usage`: tokens/cost per turn where the provider's output surfaces them, `limit`: {hit, retry_at, waits} from the engine's existing rate-limit accounting) populated ONLY when the provider exposes the signal; when it doesn't, the fields are null/absent and the event remains schema-valid",
         "The schema doc from US-2 documents every usage/cost/limit field as nullable and provider-dependent, and names this block as the data source chief-cloud's `82-run-history-analytics-and-cost-persistence` persists",
-        "Population is a projection of what the engine already observes (`_is_rate_limit` outcomes, `$STATE/.limit-retry-at`, live-record `waits`/`retry_at`, parseable provider stdout) \u2014 no new provider API calls, no polling loops",
-        "The hermetic test from US-3 gains both cases: a scripted provider that emits a usage-limit message yields events with the limit fields populated, and one that emits nothing usage-shaped yields null/absent fields \u2014 both validating against the versioned schema; `bash -n` + `shellcheck -S error` stay clean"
+        "Population is a projection of what the engine already observes (`_is_rate_limit` outcomes, `$STATE/.limit-retry-at`, live-record `waits`/`retry_at`, parseable provider stdout) — no new provider API calls, no polling loops",
+        "The hermetic test from US-3 gains both cases: a scripted provider that emits a usage-limit message yields events with the limit fields populated, and one that emits nothing usage-shaped yields null/absent fields — both validating against the versioned schema; `bash -n` + `shellcheck -S error` stay clean"
       ],
       "passes": false,
       "notes": ""
