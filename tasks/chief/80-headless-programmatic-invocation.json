@@ -33,7 +33,7 @@
         "A machine-readable end-of-run summary is emitted (a final JSON object, or a `--json` summary) naming each requested tasklist and its terminal state (merged / verify-failed / blocked / conflict) plus the run-id — enough to render an outcome with no scraping",
         "The exit-code mapping is derived from the terminal states the driver already computes for the human summary — this story surfaces them, it does not add a second state machine"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
