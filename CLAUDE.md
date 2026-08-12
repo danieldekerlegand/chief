@@ -11,7 +11,8 @@ the parallel-safety model are in `docs/`.
 - The **engine** (`engine/driver.sh` scheduler+worker, `engine/agent.sh` one iteration,
   `engine/monitor.sh` run registry, `engine/lib.sh` shared helpers, `engine/live.sh` per-tasklist
   liveliness records, `engine/events.sh` the NDJSON event stream, `engine/reap.sh` orphan reaping)
-  and the **CLI** (`bin/chief`).
+  and the **CLI** (`bin/chief`), including the roadmap → tasklists generator
+  (`engine/gen.sh`, `chief gen` — input contract in `docs/roadmap-input.md`).
 - The hermetic **test suite** (`test/*.sh`), the `chief init` **templates** (`templates/`), and the
   **docs** (`docs/`).
 
@@ -60,7 +61,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · logs · models · reap · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · logs · models · reap · pause · resume · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
@@ -74,7 +75,7 @@ templates/           # scaffolded into a repo by `chief init` (config · verify.
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
 test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git + jq)
-docs/                # tasklist schema · verify-hook contract · parallel-safety model
+docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety model
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
 VERSION              # engine version — bump on any engine/bin/install change
 ```
