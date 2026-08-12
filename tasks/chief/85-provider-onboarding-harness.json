@@ -47,7 +47,7 @@
         "If RETIRED instead: amp is removed from BOTH validators and the dispatch case, the removal and its rationale are recorded in `docs/providers.md` + ROADMAP, and a config that still sets amp fails with an actionable error naming the supported roster",
         "ROADMAP.md's Current State provider line and the provider-breadth row agree with each other and with the settled code state; editing `engine/`/`bin/` bumps `VERSION` (`test/version-bump.sh` green); full suite green"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
