@@ -225,6 +225,9 @@ headless_announce() {
   # exit and a dry run never write one, and a path that resolves to nothing is worse
   # than no line at all for a host that would go read it.
   [ -f "$RUN_FILE" ] && printf 'chief: run-file=%s\n' "$RUN_FILE"
+  # The NDJSON event log for this run (docs/events.md). Announced on the same
+  # convention so a host can subscribe without knowing $CHIEF_RUNS' layout.
+  [ -n "${CHIEF_EVENTS_FILE:-}" ] && printf 'chief: events=%s\n' "$CHIEF_EVENTS_FILE"
   printf 'chief: state=%s\n' "$STATE_ROOT"
 }
 
@@ -350,6 +353,14 @@ source "$ENGINE/reap.sh"
 # coarse <name>.state, so `chief ps` can tell a working run from a hung one.
 source "$ENGINE/live.sh"
 live_of() { printf '%s' "$STATE/$1.live.json"; }   # the record for tasklist $1
+# Machine-readable EVENT STREAM (engine/events.sh): an append-only NDJSON projection
+# of the transitions written just below — subscribed to by chief-cloud and embedding
+# hosts. $CHIEF_EVENTS_FILE is EXPORTED so the agent loop (a child process) appends
+# its story events to the SAME log; empty makes every emit a no-op.
+source "$ENGINE/events.sh"
+CHIEF_EVENTS_FILE="$(events_file_for "$CHIEF_RUNS" "$CHIEF_RUN_ID")"
+CHIEF_EVENT_REPO="$REPO"
+export CHIEF_EVENTS_FILE CHIEF_EVENT_REPO
 
 command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
 
@@ -856,7 +867,18 @@ is_recorded_done() {   # merged record exists? (in this repo, or the dep's own r
 # Per-tasklist scheduler state lives in files so no associative array is needed.
 # Every lifecycle transition also lands in the liveliness record (and stamps its
 # heartbeat), so the two views can never drift apart.
-set_state() { printf '%s' "$2" > "$STATE/$1.state"; live_set "$(live_of "$1")" name="$1" state="$2"; }
+set_state() {
+  printf '%s' "$2" > "$STATE/$1.state"; live_set "$(live_of "$1")" name="$1" state="$2"
+  # Event stream: the two coarse transitions a subscriber cannot derive from a
+  # worker's own outcome event — a tasklist STARTING, and one the scheduler ruled
+  # unstartable. The rest (done/failed/rate-limited/paused) are reap()'s translation
+  # of a <name>.status the worker already emitted an event for, so re-emitting them
+  # here would double-report one transition under two names.
+  case "$2" in
+    running) event_emit tasklist.launched name="$1" state=running ;;
+    blocked) event_emit tasklist.blocked  name="$1" state=blocked ;;
+  esac
+}
 get_state() { cat "$STATE/$1.state" 2>/dev/null || printf 'pending'; }
 dep_key() {   # scheduler key for a dep: one qualified with THIS repo is just a local dep,
               # so it can still be satisfied by a tasklist finishing in this run.
@@ -1296,6 +1318,13 @@ teardown() {
     echo >&2
     echo "  ⏹ ${STOP_REASON:-signal} — stopping. Reaping the agent tree FIRST, then releasing the run records." >&2
     echo "     (interrupt again to skip the grace periods and hard-kill immediately)" >&2
+    # Close the event stream on the interrupt path too, BEFORE the records are
+    # released — otherwise a subscriber's last line is whatever the run happened to
+    # be doing and it can never tell "killed" from "still going". Gated on the run
+    # file because teardown also runs for a Ctrl-C during preflight, where no
+    # `run.started` was ever emitted to pair with it. The normal path emits its own
+    # `run.finished` from the summary, so this arm is signals-only — never both.
+    [ -f "$RUN_FILE" ] && event_emit run.finished state=interrupted detail="${STOP_REASON:-signal}"
   fi
   stop_wait_critical
   stop_reap_tree
@@ -1383,6 +1412,7 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "staterel=$STATE_REL"
   echo "tasks=$SRC"
   echo "wt=$WT_ROOT"
+  echo "events=$CHIEF_EVENTS_FILE"             # this run's NDJSON event log (docs/events.md)
   echo "runid=$CHIEF_RUN_ID"                   # the marker stamped on this run's tree
   echo "marker=$CHIEF_RUN_MARKER_REPO"         #   (and the prefix that matches this repo)
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
@@ -1393,6 +1423,12 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
 # orphan sweep below, which can spend seconds) so the parent can start correlating
 # at once instead of after the first tasklist launches.
 headless_announce
+# The event stream opens here, on the same transition: the registry entry exists, so
+# a host that reads `run.started` can immediately resolve the run it names. Older logs
+# are pruned first — they outlive their run by design, so nothing else bounds them.
+events_prune "$CHIEF_RUNS" "${CHIEF_EVENTS_KEEP_DAYS:-14}"
+event_emit run.started state=running \
+  detail="base=$BASE_BRANCH parallel=$PARALLEL provider=$PROVIDER automerge=$AUTO_MERGE_MAIN names:$NAMES"
 # Reap ORPHANED agent loops left by a prior crashed run on THIS repo. We hold the
 # driver lock, so nothing legitimate is using them.
 #
@@ -1465,6 +1501,7 @@ run_worker() {
     echo "### worker $name  (branch $branch, iters $iters${sub:+, repo $sub})  $(date)"
     live_set "$live" name="$name" phase=worktree story= iter=0 stall=0 waits=0 retry_at=0
     if [ -n "$sub" ] && ! git -C "$work_repo" rev-parse --git-dir >/dev/null 2>&1; then
+      event_emit tasklist.bad-repo name="$name" state=failed detail="repo '$sub' is not a git repo under $REPO"
       echo "BAD-REPO" > "$STATE/$name.status"; echo "!! $name: repo '$sub' is not a git repo under $REPO — skipping"; return 0
     fi
     local skip_agent=0
@@ -1602,7 +1639,10 @@ run_worker() {
       # because the agent's $CHIEF_PROJECT is the worktree, while the pause is a
       # property of the REPO's run — one flag, every worker, no per-worktree copy
       # that could go stale against `chief resume`.
-      ( cd "$wt" && CHIEF_PROJECT="$wt" CHIEF_HOME="$ENGINE" \
+      # CHIEF_TASKLIST names this worker's tasklist for the agent's event lines — the
+      # runtime prd.json is a nameless copy, so without it a `story.passed` could not
+      # say which tasklist it belongs to.
+      ( cd "$wt" && CHIEF_PROJECT="$wt" CHIEF_HOME="$ENGINE" CHIEF_TASKLIST="$name" \
           CHIEF_PROVIDER="$PROVIDER" CHIEF_MODEL="$MODEL" CHIEF_TOOL="$TOOL" \
           CHIEF_STATE_DIR="$STATE_REL" CHIEF_TASKS_DIR="$TASKS_REL" \
           CHIEF_AGENT_CONTEXT="${CHIEF_AGENT_CONTEXT:-}" CHIEF_ITER_HOOK="$hook" \
@@ -1672,6 +1712,8 @@ run_worker() {
       rm -f "$STATE/$name.retry-at"
       [ -n "$retry_at" ] && printf '%s' "$retry_at" > "$STATE/$name.retry-at"
       live_set "$live" phase=rate-limited retry_at="$(_int "$retry_at")"
+      event_emit tasklist.rate-limited name="$name" state=rate-limited \
+        detail="usage limit — branch kept${retry_at:+, reset ETA $retry_at}"
       echo "RATE-LIMITED $(( total - remaining ))/$total" > "$STATE/$name.status"
       echo "!! $name PAUSED on a Claude usage/session limit — branch $branch kept intact; resumes from its passes state${retry_at:+ (reset ETA $retry_at)}"
       return 0
@@ -1692,6 +1734,7 @@ run_worker() {
     # (unbounded) pause lasts, which is exactly what US-2 forbids.
     if [ "$agent_rc" = "$AGENT_RC_PAUSED" ] && { [ "$remaining" != "0" ] || [ -z "$has_work" ]; }; then
       live_set "$live" phase=operator-paused story=
+      event_emit tasklist.paused name="$name" state=paused detail="operator pause — branch + worktree kept"
       echo "PAUSED $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
       echo "!! $name PARKED on an OPERATOR PAUSE — branch $branch and its worktree kept; 'chief resume' continues from its passes state"
       return 0
@@ -1703,16 +1746,19 @@ run_worker() {
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
     if [ -z "$has_work" ]; then
       live_set "$live" phase=empty-no-work
+      event_emit tasklist.no-work name="$name" state=failed detail="false-complete guard: no commits vs $work_base"
       echo "EMPTY-NO-WORK 0/$total" > "$STATE/$name.status"
       echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"; return 0
     fi
     if [ "$remaining" != "0" ]; then
       live_set "$live" phase=incomplete
+      event_emit tasklist.incomplete name="$name" state=failed detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out"
       echo "INCOMPLETE $(( total - remaining ))/$total" > "$STATE/$name.status"
       echo "!! $name INCOMPLETE — branch $branch left in worktree for review"; return 0
     fi
     if [ "$AUTO_MERGE_MAIN" != "1" ]; then
       live_set "$live" phase=complete-unmerged story=
+      event_emit tasklist.complete-unmerged name="$name" state=done detail="auto-merge off — branch $branch"
       echo "COMPLETE-UNMERGED $total/$total" > "$STATE/$name.status"
       echo ">> $name complete (auto-merge off) — branch $branch"; return 0
     fi
@@ -1734,7 +1780,9 @@ run_worker() {
       { echo "name=$name"; echo "repo=$work_repo"; echo "base=$work_base"; } > "$STATE/$name.critical" 2>/dev/null || true
       # Free the branch from its worktree so the work repo can check it out.
       wt_git remove --force "$wt" 2>/dev/null || true
-      git -C "$work_repo" checkout "$branch" >/dev/null 2>&1 || { live_set "$live" phase=checkout-failed; echo "CHECKOUT-FAILED" > "$STATE/$name.status"; exit 0; }
+      git -C "$work_repo" checkout "$branch" >/dev/null 2>&1 || { live_set "$live" phase=checkout-failed
+          event_emit tasklist.checkout-failed name="$name" state=failed detail="git checkout $branch failed in $work_repo"
+          echo "CHECKOUT-FAILED" > "$STATE/$name.status"; exit 0; }
       # The fork point, read BEFORE the rebase rewrites the branch onto base — it is
       # what makes "which commits landed on base under this file" answerable in
       # EITHER conflict arm (see conflict_report). One rev-parse on the happy path.
@@ -1770,6 +1818,7 @@ run_worker() {
             rm -f "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
             git -C "$work_repo" rebase --abort 2>/dev/null || true
             live_set "$live" phase=rebase-conflict
+            event_emit tasklist.rebase-conflict name="$name" state=failed detail="onto $work_base; forensics: $rpt"
             echo "REBASE-CONFLICT see $SNAP_REL/$name.rebase-conflict.md" > "$STATE/$name.status"
             echo "!! $name rebase conflict onto $work_base${sub:+ in $sub} — left for manual merge; what collided and with whom: $rpt"; exit 0
           fi
@@ -1794,6 +1843,7 @@ run_worker() {
         refusal_report "$name" "$branch" "$work_repo" "$work_base" "$refusal" "$rpt"
         rm -f "$SNAP/$name.rebase-conflict.md" "$SNAP/$name.merge-conflict.md" 2>/dev/null || true
         live_set "$live" phase=rebase-refused
+        event_emit tasklist.rebase-refused name="$name" state=failed detail="$refusal"
         echo "REBASE-REFUSED $refusal (see $SNAP_REL/$name.rebase-refused.md)" > "$STATE/$name.status"
         echo "!! $name: git REFUSED to rebase $branch onto $work_base${sub:+ in $sub} — this is NOT a content conflict (no conflicted paths): $refusal"
         echo "!! $name: nothing was merged and $branch is untouched — the cause and the command that clears it: $rpt"; exit 0
@@ -1810,6 +1860,7 @@ run_worker() {
         if [ "$vrc" != "0" ]; then
           printf '%s\n' "$vout" > "$SNAP/$name.verify-failed.log"
           live_set "$live" phase=verify-failed
+          event_emit tasklist.verify-failed name="$name" state=failed detail="verify exited $vrc post-rebase; log: $SNAP_REL/$name.verify-failed.log"
           echo "VERIFY-FAILED" > "$STATE/$name.status"; echo "!! $name verify failed post-rebase (persisted for re-engagement)"; exit 0
         fi
       fi
@@ -1825,6 +1876,7 @@ run_worker() {
         rm -f "$SNAP/$name.verify-failed.log" "$SNAP/$name.rebase-conflict.md" \
               "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
         live_set "$live" phase=merged story=
+        event_emit tasklist.merged name="$name" state=done detail="$branch --no-ff into $work_base @$sha${sub:+ ($sub)}"
         echo "MERGED @$sha${sub:+ ($sub)}" > "$STATE/$name.status"; echo ">> $name MERGED @$sha${sub:+ in $sub}"
         # Under-tagging this branch shared with a co-scheduled peer, reported into
         # this worker's log as soon as it is knowable (peers that have not finished
@@ -1840,6 +1892,7 @@ run_worker() {
         rm -f "$SNAP/$name.rebase-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
         git -C "$work_repo" merge --abort 2>/dev/null || true
         live_set "$live" phase=merge-conflict
+        event_emit tasklist.merge-conflict name="$name" state=failed detail="merging into $work_base; forensics: $rpt"
         echo "MERGE-CONFLICT see $SNAP_REL/$name.merge-conflict.md" > "$STATE/$name.status"
         echo "!! $name merge conflict — what collided and with whom: $rpt"
       fi
@@ -2011,6 +2064,8 @@ limit_resume() {
     printf '%s' "$(( $(retries_used "$n") + 1 ))" > "$STATE/$n.retries"
     rm -f "$STATE/$n.retry-at"
     live_set "$(live_of "$n")" phase=re-dispatch retry_at=0
+    event_emit tasklist.re-dispatch name="$n" state=pending \
+      detail="usage-limit window elapsed — retry $(retries_used "$n")/$RATE_LIMIT_REDISPATCH_MAX"
     set_state "$n" pending
     echo "  ↻ re-dispatching $n after the usage-limit window (retry $(retries_used "$n")/$RATE_LIMIT_REDISPATCH_MAX)"
   done
@@ -2262,6 +2317,11 @@ elif [ -z "$ran" ] || [ -z "$hl_ok" ]; then hl_outcome=no-work; hl_code="$HL_RC_
 else hl_outcome=merged; hl_code="$HL_RC_OK"
 fi
 headless_summary "$hl_outcome" "$hl_code"
+# The event stream closes on the same computed outcome the exit code carries — one
+# decision, published twice (a code for the caller, a line for a subscriber), never
+# two. A consumer that saw `run.started` is guaranteed this line on every normal
+# exit path; a killed run simply stops, which is why `ts` is on every event.
+event_emit run.finished state="$hl_outcome" detail="exit=$hl_code"
 
 # A run that launched nothing at all did no work — say so with a non-zero exit
 # rather than reporting success. An OPERATOR PAUSE is the one reason for that which

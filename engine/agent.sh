@@ -206,6 +206,10 @@ _passes() { jq '[.userStories[]? | select(.passes==true)] | length' "$PRD_FILE" 
 _total()  { jq '.userStories | length' "$PRD_FILE" 2>/dev/null || echo '?'; }
 _head()   { git -C "$REPO" rev-parse HEAD 2>/dev/null || echo none; }
 _story()  { jq -r '[.userStories[]? | select(.passes==false)][0].id // empty' "$PRD_FILE" 2>/dev/null || echo ""; }
+# The SET behind _passes()' count. The progress check below already re-reads the
+# count each iteration; reading the ids alongside it is what lets the event stream
+# name WHICH story passed instead of just that one more did.
+_passed_ids() { jq -r '[.userStories[]? | select(.passes==true) | .id] | join(" ")' "$PRD_FILE" 2>/dev/null || echo ""; }
 
 # --- LIVELINESS ---------------------------------------------------------------
 # The driver hands us the path of this tasklist's liveliness record; unset (a
@@ -224,7 +228,36 @@ else
   live_set() { return 0; }
   live_get() { return 0; }
 fi
+# The machine-readable EVENT STREAM (engine/events.sh), sourced on exactly the same
+# terms and for the same reason: $CHIEF_EVENTS_FILE is handed down by the driver, an
+# empty one (a standalone run) is a no-op, and a missing file must cost us nothing.
+if [ -f "$_AGENT_DIR/events.sh" ]; then
+  # shellcheck source=engine/events.sh
+  . "$_AGENT_DIR/events.sh"
+else
+  event_emit() { return 0; }
+fi
 LIVE="${CHIEF_LIVE_FILE:-}"
+# Stories already passing when this loop started. The event stream reports the SET
+# DIFFERENCE against it after every turn, so a turn that lands two stories reports
+# two and a re-read of unchanged flags reports none.
+PASSED_IDS=" $(_passed_ids) "
+# _emit_story_events ITER — one `story.passed` per story that flipped during the turn
+# that just returned. Called at ONE point (right after the provider returns) rather
+# than at the progress check, because three of this loop's exits — COMPLETE, a usage
+# limit, an operator-pause drain — happen BEFORE that check, and the last story of a
+# tasklist always passes on the COMPLETE turn. Always returns 0.
+_emit_story_events() {
+  local now sid
+  now=" $(_passed_ids) "
+  for sid in $now; do
+    case "$PASSED_IDS" in *" $sid "*) continue ;; esac
+    event_emit story.passed name="${CHIEF_TASKLIST:-}" story="$sid" state=running \
+      detail="iteration ${1:-?} — $(_passes)/$(_total) passing"
+  done
+  PASSED_IDS="$now"
+  return 0
+}
 LIVE_BEAT_SECONDS="${LIVE_BEAT_SECONDS:-15}"
 # A `claude --print` turn blocks this shell for MINUTES, so without a ticker the
 # heartbeat would freeze on every healthy turn and the staleness signal would be
@@ -355,6 +388,7 @@ while :; do
   OUTPUT=$(_run_provider < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
   _beat_stop
   live_set "$LIVE" phase=agent-turn story="$(_story)" passing="$(_passes)" total="$(_total)"
+  _emit_story_events "$i"
 
   # Completion signal — the token MUST be on a line by itself (optionally fenced in
   # backticks). Matching it ANYWHERE let an agent that merely QUOTED the token while
