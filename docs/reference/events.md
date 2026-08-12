@@ -136,6 +136,8 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `tasklist.checkout-failed` | `failed` | the branch could not be checked out for the merge phase |
 | `tasklist.no-work` | `failed` | the false-complete guard fired: COMPLETE with no commits |
 | `tasklist.unverified` | `failed` | the evidence gate fired: chief was asked to force-pass a story whose `notes` say nothing about how it was done (`detail` counts them; the run log quotes the criteria) |
+| `tasklist.research` | `running` | the up-front research document was produced (and persisted) or reused from a previous run / a human's edit — `detail` carries the path |
+| `tasklist.research-failed` | `failed` | the research phase's bounded attempts ran out without a document carrying every required section; **nothing was implemented** |
 | `tasklist.incomplete` | `failed` | the iteration budget ran out with stories still unpassed |
 | `tasklist.rate-limited` | `rate-limited` | a provider usage limit paused it; branch kept, `detail` carries the reset ETA when known — carries `limit` |
 | `tasklist.rate-limit-wait` | `rate-limited` | the agent loop hit a limit mid-turn and is **sleeping** until the window reopens, then retrying in place — carries `limit` |

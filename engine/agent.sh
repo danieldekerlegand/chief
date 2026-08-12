@@ -34,6 +34,17 @@
 #      on disk (a given approval is never asked for twice). It is the one thing the
 #      gate must do instead of proceeding: an unreachable reviewer is not an
 #      approval (see engine/review.sh and docs/plan-review.md).
+#   6  THE RESEARCH PHASE FAILED — the tasklist asked for an up-front research
+#      document (engine/research.sh) and the bounded attempts budget ran out
+#      without producing one that carries every required section. Distinct from 1
+#      on purpose: NOTHING was implemented, so this is not a stall and not a
+#      partially-built branch — it is "the map could not be drawn", and the fix is
+#      to write/repair $CHIEF_RESEARCH_FILE by hand or turn research off. The one
+#      thing this must never be is a silent fall-through into implementation on a
+#      map that isn't there. Numbered AFTER the plan codes because research runs
+#      BEFORE them: the phase order is research -> plan -> implement, and the two
+#      phases compose without either requiring the other (see RESEARCH PHASE below
+#      and engine/research.sh).
 # A usage limit is detected BEFORE the progress/stall accounting (see
 # _is_rate_limit below), so a limit-blocked turn can never be misread as a
 # no-progress iteration that trips STALL_LIMIT and exits 1.
@@ -573,6 +584,51 @@ _is_rate_limit() {
   return 1
 }
 
+# _rate_limit_wait OUTPUT — what to DO about a turn that _is_rate_limit said yes to.
+#   returns 0  slept until the window reopens; the caller should re-run the same turn
+#              (and must NOT charge it to any budget — a blocked turn is free)
+#   returns 1  will not retry; the reset ETA is recorded in $LIMIT_RETRY_FILE for the
+#              driver and the caller must exit 2
+# Shared by the story loop and the research phase so there is exactly ONE place that
+# decides how long to sleep, how many waits are left, and what the driver is told.
+# Duplicating this was the alternative, and the limit path is the last logic in the
+# engine that should ever exist in two versions: a divergence here is invisible until
+# it silently converts a blocked run into a "failed" one. Mutates $waits (a global,
+# read back by the liveliness record).
+_rate_limit_wait() {
+  local out="$1" secs
+  if [ "$RATE_LIMIT_RETRY" = "1" ] && [ "${waits:-0}" -lt "$RATE_LIMIT_MAX_WAITS" ]; then
+    waits=$(( ${waits:-0} + 1 ))
+    secs=$(_seconds_until_reset "$out")
+    echo ""
+    echo "Chief hit a session/usage limit. Sleeping ${secs}s (~$(( secs/60 )) min) then resuming — wait $waits/$RATE_LIMIT_MAX_WAITS."
+    # Publish the pause BEFORE sleeping: a heartbeat that stops advancing for an
+    # hour must read as 'paused until <eta>', not as the hang it looks like.
+    live_set "$LIVE" phase=rate-limited-waiting waits="$waits" \
+      retry_at="$(( $(date +%s) + secs ))"
+    # The same pause, published to the event stream: a subscriber must be able to
+    # tell "asleep on a usage limit until <eta>" from "hung" WITHOUT diffing the
+    # live record, and the limit block is the quota half of chief-cloud's ledger.
+    event_emit tasklist.rate-limit-wait name="${CHIEF_TASKLIST:-}" state=rate-limited \
+      limit_hit=1 retry_at="$(( $(date +%s) + secs ))" waits="$waits" \
+      max_waits="$RATE_LIMIT_MAX_WAITS" \
+      detail="sleeping ${secs}s — wait $waits/$RATE_LIMIT_MAX_WAITS"
+    sleep "$secs"
+    return 0
+  fi
+  # Hand the driver the reset ETA before stopping, so the run can re-dispatch
+  # this tasklist when the window reopens rather than stranding it.
+  secs=$(_seconds_until_reset "$out")
+  echo "$(( $(date +%s) + secs ))" > "$LIMIT_RETRY_FILE" 2>/dev/null || true
+  live_set "$LIVE" phase=rate-limited waits="${waits:-0}" \
+    retry_at="$(cat "$LIMIT_RETRY_FILE" 2>/dev/null || echo 0)"
+  echo ""
+  echo "Chief hit a session/usage limit and won't retry (RATE_LIMIT_RETRY=$RATE_LIMIT_RETRY, waits=${waits:-0}/$RATE_LIMIT_MAX_WAITS). Stopping."
+  echo "Exit 2 = blocked on a usage limit — resumable once the window resets, NOT a failed tasklist."
+  echo "Reset ETA recorded for the driver: $(cat "$LIMIT_RETRY_FILE" 2>/dev/null) (in ~$(( secs/60 )) min)."
+  return 1
+}
+
 # ACCOUNT CREDENTIAL SEAM (docs/reference/account-credentials.md) — read the designated
 # KEY=VALUE file and export its pairs into the CURRENT shell. Called only from the
 # provider subshell below, so nothing outside the provider invocation ever sees the
@@ -672,8 +728,129 @@ _provider_exec() {
 
 echo "Starting Chief — Provider: $PROVIDER${MODEL:+ (model: $MODEL)} — budget $MAX_ITERATIONS iters (extends while progressing; hard cap $HARD_MAX; stall limit $STALL_LIMIT)"
 
-prev_pass=$(_passes); prev_head=$(_head)
+# Initialized BEFORE the research phase, not with prev_pass/prev_head below: a limit
+# hit during research goes through the same _rate_limit_wait as a story turn, and
+# that helper reads and advances $waits. Resetting the counters after research would
+# hand the story loop a fresh wait budget it has already partly spent.
 i=0; stall=0; waits=0
+
+# --- RESEARCH PHASE (engine/research.sh) --------------------------------------
+# ONCE per tasklist, BEFORE the first story: map the code into a structured document
+# that every story then reads instead of re-deriving it. See research.sh's header for
+# why; this block is only the dispatch, the validation and the persistence.
+#
+# THE PERSISTENCE IS THE HALF THAT IS EASY TO GET WRONG. The document the model writes
+# lives in the WORKTREE's state dir, and the driver deletes and rebuilds that worktree
+# on every run — so a document that only ever existed there would be regenerated by
+# each resumed run, which is precisely the cost this phase exists to pay once.
+# $CHIEF_RESEARCH_FILE is the driver's DURABLE path (outside the worktree, under the
+# project's .chief/state/). We seed FROM it and promote back TO it the moment a valid
+# document exists — not at the end of the loop — so a run killed mid-story still
+# leaves the research banked.
+#
+# That same file is the human-edit surface: a hand-corrected document validates,
+# so it is reused verbatim and never regenerated.
+RESEARCH_DOC="$STATE_DIR/research.md"
+RESEARCH_STORE="${CHIEF_RESEARCH_FILE:-}"
+# THE BUDGET (acceptance: the phase is bounded). At most this many PROVIDER TURNS,
+# total, for the whole tasklist. Two is deliberate: one honest attempt plus one retry
+# that is TOLD which sections came back empty. A limit-blocked turn is not charged
+# against it (it never reached the model), exactly as in the story loop.
+RESEARCH_MAX_ATTEMPTS="${CHIEF_RESEARCH_MAX_ATTEMPTS:-2}"
+RESEARCH_PROMPT_FILE="$STATE_DIR/.research-prompt.md"
+if [ -f "$_AGENT_DIR/research.sh" ]; then
+  # shellcheck source=engine/research.sh
+  . "$_AGENT_DIR/research.sh"
+else
+  # An install that predates this module. Research is skipped — it is the only thing
+  # an engine without the module can do — but NEVER silently when it was asked for:
+  # a run that believes it got a research phase and did not is the failure mode this
+  # whole feature is trying to remove.
+  research_enabled() {
+    case "${CHIEF_RESEARCH:-}" in
+      1|on|yes|true) echo "WARNING: research was requested but $_AGENT_DIR/research.sh is missing — continuing WITHOUT a research phase" >&2 ;;
+    esac
+    return 1
+  }
+fi
+
+if research_enabled "$PRD_FILE"; then
+  # REUSE BEFORE REGENERATE. A valid persisted document (from a previous run, or from
+  # a human's hand) short-circuits the whole phase.
+  if [ -n "$RESEARCH_STORE" ] && [ -f "$RESEARCH_STORE" ]; then
+    if research_validate "$RESEARCH_STORE"; then
+      cp "$RESEARCH_STORE" "$RESEARCH_DOC" 2>/dev/null || true
+      echo "Research: reusing the persisted document ($RESEARCH_STORE) — not re-running research."
+      event_emit tasklist.research name="${CHIEF_TASKLIST:-}" state=running \
+        detail="reused the persisted research document ($RESEARCH_STORE)"
+    else
+      echo "Research: the persisted document is incomplete (missing: $(research_missing "$RESEARCH_STORE" | tr '\n' ' ')) — regenerating." >&2
+    fi
+  fi
+
+  if ! research_validate "$RESEARCH_DOC"; then
+    ra=0
+    while [ "$ra" -lt "$RESEARCH_MAX_ATTEMPTS" ]; do
+      ra=$(( ra + 1 ))
+      echo ""
+      echo "==============================================================="
+      echo "  Chief RESEARCH PHASE ($TOOL) — attempt $ra/$RESEARCH_MAX_ATTEMPTS"
+      echo "==============================================================="
+      live_set "$LIVE" phase=research iter=0 story= stall=0 waits="$waits" retry_at=0
+      # The model is handed the WORKTREE-RELATIVE path: it is instructed to stay
+      # inside its worktree, and $RESEARCH_STORE points outside it.
+      research_prompt "$PRD_FILE" "${CHIEF_STATE_DIR:-.chief/state}/research.md" \
+        "$(research_missing "$RESEARCH_DOC")" > "$RESEARCH_PROMPT_FILE"
+      TOOL_RC=0
+      _beat_start
+      OUTPUT=$(_run_provider < "$RESEARCH_PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
+      _beat_stop
+      # A research turn is still a provider turn: it costs quota and belongs in the
+      # spend ledger like any other. Reported as iteration 0 — the phase runs before
+      # the story loop's counter starts.
+      _emit_turn_event "research/$ra"
+      if _is_rate_limit "$OUTPUT" "$TOOL_RC"; then
+        if _rate_limit_wait "$OUTPUT"; then
+          ra=$(( ra - 1 ))   # a blocked turn never reached the model — not charged
+          continue
+        fi
+        exit 2
+      fi
+      research_validate "$RESEARCH_DOC" && break
+      echo "Research attempt $ra produced no usable document (missing: $(research_missing "$RESEARCH_DOC" | tr '\n' ' '))."
+    done
+  fi
+
+  if research_validate "$RESEARCH_DOC"; then
+    # PROMOTE IMMEDIATELY (see the persistence note above) — this is what "survives
+    # process death" means in practice. A pre-existing store is left alone: it is
+    # either the document we just copied down, or a human's edit, and neither wants
+    # to be overwritten by a copy of itself.
+    if [ -n "$RESEARCH_STORE" ] && [ ! -f "$RESEARCH_STORE" ]; then
+      mkdir -p "$(dirname "$RESEARCH_STORE")" 2>/dev/null || true
+      if cp "$RESEARCH_DOC" "$RESEARCH_STORE" 2>/dev/null; then
+        echo "Research: document persisted to $RESEARCH_STORE (reused by every story, and by any resumed run)."
+        event_emit tasklist.research name="${CHIEF_TASKLIST:-}" state=running \
+          detail="research document produced and persisted ($RESEARCH_STORE)"
+      else
+        # Non-fatal: the map exists and this run can use it. But an unwritable store
+        # means the NEXT run pays for research again, and that is worth saying out
+        # loud rather than discovering from a duplicated bill.
+        echo "WARNING: research document could not be persisted to $RESEARCH_STORE — this run uses it, a resumed run would regenerate it" >&2
+      fi
+    fi
+  else
+    # DISTINCT, ACTIONABLE FAILURE — never a fall-through into implementation.
+    echo ""
+    echo "Chief could not produce a valid research document in $RESEARCH_MAX_ATTEMPTS attempt(s). Stopping."
+    echo "Missing required section(s): $(research_missing "$RESEARCH_DOC" | tr '\n' ' ')"
+    echo "Exit 6 = RESEARCH FAILED — nothing was implemented. Write or repair${RESEARCH_STORE:+ $RESEARCH_STORE}, raise CHIEF_RESEARCH_MAX_ATTEMPTS, or set CHIEF_RESEARCH=0 to skip the phase."
+    live_set "$LIVE" phase=research-failed iter=0 story= passing="$(_passes)" total="$(_total)"
+    exit 6
+  fi
+fi
+
+prev_pass=$(_passes); prev_head=$(_head)
 while :; do
   # DRAIN CHECKPOINT (see OPERATOR PAUSE above). Asked here and nowhere else: the
   # previous iteration is fully accounted for (its commits are on the branch, its
@@ -801,36 +978,10 @@ while :; do
   # Checked BEFORE the progress/stall accounting below so a limit can never be
   # counted as a no-progress iteration.
   if _is_rate_limit "$OUTPUT" "$TOOL_RC"; then
-    if [ "$RATE_LIMIT_RETRY" = "1" ] && [ "$waits" -lt "$RATE_LIMIT_MAX_WAITS" ]; then
-      waits=$((waits+1))
-      secs=$(_seconds_until_reset "$OUTPUT")
-      echo ""
-      echo "Chief hit a session/usage limit. Sleeping ${secs}s (~$(( secs/60 )) min) then resuming — wait $waits/$RATE_LIMIT_MAX_WAITS."
-      # Publish the pause BEFORE sleeping: a heartbeat that stops advancing for an
-      # hour must read as 'paused until <eta>', not as the hang it looks like.
-      live_set "$LIVE" phase=rate-limited-waiting waits="$waits" \
-        retry_at="$(( $(date +%s) + secs ))"
-      # The same pause, published to the event stream: a subscriber must be able to
-      # tell "asleep on a usage limit until <eta>" from "hung" WITHOUT diffing the
-      # live record, and the limit block is the quota half of chief-cloud's ledger.
-      event_emit tasklist.rate-limit-wait name="${CHIEF_TASKLIST:-}" state=rate-limited \
-        limit_hit=1 retry_at="$(( $(date +%s) + secs ))" waits="$waits" \
-        max_waits="$RATE_LIMIT_MAX_WAITS" \
-        detail="sleeping ${secs}s — wait $waits/$RATE_LIMIT_MAX_WAITS"
-      sleep "$secs"
+    if _rate_limit_wait "$OUTPUT"; then
       i=$((i-1))   # the blocked turn doesn't consume the budget
       continue
     fi
-    # Hand the driver the reset ETA before stopping, so the run can re-dispatch
-    # this tasklist when the window reopens rather than stranding it.
-    secs=$(_seconds_until_reset "$OUTPUT")
-    echo "$(( $(date +%s) + secs ))" > "$LIMIT_RETRY_FILE" 2>/dev/null || true
-    live_set "$LIVE" phase=rate-limited waits="$waits" \
-      retry_at="$(cat "$LIMIT_RETRY_FILE" 2>/dev/null || echo 0)"
-    echo ""
-    echo "Chief hit a session/usage limit and won't retry (RATE_LIMIT_RETRY=$RATE_LIMIT_RETRY, waits=$waits/$RATE_LIMIT_MAX_WAITS). Stopping."
-    echo "Exit 2 = blocked on a usage limit — resumable once the window resets, NOT a failed tasklist."
-    echo "Reset ETA recorded for the driver: $(cat "$LIMIT_RETRY_FILE" 2>/dev/null) (in ~$(( secs/60 )) min)."
     exit 2
   fi
 

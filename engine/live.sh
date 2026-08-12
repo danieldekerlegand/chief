@@ -26,16 +26,22 @@
 #
 # PHASE VOCABULARY (the fine-grained sub-phase; the coarse lifecycle is `state`):
 #   agent.sh   agent-turn · provider-waiting · writing · rate-limited-waiting · stalled ·
-#              operator-paused · plan-turn · plan-ready · plan-invalid · review-wait ·
-#              awaiting-review
+#              operator-paused · research · research-failed · plan-turn · plan-ready ·
+#              plan-invalid · review-wait · awaiting-review
 #   driver.sh  worktree · warmup · reconcile · merge-wait · rebasing · verifying ·
-#              merging · merged · done · operator-paused · plan-invalid · awaiting-review
+#              merging · merged · done · operator-paused · research-failed ·
+#              plan-invalid · awaiting-review
 # The plan-* phases belong to the opt-in PLAN REVIEW checkpoint (docs/plan-review.md)
 # and appear only on a tasklist that enabled it: 'plan-turn' is the agent writing a
 # plan instead of code, 'plan-ready' the artifact passing its schema check, and
 # 'plan-invalid' the stop when it does not. 'review-wait' is the bounded window in
 # which a human reviewer is being waited on, and 'awaiting-review' the park when that
 # window closes with no approval — a hold, not a fault (docs/plan-review.md).
+# The research-* phases belong to the opt-in RESEARCH PHASE, which runs ONCE per
+# tasklist BEFORE the first story and before any plan turn: 'research' is the agent
+# mapping the code into the structured document every story then reads, and
+# 'research-failed' the stop when the bounded attempts produce none. Both carry
+# `iter=0` and no story on purpose — the phase precedes the story loop's counter.
 # 'operator-paused' is the OPERATOR pause (a human's `chief pause`); the two
 # rate-limited phases are the account's usage-limit window. Never conflate them — a
 # reader has to be able to tell which one is holding the run.
