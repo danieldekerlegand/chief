@@ -201,3 +201,7 @@ chief events "$id" -f | your-consumer
 - [`desktop-gui-decision.md`](desktop-gui-decision.md) — why the GUI lives in
   chief-cloud and chief ships the stable data seam instead.
 - `engine/events.sh` — the emitter, and the engine-side half of this contract.
+- `test/events.sh` — the hermetic test that pins this document: it drives a real run
+  (fake provider, temp `CHIEF_*` prefixes) and asserts the merged and verify-failed
+  sequences from the catalogue above, line by line. **A schema or catalogue change
+  that test does not reflect is a contract break, not a passing change.**

@@ -83,6 +83,9 @@ jobs:
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 
+      - name: NDJSON event stream (per-run log, versioned schema, merged + verify-failed sequences)
+        run: bash test/events.sh
+
       - name: Pickup-time base integration (a resumed branch follows base; conflicts go to the agent)
         run: bash test/stale-resume.sh
 
