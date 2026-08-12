@@ -80,6 +80,9 @@ jobs:
       - name: No-work guard (false-complete must not merge/retire)
         run: bash test/noworkguard.sh
 
+      - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
+        run: bash test/headless.sh
+
       - name: Pickup-time base integration (a resumed branch follows base; conflicts go to the agent)
         run: bash test/stale-resume.sh
 

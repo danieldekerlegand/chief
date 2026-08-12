@@ -166,6 +166,11 @@ a scripted fake `claude` on `PATH` and temp `CHIEF_*` prefixes, and asserts the
 run-id line, the exit codes, the JSON summary's fields, and that a **non-headless**
 run still emits none of it.
 
+It is part of the **behavioral subset**, not an optional extra — it runs in
+`.chief/verify.sh` (so no engine change merges without it), in
+`.github/workflows/ci.yml` on both Ubuntu and macOS, and in `test/all.sh`. Changing
+anything in this document therefore means changing that test in the same commit.
+
 ## Related
 
 - `docs/monitoring.md` — the run registry and live records these lines point at.
