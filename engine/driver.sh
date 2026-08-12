@@ -387,6 +387,30 @@ export CHIEF_EVENTS_FILE CHIEF_EVENT_REPO
 
 command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
 
+# ACCOUNT DESIGNATION (docs/account-credentials.md) — the optional credential env
+# FILE this run's provider turns execute under. The driver only PLUMBS the path
+# through to engine/agent.sh, which applies it around the provider invocation and
+# nowhere else; git, the verify hook and the iteration hook keep running under
+# chief's own environment. Validated here, before a single worktree or agent turn,
+# so a bad designation is a config error at launch instead of a run that quietly
+# spends the inherited account's quota. bin/chief already resolved a relative path
+# against the invoking cwd — the driver and its workers run elsewhere, so a path
+# that is still relative here cannot be trusted to mean the same thing.
+ACCOUNT_ENV_FILE="${CHIEF_ACCOUNT_ENV_FILE:-}"
+if [ -n "$ACCOUNT_ENV_FILE" ]; then
+  case "$ACCOUNT_ENV_FILE" in /*) ;; *) ACCOUNT_ENV_FILE="$PWD/$ACCOUNT_ENV_FILE" ;; esac
+  if [ ! -f "$ACCOUNT_ENV_FILE" ] || [ ! -r "$ACCOUNT_ENV_FILE" ]; then
+    echo "ERROR: --account-env: no readable credential env file at $ACCOUNT_ENV_FILE" >&2
+    exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+  fi
+fi
+# Keep the designation OUT of the ambient environment from here on: the driver hands
+# it to engine/agent.sh explicitly (see run_worker), and nothing else in a run has
+# any business consulting it. Un-exporting it means the verify hook, the warmup
+# commands and the iteration hook see exactly the environment they would see on an
+# undesignated run.
+export -n CHIEF_ACCOUNT_ENV_FILE 2>/dev/null || true
+
 # The state tree must be WRITABLE, not merely nameable — a distinction that only
 # bites in a container, where the prefix can land on a read-only mount or a path this
 # uid does not own, and where a bind-mounted repo can itself be read-only. Every
@@ -1717,6 +1741,7 @@ run_worker() {
           CHIEF_STATE_DIR="$STATE_REL" CHIEF_TASKS_DIR="$TASKS_REL" \
           CHIEF_AGENT_CONTEXT="${CHIEF_AGENT_CONTEXT:-}" CHIEF_ITER_HOOK="$hook" \
           CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" CHIEF_VERBOSE="${CHIEF_VERBOSE:-}" \
+          CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a
