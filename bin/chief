@@ -77,6 +77,11 @@ run flags:
   -n, --dry-run      print the schedule and exit (no git, no agents)
   -V, --verbose      trace each provider invocation into the log (provider · model · prompt) —
                      also settable as CHIEF_VERBOSE=1 in the environment or .chief/config
+      --headless     non-interactive/programmatic mode for a host app embedding chief: no ANSI
+                     colour, no interactive step, line-oriented output, and the run announces its
+                     id on a greppable `chief: run-id=<id>` line before the loop starts. Takes all
+                     the flags/env above unchanged. Also settable as CHIEF_HEADLESS=1. Never
+                     inferred from stdout being a pipe — see docs/headless-invocation.md
       --no-merge     complete branches but don't merge into the base
 
 pause/resume flags:
@@ -158,12 +163,13 @@ cmd_list() {
 }
 
 cmd_run() {
-  local parallel=1 dry=0 merge="" provider="" model="" verbose="" ; local names=()
+  local parallel=1 dry=0 merge="" provider="" model="" verbose="" headless="" ; local names=()
   while [ "$#" -gt 0 ]; do case "$1" in
     -p|--parallel) parallel="$2"; shift 2 ;;
     -p*)           parallel="${1#-p}"; shift ;;
     -n|--dry-run)  dry=1; shift ;;
     -V|--verbose)  verbose=1; shift ;;
+    --headless)    headless=1; shift ;;
     --no-merge)    merge=0; shift ;;
     --provider)    provider="$2"; shift 2 ;;
     --provider=*)  provider="${1#*=}"; shift ;;
@@ -188,6 +194,23 @@ cmd_run() {
   # assignment, so bash tries to RUN it ("AUTO_MERGE_MAIN=0: command not found").
   [ -n "$verbose" ] && export CHIEF_VERBOSE=1    # inherited by the driver, forwarded to agent.sh
   [ -n "$merge" ]   && export AUTO_MERGE_MAIN="$merge"
+  # HEADLESS — the programmatic entry point (docs/headless-invocation.md). Explicit,
+  # never inferred from `[ -t 1 ]`: a host that pipes an interactive run through `tee`
+  # must get the SAME behavior it gets on a terminal, and a contract that changes
+  # shape depending on how stdout happens to be attached is not one you can code
+  # against. `--headless` (or CHIEF_HEADLESS=1 in the environment / .chief/config) is
+  # the one switch, and it only ever ADDS machine-readable output.
+  [ -n "$headless" ] && CHIEF_HEADLESS=1
+  case "${CHIEF_HEADLESS:-0}" in
+    1|true|yes|on)
+      export CHIEF_HEADLESS=1
+      # Children (the provider CLI, git, any warmup command) inherit the standard
+      # "don't emit ANSI" signals, so a captured stream stays line-oriented plain
+      # text even when a tool would otherwise colorize for its own reasons.
+      export NO_COLOR=1 CLICOLOR=0 GIT_PAGER=cat
+      ;;
+    *) export CHIEF_HEADLESS=0 ;;
+  esac
   CHIEF_PROVIDER="$provider" CHIEF_MODEL="$model" \
     PARALLEL="$parallel" DRY_RUN="$dry" \
     bash "$ENGINE/driver.sh" ${names[@]+"${names[@]}"}

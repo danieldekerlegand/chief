@@ -205,6 +205,25 @@ STRICT_VERIFY="${STRICT_VERIFY:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 POLL_SECONDS="${POLL_SECONDS:-5}"
 FORCE="${FORCE:-0}"
+# HEADLESS — programmatic invocation (docs/headless-invocation.md). Set by
+# `chief run --headless` or CHIEF_HEADLESS=1 in the environment/.chief/config, and
+# NEVER inferred from `[ -t 1 ]`: a host that pipes a normal run through `tee` must
+# see exactly what it sees on a terminal, so the contract is switched on explicitly
+# or not at all. It only ADDS machine-readable lines — every human line the driver
+# already prints still prints, so `chief logs`, the per-tasklist logs and the final
+# summary are unchanged and a host can tee the stream to a person as well.
+case "${CHIEF_HEADLESS:-0}" in 1|true|yes|on) HEADLESS=1 ;; *) HEADLESS=0 ;; esac
+# Announce the run's identity on stable, greppable, one-per-line `chief: key=value`
+# records. The id is the marker minted above — the same string that appears in
+# $CHIEF_RUNS/<pid>.run as `runid=` and on every process in this run's tree — so a
+# parent can correlate its child's stdout with the registry and the state dir
+# without parsing a table. Silent unless headless.
+headless_announce() {
+  [ "$HEADLESS" = "1" ] || return 0
+  printf 'chief: run-id=%s\n' "$CHIEF_RUN_ID"
+  printf 'chief: run-file=%s\n' "$RUN_FILE"
+  printf 'chief: state=%s\n' "$STATE_ROOT"
+}
 # engine/agent.sh's exit-code contract: 0 = COMPLETE, 1 = genuine failure (stall or
 # hard cap), 2 = stopped on a Claude usage/session limit and won't retry, 3 = drained
 # at an iteration boundary because an OPERATOR PAUSE is armed. Keep in sync with the
@@ -937,6 +956,9 @@ audit_findings() {   # one WARNING block per under-tagged pair ($1: only this na
 # dependency + conflict + concurrency logic before a real, hours-long run.
 # ---------------------------------------------------------------------------
 if [ "$DRY_RUN" = "1" ]; then
+  # A dry run spawns nothing and writes no registry file, so the id it announces is
+  # this process's alone — correlate on stdout, not on $CHIEF_RUNS.
+  [ "$HEADLESS" = "1" ] && printf 'chief: run-id=%s\nchief: dry-run=1\n' "$CHIEF_RUN_ID"
   echo "DRY RUN — provider=$PROVIDER${MODEL:+ model=$MODEL} — PARALLEL=$PARALLEL — pending:$NAMES" | sed 's/  */ /g'
   # The gate is checked inline: op_paused() is defined with the scheduler helpers,
   # far below this early-exit block.
@@ -1275,6 +1297,11 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
   echo "names=$NAMES"
 } > "$RUN_FILE" 2>/dev/null || true
+# The run file now exists, so the id a headless host reads here is immediately
+# resolvable in the registry. Emitted BEFORE the scheduler loop (and before the
+# orphan sweep below, which can spend seconds) so the parent can start correlating
+# at once instead of after the first tasklist launches.
+headless_announce
 # Reap ORPHANED agent loops left by a prior crashed run on THIS repo. We hold the
 # driver lock, so nothing legitimate is using them.
 #
