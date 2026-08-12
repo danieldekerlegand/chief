@@ -232,6 +232,8 @@ Reference docs (living, kept in place):
 - [`docs/drivers-and-safety.md`](docs/drivers-and-safety.md) — sequential vs. parallel,
   `dependsOn`/`touches`/`warmup`, and the safety model.
 - [`docs/verify-hook.md`](docs/verify-hook.md) — writing `verify.sh`, the merge gate.
+- [`docs/providers.md`](docs/providers.md) — the provider onboarding recipe: every roster
+  surface a new agent CLI must be wired into, and the limit-detection caveat.
 - [`docs/monitoring.md`](docs/monitoring.md) — `chief ps`/`chief monitor` and the run registry.
 - [`docs/cross-repo-dependencies.md`](docs/cross-repo-dependencies.md) — cross-repo `dependsOn`.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.

@@ -237,6 +237,10 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - [`docs/cross-repo-dependencies.md`](docs/cross-repo-dependencies.md) — waiting on
   a tasklist in another repo with `"<repo>:<tasklist>"`.
 - [`docs/verify-hook.md`](docs/verify-hook.md) — writing `verify.sh`.
+- [`docs/providers.md`](docs/providers.md) — the provider seam: the onboarding
+  checklist for adding an agent CLI (one `_run_provider` case + one conformance
+  fixture), the invariants a provider must satisfy, and how usage-limit detection
+  depends on its output.
 - [`docs/monitoring.md`](docs/monitoring.md) — `chief ps` / `chief monitor` and the
   run registry.
 - [`docs/headless-invocation.md`](docs/headless-invocation.md) — embedding chief in
