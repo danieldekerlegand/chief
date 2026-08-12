@@ -45,7 +45,7 @@
         "A hermetic test (scripted fake `claude` on PATH, temp `CHIEF_*` prefixes, per `test/{smoke,ratelimit,…}.sh`) asserts: the run-id line is emitted and parseable; the exit code matches the outcome for a merged run and for a verify-failed run; the JSON summary is valid JSON with the documented fields. It joins the behavioral subset the verify hook + CI run",
         "Editing `bin/`/`engine/` bumps `VERSION` (`test/version-bump.sh`); existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
