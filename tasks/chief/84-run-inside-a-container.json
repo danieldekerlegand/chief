@@ -46,7 +46,7 @@
         "A hermetic test exercises the container-shaped conditions without a real container: HOME unset → prefix resolves via env; a run against a repo dir with the container-config env; the registry keys degrade cleanly rather than erroring or mis-matching",
         "Editing `engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
