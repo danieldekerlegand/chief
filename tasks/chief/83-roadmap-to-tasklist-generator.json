@@ -33,7 +33,7 @@
         "`touches` and `iters` are populated from the roadmap item where given, with sensible defaults otherwise",
         "Every generated file passes `jq -e .` and the tasklist gate: valid JSON, `branchName == chief/NN-slug`, `mergedToMain` absent (not yet merged)"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
