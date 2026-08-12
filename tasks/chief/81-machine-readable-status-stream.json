@@ -60,7 +60,7 @@
         "Population is a projection of what the engine already observes (`_is_rate_limit` outcomes, `$STATE/.limit-retry-at`, live-record `waits`/`retry_at`, parseable provider stdout) — no new provider API calls, no polling loops",
         "The hermetic test from US-3 gains both cases: a scripted provider that emits a usage-limit message yields events with the limit fields populated, and one that emits nothing usage-shaped yields null/absent fields — both validating against the versioned schema; `bash -n` + `shellcheck -S error` stay clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
