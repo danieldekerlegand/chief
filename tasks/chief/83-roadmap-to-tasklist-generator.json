@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "feature",
   "branchName": "chief/83-roadmap-to-tasklist-generator",
-  "description": "An operator agent embedding chief (Cuneiform's roadmap \u2192 tasklists \u2192 `chief run` loop) needs to turn a product roadmap into `tasks/chief/NN-slug.json` tasklists PROGRAMMATICALLY \u2014 with the numbered bands, `branchName: chief/NN-slug`, `dependsOn` (filename-minus-.json, cross-repo `<repo>:<name>`), and `touches` conventions correct \u2014 rather than hand-writing JSON. This tasklist adds a supported generator with a CONCRETE input contract: a roadmap JSON document `{\"phases\": [{\"name\", \"items\": [...]}]}` where each item carries `title` (required), `description` (required), `scope` (optional prose folded into the description), `deps` (optional array of tasklist stems, `<repo>:<stem>` for cross-repo), `touches` (optional array of conflict domains), and `iters` (optional integer) \u2014 and it emits one schema-valid tasklist file per item, per `docs/tasklist-schema.md`, callable by an embedding host. It is the operation the Cuneiform Chief-in-Riju phase (cuneiform G8) calls, so the input shape is a published contract, not an internal detail. Scope: a generator command/helper (under `bin/`/`engine/`), `docs/`, and a hermetic test.",
+  "description": "An operator agent embedding chief (Cuneiform's roadmap → tasklists → `chief run` loop) needs to turn a product roadmap into `tasks/chief/NN-slug.json` tasklists PROGRAMMATICALLY — with the numbered bands, `branchName: chief/NN-slug`, `dependsOn` (filename-minus-.json, cross-repo `<repo>:<name>`), and `touches` conventions correct — rather than hand-writing JSON. This tasklist adds a supported generator with a CONCRETE input contract: a roadmap JSON document `{\"phases\": [{\"name\", \"items\": [...]}]}` where each item carries `title` (required), `description` (required), `scope` (optional prose folded into the description), `deps` (optional array of tasklist stems, `<repo>:<stem>` for cross-repo), `touches` (optional array of conflict domains), and `iters` (optional integer) — and it emits one schema-valid tasklist file per item, per `docs/tasklist-schema.md`, callable by an embedding host. It is the operation the Cuneiform Chief-in-Riju phase (cuneiform G8) calls, so the input shape is a published contract, not an internal detail. Scope: a generator command/helper (under `bin/`/`engine/`), `docs/`, and a hermetic test.",
   "parked": false,
   "dependsOn": [],
   "touches": [
@@ -16,12 +16,12 @@
       "title": "A generator that emits schema-valid tasklists from a roadmap",
       "description": "Given a structured roadmap input, emit one schema-valid `tasks/chief/NN-slug.json` per item.",
       "acceptanceCriteria": [
-        "A supported command/helper (e.g. `chief gen <roadmap-file>`, or a documented `engine/` script) takes a roadmap JSON in the contract shape (`phases[]` \u2192 `items[]`, each item with `title`/`description` required and `scope`/`deps`/`touches`/`iters` optional) and emits one `tasks/chief/<NN-slug>.json` per item, each valid against `docs/tasklist-schema.md`: `project`, `branchName: chief/<NN-slug>`, `description`, and `userStories` each with `acceptanceCriteria` + `passes:false`",
+        "A supported command/helper (e.g. `chief gen <roadmap-file>`, or a documented `engine/` script) takes a roadmap JSON in the contract shape (`phases[]` → `items[]`, each item with `title`/`description` required and `scope`/`deps`/`touches`/`iters` optional) and emits one `tasks/chief/<NN-slug>.json` per item, each valid against `docs/tasklist-schema.md`: `project`, `branchName: chief/<NN-slug>`, `description`, and `userStories` each with `acceptanceCriteria` + `passes:false`",
         "Numbering is non-colliding: the generator inspects existing `tasks/chief/*.json` + `tasks/chief/completed/*.json` and continues the band ABOVE the current max",
         "It writes files for review by default and never overwrites an existing tasklist without an explicit `--force`; a `--dry-run`/stdout mode emits without writing",
         "Bash 3.2 compatible (or, if a helper language is used, it ships with the engine and needs no new runtime beyond `jq`); `bash -n` + `shellcheck -S error` clean on any shell it adds"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -29,7 +29,7 @@
       "title": "Faithful to the tasklist conventions",
       "description": "The generated files must obey the exact conventions the schema doc and the tasklist gate enforce.",
       "acceptanceCriteria": [
-        "Generated `branchName` == `chief/<name>`; `dependsOn` entries are filenames-minus-`.json` (never branch names), cross-repo-qualified `<repo>:<name>` where the roadmap declares a cross-repo dependency \u2014 matching `docs/tasklist-schema.md` and `docs/cross-repo-dependencies.md`",
+        "Generated `branchName` == `chief/<name>`; `dependsOn` entries are filenames-minus-`.json` (never branch names), cross-repo-qualified `<repo>:<name>` where the roadmap declares a cross-repo dependency — matching `docs/tasklist-schema.md` and `docs/cross-repo-dependencies.md`",
         "`touches` and `iters` are populated from the roadmap item where given, with sensible defaults otherwise",
         "Every generated file passes `jq -e .` and the tasklist gate: valid JSON, `branchName == chief/NN-slug`, `mergedToMain` absent (not yet merged)"
       ],
@@ -41,7 +41,7 @@
       "title": "Document the input shape + test the generator",
       "description": "Document the roadmap input contract an embedding agent produces, and pin the generator with a fixture test.",
       "acceptanceCriteria": [
-        "`docs/` documents the roadmap-input contract NORMATIVELY (the operation an embedding agent \u2014 cuneiform G8's operator loop \u2014 calls to author tasklists): a JSON document whose top level is `phases[]`, each phase `{\"name\": string, \"items\": [...]}`, each item `{\"title\": string (required), \"description\": string (required), \"scope\": string (optional), \"deps\": [\"<stem>\"|\"<repo>:<stem>\"] (optional), \"touches\": [string] (optional), \"iters\": integer (optional)}` \u2014 with the mapping of each field onto the emitted tasklist (`title`\u2192slug + story seed, `description`+`scope`\u2192`description`, `deps`\u2192`dependsOn`, `touches`\u2192`touches`, `iters`\u2192`iters`) and the defaulting rules for every optional field stated explicitly",
+        "`docs/` documents the roadmap-input contract NORMATIVELY (the operation an embedding agent — cuneiform G8's operator loop — calls to author tasklists): a JSON document whose top level is `phases[]`, each phase `{\"name\": string, \"items\": [...]}`, each item `{\"title\": string (required), \"description\": string (required), \"scope\": string (optional), \"deps\": [\"<stem>\"|\"<repo>:<stem>\"] (optional), \"touches\": [string] (optional), \"iters\": integer (optional)}` — with the mapping of each field onto the emitted tasklist (`title`→slug + story seed, `description`+`scope`→`description`, `deps`→`dependsOn`, `touches`→`touches`, `iters`→`iters`) and the defaulting rules for every optional field stated explicitly",
         "Unknown top-level or item fields are rejected (or warned on) by the generator rather than silently dropped, so the contract stays honest as embedding hosts evolve; the doc includes one complete worked example roadmap JSON and the file(s) it generates",
         "A hermetic test runs the generator on a small fixture roadmap and asserts the emitted files are schema-valid, numbered in a non-colliding band, carry correct `branchName`/`dependsOn`, and round-trip through `jq`",
         "Editing `bin/`/`engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
