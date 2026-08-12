@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "unblock",
   "branchName": "chief/90-research-phase-artifact",
-  "description": "The highest-leverage review point in the context-engineering methodology is the one chief lacks entirely: RESEARCH. 'Misunderstandings can generate thousands of bad lines' \u2014 a wrong mental model of the codebase is the most expensive error an agent can make, and it is made before a single line is written. Chief's agent starts each story cold with the tasklist's acceptance criteria and whatever it greps in-iteration, which means every story in a tasklist independently re-derives (and can independently mis-derive) the same understanding of the code. This tasklist adds a RESEARCH PHASE that runs ONCE per tasklist, before the first story: sub-agents map the relevant code and return a STRUCTURED research document (target files, data flow, root cause, existing conventions), the document is reviewable by a human, and it is then carried into every story's context. Two independent benefits: correctness (the model works from a validated map instead of a fresh guess each time) and context economy (the research document is a compaction artifact \u2014 the methodology's core technique \u2014 so per-story iterations spend their window on the change rather than on rediscovery, holding the recommended 40-60% utilization). Talos already proves the shape: its Test Director derives expectation specs FROM THE DIFF and never lets the implementing agent author its own oracle \u2014 the same separation applies here. Sub-agents must return structured summaries, never raw grep output ('getting subagents to return structured output is not trivial'). Scope: `engine/driver.sh` (a per-tasklist pre-phase), `engine/agent.sh` (research dispatch + context injection), `docs/`. See ../AGENTIC-ENGINEERING-ADVISORY.md \u00a72.2 and \u00a76.2.",
+  "description": "The highest-leverage review point in the context-engineering methodology is the one chief lacks entirely: RESEARCH. 'Misunderstandings can generate thousands of bad lines' — a wrong mental model of the codebase is the most expensive error an agent can make, and it is made before a single line is written. Chief's agent starts each story cold with the tasklist's acceptance criteria and whatever it greps in-iteration, which means every story in a tasklist independently re-derives (and can independently mis-derive) the same understanding of the code. This tasklist adds a RESEARCH PHASE that runs ONCE per tasklist, before the first story: sub-agents map the relevant code and return a STRUCTURED research document (target files, data flow, root cause, existing conventions), the document is reviewable by a human, and it is then carried into every story's context. Two independent benefits: correctness (the model works from a validated map instead of a fresh guess each time) and context economy (the research document is a compaction artifact — the methodology's core technique — so per-story iterations spend their window on the change rather than on rediscovery, holding the recommended 40-60% utilization). Talos already proves the shape: its Test Director derives expectation specs FROM THE DIFF and never lets the implementing agent author its own oracle — the same separation applies here. Sub-agents must return structured summaries, never raw grep output ('getting subagents to return structured output is not trivial'). Scope: `engine/driver.sh` (a per-tasklist pre-phase), `engine/agent.sh` (research dispatch + context injection), `docs/`. See ../AGENTIC-ENGINEERING-ADVISORY.md §2.2 and §6.2.",
   "parked": false,
   "dependsOn": [],
   "touches": [
@@ -17,15 +17,15 @@
     {
       "id": "US-1",
       "title": "A once-per-tasklist research phase producing a structured document",
-      "description": "Before the first story, run research and persist a structured artifact. Not prose \u2014 a map.",
+      "description": "Before the first story, run research and persist a structured artifact. Not prose — a map.",
       "acceptanceCriteria": [
         "A research phase runs ONCE per tasklist before the first story and emits a structured research document with documented required sections: target files and why each is relevant, the data/control flow through them, the root-cause hypothesis or the change's point of insertion, and the existing conventions the implementation must follow",
-        "Research is delegated to sub-agent context(s) whose output is a STRUCTURED SUMMARY, not raw tool output \u2014 the parent's window receives the map, never the greps and file dumps that produced it (sub-agent context isolation)",
-        "The document is persisted under `.chief/state/` per tasklist, survives process death, and is REUSED on resume rather than regenerated \u2014 a resumed tasklist must not pay for research twice",
+        "Research is delegated to sub-agent context(s) whose output is a STRUCTURED SUMMARY, not raw tool output — the parent's window receives the map, never the greps and file dumps that produced it (sub-agent context isolation)",
+        "The document is persisted under `.chief/state/` per tasklist, survives process death, and is REUSED on resume rather than regenerated — a resumed tasklist must not pay for research twice",
         "The phase is bounded (a documented iteration/time budget) and its failure is a distinct, actionable state, never a silent fall-through into implementation",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -33,10 +33,10 @@
       "title": "Carry the research into every story, and let a human correct it",
       "description": "The artifact is only worth its cost if stories consume it and a human can fix it when it is wrong.",
       "acceptanceCriteria": [
-        "Each story's iteration receives the research document in context (alongside the existing `progress.txt` and prior notes), so a story starts from the validated map instead of rediscovering it \u2014 and the mechanism is documented in `.chief/agent-context.md`/`templates/agent-context.md`",
-        "The research document is a reviewable artifact: it is written to a predictable path a human can read and EDIT between iterations, and an edited document is what subsequent stories consume (correcting research must be cheaper than correcting code \u2014 that is the entire point of the leverage hierarchy)",
+        "Each story's iteration receives the research document in context (alongside the existing `progress.txt` and prior notes), so a story starts from the validated map instead of rediscovering it — and the mechanism is documented in `.chief/agent-context.md`/`templates/agent-context.md`",
+        "The research document is a reviewable artifact: it is written to a predictable path a human can read and EDIT between iterations, and an edited document is what subsequent stories consume (correcting research must be cheaper than correcting code — that is the entire point of the leverage hierarchy)",
         "When the plan-review checkpoint (`89`) is enabled for the same tasklist, research is reviewable on the same surface and in the same order (research before plan); the two features compose without either becoming a hard dependency of the other",
-        "Research is opt-in or defaulted per a documented rule (the methodology says ~40% of tasks are one-shots that should skip it) \u2014 a small doc-fix tasklist must not pay a research iteration"
+        "Research is opt-in or defaulted per a documented rule (the methodology says ~40% of tasks are one-shots that should skip it) — a small doc-fix tasklist must not pay a research iteration"
       ],
       "passes": false,
       "notes": ""
