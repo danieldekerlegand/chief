@@ -33,7 +33,7 @@
         "The tradeoff is stated plainly — lower coding quality in exchange for zero marginal cost — so it is chosen deliberately, not by accident",
         "`chief models opencode` (the existing command) is documented as the way to see the local models available"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
