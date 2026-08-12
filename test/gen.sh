@@ -154,17 +154,26 @@ ok "omitted optional fields take their documented defaults"
 ok "titles are slugified into filename-safe stems"
 
 # ── 7. No clobber without --force (all-or-nothing) ───────────────────────────
-"$CHIEF" gen "$WORK/roadmap.json" >"$WORK/clobber.log" 2>&1 && fail "regenerating over existing files should have failed"
-grep -q "refusing to overwrite" "$WORK/clobber.log" || { cat "$WORK/clobber.log"; fail "no refusal message"; }
-ok "an existing tasklist is never overwritten without --force"
+# Numbering always comes from the PROJECT tasks dir, so two runs into the same
+# staging dir produce the same filenames — the collision case, without disturbing
+# the real band.
+"$CHIEF" gen "$WORK/roadmap.json" --out "$WORK/stage" >/dev/null 2>&1 || fail "staged generation failed"
+[ -f "$WORK/stage/45-widget-store-schema.json" ] \
+  || fail "--out did not stage the batch (or the band moved): $(ls "$WORK/stage" 2>&1)"
+[ "$(ls tasks/chief/*.json | wc -l | tr -d ' ')" = 4 ] || fail "--out wrote into the project tasks dir"
+ok "--out stages elsewhere while the band still comes from the project tasks dir"
 
-# --force onto a staging dir proves the flag works without disturbing the real band.
-mkdir -p "$WORK/stage"
-cp "$A" "$WORK/stage/42-widget-store-schema.json"
+rm -f "$WORK/stage/46-widget-read-api.json"     # only ONE target exists now…
+"$CHIEF" gen "$WORK/roadmap.json" --out "$WORK/stage" >"$WORK/clobber.log" 2>&1 \
+  && fail "regenerating over an existing file should have failed"
+grep -q "refusing to overwrite" "$WORK/clobber.log" || { cat "$WORK/clobber.log"; fail "no refusal message"; }
+[ -f "$WORK/stage/46-widget-read-api.json" ] && fail "the refused batch still wrote a file (must be all-or-nothing)"
+ok "one existing target refuses the WHOLE batch — a partial batch never lands"
+
 "$CHIEF" gen "$WORK/roadmap.json" --out "$WORK/stage" --force >/dev/null 2>&1 \
   || fail "--force did not overwrite"
-[ -f "$WORK/stage/43-widget-read-api.json" ] || fail "--force did not write the batch"
-ok "--force overwrites; --out stages elsewhere while keeping the project band"
+[ -f "$WORK/stage/46-widget-read-api.json" ] || fail "--force did not write the batch"
+ok "--force overwrites"
 
 # ── 8. Rejections — the contract is enforced, not assumed ────────────────────
 reject() {  # $1 = label, $2 = roadmap JSON, $3 = expected substring

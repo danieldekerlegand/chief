@@ -46,9 +46,10 @@ Usage:
                               free band, with branchName/dependsOn/touches per the conventions.
                               The programmatic way for an embedding host to author tasklists.
                               -n/--dry-run emits NDJSON to stdout and writes nothing; --force
-                              overwrites; --out DIR stages elsewhere. Input contract (phases[] →
-                              items[] with title/description required and scope/deps/touches/
-                              iters optional): docs/roadmap-input.md
+                              overwrites; --out DIR stages elsewhere. An unknown roadmap field
+                              is an error (--allow-unknown warns instead). Input contract
+                              (phases[] → items[] with title/description required and scope/
+                              deps/touches/iters optional): docs/roadmap-input.md
   chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
                               --provider claude|devin|opencode (default claude)
                               --model MODEL (provider-specific model override)
