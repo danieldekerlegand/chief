@@ -66,7 +66,15 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   fi
 fi
 
-# ── 2) Tasklists — every changed tasks/chief/*.json must be valid JSON ──────
+# ── 2) Docs — README must not lag the engine (version string + command table) ─
+# Cheap grep/sed/awk check, so it runs on any branch that could have caused the
+# drift: a VERSION bump, a CLI surface change, or a README edit itself.
+if touches '^(bin/|engine/|VERSION$|README\.md$)'; then
+  say "docs — test/doc-sync.sh (README vs VERSION + bin/chief dispatch)"
+  bash test/doc-sync.sh || block "README is out of sync with the engine"
+fi
+
+# ── 3) Tasklists — every changed tasks/chief/*.json must be valid JSON ──────
 if touches '^tasks/chief/.+\.json$'; then
   say "tasklists — jq parse"
   while IFS= read -r f; do
