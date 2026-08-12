@@ -598,6 +598,95 @@ conflict_report() {
   } > "$out" 2>/dev/null || true
 }
 
+# ---------------------------------------------------------------------------
+# REFUSAL FORENSICS — the other arm of the same failure
+# ---------------------------------------------------------------------------
+# A refused rebase and a conflicted one land a human in the same place (nothing
+# merged, branch parked) for opposite reasons, and the move out is opposite too: a
+# conflict is resolved INSIDE a rebase, a refusal is cleared BEFORE one can start.
+# Handing over conflict_report()'s runbook for a dirty work repo sends someone
+# hunting a collision that never happened — "## Conflicted files: (git reported
+# none)" is the field symptom this whole tasklist exists to kill. So the refusal
+# arm writes its OWN note: git's reason, the repo's state at that instant (which
+# the abort does not throw away, unlike the conflict index — but the operator is
+# not there to see it), and the one command that clears it.
+#
+# $1 name · $2 branch · $3 work repo · $4 base branch · $5 cause · $6 report path.
+# Writes the report; never fails the caller.
+refusal_report() {
+  local name="$1" branch="$2" repo="$3" base="$4" cause="$5" out="$6"
+  local base_tip branch_tip dirty
+  base_tip="$(git -C "$repo" rev-parse --short "$base" 2>/dev/null)"
+  branch_tip="$(git -C "$repo" rev-parse --short "$branch" 2>/dev/null)"
+  dirty="$(git -C "$repo" status --short 2>/dev/null | head -20)"
+  mkdir -p "$SNAP" 2>/dev/null || true
+  {
+    echo "# REBASE-REFUSED — $name"
+    echo
+    echo "**This is not a merge conflict.** \`git rebase\` never got far enough to produce"
+    echo "one: it left ZERO unmerged paths (\`git diff --diff-filter=U\` was empty at the"
+    echo "moment of the failure), which is exactly what separates this from"
+    echo "\`REBASE-CONFLICT\`. There are no conflicted files to open and nothing to resolve."
+    echo
+    echo "Nothing was merged and nothing was rewritten — \`$branch\` is exactly as the agent"
+    echo "left it and \`$base\` never moved. The work repo needs one fix, then a re-run."
+    echo
+    echo "- branch: \`$branch\` @$branch_tip"
+    echo "- base: \`$base\` @$base_tip"
+    echo "- work repo: \`$repo\`"
+    echo
+    echo "## Why git refused"
+    echo
+    echo "$cause"
+    echo
+    echo "## The work repo at that moment"
+    echo
+    if [ -n "$dirty" ]; then
+      echo '```'
+      printf '%s\n' "$dirty"
+      echo '```'
+    else
+      echo "\`git status --short\` was clean — the refusal is state or configuration, not"
+      echo "uncommitted work (see the cause above)."
+    fi
+    echo
+    echo "## Fix it"
+    echo
+    echo '```sh'
+    echo "cd $repo"
+    # Cause-specific first move. The cause string is either rebase_refusal_cause()'s
+    # own wording or git's verbatim message, so match on the tokens common to both.
+    case "$cause" in
+      *rebase-merge*|*rebase-apply*|*"rebase in progress"*|*"rebase --abort"*)
+        echo "git rebase --abort       # clear the rebase left in progress" ;;
+      *CHERRY_PICK_HEAD*|*"cherry-pick in progress"*)
+        echo "git cherry-pick --abort  # clear the cherry-pick left in progress" ;;
+      *REVERT_HEAD*|*"revert in progress"*)
+        echo "git revert --abort       # clear the revert left in progress" ;;
+      *MERGE_HEAD*|*"merge in progress"*|*"You have not concluded your merge"*)
+        echo "git merge --abort        # clear the merge left in progress" ;;
+      *uncommitted*|*unstaged*|*"local changes"*|*"staged changes"*|*"would be overwritten"*)
+        echo "git status               # whose work is this?"
+        echo "git stash -u             # or commit it — do not discard someone's work blind" ;;
+      *ownership*|*"not a repository"*|*permission*|*safe.directory*)
+        echo "git status               # confirm git will operate on this path at all"
+        echo "git config --global --add safe.directory $repo   # if it is dubious ownership" ;;
+      *)
+        echo "git status               # the refusal above is git's own wording" ;;
+    esac
+    echo "#"
+    echo "# then this must start AND finish clean before chief will merge:"
+    echo "git rebase $base"
+    echo "# and the tasklist picks back up with: chief run $name"
+    echo '```'
+    echo
+    echo "Chief does not retry this on its own. A refusal is an **environment** fault, not"
+    echo "something an agent can write code to fix — re-running the agent would only be"
+    echo "refused again. Once the rebase above runs clean, \`chief run $name\` picks the"
+    echo "branch back up at the merge phase with the stories it already finished intact."
+  } > "$out" 2>/dev/null || true
+}
+
 # INTERNAL SUBCOMMAND — `driver.sh --integrate-base <name> <branch> <wt> <repo> <base>`.
 # agent.sh runs this between iterations (see run_worker's CHIEF_ITER_HOOK). It is a
 # re-entry rather than an exported function so the pickup path and the boundary path
@@ -1543,7 +1632,15 @@ run_worker() {
       # (≥1 unmerged path = a real content conflict; zero = a refusal).
       live_set "$live" phase=rebasing
       refusal="$(rebase_refusal_cause "$work_repo")"
-      if [ -z "$refusal" ]; then
+      if [ -z "$refusal" ] && git -C "$work_repo" merge-base --is-ancestor "$work_base" "$branch" 2>/dev/null; then
+        # Strictly AHEAD of base (base is an ancestor of the branch) → the rebase is a
+        # NO-OP: there is nothing on base left to replay onto. git agrees ("Current
+        # branch is up to date") but it still has to open and lock the repo to say so,
+        # and that is exactly where an environment fault turns a guaranteed no-op into a
+        # non-zero exit — the field case this arm exists for (three branches strictly
+        # ahead of main, every one parked as REBASE-CONFLICT). Don't ask the question.
+        echo ">> $name: $branch is strictly ahead of $work_base — rebase is a no-op, skipping it"
+      elif [ -z "$refusal" ]; then
         rb_out="$(git -C "$work_repo" rebase "$work_base" 2>&1)" || rb_rc=$?
         if [ "$rb_rc" != 0 ]; then
           # Read the index BEFORE the abort discards it — in EITHER arm.
@@ -1552,7 +1649,7 @@ run_worker() {
             # Forensics FIRST: the unmerged paths live in the index the abort discards.
             rpt="$SNAP/$name.rebase-conflict.md"
             conflict_report "$name" "$branch" "$work_repo" "$work_base" "$pre_mb" "REBASE-CONFLICT" "$rpt"
-            rm -f "$SNAP/$name.merge-conflict.md" 2>/dev/null || true
+            rm -f "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
             git -C "$work_repo" rebase --abort 2>/dev/null || true
             live_set "$live" phase=rebase-conflict
             echo "REBASE-CONFLICT see $SNAP_REL/$name.rebase-conflict.md" > "$STATE/$name.status"
@@ -1571,13 +1668,17 @@ run_worker() {
       fi
       if [ -n "$refusal" ]; then
         # A refusal is an ENVIRONMENT fault, not a collision: nothing merged, nothing
-        # rewritten, $branch still exactly as the agent left it. Stale forensics from a
-        # previous attempt would misdescribe it, so they go.
+        # rewritten, $branch still exactly as the agent left it. It gets its OWN note —
+        # conflict_report()'s runbook ("resolve inside the rebase") is the wrong advice
+        # for a repo that could not start one. Stale conflict forensics from a previous
+        # attempt would assert a collision that did not happen, so they go.
+        rpt="$SNAP/$name.rebase-refused.md"
+        refusal_report "$name" "$branch" "$work_repo" "$work_base" "$refusal" "$rpt"
         rm -f "$SNAP/$name.rebase-conflict.md" "$SNAP/$name.merge-conflict.md" 2>/dev/null || true
         live_set "$live" phase=rebase-refused
-        echo "REBASE-REFUSED $refusal" > "$STATE/$name.status"
+        echo "REBASE-REFUSED $refusal (see $SNAP_REL/$name.rebase-refused.md)" > "$STATE/$name.status"
         echo "!! $name: git REFUSED to rebase $branch onto $work_base${sub:+ in $sub} — this is NOT a content conflict (no conflicted paths): $refusal"
-        echo "!! $name: nothing was merged and $branch is untouched — fix the cause above, then re-run \`chief run $name\`"; exit 0
+        echo "!! $name: nothing was merged and $branch is untouched — the cause and the command that clears it: $rpt"; exit 0
       fi
       # Re-verify the REBASED branch against the latest base, IN the work repo. On
       # failure, PERSIST the output to snapshots/<name>.verify-failed.log so the NEXT
@@ -1604,7 +1705,7 @@ run_worker() {
         # cleared: this branch is green + merged, so every failure artifact from a
         # previous attempt (verify output, conflict forensics) is now stale.
         rm -f "$SNAP/$name.verify-failed.log" "$SNAP/$name.rebase-conflict.md" \
-              "$SNAP/$name.merge-conflict.md" 2>/dev/null || true
+              "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
         live_set "$live" phase=merged story=
         echo "MERGED @$sha${sub:+ ($sub)}" > "$STATE/$name.status"; echo ">> $name MERGED @$sha${sub:+ in $sub}"
         # Under-tagging this branch shared with a co-scheduled peer, reported into
@@ -1618,7 +1719,7 @@ run_worker() {
         # rebased cleanly) but leaves a human in exactly the same position.
         rpt="$SNAP/$name.merge-conflict.md"
         conflict_report "$name" "$branch" "$work_repo" "$work_base" "$pre_mb" "MERGE-CONFLICT" "$rpt"
-        rm -f "$SNAP/$name.rebase-conflict.md" 2>/dev/null || true
+        rm -f "$SNAP/$name.rebase-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
         git -C "$work_repo" merge --abort 2>/dev/null || true
         live_set "$live" phase=merge-conflict
         echo "MERGE-CONFLICT see $SNAP_REL/$name.merge-conflict.md" > "$STATE/$name.status"

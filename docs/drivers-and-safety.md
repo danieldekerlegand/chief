@@ -147,6 +147,16 @@ Two more guards back this up:
   none → `REBASE-REFUSED <cause>`, quoting git's own refusal. A refusal merges
   nothing and rewrites nothing — the branch is exactly as the agent left it — and it
   is deliberately **not retryable**: the repo needs a human, not another agent run.
+  It writes its own note, `snapshots/<name>.rebase-refused.md` (not a
+  `.rebase-conflict.md`, which would assert a collision that never happened): the
+  cause, `git status --short` at that instant, and the cause-specific command that
+  clears it — `git rebase --abort`, `git stash`, `safe.directory` — followed by the
+  rebase that must run clean before chief will merge. A later clean merge clears it,
+  and so does a real conflict (each failure arm removes the other's stale note).
+  A branch **strictly ahead** of base (base is an ancestor → the replay is a no-op)
+  skips the rebase altogether: git would only have to open the repo to say "up to
+  date", and that is the one place an environment fault could turn a guaranteed
+  no-op into a non-zero exit — the field case this whole path comes from.
 
 Terminal per-tasklist statuses: `MERGED @<sha>`, `COMPLETE-UNMERGED`, `INCOMPLETE`,
 `EMPTY-NO-WORK`, `WORKTREE-FAILED`, `CHECKOUT-FAILED`, `REBASE-CONFLICT`,

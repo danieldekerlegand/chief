@@ -34,7 +34,7 @@
         "For a real content conflict, the existing snapshot content (conflicted files, colliders, 'resolve inside the rebase' guidance) is unchanged",
         "A strictly-ahead branch (base is an ancestor → rebase is a no-op) is never reported as either a conflict or a refusal — it rebases cleanly and proceeds to merge (this is the exact field case that motivated the tasklist)"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
