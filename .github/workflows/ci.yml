@@ -86,6 +86,9 @@ jobs:
       - name: Conflict forensics (a merge-phase conflict names the files and the colliding sibling)
         run: bash test/conflict-forensics.sh
 
+      - name: Refused rebase vs real conflict (a dirty work repo is not a merge conflict)
+        run: bash test/rebase-refusal.sh
+
       - name: Under-tagged touches audit (co-scheduled tasklists that edited the same file are reported)
         run: bash test/touches-audit.sh
 
