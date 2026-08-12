@@ -27,8 +27,14 @@
 #   - Numbering NEVER collides: the next band starts ABOVE the max NN already present
 #     in the tasks dir AND in completed/ (a retired tasklist still owns its number).
 #   - `branchName` is always `chief/<NN-slug>` — the same stem as the filename.
-#   - `dependsOn` carries filename stems, never branch names; `mergedToMain` is never
-#     emitted (an unmerged tasklist must not claim to be merged).
+#   - `dependsOn` carries filename stems, never branch names (a `chief/…` or a
+#     `….json` dep is rejected with the correction), and a dep naming a SIBLING item
+#     of the same roadmap by its slug is resolved to that item's generated stem —
+#     the number isn't knowable to the host writing the roadmap.
+#   - `mergedToMain` is never emitted (an unmerged tasklist must not claim to be
+#     merged), and every emitted file is re-checked against the tasklist gate
+#     (valid JSON · branchName == chief/<filename stem> · no mergedToMain) before
+#     chief calls it generated.
 #   - Nothing is overwritten without --force, and --dry-run writes nothing at all.
 #
 # bash 3.2: no associative arrays, no ${var^^}, no mapfile. jq is the only dependency
@@ -62,6 +68,11 @@ Usage:
 Each roadmap item becomes one tasklist: title → slug + seed story, description(+scope)
 → description, deps → dependsOn, touches → touches, iters → iters. The single seeded
 user story is a STARTING POINT — review and split it before running.
+
+A dep is a tasklist name (the filename minus .json), NEVER a branch name; qualify
+another repo as "<repo>:<stem>". A dep that matches a sibling roadmap item's slug is
+rewritten to that item's generated "NN-slug" stem, so a roadmap can order its own
+items without knowing the band in advance.
 Contract + worked example: docs/roadmap-input.md   Schema: docs/tasklist-schema.md
 EOF
 }
@@ -122,6 +133,28 @@ jq -e . >/dev/null 2>&1 <<<"$ROADMAP_JSON" || die "roadmap is not valid JSON: $r
 problems="$(jq -r '
   def nonempty_string: type == "string" and (gsub("^\\s+|\\s+$"; "") | length) > 0;
 
+  # dependsOn is the convention hand-authoring gets wrong most often
+  # (docs/cross-repo-dependencies.md), so each entry is checked on its own and the
+  # message carries the correction, not just the complaint.
+  def dep_problem($at):
+    if type != "string"
+      then "\($at): must be a string — a tasklist name (\"82-some-work\"), or \"<repo>:<stem>\""
+    else (gsub("^\\s+|\\s+$"; "")) as $t
+      | (if ($t|test(":")) then ($t|sub(":[^:]*$"; "")) else "" end) as $repo
+      | (if ($t|test(":")) then ($t|sub("^.*:"; "")) else $t end) as $stem
+      | if ($t|length) == 0
+          then "\($at): must be a non-empty string — a tasklist name (\"82-some-work\"), or \"<repo>:<stem>\""
+        elif ($t|test(":")) and ($repo|length) == 0
+          then "\($at): \"\($t)\" — a cross-repo dep is \"<repo>:<stem>\"; the repo part is empty"
+        elif ($stem|length) == 0
+          then "\($at): \"\($t)\" — a cross-repo dep is \"<repo>:<stem>\"; the tasklist part is empty"
+        elif ($stem|endswith(".json"))
+          then "\($at): \"\($t)\" — dependsOn takes the filename MINUS .json (\"\($stem|sub("\\.json$"; ""))\")"
+        elif ($stem|test("/"))
+          then "\($at): \"\($t)\" — dependsOn takes a tasklist name, never a branch name (\"\($stem|sub("^.*/"; ""))\"); qualify another repo as \"<repo>:<stem>\""
+        else empty end
+      end;
+
   def item_problems($pi; $ii):
     . as $it
     | if type != "object" then ["phases[\($pi)].items[\($ii)]: must be a JSON object"]
@@ -132,9 +165,11 @@ problems="$(jq -r '
            else "phases[\($pi)].items[\($ii)]: \"description\" is required and must be a non-empty string" end),
           (if ($it|has("scope")|not) or ($it.scope|type == "string") then empty
            else "phases[\($pi)].items[\($ii)]: \"scope\" must be a string" end),
-          (if ($it|has("deps")|not)
-              or (($it.deps|type == "array") and ([$it.deps[] | select(nonempty_string|not)]|length) == 0) then empty
-           else "phases[\($pi)].items[\($ii)]: \"deps\" must be an array of non-empty strings (tasklist stems, or <repo>:<stem>)" end),
+          (if ($it|has("deps")|not) then empty
+           elif ($it.deps|type) != "array"
+             then "phases[\($pi)].items[\($ii)]: \"deps\" must be an array of tasklist names (\"<stem>\", or \"<repo>:<stem>\")"
+           else ($it.deps | to_entries[] | .key as $di | .value
+                 | dep_problem("phases[\($pi)].items[\($ii)].deps[\($di)]")) end),
           (if ($it|has("touches")|not)
               or (($it.touches|type == "array") and ([$it.touches[] | select(nonempty_string|not)]|length) == 0) then empty
            else "phases[\($pi)].items[\($ii)]: \"touches\" must be an array of non-empty strings" end),
@@ -216,7 +251,9 @@ PLAN="$(jq -c \
             branchName:  "chief/\($name)",
             description: ($desc + (if $scope != "" then " Scope: \($scope)" else "" end)),
             parked:      false,
-            dependsOn:   ($it.deps // []),
+            # defaults when the roadmap item is silent: no deps, no conflict domain
+            # (free to co-schedule), and the schema's own iteration budget.
+            dependsOn:   ([($it.deps // [])[] | trim]),
             touches:     ($it.touches // []),
             iters:       ($it.iters // $defiters),
             warmup:      [],
@@ -230,6 +267,13 @@ PLAN="$(jq -c \
             ]
           } }
     )
+  # A host writing the roadmap cannot know the band it will land in, so an item may
+  # order itself after a SIBLING by the slug of that sibling; rewrite those to the stem
+  # that was actually generated. First slug wins if two titles collide. A qualified
+  # <repo>:<stem> dep is never rewritten — it names work in another repo.
+  | . as $plan
+  | (reduce $plan[] as $p ({}; if has($p.slug) then . else .[$p.slug] = $p.name end)) as $bystem
+  | map(.tasklist.dependsOn |= map(if test(":") then . else ($bystem[.] // .) end))
 ' <<<"$ROADMAP_JSON")" || die "could not build the tasklists from the roadmap"
 
 count="$(jq 'length' <<<"$PLAN")"
@@ -243,6 +287,67 @@ if [ -n "$empty_slugs" ]; then
     printf '%s\n' "$empty_slugs" | sed 's/^/  - /' ; } >&2
   exit 2
 fi
+
+# ── audit the plan against the tasklist gate (docs/tasklist-schema.md) ───────
+# The generator's whole point is that the conventions come out right, so it checks
+# its OWN output rather than trusting the transform above: filename stem is NN-slug,
+# branchName is that stem under chief/, no mergedToMain on unmerged work, and every
+# seeded story is a well-formed, not-yet-passing story. A hit here is a chief bug.
+audit="$(jq -r '
+  def bad($path; $msg): "\($path): \($msg)";
+  [ .[]
+    | .name as $name | .path as $path | .tasklist as $t
+    | (if ($name|test("^[0-9][0-9]+-[a-z0-9]+(-[a-z0-9]+)*$")) then empty
+       else bad($path; "filename stem \"\($name)\" is not NN-slug") end),
+      (if $t.branchName == "chief/\($name)" then empty
+       else bad($path; "branchName \"\($t.branchName // "")\" != \"chief/\($name)\"") end),
+      (if ($t|has("mergedToMain")|not) then empty
+       else bad($path; "carries mergedToMain — an unmerged tasklist must not claim to be merged") end),
+      (if ($t.project|type) == "string" and (($t.project|length) > 0) then empty
+       else bad($path; "\"project\" must be a non-empty string") end),
+      (if ($t.description|type) == "string" and (($t.description|length) > 0) then empty
+       else bad($path; "\"description\" must be a non-empty string") end),
+      (if ($t.dependsOn|type) == "array"
+          and all($t.dependsOn[];
+                  type == "string" and length > 0
+                  # only the STEM is a filename; the repo half of a cross-repo dep is
+                  # allowed to be a path (../pinakes:10-work) — see docs/cross-repo-dependencies.md
+                  and ((if test(":") then sub("^.*:"; "") else . end)
+                       | length > 0 and (test("/")|not) and (endswith(".json")|not)))
+       then empty else bad($path; "\"dependsOn\" must be tasklist names, never branch names (\"<stem>\", or \"<repo>:<stem>\")") end),
+      (if ($t.touches|type) == "array" and all($t.touches[]; type == "string" and length > 0)
+       then empty else bad($path; "\"touches\" must be an array of non-empty strings") end),
+      (if ($t.iters|type) == "number" and ($t.iters == ($t.iters|floor)) and ($t.iters > 0)
+       then empty else bad($path; "\"iters\" must be a positive integer") end),
+      (if ($t.userStories|type) == "array" and (($t.userStories|length) > 0) then empty
+       else bad($path; "\"userStories\" must be a non-empty array") end),
+      ( $t.userStories[]?
+        | . as $us
+        | (if ($us.id|type) == "string" and (($us.id|length) > 0) then empty
+           else bad($path; "a user story has no \"id\"") end),
+          (if ($us.title|type) == "string" and (($us.title|length) > 0) then empty
+           else bad($path; "story \($us.id // "?") has no \"title\"") end),
+          (if ($us.acceptanceCriteria|type) == "array" and (($us.acceptanceCriteria|length) > 0)
+              and all($us.acceptanceCriteria[]; type == "string" and length > 0) then empty
+           else bad($path; "story \($us.id // "?") needs a non-empty acceptanceCriteria array") end),
+          (if $us.passes == false then empty
+           else bad($path; "story \($us.id // "?") must start with passes:false") end) )
+  ] | unique | .[]
+' <<<"$PLAN")"
+if [ -n "$audit" ]; then
+  { echo "chief gen: generated tasklists violate chief's own conventions (this is a bug in chief gen):"
+    printf '%s\n' "$audit" | sed 's/^/  - /' ; } >&2
+  exit 1
+fi
+
+# The tasklist gate as the verify hook / CLAUDE.md state it, re-applied to a file on
+# disk: valid JSON, branchName == chief/<its own filename stem>, no mergedToMain.
+gate_file() {
+  gf_n="$(basename "$1" .json)"
+  jq -e --arg n "$gf_n" '
+    (.branchName == "chief/\($n)") and (has("mergedToMain")|not)
+  ' "$1" >/dev/null 2>&1
+}
 
 # ── dry run: emit, write nothing ─────────────────────────────────────────────
 if [ "$dry" = 1 ]; then
@@ -274,6 +379,7 @@ while [ "$i" -lt "$count" ]; do
   p="$(jq -r --argjson i "$i" '.[$i].path' <<<"$PLAN")"
   jq --argjson i "$i" '.[$i].tasklist' <<<"$PLAN" > "$p" || die "write failed: $p"
   jq -e . "$p" >/dev/null 2>&1 || die "generated invalid JSON: $p"
+  gate_file "$p" || die "generated file fails the tasklist gate: $p"
   echo "  gen  ${p#"$CHIEF_PROJECT"/}"
   i="$((i + 1))"
 done
