@@ -93,6 +93,10 @@ if [ -f "$_MON_DIR/reap.sh" ]; then
 else
   CHIEF_UNREG=""; CHIEF_UNREG_INFO=""
   chief_find_unregistered_drivers() { CHIEF_UNREG=""; CHIEF_UNREG_INFO=""; }
+  # Against an engine tree without the PID-namespace helpers, every record reads as
+  # local — which is exactly how this view behaved before they existed.
+  chief_run_file_ns() { printf ''; }
+  chief_ns_foreign()  { return 1; }
 fi
 
 dur() {       # $1 = seconds -> "45s" / "12m" / "3h04m"
@@ -377,21 +381,42 @@ unreg_render() {
       missing)  printf '       %s↳ driver.lock is GONE — only this check stands between it and a second driver%s\n' "$YEL" "$RST" ;;
       other:*)  printf '       %s↳ driver.lock is held by pid %s, not this one%s\n' "$YEL" "${lock#other:}" "$RST" ;;
       stale:*)  printf '       %s↳ driver.lock names dead pid %s%s\n' "$YEL" "${lock#stale:}" "$RST" ;;
+      foreign:*) printf '       %s↳ driver.lock was taken in ANOTHER PID namespace (pid %s) — liveness unknowable from here%s\n' \
+                   "$YEL" "${lock#foreign:}" "$RST" ;;
     esac
     printf '       %s↳ stop it:  kill %s    then:  chief reap    (reaps whatever it leaves behind)%s\n' "$DIM" "$pid" "$RST"
   done
   return 0
 }
 
+# Run files this process must not interpret: written where their pids were numbered
+# in a different PID namespace. Named, so an operator who is sharing a prefix between
+# containers sees WHY `chief ps` is quieter than the directory listing suggests.
+foreign_note() {   # $1 = count
+  [ "${1:-0}" -gt 0 ] || return 0
+  printf '%s%d run file(s) belong to another PID namespace (another container sharing %s) — not shown, not removed.%s\n' \
+    "$DIM" "$1" "$RUNS" "$RST"
+}
+
 render() {
-  local now runfiles="" f pid n_active=0
+  local now runfiles="" f pid n_active=0 n_foreign=0 n_files=0
   now="$(date '+%Y-%m-%d %H:%M:%S')"
   set -- "$RUNS"/*.run
   [ -e "$1" ] && runfiles="$*"
 
   # Header (count active first so a run whose pid just died isn't counted).
+  #
+  # This loop DELETES the run file of a run whose pid is gone — reasonable when the
+  # pid is ours to check, destructive when it is not. A shared $CHIEF_PREFIX (a
+  # bind-mounted ~/.chief, one volume in two containers) puts another PID namespace's
+  # entries in this directory, where their pids mean nothing here and would read as
+  # dead: a `chief ps` in a container would quietly delete the registry of a live run
+  # in another. Those entries are left ALONE — not counted, not rendered, not removed
+  # — and reported as a one-line footnote instead.
   for f in $runfiles; do
     [ -e "$f" ] || continue
+    n_files=$(( n_files + 1 ))
+    if chief_ns_foreign "$(chief_run_file_ns "$f")"; then n_foreign=$(( n_foreign + 1 )); continue; fi
     pid="$(field pid "$f")"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then n_active=$(( n_active + 1 )); else rm -f "$f" 2>/dev/null; fi
   done
@@ -404,22 +429,26 @@ render() {
       printf '%sStart one with:  chief run -p N%s\n' "$DIM" "$RST"
     else
       printf '%sCHIEF%s · %s0 active run(s)%s · %s%s%s\n' "$BOLD" "$RST" "$CYN" "$RST" "$DIM" "$now" "$RST"
-      printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
+      # Only claim they exited if any of them were ours to check.
+      [ "$n_foreign" -lt "$n_files" ] && printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
+      foreign_note "$n_foreign"
     fi
     return 0
   fi
   printf '%sCHIEF%s · %s%d active run(s)%s%s · %s%s%s\n' "$BOLD" "$RST" "$CYN" "$n_active" "$RST" \
     "$([ "$UNREG_N" -gt 0 ] && printf ' · %s⚠ %d unregistered%s' "$RED" "$UNREG_N" "$RST")" "$DIM" "$now" "$RST"
+  foreign_note "$n_foreign"
   if [ "$n_active" -eq 0 ]; then
     # Only a registry that HAD entries can have "all exited" — with no run files at
     # all the only thing running is the unregistered driver below.
-    [ -n "$runfiles" ] && printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
+    [ -n "$runfiles" ] && [ "$n_foreign" -lt "$n_files" ] && printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
     unreg_render
     return 0
   fi
 
   for f in $runfiles; do
     [ -e "$f" ] || continue
+    chief_ns_foreign "$(chief_run_file_ns "$f")" && continue
     pid="$(field pid "$f")"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || continue
 

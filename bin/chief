@@ -22,6 +22,11 @@ VERSION="$(cat "$SELF/VERSION" 2>/dev/null || echo unknown)"
 # is a fatal error, not a default) or read-only. See that file for the fallbacks.
 # shellcheck source=engine/paths.sh
 . "$ENGINE/paths.sh"
+# git-as-a-container-hands-it-to-us (ownership + committer identity). Only the probe
+# is used here — the driver is what SETS anything; `chief init` merely needs to tell
+# "this is not a git repo" apart from "git refuses to look at this repo".
+# shellcheck source=engine/gitenv.sh
+. "$ENGINE/gitenv.sh"
 # Host-wide run registry (shared by every repo). The driver drops a <pid>.run
 # file here per active run; `chief ps`/`chief monitor` read it. Overridable via
 # CHIEF_RUNS; defaults under the install prefix (~/.chief).
@@ -172,8 +177,15 @@ cmd_init() {
     exit 1
   fi
   # Chief operates on git branches/worktrees/merges — warn if this isn't a repo yet.
-  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-    || echo "  note: not a git repo yet — run 'git init' before 'chief run' (it needs a clean git tree on the base branch)." >&2
+  # A bind-mounted repo owned by another uid ALSO fails `rev-parse`, and telling that
+  # operator to `git init` an already-initialised repo sends them the wrong way.
+  case "$(chief_git_probe "$root")" in
+    ok) ;;
+    ownership) echo "  note: git refuses this repo — dubious ownership (owned by another uid)." >&2
+               echo "        Set CHIEF_GIT_SAFE_DIRECTORY=1 for 'chief run', or:" >&2
+               echo "        git config --global --add safe.directory $root" >&2 ;;
+    *) echo "  note: not a git repo yet — run 'git init' before 'chief run' (it needs a clean git tree on the base branch)." >&2 ;;
+  esac
   mkdir -p "$root/.chief" "$root/tasks/chief/completed"
   for f in config verify.sh agent-context.md; do
     if [ -e "$root/.chief/$f" ]; then echo "  keep  .chief/$f (exists)"

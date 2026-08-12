@@ -362,6 +362,12 @@ LIMIT_PAUSE_FILE="$STATE/.limit-pause-until"
 OPERATOR_PAUSE_FILE="$STATE/.paused"
 
 source "$ENGINE/lib.sh"
+# git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
+# another uid, and an image with no committer identity. Sourced before anything runs
+# git on $REPO; its exports are inherited by every child — agent.sh, the verify hook,
+# and the agent's own commits.
+# shellcheck source=engine/gitenv.sh
+source "$ENGINE/gitenv.sh"
 # Orphan identification + the bounded, reporting reap (engine/reap.sh). Shared with
 # `chief reap`, which is the same sweep on a path that does NOT need a new run.
 source "$ENGINE/reap.sh"
@@ -398,6 +404,16 @@ for _d in "$WT_ROOT" "$STATE"; do
   exit "$(hl_rc "$HL_RC_CONFIG" 1)"
 done
 unset _d
+
+# git must OPERATE on this repo and be able to sign a commit, checked here for the
+# same reason the writability guard above is: both hold for free on a laptop, both
+# fail inside a container, and both otherwise surface an hour later as a git error
+# with no mention of chief. See engine/gitenv.sh for what each knob does.
+# NOT in a command substitution, however tempting: this call's whole product is
+# EXPORTS ($GIT_CONFIG_*, $GIT_*_NAME/EMAIL) and a subshell would drop every one of
+# them while still printing a reassuring note. Its notes go to stderr with a plain
+# redirection, which keeps them in this shell.
+chief_git_env_setup "$REPO" "$WT_ROOT" >&2 || exit "$(hl_rc "$HL_RC_CONFIG" 1)"
 
 # ---------------------------------------------------------------------------
 # Small helpers (bash 3.2 — no associative arrays)
@@ -1205,14 +1221,31 @@ fi
 # after a crash/Ctrl-C doesn't need manual `rmdir`. The lock dir carries the pid.
 if mkdir "$DRIVER_LOCK" 2>/dev/null; then
   echo $$ > "$DRIVER_LOCK/pid"
+  chief_ns_token > "$DRIVER_LOCK/ns"
 else
   opid="$(cat "$DRIVER_LOCK/pid" 2>/dev/null || echo)"
+  # "Stale" here means "that pid is dead", and a pid from ANOTHER PID namespace is
+  # not a pid we can ask about: `kill -0` would answer about whatever local process
+  # happens to wear that number, and the likely answer — nothing — clears a lock that
+  # a driver in a sibling container is holding right now. Two drivers on one repo is
+  # the failure this lock exists to prevent, so an unanswerable question stops the run
+  # instead of being guessed at. (Same repo, same container: the token matches and
+  # this branch never fires.)
+  if chief_ns_foreign "$(chief_lock_ns "$DRIVER_LOCK")"; then
+    echo "ERROR: this repo's driver.lock was taken in a DIFFERENT PID namespace" >&2
+    echo "       (lock: $(chief_lock_ns "$DRIVER_LOCK"), here: $(chief_ns_token)) by pid ${opid:-unknown}." >&2
+    echo "       Another container is driving $REPO, or one exited without releasing it." >&2
+    echo "       Chief will not guess: from here that pid number means a different process." >&2
+    echo "       Stop that run, or — if you know it is gone — rm -rf $DRIVER_LOCK" >&2
+    exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+  fi
   if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null; then
     echo "ERROR: another Chief driver is active (pid $opid, lock: $DRIVER_LOCK). Never run two on one repo." >&2
     exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
   echo "  (clearing a stale driver lock from a dead run — owner pid ${opid:-unknown})" >&2
-  rm -rf "$DRIVER_LOCK"; mkdir "$DRIVER_LOCK" && echo $$ > "$DRIVER_LOCK/pid"
+  rm -rf "$DRIVER_LOCK"
+  if mkdir "$DRIVER_LOCK"; then echo $$ > "$DRIVER_LOCK/pid"; chief_ns_token > "$DRIVER_LOCK/ns"; fi
 fi
 # ---------------------------------------------------------------------------
 # TEARDOWN — reap before you forget.
@@ -1433,6 +1466,7 @@ rm -f "$STATE"/*.state "$STATE"/*.pid "$STATE"/*.live.json 2>/dev/null || true  
 mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
 {
   echo "pid=$$"
+  echo "ns=$(chief_ns_token)"                  # which PID namespace `pid`/`pgid` are numbered in
   echo "repo=$REPO"
   echo "base=$BASE_BRANCH"
   echo "parallel=$PARALLEL"

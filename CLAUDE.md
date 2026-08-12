@@ -69,10 +69,14 @@ engine/
   lib.sh             #   shared helpers: run_verify / verify_branch, locks, state I/O
   paths.sh           #   host-wide state paths (prefix · runs · repos · worktree root), resolved
                      #   in one place — container-safe when $HOME is unset/read-only
+  gitenv.sh          #   the git a CONTAINER hands us: safe.directory for a repo owned by another
+                     #   uid ($CHIEF_GIT_SAFE_DIRECTORY), a committer identity when git can't find one
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
-  reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it)
+  reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it);
+                     #   also the PID-NAMESPACE token every pid-keyed record carries, so a shared prefix
+                     #   across containers is never read as "that pid is dead"
 templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json)
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
