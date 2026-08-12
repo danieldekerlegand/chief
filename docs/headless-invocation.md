@@ -62,6 +62,7 @@ id resolves immediately — a headless run announces itself:
 ```
 chief: run-id=myrepo-1234567890-1765000000-54321
 chief: run-file=/Users/me/.chief/runs/54321.run
+chief: events=/Users/me/.chief/runs/myrepo-1234567890-1765000000-54321.events.jsonl
 chief: state=/Users/me/myrepo/.chief/state
 ```
 
@@ -71,6 +72,10 @@ chief: state=/Users/me/myrepo/.chief/state
   how you tie stdout, the process tree and the registry together.
 - **`run-file`** is the run's entry in the host-wide registry (`$CHIEF_RUNS/<pid>.run`),
   the same file `chief ps` / `chief monitor` read. Key=value, one per line.
+- **`events`** is this run's append-only NDJSON **event stream** — every
+  run/tasklist/story transition as it happens, the live counterpart to the one-shot
+  summary below. Follow it with `chief events <run-id> -f`, or read the file
+  directly; the schema is the contract in [`events.md`](events.md).
 - **`state`** is the run's state directory; per-tasklist logs live in
   `<state>/parallel/<name>.log` and live records in `<state>/parallel/<name>.live.json`.
 

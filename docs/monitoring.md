@@ -135,6 +135,23 @@ The registry is read-only from the monitor's side — it never touches a run. It
 safe to run `chief ps` as often as you like, from any directory, while runs are in
 flight.
 
+## Subscribing instead of polling
+
+Everything above is a **snapshot** — a table you re-read, or a record you diff. A
+host that wants the *transitions themselves* (a tasklist merged, went VERIFY-FAILED,
+hit a usage limit; a story passed) subscribes to the **event stream** instead: an
+append-only NDJSON log per run at `$CHIEF_RUNS/<run-id>.events.jsonl`, one JSON
+object per transition.
+
+```sh
+chief events -f | jq -c 'select(.event == "tasklist.merged")'
+```
+
+The stream is a *projection* of the very same transitions this page describes — the
+live records and `ps`/`monitor`/`logs` are unchanged by it. The path, the versioned
+line schema and the full event catalogue are in [`events.md`](events.md), which is
+the contract chief-cloud and embedding hosts code against.
+
 ## Is there a GUI?
 
 **Not in chief — by design.** `chief ps` / `chief monitor` / `chief logs` are the

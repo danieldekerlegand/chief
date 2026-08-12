@@ -10,7 +10,8 @@ the parallel-safety model are in `docs/`.
 
 - The **engine** (`engine/driver.sh` scheduler+worker, `engine/agent.sh` one iteration,
   `engine/monitor.sh` run registry, `engine/lib.sh` shared helpers, `engine/live.sh` per-tasklist
-  liveliness records, `engine/reap.sh` orphan reaping) and the **CLI** (`bin/chief`).
+  liveliness records, `engine/events.sh` the NDJSON event stream, `engine/reap.sh` orphan reaping)
+  and the **CLI** (`bin/chief`).
 - The hermetic **test suite** (`test/*.sh`), the `chief init` **templates** (`templates/`), and the
   **docs** (`docs/`).
 
@@ -66,6 +67,8 @@ engine/
   monitor.sh         #   active-run registry view  (chief ps / chief monitor)
   lib.sh             #   shared helpers: run_verify / verify_branch, locks, state I/O
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
+  events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
+                     #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
   reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it)
 templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json)
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
