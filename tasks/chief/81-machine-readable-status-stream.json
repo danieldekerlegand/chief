@@ -35,7 +35,7 @@
         "`docs/` (extend `docs/monitoring.md` or add a doc) documents the event path, the versioned schema, and a consumer example — explicitly named as the contract chief-cloud + embedding hosts read",
         "Backward-compatible: `ps` / `monitor` / `logs` and the `.live.json` records are unchanged; the event stream is purely additive"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
