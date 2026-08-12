@@ -66,9 +66,10 @@ Usage:
                               (phases[] → items[] with title/description required and scope/
                               deps/touches/iters optional): docs/roadmap-input.md
   chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
-                              --provider claude|devin|opencode (default claude)
-                              --model MODEL (provider-specific model override)
-                              --claude, --devin, --opencode provider shortcuts
+                              --provider claude|devin|opencode|amp (default claude)
+                              --model MODEL (provider-specific model override; amp has no
+                              model selector, so --model is refused for it)
+                              --claude, --devin, --opencode, --amp provider shortcuts
                               --preset local (= --local) cost-avoidance mode: run every agent
                               turn on a LOCAL/self-hosted endpoint via opencode, at zero API
                               cost and materially lower coding quality. Configure it with
@@ -92,7 +93,8 @@ Usage:
                               pure NDJSON (pipe it to jq) — notes go to stderr. This is the contract
                               chief-cloud and embedding hosts read: docs/events.md
   chief models [provider]     list the models you can pass to --model: live from the provider for
-                              devin/opencode, the stable family aliases for claude (no arg = all)
+                              devin/opencode, the stable family aliases for claude, none for amp
+                              (no arg = all)
   chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
                               still spending quota) with no live, registered run behind
                               them. -n reports without signalling. Never touches a live
@@ -154,7 +156,7 @@ load_project() {
   # shellcheck disable=SC1091
   source "$CHIEF_PROJECT/.chief/config"
   # CHIEF_TOOL is the pre-provider compatibility name. Preserve configurations
-  # that selected amp while making provider the canonical setting.
+  # that selected a non-default tool while making provider the canonical setting.
   if [ "${CHIEF_PROVIDER:-claude}" = claude ] && [ "${CHIEF_TOOL:-claude}" != claude ]; then
     CHIEF_PROVIDER="$CHIEF_TOOL"
   fi
@@ -237,6 +239,7 @@ cmd_run() {
     --claude)      provider=claude; shift ;;
     --devin)       provider=devin; shift ;;
     --opencode)    provider=opencode; shift ;;
+    --amp)         provider=amp; shift ;;
     --tool)        provider="$2"; shift 2 ;; # compatibility with pre-provider releases
     --tool=*)      provider="${1#*=}"; shift ;;
     -*)            echo "unknown flag: $1" >&2; exit 2 ;;
@@ -257,11 +260,24 @@ cmd_run() {
     provider="$CHIEF_PROVIDER"; model="$CHIEF_MODEL"
     export CHIEF_PRESET="$preset"
   fi
+  local model_explicit="$model"        # flag/preset value, before the config default
   provider="${provider:-$CHIEF_PROVIDER}"; model="${model:-$CHIEF_MODEL}"
   case "$provider" in
     claude|devin|opencode|amp) ;;
-    *) echo "invalid provider '$provider' (choose claude, devin, or opencode)" >&2; exit 2 ;;
+    *) echo "invalid provider '$provider' (choose claude, devin, opencode, or amp)" >&2; exit 2 ;;
   esac
+  # amp has no model selector — it picks its own (docs/providers.md#model-overrides).
+  # Accept-and-ignore is barred, so an EXPLICIT --model is a bad invocation. A model
+  # merely inherited from .chief/config is dropped with a note instead, so `chief run
+  # --amp` still works in a project whose default provider takes a model.
+  if [ "$provider" = amp ] && [ -n "$model" ]; then
+    if [ -n "$model_explicit" ]; then
+      echo "amp has no model selector — drop --model '$model_explicit' (docs/providers.md#model-overrides)" >&2
+      exit 2
+    fi
+    echo "  note: amp has no model selector — dropping CHIEF_MODEL='$model' for this run" >&2
+    model=""
+  fi
   # Export the optional toggles instead of splicing "VAR=val" via ${x:+…} into the
   # command's assignment-prefix position — an EXPANSION there isn't recognized as an
   # assignment, so bash tries to RUN it ("AUTO_MERGE_MAIN=0: command not found").
@@ -484,13 +500,16 @@ cmd_models() {
     claude)   _models_claude ;;
     devin)    if command -v devin    >/dev/null 2>&1; then devin models list;            else echo "devin CLI not on PATH";    return 1; fi ;;
     opencode) if command -v opencode >/dev/null 2>&1; then opencode models ${2:+"$2"};   else echo "opencode CLI not on PATH"; return 1; fi ;;
+    amp)      echo "amp — no model selector: the CLI chooses its own model, so there is nothing to pass to --model."
+              echo "      chief refuses an explicit '--model' for amp rather than ignoring it (docs/providers.md#model-overrides)." ;;
     ""|all|help)
       _models_claude
       echo
       echo "devin    — live, per-account list:  chief models devin        (= devin models list)"
       echo "opencode — live list:               chief models opencode     (= opencode models [provider])"
+      echo "amp      — none: amp has no model selector; --model is refused for it"
       ;;
-    *) echo "chief models: unknown provider '$1' (claude | devin | opencode)" >&2; return 2 ;;
+    *) echo "chief models: unknown provider '$1' (claude | devin | opencode | amp)" >&2; return 2 ;;
   esac
 }
 # Host-wide orphan sweep. Deliberately NOT gated on load_project: the whole point is

@@ -96,7 +96,8 @@
 #
 # Env vars (shared with run-all.sh unless noted):
 #   PARALLEL=N            max tasklists running at once (default 2). NEW.
-#   CHIEF_PROVIDER=claude|devin|opencode  AI provider (default claude; amp remains a legacy alias)
+#   CHIEF_PROVIDER=claude|devin|opencode|amp  AI provider (default claude). amp is a first-class
+#                         dispatch case of its own, NOT an alias — it just has no model selector.
 #   CHIEF_MODEL=<model>                  optional provider-specific model override
 #   AUTO_MERGE_MAIN=1     verify+merge each completed branch (default 1)
 #   NO_VERIFY=0           skip the pre-merge verification gate (not advised)

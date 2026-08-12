@@ -36,11 +36,12 @@ implements their work) and contract definitions (those live in `koine`).
   **CLI** (`bin/chief`): `init · run · list · ps · monitor · logs · models · reap · pause · resume
   · version · update`.
 - **Multi-provider:** Claude Code (default), Devin, OpenCode, and Amp via `--provider`/`--model`
-  (or `CHIEF_PROVIDER`/`CHIEF_MODEL` in `.chief/config`); legacy `CHIEF_TOOL`/`--tool` still
-  accepted. Amp is **dispatch-only** today: accepted by both validators with a first-class
-  `_run_provider` case (`engine/agent.sh`) — *not* the "legacy alias" an old `driver.sh` comment
-  claims — but with no model-override wiring, no `chief models` case, and no README/template
-  coverage; `85` settles its status.
+  (or `CHIEF_PROVIDER`/`CHIEF_MODEL` in `.chief/config`, or the `--claude`/`--devin`/`--opencode`/
+  `--amp` shortcuts); legacy `CHIEF_TOOL`/`--tool` still accepted. All four are **first-class**:
+  one `_run_provider` dispatch case each, both validator lists in lockstep, a `chief models` case,
+  and a conformance fixture. Amp is its own dispatch case (never an alias); its CLI has no model
+  selector, so `--model` is **refused** for it rather than ignored. Onboarding recipe:
+  [`docs/providers.md`](docs/providers.md).
 - **Safe by construction:** worktree isolation per tasklist, a serialized rebase → verify → merge
   floor, a no-work guard (EMPTY-NO-WORK), verify-failure re-engagement, mid-merge crash recovery,
   and orphan reaping keyed on the inherited `$CHIEF_RUN_ID` (`77`, merged).
@@ -157,8 +158,8 @@ ongoing bars are continuous upkeep, not discrete tasklists.
 |---|---|---|
 | ⬜ | Rebase-refusal vs. real content-conflict disambiguation — the merge phase labels **any** non-zero `git rebase` as `REBASE-CONFLICT` (`engine/driver.sh` §1492), so a worktree that merely *refuses* / is dirty-or-locked masquerades as a content collision (a spurious failure observed in practice); distinguish the two so a branch isn't parked on a false positive · S/M | `chief/78-rebase-refusal-vs-conflict-disambiguation` *(proposed)* |
 | ✅ | Desktop monitor-app decision — **decided: chief is CLI-only.** No desktop app is planned or referenced here; the GUI monitoring surface (and any cross-host view) is chief-cloud's Tauri app over `chiefd`, which consumes chief's run registry + the `81` status stream. Rationale + reversal clause in [`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md) · S (decision) | `chief/79-desktop-monitor-app-decision` |
-| 🚧 | Provider breadth — the multi-provider seam dispatches Claude / Devin / OpenCode / Amp; Amp is dispatch-only (no model override, no `chief models` case, no docs/tests — `85` reconciles it); keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
-| ⬜ | Provider onboarding harness — a documented onboarding recipe + a hermetic, roster-driven scripted-fake conformance test, so a new agent CLI = one `_run_provider` dispatch case + one registered fixture; settles Amp's first-class-vs-legacy contradiction (promote or retire, no third state) · S/M | `chief/85-provider-onboarding-harness` *(proposed)* |
+| 🚧 | Provider breadth — the multi-provider seam dispatches Claude / Devin / OpenCode / Amp, all four first-class (dispatch case · both validators · shorthand · `chief models` · conformance fixture); Amp takes no `--model` (its CLI has no selector, so chief refuses it). Keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
+| ✅ | Provider onboarding harness — [`docs/providers.md`](docs/providers.md) is the 10-item onboarding recipe, and `test/provider-conformance.sh` is the roster-driven scripted-fake harness (argv · prompt channel · model stance · completion, plus a drift guard over both validator lists), so a new agent CLI = one `_run_provider` dispatch case + one `ROSTER` line. **Amp settled: promoted**, first-class on every surface, with `--model` refused rather than ignored · S/M | `chief/85-provider-onboarding-harness` |
 | ⬜ | Doc-sync gate — a grep-based, hermetic verify/CI check asserting README's version string == `VERSION` and the README command table covers every `bin/chief` subcommand (the exact drift class re-synced by hand on 2026-08-11, commit `995263c`) · S | `chief/86-doc-sync-gate` *(proposed)* |
 | 🚧 | bash-3.2 compatibility upkeep — hold the bash 3.2 + shellcheck-clean bar as the engine grows; CI on Ubuntu + macOS is the guard | — |
 
@@ -232,6 +233,8 @@ Reference docs (living, kept in place):
 - [`docs/drivers-and-safety.md`](docs/drivers-and-safety.md) — sequential vs. parallel,
   `dependsOn`/`touches`/`warmup`, and the safety model.
 - [`docs/verify-hook.md`](docs/verify-hook.md) — writing `verify.sh`, the merge gate.
+- [`docs/providers.md`](docs/providers.md) — the provider onboarding recipe: every roster
+  surface a new agent CLI must be wired into, and the limit-detection caveat.
 - [`docs/monitoring.md`](docs/monitoring.md) — `chief ps`/`chief monitor` and the run registry.
 - [`docs/cross-repo-dependencies.md`](docs/cross-repo-dependencies.md) — cross-repo `dependsOn`.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.

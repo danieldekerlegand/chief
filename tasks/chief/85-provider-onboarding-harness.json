@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "feature",
   "branchName": "chief/85-provider-onboarding-harness",
-  "description": "The multi-provider seam already reduces a new agent CLI to ONE dispatch case in `engine/agent.sh` `_run_provider()` \u2014 but nothing documents that recipe, and the surrounding roster surfaces (the two validator lists in `engine/agent.sh` + `bin/chief cmd_run`, the `--<provider>` CLI shorthands, `chief models`, `templates/config`, README) drift independently, as Amp proves. AMP CODE TRUTH, per the 2026-08-11 audit: `amp` is ACCEPTED by both validators (`bin/chief` `claude|devin|opencode|amp)`, `engine/agent.sh` provider check) and has a FIRST-CLASS dispatch case (`amp --dangerously-allow-all`, prompt on stdin) \u2014 it is NOT an alias of anything \u2014 yet `engine/driver.sh`'s header calls it 'a legacy alias', both invalid-provider error messages name only three providers, `--model` is silently ignored for it, there is no `--amp` shorthand, no `chief models` case, no mention in README/`templates/config`, and no `test/provider.sh` coverage. This tasklist (a) documents the onboarding recipe, (b) generalizes the hermetic scripted-fake conformance test so a new provider = one dispatch case + one registered fixture, and (c) settles Amp's status by applying that recipe to it \u2014 first-class everywhere or explicitly retired, no third state. Scope: `docs/`, `test/`, `engine/agent.sh`, `engine/driver.sh` (comment), `bin/chief`, `templates/config`, README; editing `engine/`/`bin/` bumps `VERSION`.",
+  "description": "The multi-provider seam already reduces a new agent CLI to ONE dispatch case in `engine/agent.sh` `_run_provider()` — but nothing documents that recipe, and the surrounding roster surfaces (the two validator lists in `engine/agent.sh` + `bin/chief cmd_run`, the `--<provider>` CLI shorthands, `chief models`, `templates/config`, README) drift independently, as Amp proves. AMP CODE TRUTH, per the 2026-08-11 audit: `amp` is ACCEPTED by both validators (`bin/chief` `claude|devin|opencode|amp)`, `engine/agent.sh` provider check) and has a FIRST-CLASS dispatch case (`amp --dangerously-allow-all`, prompt on stdin) — it is NOT an alias of anything — yet `engine/driver.sh`'s header calls it 'a legacy alias', both invalid-provider error messages name only three providers, `--model` is silently ignored for it, there is no `--amp` shorthand, no `chief models` case, no mention in README/`templates/config`, and no `test/provider.sh` coverage. This tasklist (a) documents the onboarding recipe, (b) generalizes the hermetic scripted-fake conformance test so a new provider = one dispatch case + one registered fixture, and (c) settles Amp's status by applying that recipe to it — first-class everywhere or explicitly retired, no third state. Scope: `docs/`, `test/`, `engine/agent.sh`, `engine/driver.sh` (comment), `bin/chief`, `templates/config`, README; editing `engine/`/`bin/` bumps `VERSION`.",
   "parked": false,
   "dependsOn": [],
   "touches": [
@@ -16,12 +16,12 @@
       "title": "Document the provider onboarding recipe",
       "description": "Write the checklist that makes adding an agent CLI a one-case + one-fixture change, enumerating every roster surface so none is forgotten.",
       "acceptanceCriteria": [
-        "A `docs/providers.md` (or an equivalently discoverable doc linked from README + ROADMAP) documents the onboarding recipe as an explicit checklist: the `_run_provider()` dispatch case in `engine/agent.sh` (non-interactive/print mode, permission bypass flag, prompt delivery \u2014 stdin vs. prompt-file, like devin \u2014 and the `--model`/`$MODEL` wiring or a recorded decision that the CLI has no model flag), the TWO validator lists (`engine/agent.sh` + `bin/chief cmd_run`) and their error strings, the optional `--<provider>` shorthand in `cmd_run`, the `chief models` case, the `templates/config` roster comment, the README provider mentions/command-table row, and the conformance fixture from US-2",
+        "A `docs/providers.md` (or an equivalently discoverable doc linked from README + ROADMAP) documents the onboarding recipe as an explicit checklist: the `_run_provider()` dispatch case in `engine/agent.sh` (non-interactive/print mode, permission bypass flag, prompt delivery — stdin vs. prompt-file, like devin — and the `--model`/`$MODEL` wiring or a recorded decision that the CLI has no model flag), the TWO validator lists (`engine/agent.sh` + `bin/chief cmd_run`) and their error strings, the optional `--<provider>` shorthand in `cmd_run`, the `chief models` case, the `templates/config` roster comment, the README provider mentions/command-table row, and the conformance fixture from US-2",
         "The doc states the invariants a provider case must satisfy: runs non-interactively from a piped prompt, preserves its own exit status for limit classification (`_is_rate_limit`), and needs no chief-side state beyond the dispatch case",
         "The doc explains how usage-limit detection interacts with a new provider: `RATE_LIMIT_PATTERN`/`RATE_LIMIT_STATUS_PATTERN` are provider-output-based, so a provider whose limit phrasing isn't covered must extend the pattern (with a test), or its limit stops will be misread as stalls",
         "Docs-only for this story (no engine edits yet); markdown links resolve"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -30,11 +30,11 @@
       "description": "Generalize test/provider.sh's per-provider scripted fakes into a parameterized conformance harness, so registering one fake + one expected-invocation line IS the test for a new provider.",
       "acceptanceCriteria": [
         "The hermetic provider test (extend `test/provider.sh` or add `test/provider-conformance.sh` wired into `test/all.sh`) drives `engine/agent.sh` against a scripted fake CLI on `PATH` for EVERY provider the validators accept, asserting per provider: the exact argv the engine composes (recorded by the fake), prompt delivery on the documented channel (stdin vs. `--prompt-file`), `--model` propagation where supported, and that a fake emitting `<promise>COMPLETE</promise>` after a commit ends the loop with exit 0",
-        "The harness is data-driven: adding a provider means registering one fake script + one expected-invocation entry \u2014 no new test scaffolding \u2014 and the doc from US-1 points at the exact registration point",
+        "The harness is data-driven: adding a provider means registering one fake script + one expected-invocation entry — no new test scaffolding — and the doc from US-1 points at the exact registration point",
         "A roster-drift guard asserts the provider lists in `engine/agent.sh` and `bin/chief` accept the same set, so the two validators can never silently diverge again",
         "Fully hermetic (temp `CHIEF_*` prefixes, fake CLIs on `PATH`, no network, never touches `~/.chief`); `bash -n` + `shellcheck -S error` clean; bash 3.2 compatible; existing `test/*.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -47,7 +47,7 @@
         "If RETIRED instead: amp is removed from BOTH validators and the dispatch case, the removal and its rationale are recorded in `docs/providers.md` + ROADMAP, and a config that still sets amp fails with an actionable error naming the supported roster",
         "ROADMAP.md's Current State provider line and the provider-breadth row agree with each other and with the settled code state; editing `engine/`/`bin/` bumps `VERSION` (`test/version-bump.sh` green); full suite green"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
