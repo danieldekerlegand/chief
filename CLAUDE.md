@@ -87,6 +87,11 @@ engine/
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
                      #   silently ignored. Chief requires the measurement; it never judges it
+  research.sh        #   the RESEARCH PHASE contract: the four required sections of the per-tasklist
+                     #   research document, its validator, and the sub-agent structured-output prompt.
+                     #   Runs ONCE per tasklist before the first story (opt-in: "research":true /
+                     #   CHIEF_RESEARCH=1); the document is persisted, human-editable and reused, never
+                     #   regenerated. agent.sh dispatches it; a failure is exit 6 -> RESEARCH-FAILED
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
@@ -115,6 +120,17 @@ VERSION              # engine version — bump on any engine/bin/install change
   changes, not just the `passes` flags** (a doc-only merge that flipped every flag built nothing).
 - **One story per iteration; keep `main` green.** The engine merges with `--no-ff` only after a clean
   rebase + a green `verify.sh`; a non-zero verify leaves the branch as `VERIFY-FAILED` for re-engagement.
+- **Durable per-tasklist state lives OUTSIDE the worktree.** `run_worker` does `rm -rf "$wt"` at the
+  top of every run, so anything written only under `$wt/.chief/state/` is rebuilt by each resumed run.
+  The working shape: the driver owns an absolute path under `$STATE_ROOT`, hands it down as an env var
+  (`CHIEF_PAUSE_FILE`, `CHIEF_RESEARCH_FILE`), and `agent.sh` seeds FROM it and promotes back TO it the
+  moment the artifact is valid — not at the end of the loop, or a mid-run death loses it. Relatedly, a
+  new `agent.sh` exit code needs its `run_worker` arm placed **above** the EMPTY-NO-WORK guard whenever
+  that stop can legitimately leave zero commits (as 2, 3, 4, 5 and 6 all can).
+- **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
+  "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
+  locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when
+  the tokens being matched are ASCII.
 - **Verify is the quality bar** (`docs/reference/verify-hook.md`): exit 0 allows the merge, non-zero blocks it,
   cwd is the repo root with the finished branch checked out, and the hook **must stay executable**.
   `NO_VERIFY=1` skips it (don't); `STRICT_VERIFY=1` blocks on pre-existing issues too.
