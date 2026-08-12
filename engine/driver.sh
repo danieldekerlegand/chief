@@ -114,13 +114,24 @@
 #   RATE_LIMIT_REDISPATCH_MAX_WAIT=21600  ceiling on any single wait (6h), so a
 #                         bogus far-future reset can't park the run for days. NEW.
 #   (the per-worker knobs — RATE_LIMIT_RETRY/WAIT/MAX_WAITS/PATTERN — are agent.sh's)
-#   WT_ROOT=<dir>         where worktrees live. Default is OUTSIDE the repo
-#                         (${CHIEF_PREFIX:-~/.chief}/worktrees/<repo>-<hash>) so a
-#                         `--print` agent can't resolve its root to the outer tree.
+#   WT_ROOT=<dir>         where THIS repo's worktrees live. Default is OUTSIDE the
+#                         repo ($CHIEF_WORKTREE_ROOT/<repo>-<hash>) so a `--print`
+#                         agent can't resolve its root to the outer tree.
+#   CHIEF_PREFIX=<dir>    host-wide state root (runs/repos/worktrees). Default
+#                         ~/.chief, with container fallbacks — engine/paths.sh.
+#   CHIEF_WORKTREE_ROOT=<dir>  the worktree tree ALL repos share. Default
+#                         $CHIEF_PREFIX/worktrees; set it to keep worktrees off a
+#                         container's ephemeral prefix.
 #
 set -uo pipefail
 
 ENGINE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Host-wide state paths (prefix / runs / repos / worktree root). Sourced HERE, well
+# before the first path is spelled, because the old inline `${CHIEF_PREFIX:-$HOME/.chief}`
+# aborted the driver outright under `set -u` when $HOME was unset — the shape a
+# container hands you. engine/paths.sh has the resolution order and the fallbacks.
+# shellcheck source=engine/paths.sh
+. "$ENGINE/paths.sh"
 : "${CHIEF_PROJECT:?CHIEF_PROJECT must be set — run this via 'chief run', not directly}"
 REPO="$CHIEF_PROJECT"
 # ---------------------------------------------------------------------------
@@ -176,7 +187,12 @@ SNAP_REL="$STATE_REL/snapshots"            # repo-relative — short enough for 
 # project root to the OUTER working tree and read/edit THAT instead of the
 # worktree — so it produces no committed work and the branch merges empty. Keeping
 # the worktree tree out of $REPO is what makes agent isolation actually hold.
-WT_ROOT="${WT_ROOT:-${CHIEF_PREFIX:-$HOME/.chief}/worktrees/$(basename "$REPO")-$(printf '%s' "$REPO" | cksum | cut -d' ' -f1)}"
+# WT_ROOT names THIS repo's worktree dir; $CHIEF_WORKTREE_ROOT relocates the tree
+# ALL repos share (chief_worktree_root). The per-repo key is <basename>-<cksum of the
+# absolute path>: inside a container the repo's bind-mount path differs from the
+# host's, so the same repo keys differently there — which is what keeps a container
+# run's worktrees from colliding with the host's.
+WT_ROOT="${WT_ROOT:-$(chief_worktree_root)/$(basename "$REPO")-$(printf '%s' "$REPO" | cksum | cut -d' ' -f1)}"
 STATE="$STATE_ROOT/parallel"
 MERGE_LOCK="$STATE_ROOT/merge.lock"
 WT_LOCK="$STATE_ROOT/wt.lock"              # serialize concurrent `git worktree add`
@@ -186,11 +202,11 @@ DRIVER_LOCK="$STATE_ROOT/driver.lock"      # one driver per repo
 # host-wide dir (default ~/.chief/runs). It lets `chief ps`/`chief monitor` see
 # every live run across ALL repos, not just this one. Written after the driver
 # lock is held; removed on exit. `chief monitor` prunes files whose pid is dead.
-CHIEF_RUNS="${CHIEF_RUNS:-${CHIEF_PREFIX:-$HOME/.chief}/runs}"
+CHIEF_RUNS="$(chief_runs_dir)"
 RUN_FILE="$CHIEF_RUNS/$$.run"
 # Known-repos registry (bin/chief exports it; defaulted here so the driver also
 # works standalone). Resolves the "<repo>:" half of a qualified cross-repo dep.
-CHIEF_REPOS="${CHIEF_REPOS:-${CHIEF_PREFIX:-$HOME/.chief}/repos}"
+CHIEF_REPOS="$(chief_repos_dir)"
 BASE_BRANCH="${CHIEF_BASE_BRANCH:-main}"
 VERIFY_HOOK=""; [ -n "${CHIEF_VERIFY:-}" ] && VERIFY_HOOK="$REPO/$CHIEF_VERIFY"
 mkdir -p "$COMPLETED" "$SNAP" "$WT_ROOT" "$STATE"
@@ -346,6 +362,12 @@ LIMIT_PAUSE_FILE="$STATE/.limit-pause-until"
 OPERATOR_PAUSE_FILE="$STATE/.paused"
 
 source "$ENGINE/lib.sh"
+# git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
+# another uid, and an image with no committer identity. Sourced before anything runs
+# git on $REPO; its exports are inherited by every child — agent.sh, the verify hook,
+# and the agent's own commits.
+# shellcheck source=engine/gitenv.sh
+source "$ENGINE/gitenv.sh"
 # Orphan identification + the bounded, reporting reap (engine/reap.sh). Shared with
 # `chief reap`, which is the same sweep on a path that does NOT need a new run.
 source "$ENGINE/reap.sh"
@@ -363,6 +385,35 @@ CHIEF_EVENT_REPO="$REPO"
 export CHIEF_EVENTS_FILE CHIEF_EVENT_REPO
 
 command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
+
+# The state tree must be WRITABLE, not merely nameable — a distinction that only
+# bites in a container, where the prefix can land on a read-only mount or a path this
+# uid does not own, and where a bind-mounted repo can itself be read-only. Every
+# symptom of that appears much later and somewhere unhelpful: `git worktree add`
+# failing with a permission error from deep inside git, or a run whose registry entry
+# silently never appears. So it is checked once, here, with the knobs named.
+for _d in "$WT_ROOT" "$STATE"; do
+  mkdir -p "$_d" 2>/dev/null || true
+  { [ -d "$_d" ] && [ -w "$_d" ]; } && continue
+  echo "ERROR: chief cannot write its state directory: $_d" >&2
+  case "$_d" in
+    "$REPO"/*) echo "       This lives inside the repo — mount/checkout $REPO writable." >&2 ;;
+    *)         echo "       Set CHIEF_PREFIX (all host-wide state) or CHIEF_WORKTREE_ROOT" >&2
+               echo "       (worktrees only) to a writable path — in a container, a volume or a tmpfs." >&2 ;;
+  esac
+  exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+done
+unset _d
+
+# git must OPERATE on this repo and be able to sign a commit, checked here for the
+# same reason the writability guard above is: both hold for free on a laptop, both
+# fail inside a container, and both otherwise surface an hour later as a git error
+# with no mention of chief. See engine/gitenv.sh for what each knob does.
+# NOT in a command substitution, however tempting: this call's whole product is
+# EXPORTS ($GIT_CONFIG_*, $GIT_*_NAME/EMAIL) and a subshell would drop every one of
+# them while still printing a reassuring note. Its notes go to stderr with a plain
+# redirection, which keeps them in this shell.
+chief_git_env_setup "$REPO" "$WT_ROOT" >&2 || exit "$(hl_rc "$HL_RC_CONFIG" 1)"
 
 # ---------------------------------------------------------------------------
 # Small helpers (bash 3.2 — no associative arrays)
@@ -828,7 +879,7 @@ dep_task() { printf '%s' "${1##*:}"; }
 resolve_repo() {   # repo spec -> absolute path, or nothing when it can't be resolved
   local spec="$1" cand hits
   case "$spec" in
-    "~/"*) cand="$HOME/${spec#\~/}" ;;
+    "~/"*) cand="${HOME:-}/${spec#\~/}"; [ -n "${HOME:-}" ] || cand="" ;;
     /*)    cand="$spec" ;;
     */*)   cand="$REPO/$spec" ;;                      # relative to this repo
     *)     cand="" ;;
@@ -1170,14 +1221,31 @@ fi
 # after a crash/Ctrl-C doesn't need manual `rmdir`. The lock dir carries the pid.
 if mkdir "$DRIVER_LOCK" 2>/dev/null; then
   echo $$ > "$DRIVER_LOCK/pid"
+  chief_ns_token > "$DRIVER_LOCK/ns"
 else
   opid="$(cat "$DRIVER_LOCK/pid" 2>/dev/null || echo)"
+  # "Stale" here means "that pid is dead", and a pid from ANOTHER PID namespace is
+  # not a pid we can ask about: `kill -0` would answer about whatever local process
+  # happens to wear that number, and the likely answer — nothing — clears a lock that
+  # a driver in a sibling container is holding right now. Two drivers on one repo is
+  # the failure this lock exists to prevent, so an unanswerable question stops the run
+  # instead of being guessed at. (Same repo, same container: the token matches and
+  # this branch never fires.)
+  if chief_ns_foreign "$(chief_lock_ns "$DRIVER_LOCK")"; then
+    echo "ERROR: this repo's driver.lock was taken in a DIFFERENT PID namespace" >&2
+    echo "       (lock: $(chief_lock_ns "$DRIVER_LOCK"), here: $(chief_ns_token)) by pid ${opid:-unknown}." >&2
+    echo "       Another container is driving $REPO, or one exited without releasing it." >&2
+    echo "       Chief will not guess: from here that pid number means a different process." >&2
+    echo "       Stop that run, or — if you know it is gone — rm -rf $DRIVER_LOCK" >&2
+    exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+  fi
   if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null; then
     echo "ERROR: another Chief driver is active (pid $opid, lock: $DRIVER_LOCK). Never run two on one repo." >&2
     exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
   echo "  (clearing a stale driver lock from a dead run — owner pid ${opid:-unknown})" >&2
-  rm -rf "$DRIVER_LOCK"; mkdir "$DRIVER_LOCK" && echo $$ > "$DRIVER_LOCK/pid"
+  rm -rf "$DRIVER_LOCK"
+  if mkdir "$DRIVER_LOCK"; then echo $$ > "$DRIVER_LOCK/pid"; chief_ns_token > "$DRIVER_LOCK/ns"; fi
 fi
 # ---------------------------------------------------------------------------
 # TEARDOWN — reap before you forget.
@@ -1398,6 +1466,7 @@ rm -f "$STATE"/*.state "$STATE"/*.pid "$STATE"/*.live.json 2>/dev/null || true  
 mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
 {
   echo "pid=$$"
+  echo "ns=$(chief_ns_token)"                  # which PID namespace `pid`/`pgid` are numbered in
   echo "repo=$REPO"
   echo "base=$BASE_BRANCH"
   echo "parallel=$PARALLEL"

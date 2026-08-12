@@ -17,15 +17,30 @@ unset _src _dir
 ENGINE="$SELF/engine"
 TEMPLATES="$SELF/templates"
 VERSION="$(cat "$SELF/VERSION" 2>/dev/null || echo unknown)"
+# Host-wide state paths, resolved in ONE place (engine/paths.sh) because $HOME is
+# not a given: in a container it may be unset (an unguarded `$HOME` under `set -u`
+# is a fatal error, not a default) or read-only. See that file for the fallbacks.
+# shellcheck source=engine/paths.sh
+. "$ENGINE/paths.sh"
+# git-as-a-container-hands-it-to-us (ownership + committer identity). Only the probe
+# is used here — the driver is what SETS anything; `chief init` merely needs to tell
+# "this is not a git repo" apart from "git refuses to look at this repo".
+# shellcheck source=engine/gitenv.sh
+. "$ENGINE/gitenv.sh"
 # Host-wide run registry (shared by every repo). The driver drops a <pid>.run
 # file here per active run; `chief ps`/`chief monitor` read it. Overridable via
 # CHIEF_RUNS; defaults under the install prefix (~/.chief).
-CHIEF_RUNS="${CHIEF_RUNS:-${CHIEF_PREFIX:-$HOME/.chief}/runs}"
+CHIEF_RUNS="$(chief_runs_dir)"
 # Known-repos registry: every repo `chief` has touched (init or run), one absolute
 # path per line. The desktop UI reads this to list repos for history + new tasklists
 # (active runs already self-register in CHIEF_RUNS). Deduped, best-effort.
-CHIEF_REPOS="${CHIEF_REPOS:-${CHIEF_PREFIX:-$HOME/.chief}/repos}"
-export CHIEF_RUNS CHIEF_REPOS
+CHIEF_REPOS="$(chief_repos_dir)"
+# CHIEF_PREFIX is exported as the RESOLVED value so the whole process tree (driver,
+# agents, a nested `chief` an agent runs) agrees on one prefix even when it came from
+# a fallback — two processes re-deriving it from a differing environment would
+# otherwise split the registry in half.
+CHIEF_PREFIX="$(chief_prefix)"
+export CHIEF_RUNS CHIEF_REPOS CHIEF_PREFIX
 
 register_repo() {   # $1 = absolute repo root; append if not already present
   local root="$1" dir; dir="$(dirname "$CHIEF_REPOS")"
@@ -155,15 +170,22 @@ cmd_init() {
   # prefix). There, the project's `.chief/` dir IS `~/.chief` — the install prefix
   # that holds src/runs/repos — so project config collides with the engine, and
   # find_project would treat home as a project from almost anywhere.
-  local prefix="${CHIEF_PREFIX:-$HOME/.chief}"
-  if [ "$root" = "$HOME" ] || [ "$root/.chief" = "$prefix" ] || [ "$root" = "$prefix" ]; then
+  local prefix; prefix="$(chief_prefix)"
+  if { [ -n "${HOME:-}" ] && [ "$root" = "$HOME" ]; } || [ "$root/.chief" = "$prefix" ] || [ "$root" = "$prefix" ]; then
     echo "ERROR: refusing to 'chief init' here — <repo>/.chief would collide with the Chief" >&2
     echo "       install prefix ($prefix). cd into a project repo (not your home dir) first." >&2
     exit 1
   fi
   # Chief operates on git branches/worktrees/merges — warn if this isn't a repo yet.
-  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-    || echo "  note: not a git repo yet — run 'git init' before 'chief run' (it needs a clean git tree on the base branch)." >&2
+  # A bind-mounted repo owned by another uid ALSO fails `rev-parse`, and telling that
+  # operator to `git init` an already-initialised repo sends them the wrong way.
+  case "$(chief_git_probe "$root")" in
+    ok) ;;
+    ownership) echo "  note: git refuses this repo — dubious ownership (owned by another uid)." >&2
+               echo "        Set CHIEF_GIT_SAFE_DIRECTORY=1 for 'chief run', or:" >&2
+               echo "        git config --global --add safe.directory $root" >&2 ;;
+    *) echo "  note: not a git repo yet — run 'git init' before 'chief run' (it needs a clean git tree on the base branch)." >&2 ;;
+  esac
   mkdir -p "$root/.chief" "$root/tasks/chief/completed"
   for f in config verify.sh agent-context.md; do
     if [ -e "$root/.chief/$f" ]; then echo "  keep  .chief/$f (exists)"

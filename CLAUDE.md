@@ -67,15 +67,22 @@ engine/
   agent.sh           #   one agent iteration (implement a single story)
   monitor.sh         #   active-run registry view  (chief ps / chief monitor)
   lib.sh             #   shared helpers: run_verify / verify_branch, locks, state I/O
+  paths.sh           #   host-wide state paths (prefix · runs · repos · worktree root), resolved
+                     #   in one place — container-safe when $HOME is unset/read-only
+  gitenv.sh          #   the git a CONTAINER hands us: safe.directory for a repo owned by another
+                     #   uid ($CHIEF_GIT_SAFE_DIRECTORY), a committer identity when git can't find one
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
-  reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it)
+  reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it);
+                     #   also the PID-NAMESPACE token every pid-keyed record carries, so a shared prefix
+                     #   across containers is never read as "that pid is dead"
 templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json)
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
 test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git + jq)
-docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety model
+docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
+                     # model · containers.md (running chief in a container/Riju workspace)
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
 VERSION              # engine version — bump on any engine/bin/install change
 ```

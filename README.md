@@ -242,6 +242,9 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - [`docs/headless-invocation.md`](docs/headless-invocation.md) — embedding chief in
   a host app: `chief run --headless`, the run-id line, the exit-code table and the
   machine-readable summary.
+- [`docs/containers.md`](docs/containers.md) — running chief inside a container or a
+  Riju workspace: the env an embedding host sets (state prefix, worktree root, git
+  `safe.directory`, committer identity), the guarantees, and what degrades.
 - [`docs/events.md`](docs/events.md) — the machine-readable event stream: the NDJSON
   path, the versioned line schema, the event catalogue and `chief events`. The
   contract chief-cloud and embedding hosts subscribe to.

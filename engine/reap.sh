@@ -83,8 +83,13 @@ if ! command -v chief_scan_descendants >/dev/null 2>&1; then
   . "$_REAP_DIR/lib.sh"
 fi
 
-CHIEF_PREFIX_DEFAULT="${CHIEF_PREFIX:-$HOME/.chief}"
-CHIEF_WT_ROOT_ALL="$CHIEF_PREFIX_DEFAULT/worktrees"    # every repo's worktrees live here
+if ! command -v chief_prefix >/dev/null 2>&1; then
+  # shellcheck source=engine/paths.sh
+  . "$_REAP_DIR/paths.sh"
+fi
+
+CHIEF_PREFIX_DEFAULT="$(chief_prefix)"
+CHIEF_WT_ROOT_ALL="$(chief_worktree_root)"             # every repo's worktrees live here
 CHIEF_RUN_MARKER="--chief-run="                        # the argv spawn marker
 
 # ── primitives ───────────────────────────────────────────────────────────────
@@ -100,6 +105,77 @@ chief_reap_canon() {   # $1 = dir -> its canonical path ('' when it doesn't exis
 chief_pid_alive() {    # $1 = pid
   case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
   ps -o pid=,stat= -p "$1" 2>/dev/null | awk '$2 !~ /^Z/ {f=1} END{exit !f}'
+}
+
+# ── WHOSE PID NUMBERS ARE THESE? ─────────────────────────────────────────────
+#
+# Every key below — the <pid>.run registry, driver.lock, the run id's trailing pid —
+# is a PID, and a pid means nothing without the namespace it was numbered in. On a
+# laptop there is only one and this is invisible. A container has its own, and the
+# state prefix may be SHARED with the namespace that wrote it (a bind-mounted
+# ~/.chief, a volume mounted into two containers, `docker run -v` against the host's
+# prefix). Then pid 42 in the registry is a live driver over there and, here, either
+# nothing or somebody else's process entirely — and every pid-keyed decision reads
+# backwards:
+#
+#   · `chief ps` DELETES the run file of a live foreign run ("its pid is dead").
+#   · the driver declares a foreign driver.lock stale and STEALS it — two drivers on
+#     one repo, which is the single thing that lock exists to prevent.
+#   · a foreign run file's pid collides with a local pid and a running driver is
+#     mistaken for registered (or a candidate is spared for the wrong reason).
+#
+# So every record that carries a pid also carries the namespace token it was numbered
+# in, and a reader that sees a FOREIGN token declines to interpret the pid at all —
+# it neither reaps nor deletes nor steals on the strength of it. Degrading to nothing
+# is the whole point: the alternative is acting confidently on a number that means
+# something else.
+#
+# The token, in order:
+#   1. $CHIEF_PID_NS               — explicit, for a host that knows better.
+#   2. ns:<inode> from /proc/self/ns/pid — Linux, exact, and identical across two
+#      containers that genuinely SHARE a namespace (`--pid=host`), which is right.
+#   3. proc:<hostname>             — /proc but no ns link (old/restricted kernel).
+#      A proxy: containers get their own UTS namespace by default.
+#   4. host                        — no /proc at all (macOS/BSD): ONE machine-wide pid
+#      space. Deliberately a constant, not the hostname — a laptop's hostname changes
+#      with the network, and that must not turn yesterday's records foreign.
+CHIEF_NS_TOKEN=""
+chief_ns_token() {
+  local ns h
+  if [ -z "$CHIEF_NS_TOKEN" ]; then
+    if [ -n "${CHIEF_PID_NS:-}" ]; then
+      CHIEF_NS_TOKEN="${CHIEF_PID_NS}"
+    else
+      ns="$(readlink /proc/self/ns/pid 2>/dev/null || echo)"
+      case "$ns" in
+        *'['*']') ns="${ns#*[}"; CHIEF_NS_TOKEN="ns:${ns%]}" ;;
+        *) if [ -d /proc/self ]; then h="$(hostname 2>/dev/null || echo)"; CHIEF_NS_TOKEN="proc:${h:-unknown}"
+           else CHIEF_NS_TOKEN="host"; fi ;;
+      esac
+    fi
+  fi
+  printf '%s' "$CHIEF_NS_TOKEN"
+}
+
+# Does $1 name a DIFFERENT pid namespace than this process runs in? An EMPTY token is
+# not foreign: it is a record written by an engine older than this field, or by a host
+# that could not tell, and treating those as foreign would silently retire the stale
+# -lock and stale-run-file cleanup that every ordinary run depends on. Unknown means
+# "assume local, behave exactly as before"; only an explicit mismatch changes anything.
+chief_ns_foreign() {   # $1 = recorded token
+  [ -n "${1:-}" ] || return 1
+  [ "$1" = "$(chief_ns_token)" ] && return 1
+  return 0
+}
+
+# The namespace token recorded in a <pid>.run file ('' for a pre-0.8.14 file).
+chief_run_file_ns() {  # $1 = run file
+  sed -n 's/^ns=//p' "${1:-}" 2>/dev/null | head -1
+}
+
+# The namespace token recorded alongside a driver.lock's pid ('' when absent).
+chief_lock_ns() {      # $1 = lock dir
+  cat "${1:-}/ns" 2>/dev/null | head -1
 }
 
 chief_pid_cmd() {      # $1 = pid -> its command line, trimmed for a report line
@@ -264,6 +340,11 @@ chief_protected_pids() {
   local runs f pid repos repo lockpid p
   for p in $(chief_ancestors "$$"); do _chief_protect "$p"; done
   runs="${CHIEF_RUNS:-$CHIEF_PREFIX_DEFAULT/runs}"
+  # Deliberately NOT namespace-filtered, unlike every other registry read. A foreign
+  # run file's pid can only ever ADD to the protected set, and this set only ever
+  # SPARES: the worst a numeric coincidence buys is one orphan surviving a sweep. The
+  # namespace checks exist to stop confident destruction, so on the one path where
+  # ambiguity is safe, ambiguity wins.
   for f in "$runs"/*.run; do
     [ -e "$f" ] || continue
     pid="$(sed -n 's/^pid=//p' "$f" 2>/dev/null | head -1)"
@@ -331,6 +412,10 @@ chief_run_id_live() {         # $1 = run id -> 0 when the run it names is still 
   for f in "$runs"/*.run; do                # registered: a run file claiming this id
     [ -e "$f" ] || continue
     [ "$(sed -n 's/^runid=//p' "$f" 2>/dev/null | head -1)" = "$id" ] || continue
+    # Written in another PID namespace: its pid is not a question this process can
+    # answer, so it is not evidence either way. Fall through to the argv check, which
+    # reads THIS namespace's process table and is always answerable.
+    chief_ns_foreign "$(chief_run_file_ns "$f")" && continue
     rp="$(sed -n 's/^pid=//p' "$f" 2>/dev/null | head -1)"
     chief_pid_alive "$rp" && return 0
   done
@@ -598,6 +683,9 @@ chief_run_file_for_pid() { # $1 = pid -> the <pid>.run path ('' when unregistere
   runs="${CHIEF_RUNS:-$CHIEF_PREFIX_DEFAULT/runs}"
   for f in "$runs"/*.run; do
     [ -e "$f" ] || continue
+    # A foreign namespace's pid 42 is not our pid 42. Counting it as registration
+    # would hide a genuinely unregistered local driver behind a numeric coincidence.
+    chief_ns_foreign "$(chief_run_file_ns "$f")" && continue
     [ "$(sed -n 's/^pid=//p' "$f" 2>/dev/null | head -1)" = "$pid" ] && { printf '%s' "$f"; return 0; }
   done
   return 0
@@ -621,11 +709,16 @@ chief_driver_inflight() {  # $1 = repo root -> "<name> <state>" pairs, space-joi
 
 # How this repo's driver.lock relates to a pid — the single-driver invariant as the
 # FILESYSTEM sees it, next to what the process table says.
-chief_driver_lock_state() { # $1 = repo root  $2 = pid -> held|stale|other:<pid>|missing
-  local repo="${1:-}" pid="${2:-}" lp
+chief_driver_lock_state() { # $1 = repo root  $2 = pid -> held|stale|other|foreign|missing
+  local repo="${1:-}" pid="${2:-}" lock lp
   [ -n "$repo" ] || { printf 'missing'; return 0; }
-  lp="$(cat "$repo/$(chief_state_rel "$repo")/driver.lock/pid" 2>/dev/null || echo)"
+  lock="$repo/$(chief_state_rel "$repo")/driver.lock"
+  lp="$(cat "$lock/pid" 2>/dev/null || echo)"
   if   [ -z "$lp" ];        then printf 'missing'
+  elif chief_ns_foreign "$(chief_lock_ns "$lock")"; then
+    # Taken in another PID namespace (a container sharing this repo). "stale" would be
+    # a guess, and the one that ends with two drivers on one repo.
+    printf 'foreign:%s' "$lp"
   elif [ "$lp" = "$pid" ];  then printf 'held'
   elif chief_pid_alive "$lp"; then printf 'other:%s' "$lp"
   else printf 'stale:%s' "$lp"; fi
