@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "unblock",
   "branchName": "chief/88-code-quality-ratchet-gate",
-  "description": "THE HIGHEST-PRIORITY GAP IN THE ENGINE. Today `.chief/verify.sh` is a pass/fail test oracle: it answers 'did the gates exit 0', nothing more. That is exactly the reward shape the RLVR critique indicts \u2014 'there is no penalty for eroding codebase maintainability', because tests return in seconds while shotgun surgery shows up in weeks. Chief therefore maximizes 'how much can we queue for the agent' while gating on a signal that is blind to the damage the research documents (Faros AI: +242.7% incidents per PR, +31.3% of PRs skipping review; SlopCodeBench: cyclomatic complexity grew across checkpoints for EVERY model tested, and 89-98% of lines tripped slop rules regardless of model). This tasklist gives the merge gate a second, DETERMINISTIC axis: measure code-quality metrics on the branch, compare them against the base, and BLOCK a merge that makes the codebase materially worse \u2014 even when every test is green. Modeled on talos's proven 'ratchet' (a monotone baseline that may improve and may not regress) and on SlopCodeBench's 41 deterministic measures (NO model judgment anywhere in the gate \u2014 a model scoring a model's work reintroduces the same blind spot). Scope: a metrics tool shipped with the engine, its wiring into `.chief/verify.sh` + `templates/verify.sh`, a per-repo config with a baseline file, and docs. See ../AGENTIC-ENGINEERING-ADVISORY.md \u00a73 and \u00a76.1.",
+  "description": "THE HIGHEST-PRIORITY GAP IN THE ENGINE. Today `.chief/verify.sh` is a pass/fail test oracle: it answers 'did the gates exit 0', nothing more. That is exactly the reward shape the RLVR critique indicts — 'there is no penalty for eroding codebase maintainability', because tests return in seconds while shotgun surgery shows up in weeks. Chief therefore maximizes 'how much can we queue for the agent' while gating on a signal that is blind to the damage the research documents (Faros AI: +242.7% incidents per PR, +31.3% of PRs skipping review; SlopCodeBench: cyclomatic complexity grew across checkpoints for EVERY model tested, and 89-98% of lines tripped slop rules regardless of model). This tasklist gives the merge gate a second, DETERMINISTIC axis: measure code-quality metrics on the branch, compare them against the base, and BLOCK a merge that makes the codebase materially worse — even when every test is green. Modeled on talos's proven 'ratchet' (a monotone baseline that may improve and may not regress) and on SlopCodeBench's 41 deterministic measures (NO model judgment anywhere in the gate — a model scoring a model's work reintroduces the same blind spot). Scope: a metrics tool shipped with the engine, its wiring into `.chief/verify.sh` + `templates/verify.sh`, a per-repo config with a baseline file, and docs. See ../AGENTIC-ENGINEERING-ADVISORY.md §3 and §6.1.",
   "parked": false,
   "dependsOn": [],
   "touches": [
@@ -17,29 +17,29 @@
     {
       "id": "US-1",
       "title": "A deterministic code-quality metrics tool",
-      "description": "Ship a tool that computes objective, reproducible metrics over a set of changed files. Deterministic only \u2014 no LLM, no network, no judgment calls.",
+      "description": "Ship a tool that computes objective, reproducible metrics over a set of changed files. Deterministic only — no LLM, no network, no judgment calls.",
       "acceptanceCriteria": [
-        "A metrics command (shipped with the engine, e.g. `engine/quality.sh` or a `chief quality` subcommand) computes, for a given file set, a documented metric record: total/added/removed source lines, file count, function count, mean and max function length, max nesting depth, duplicated-block count and percentage, single-use function count, and per-file lint-violation counts where a linter is configured \u2014 matching SlopCodeBench's deterministic families (size, complexity, duplication, decomposition, rule violations)",
-        "Metrics are LANGUAGE-AWARE BUT DEGRADE HONESTLY: a language-agnostic core (lines, files, duplication by normalized-line hashing, nesting via brace/indent heuristics) always runs; richer per-language analyzers run only when the toolchain is present, and a language with no analyzer is REPORTED AS UNMEASURED \u2014 never scored as 0 and never silently skipped (the same `not_measured` discipline talos uses; a metric that vanishes is worse than one that is absent)",
+        "A metrics command (shipped with the engine, e.g. `engine/quality.sh` or a `chief quality` subcommand) computes, for a given file set, a documented metric record: total/added/removed source lines, file count, function count, mean and max function length, max nesting depth, duplicated-block count and percentage, single-use function count, and per-file lint-violation counts where a linter is configured — matching SlopCodeBench's deterministic families (size, complexity, duplication, decomposition, rule violations)",
+        "Metrics are LANGUAGE-AWARE BUT DEGRADE HONESTLY: a language-agnostic core (lines, files, duplication by normalized-line hashing, nesting via brace/indent heuristics) always runs; richer per-language analyzers run only when the toolchain is present, and a language with no analyzer is REPORTED AS UNMEASURED — never scored as 0 and never silently skipped (the same `not_measured` discipline talos uses; a metric that vanishes is worse than one that is absent)",
         "Output is a stable, sorted JSON record suitable for committing as a baseline: identical inputs produce byte-identical output, with no timestamps, no absolute paths, and no host-specific values",
         "The tool runs offline with no network and adds no new hard runtime dependency beyond what the engine already requires (`jq`); anything richer is opt-in and its absence degrades to UNMEASURED",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
       "id": "US-2",
       "title": "Ratchet semantics: block a merge that makes the codebase materially worse",
-      "description": "Compare the branch's metrics against the base and block on regression beyond a configured tolerance. Never absolute thresholds \u2014 a legacy repo must not be unmergeable on day one.",
+      "description": "Compare the branch's metrics against the base and block on regression beyond a configured tolerance. Never absolute thresholds — a legacy repo must not be unmergeable on day one.",
       "acceptanceCriteria": [
-        "The gate computes metrics for the SAME changed-file scope on the branch and on `$CHIEF_BASE_BRANCH`, and evaluates DELTAS \u2014 a repo with pre-existing high complexity is not blocked for its history, only for what this branch adds (mirrors the existing path-scoped, diff-driven design of `.chief/verify.sh`)",
-        "A committed baseline file (e.g. `.chief/quality-baseline.json`) records the accepted metric record; the gate BLOCKS when a tracked metric regresses beyond its configured tolerance and ALLOWS when metrics hold or improve \u2014 a monotone ratchet, with `--write-baseline` as the explicit, reviewable re-baseline escape hatch",
+        "The gate computes metrics for the SAME changed-file scope on the branch and on `$CHIEF_BASE_BRANCH`, and evaluates DELTAS — a repo with pre-existing high complexity is not blocked for its history, only for what this branch adds (mirrors the existing path-scoped, diff-driven design of `.chief/verify.sh`)",
+        "A committed baseline file (e.g. `.chief/quality-baseline.json`) records the accepted metric record; the gate BLOCKS when a tracked metric regresses beyond its configured tolerance and ALLOWS when metrics hold or improve — a monotone ratchet, with `--write-baseline` as the explicit, reviewable re-baseline escape hatch",
         "Thresholds and the tracked-metric set are configured per repo (in `.chief/config` or a sibling), with documented defaults; a repo may disable individual metrics but the DISABLING IS VISIBLE in the config diff, never implicit",
-        "Blocking output names the offending metric, its base value, its branch value, the tolerance, and the files that contributed most \u2014 an operator must be able to act on the message without rerunning anything",
+        "Blocking output names the offending metric, its base value, its branch value, the tolerance, and the files that contributed most — an operator must be able to act on the message without rerunning anything",
         "The gate is skippable exactly like the existing suite (`CHIEF_VERIFY_TESTS=0`-style env, documented) so iterating locally is not punished, and `NO_VERIFY=1` continues to bypass the whole hook"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -53,7 +53,7 @@
         "A hermetic test asserts the ratchet: a branch that adds a deeply-nested duplicated block regresses a tracked metric and is BLOCKED; a branch that refactors it away IMPROVES the metric and is ALLOWED; a language with no analyzer reports UNMEASURED rather than passing silently",
         "Editing `bin/`/`engine/` bumps `VERSION` (`test/version-bump.sh`); existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

@@ -99,6 +99,17 @@ Usage:
                               still spending quota) with no live, registered run behind
                               them. -n reports without signalling. Never touches a live
                               run, another user's processes, or your own claude sessions.
+  chief quality SUB [opts]    the code-quality RATCHET — the merge gate's second, MEASURED axis.
+                              `measure` emits a deterministic metric record (size · complexity ·
+                              duplication · decomposition · lint violations) for a file set;
+                              `ratchet` compares the branch against $CHIEF_BASE_BRANCH and exits
+                              non-zero when a tracked metric regressed past its tolerance, so a
+                              verify hook can BLOCK a merge that made the codebase measurably
+                              worse even with every test green. No model judgment anywhere in it
+                              — awk over text, offline, byte-identical output. Configure per repo
+                              in .chief/quality.conf; `--write-baseline` is the reviewable
+                              re-baseline hatch; CHIEF_VERIFY_QUALITY=0 skips it.
+                              See docs/verify-hook.md
   chief pause [--all]         withhold AGENT TURNS: launch no tasklist and start no new agent
                               iteration — but DRAIN, never kill: the iteration in flight runs to
                               completion so its commits land, a tasklist whose agent loop already
@@ -202,7 +213,7 @@ cmd_init() {
     *) echo "  note: not a git repo yet — run 'git init' before 'chief run' (it needs a clean git tree on the base branch)." >&2 ;;
   esac
   mkdir -p "$root/.chief" "$root/tasks/chief/completed"
-  for f in config verify.sh agent-context.md; do
+  for f in config verify.sh agent-context.md quality.conf; do
     if [ -e "$root/.chief/$f" ]; then echo "  keep  .chief/$f (exists)"
     else cp "$TEMPLATES/$f" "$root/.chief/$f"; echo "  init  .chief/$f"; fi
   done
@@ -573,6 +584,17 @@ cmd_models() {
 # until someone happened to re-run that repo).
 cmd_reap()    { bash "$ENGINE/reap.sh" "$@" ; }
 
+# ── the code-quality ratchet (the SECOND, measured axis of the merge gate) ───
+# The verify hook is a pass/fail test oracle: it answers "did the gates exit 0",
+# which is blind to maintainability damage (duplication, ballooning functions,
+# deep nesting) because tests come back in seconds and that damage shows up in
+# weeks. `chief quality` measures it deterministically — awk over text, no model
+# judgment anywhere — and its `ratchet` subcommand is what a verify hook calls to
+# BLOCK a merge that made the numbers worse. Not gated on load_project: measuring
+# a repo is useful with or without a chief run behind it. Contract + defaults:
+# docs/verify-hook.md.
+cmd_quality() { bash "$ENGINE/quality.sh" "$@" ; }
+
 # ── operator pause / resume (the human's quota lever) ────────────────────────
 # The pause is a FLAG FILE under a repo's scheduler state — <state>/parallel/.paused —
 # polled by the driver's launch gate and by agent.sh's iteration boundary (see the
@@ -754,6 +776,7 @@ case "$cmd" in
   events|subscribe)     cmd_events "$@" ;;
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
+  quality)              cmd_quality "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;
   resume)               cmd_pause_resume resume "$@" ;;
   version|-v|--version) echo "chief $VERSION" ;;

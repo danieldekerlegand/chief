@@ -17,7 +17,8 @@
 #
 # Gates are scoped to what the branch actually changed, cheapest-first. Only
 # engine-touching tasklists pay for the shell lint + behavioral tests. Set
-# CHIEF_VERIFY_TESTS=0 to skip the (slower) behavioral test subset while iterating.
+# CHIEF_VERIFY_TESTS=0 to skip the (slower) behavioral test subset while iterating,
+# and CHIEF_VERIFY_QUALITY=0 to skip the code-quality ratchet the same way.
 set -uo pipefail
 
 BASE="${CHIEF_BASE_BRANCH:-main}"
@@ -32,7 +33,28 @@ say()     { echo "verify: $*"; }
 block()   { say "BLOCK — $*"; exit 1; }
 touches() { grep -qE "$1" <<<"$changed"; }
 
-# ── 1) Shell engine — syntax (always) · shellcheck (if present) · behavior ──
+# ── 1) Code quality — the RATCHET (cheapest gate, so it runs first) ────────
+# Everything below this block is a pass/fail test oracle: it answers "did the gates
+# exit 0", which is blind to the damage that shows up in weeks rather than seconds
+# (duplication, ballooning functions, deep nesting, helpers nobody reuses). This is
+# the second, MEASURED axis — deterministic metrics on the branch compared against
+# the same files at $BASE, blocking when one regressed past its tolerance. Nothing
+# in it consults a model. Tolerances + the tracked set: .chief/quality.conf.
+#
+# WHY NO COMMITTED .chief/quality-baseline.json HERE. The whole-tree axis stays
+# inactive for chief deliberately. Writing one would freeze this repo's current
+# duplicate_blocks (68) and single_use_functions (93) as a zero-tolerance floor,
+# and the next tasklist that adds a test/*.sh — they all share a ~6-line hermetic
+# preamble — would be unmergeable through no fault of its own. The changed-file
+# DELTA axis is the honest gate for a repo this shape; the cost is that files a
+# branch creates have no base version and so go unmeasured here (announced in the
+# gate's own header). Commit a baseline when the tree has been cleaned, not before.
+if touches '^(bin/chief|.+\.(sh|bash|py|js|jsx|ts|tsx|go|rs|c|h|cc|cpp|java|rb))$'; then
+  say "quality — ratchet (engine/quality.sh, deltas vs $BASE)"
+  bash engine/quality.sh ratchet --base "$BASE" || block "code-quality ratchet: a tracked metric regressed (see above)"
+fi
+
+# ── 2) Shell engine — syntax (always) · shellcheck (if present) · behavior ──
 if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$'; then
   say "shell — bash -n"
   for f in bin/chief engine/*.sh install.sh templates/*.sh test/*.sh; do
@@ -57,7 +79,7 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   # pollution). monitor.sh is deliberately excluded here (timing-sensitive under the
   # parallel load verify runs beneath); CI still covers it and the full suite.
   if [ "${CHIEF_VERIFY_TESTS:-1}" = "1" ]; then
-    for t in smoke provider-conformance ratelimit limitstate limitresume limitmonitor pause liveliness teardown reapscope reapenv noworkguard headless events container account-env stale-resume conflict-forensics rebase-refusal touches-audit gen; do
+    for t in smoke provider-conformance ratelimit limitstate limitresume limitmonitor pause liveliness teardown reapscope reapenv noworkguard headless events container account-env stale-resume conflict-forensics rebase-refusal touches-audit quality-ratchet gen; do
       say "behavioral — test/$t.sh"
       bash "test/$t.sh" || block "test/$t.sh failed"
     done
@@ -66,7 +88,7 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   fi
 fi
 
-# ── 2) Docs — README must not lag the engine (version string + command table) ─
+# ── 3) Docs — README must not lag the engine (version string + command table) ─
 # Cheap grep/sed/awk check, so it runs on any branch that could have caused the
 # drift: a VERSION bump, a CLI surface change, or a README edit itself.
 if touches '^(bin/|engine/|VERSION$|README\.md$)'; then
@@ -74,7 +96,7 @@ if touches '^(bin/|engine/|VERSION$|README\.md$)'; then
   bash test/doc-sync.sh || block "README is out of sync with the engine"
 fi
 
-# ── 3) Tasklists — every changed tasks/chief/*.json must be valid JSON ──────
+# ── 4) Tasklists — every changed tasks/chief/*.json must be valid JSON ──────
 if touches '^tasks/chief/.+\.json$'; then
   say "tasklists — jq parse"
   while IFS= read -r f; do
