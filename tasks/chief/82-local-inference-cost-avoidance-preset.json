@@ -45,7 +45,7 @@
         "A negative case asserts the unconfigured preset errors with the actionable message rather than dispatching a paid provider",
         "Editing `engine/`/`bin/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
