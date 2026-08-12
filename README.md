@@ -216,6 +216,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief ps` | One-shot table of active runs across all repos. |
 | `chief monitor [interval]` | Live-refreshing run view (default 2s; Ctrl-C to exit). |
 | `chief logs [name] [-f]` | Tail a tasklist's per-iteration log from a live run (`-f` follows; `-n N` sets the tail size). |
+| `chief events [id] [-f]` | Subscribe to a run's machine-readable NDJSON event stream — run/tasklist/story transitions as they happen, stdout is pure NDJSON (`-l` lists the logs on this host). The contract chief-cloud and embedding hosts read ([`docs/events.md`](docs/events.md)). |
 | `chief models [provider]` | List the models you can pass to `--model` (live from devin/opencode; stable aliases for claude). |
 | `chief reap [-n] [--grace N]` | Stop orphaned chief work — agent trees with no live, registered run behind them (`-n` reports only). |
 | `chief pause [--all]` | Withhold agent turns — drain, never kill: in-flight iterations finish, the rest park as paused. |
@@ -237,6 +238,9 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - [`docs/headless-invocation.md`](docs/headless-invocation.md) — embedding chief in
   a host app: `chief run --headless`, the run-id line, the exit-code table and the
   machine-readable summary.
+- [`docs/events.md`](docs/events.md) — the machine-readable event stream: the NDJSON
+  path, the versioned line schema, the event catalogue and `chief events`. The
+  contract chief-cloud and embedding hosts subscribe to.
 - [`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md) — why monitoring is
   CLI-only here and a desktop GUI belongs to chief-cloud.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.

@@ -54,6 +54,13 @@ Usage:
   chief logs [name] [-f]      hook into a live run's output — tail a tasklist's per-iteration log
                               (the agent's stdout, gate output, stall notes). Defaults to the
                               running tasklist; -f/--follow streams it live, -n N sets the tail size
+  chief events [run-id] [-f]  subscribe to a run's machine-readable EVENT STREAM — the append-only
+                              NDJSON log of run/tasklist/story transitions
+                              ($CHIEF_RUNS/<run-id>.events.jsonl). Defaults to the live run (else the
+                              most recent log); -f/--follow streams events as they land, -l/--list
+                              enumerates the logs on this host, -n N starts N lines back. stdout is
+                              pure NDJSON (pipe it to jq) — notes go to stderr. This is the contract
+                              chief-cloud and embedding hosts read: docs/events.md
   chief models [provider]     list the models you can pass to --model: live from the provider for
                               devin/opencode, the stable family aliases for claude (no arg = all)
   chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
@@ -285,6 +292,119 @@ cmd_logs() {
   fi
 }
 
+# ── the machine-readable EVENT STREAM (docs/events.md) ───────────────────────
+# `chief logs` hands you an agent's raw stdout for a HUMAN to read; this is its
+# machine-facing sibling. engine/events.sh appends one JSON object per
+# run/tasklist/story transition to $CHIEF_RUNS/<run-id>.events.jsonl, and this
+# command is the subscribe surface over it — what chief-cloud's daemon and an
+# embedding host follow INSTEAD of polling <name>.live.json and diffing it
+# themselves (which loses every transition between two polls).
+#
+# STDOUT IS PURE NDJSON. Every banner, warning and hint goes to stderr, so
+#   chief events -f | jq -c 'select(.event=="tasklist.merged")'
+# works with nothing in the way. Reading is entirely passive: this never writes to
+# the registry, never signals anything, and never touches a run.
+events_file_of() { printf '%s/%s.events.jsonl' "$CHIEF_RUNS" "$1"; }   # $1 = run-id
+events_id_of()   { local b; b="$(basename "$1")"; printf '%s' "${b%.events.jsonl}"; }
+
+# The run-ids with a LIVE driver behind them, one per line (same liveness test as
+# `chief ps`: the run file's pid still answers).
+events_live_ids() {
+  local rf p id
+  for rf in "$CHIEF_RUNS"/*.run; do
+    [ -e "$rf" ] || continue
+    p="$(run_field pid "$rf")"; id="$(run_field runid "$rf")"
+    [ -n "$p" ] && [ -n "$id" ] && kill -0 "$p" 2>/dev/null && printf '%s\n' "$id"
+  done
+}
+
+# Newest log in the registry, by mtime. These logs deliberately OUTLIVE their run
+# (bounded only by CHIEF_EVENTS_KEEP_DAYS, default 14), which is what makes
+# `chief events` useful after the fact and not only while something is running.
+events_newest() {
+  local f newest=""
+  for f in "$CHIEF_RUNS"/*.events.jsonl; do
+    [ -e "$f" ] || continue
+    if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest="$f"; fi
+  done
+  [ -n "$newest" ] && printf '%s' "$newest"
+}
+
+cmd_events() {
+  local follow="" want="" lines="" list="" f id file="" any=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f|--follow) follow=1 ;;
+      -n|--lines)  shift; lines="${1:-}" ;;
+      -l|--list)   list=1 ;;
+      -*)          echo "chief events: unknown flag: $1" >&2; return 2 ;;
+      *)           want="$1" ;;
+    esac; shift
+  done
+  if [ -n "$lines" ]; then
+    case "$lines" in ''|*[!0-9]*) echo "chief events: -n wants a number of lines" >&2; return 2 ;; esac
+  fi
+
+  # -l/--list: what a host can subscribe to on this machine.
+  if [ -n "$list" ]; then
+    local live_ids; live_ids=" $(events_live_ids | tr '\n' ' ') "
+    for f in "$CHIEF_RUNS"/*.events.jsonl; do
+      [ -e "$f" ] || continue
+      any=1; id="$(events_id_of "$f")"
+      case "$live_ids" in
+        *" $id "*) printf '%s\tlive\t%s events\t%s\n'  "$id" "$(wc -l < "$f" | tr -d ' ')" "$f" ;;
+        *)         printf '%s\tended\t%s events\t%s\n' "$id" "$(wc -l < "$f" | tr -d ' ')" "$f" ;;
+      esac
+    done
+    [ -n "$any" ] || echo "chief events: no event logs in $CHIEF_RUNS" >&2
+    return 0
+  fi
+
+  # Which log? An explicit run-id (or path) wins; otherwise the sole live run;
+  # otherwise the most recent log, which is what you want right after a run ended.
+  if [ -n "$want" ]; then
+    case "$want" in
+      */*) file="$want" ;;
+      *)   file="$(events_file_of "$want")" ;;
+    esac
+  else
+    local n=0 first=""
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      n=$(( n + 1 )); [ -z "$first" ] && first="$id"
+    done <<EOF
+$(events_live_ids)
+EOF
+    case "$n" in
+      1) file="$(events_file_of "$first")" ;;
+      0) file="$(events_newest)"
+         [ -n "$file" ] || { echo "chief events: no active run and no event log in $CHIEF_RUNS" >&2; return 1; }
+         echo "chief events: no active run — reading the most recent log ($(events_id_of "$file"))" >&2 ;;
+      *) echo "chief events: multiple active runs — name the one you want:" >&2
+         events_live_ids | sed 's/^/  /' >&2
+         echo "  chief events <run-id> [-f]" >&2
+         return 1 ;;
+    esac
+  fi
+
+  # A host that launches a run and subscribes immediately can beat the driver to the
+  # first event. Wait briefly for the log rather than making the host poll for it.
+  if [ ! -f "$file" ] && [ -n "$follow" ]; then
+    local w=0
+    while [ ! -f "$file" ] && [ "$w" -lt 15 ]; do sleep 1; w=$(( w + 1 )); done
+  fi
+  [ -f "$file" ] || { echo "chief events: no event log at $file" >&2; return 1; }
+
+  if [ -n "$follow" ]; then
+    printf '── events · %s · %s (Ctrl-C to stop) ──\n' "$(events_id_of "$file")" "$file" >&2
+    exec tail -n "${lines:-+1}" -f "$file"
+  elif [ -n "$lines" ]; then
+    tail -n "$lines" "$file"
+  else
+    cat "$file"
+  fi
+}
+
 # chief models [provider] — what to pass to --model. Delegates to each provider's own
 # enumeration where it has one (devin, opencode — the lists are account-specific and
 # change often, so never hardcode them); claude has no listing command, so print its
@@ -493,6 +613,7 @@ case "$cmd" in
   ps)                   cmd_ps ;;
   monitor|watch)        cmd_monitor "$@" ;;
   logs|tail)            cmd_logs "$@" ;;
+  events|subscribe)     cmd_events "$@" ;;
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;
