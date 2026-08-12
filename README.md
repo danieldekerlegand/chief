@@ -211,6 +211,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief run --provider P --model M` | Select Claude (default), Devin, or OpenCode and optionally override its model. |
 | `chief run -n` | Dry run: print the schedule waves and exit (no git, no agents). |
 | `chief run --no-merge` | Complete branches but don't merge into the base. |
+| `chief run --headless` | Non-interactive embedding mode: no colour, a `chief: run-id=…` line, a JSON outcome summary and a documented exit-code table ([`docs/headless-invocation.md`](docs/headless-invocation.md)). |
 | `chief list` | List tasklists with pass status. |
 | `chief ps` | One-shot table of active runs across all repos. |
 | `chief monitor [interval]` | Live-refreshing run view (default 2s; Ctrl-C to exit). |
@@ -233,6 +234,9 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - [`docs/verify-hook.md`](docs/verify-hook.md) — writing `verify.sh`.
 - [`docs/monitoring.md`](docs/monitoring.md) — `chief ps` / `chief monitor` and the
   run registry.
+- [`docs/headless-invocation.md`](docs/headless-invocation.md) — embedding chief in
+  a host app: `chief run --headless`, the run-id line, the exit-code table and the
+  machine-readable summary.
 - [`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md) — why monitoring is
   CLI-only here and a desktop GUI belongs to chief-cloud.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.

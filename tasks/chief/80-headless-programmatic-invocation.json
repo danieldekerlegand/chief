@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "feature",
   "branchName": "chief/80-headless-programmatic-invocation",
-  "description": "Today `bin/chief run` is the only entry point and it is built for a human terminal \u2014 a colored schedule and a summary meant to be read, not parsed. A host app embedding chief (a Cuneiform Riju agent, or chief-cloud) that wants to START a run and READ its outcome must either scrape the interactive stdout or invoke `engine/driver.sh` against an undocumented contract. This tasklist adds a stable, non-interactive invocation path over the SAME engine (no loop rewrite): configuration in via the existing env/flags, a parseable run-id + machine-readable outcome out, and a documented, deterministic exit-code contract. It is the foundation the status stream (81) and run-in-container (84) build on. Scope: `bin/chief` (a headless/JSON mode on `cmd_run`), `engine/driver.sh` (emit the run-id line + a final machine summary at points it already reaches), and `docs/`. The run-id is the `<repo>-<cksum>-<epoch>-<pid>` id driver.sh already mints (~L157) and exports as `CHIEF_RUN_ID`.",
+  "description": "Today `bin/chief run` is the only entry point and it is built for a human terminal — a colored schedule and a summary meant to be read, not parsed. A host app embedding chief (a Cuneiform Riju agent, or chief-cloud) that wants to START a run and READ its outcome must either scrape the interactive stdout or invoke `engine/driver.sh` against an undocumented contract. This tasklist adds a stable, non-interactive invocation path over the SAME engine (no loop rewrite): configuration in via the existing env/flags, a parseable run-id + machine-readable outcome out, and a documented, deterministic exit-code contract. It is the foundation the status stream (81) and run-in-container (84) build on. Scope: `bin/chief` (a headless/JSON mode on `cmd_run`), `engine/driver.sh` (emit the run-id line + a final machine summary at points it already reaches), and `docs/`. The run-id is the `<repo>-<cksum>-<epoch>-<pid>` id driver.sh already mints (~L157) and exports as `CHIEF_RUN_ID`.",
   "parked": false,
   "dependsOn": [],
   "touches": [
@@ -14,14 +14,14 @@
     {
       "id": "US-1",
       "title": "A non-interactive run entry point that prints the run-id",
-      "description": "Add a headless mode to `chief run` (a `--headless` flag, and/or suppress TTY-only output when stdout is not a terminal \u2014 pick one and document it) so a parent process can drive a run with no interactive behavior.",
+      "description": "Add a headless mode to `chief run` (a `--headless` flag, and/or suppress TTY-only output when stdout is not a terminal — pick one and document it) so a parent process can drive a run with no interactive behavior.",
       "acceptanceCriteria": [
-        "`chief run --headless [names\u2026]` runs the scheduler with NO TTY-dependent behavior: no ANSI color, no interactive prompt, line-oriented parseable output; it accepts all config already supported (`-p N`, `--no-merge`, `--provider`, `--model`, and the `CHIEF_PROVIDER`/`CHIEF_MODEL`/`CHIEF_PROJECT` env) with no new interactive step",
+        "`chief run --headless [names…]` runs the scheduler with NO TTY-dependent behavior: no ANSI color, no interactive prompt, line-oriented parseable output; it accepts all config already supported (`-p N`, `--no-merge`, `--provider`, `--model`, and the `CHIEF_PROVIDER`/`CHIEF_MODEL`/`CHIEF_PROJECT` env) with no new interactive step",
         "Before the loop begins, the run prints its `CHIEF_RUN_ID` (the id minted in `engine/driver.sh` ~L157) to stdout on a stable, greppable line (e.g. `chief: run-id=<id>`), so a host can correlate the run with `$CHIEF_RUNS/<pid>.run` and the state dir",
         "Human/interactive `chief run` output is unchanged when `--headless` is not in effect and stdout is a TTY (the colored schedule + summary still print)",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -29,11 +29,11 @@
       "title": "A deterministic exit-code + machine-readable outcome contract",
       "description": "A host must be able to tell what happened from the exit code and a parseable summary, without scraping the human summary block.",
       "acceptanceCriteria": [
-        "The headless run exits with documented, deterministic codes that distinguish at least: all requested tasklists merged (0); nothing runnable / no-work (a distinct non-zero); \u22651 tasklist ended VERIFY-FAILED; \u22651 REBASE/MERGE-CONFLICT; a bad-repo / config error. The exact table is written in docs and asserted by a test",
-        "A machine-readable end-of-run summary is emitted (a final JSON object, or a `--json` summary) naming each requested tasklist and its terminal state (merged / verify-failed / blocked / conflict) plus the run-id \u2014 enough to render an outcome with no scraping",
-        "The exit-code mapping is derived from the terminal states the driver already computes for the human summary \u2014 this story surfaces them, it does not add a second state machine"
+        "The headless run exits with documented, deterministic codes that distinguish at least: all requested tasklists merged (0); nothing runnable / no-work (a distinct non-zero); ≥1 tasklist ended VERIFY-FAILED; ≥1 REBASE/MERGE-CONFLICT; a bad-repo / config error. The exact table is written in docs and asserted by a test",
+        "A machine-readable end-of-run summary is emitted (a final JSON object, or a `--json` summary) naming each requested tasklist and its terminal state (merged / verify-failed / blocked / conflict) plus the run-id — enough to render an outcome with no scraping",
+        "The exit-code mapping is derived from the terminal states the driver already computes for the human summary — this story surfaces them, it does not add a second state machine"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -42,10 +42,10 @@
       "description": "The whole point is a stable contract a host codes against; write it down and pin it with a test in the existing hermetic suite.",
       "acceptanceCriteria": [
         "`docs/` gains an \"Embedding chief / headless invocation\" section: the entry point, env/flags in, the run-id-out line, the exit-code table, and the summary shape",
-        "A hermetic test (scripted fake `claude` on PATH, temp `CHIEF_*` prefixes, per `test/{smoke,ratelimit,\u2026}.sh`) asserts: the run-id line is emitted and parseable; the exit code matches the outcome for a merged run and for a verify-failed run; the JSON summary is valid JSON with the documented fields. It joins the behavioral subset the verify hook + CI run",
+        "A hermetic test (scripted fake `claude` on PATH, temp `CHIEF_*` prefixes, per `test/{smoke,ratelimit,…}.sh`) asserts: the run-id line is emitted and parseable; the exit code matches the outcome for a merged run and for a verify-failed run; the JSON summary is valid JSON with the documented fields. It joins the behavioral subset the verify hook + CI run",
         "Editing `bin/`/`engine/` bumps `VERSION` (`test/version-bump.sh`); existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

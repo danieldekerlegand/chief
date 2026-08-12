@@ -205,6 +205,108 @@ STRICT_VERIFY="${STRICT_VERIFY:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 POLL_SECONDS="${POLL_SECONDS:-5}"
 FORCE="${FORCE:-0}"
+# HEADLESS — programmatic invocation (docs/headless-invocation.md). Set by
+# `chief run --headless` or CHIEF_HEADLESS=1 in the environment/.chief/config, and
+# NEVER inferred from `[ -t 1 ]`: a host that pipes a normal run through `tee` must
+# see exactly what it sees on a terminal, so the contract is switched on explicitly
+# or not at all. It only ADDS machine-readable lines — every human line the driver
+# already prints still prints, so `chief logs`, the per-tasklist logs and the final
+# summary are unchanged and a host can tee the stream to a person as well.
+case "${CHIEF_HEADLESS:-0}" in 1|true|yes|on) HEADLESS=1 ;; *) HEADLESS=0 ;; esac
+# Announce the run's identity on stable, greppable, one-per-line `chief: key=value`
+# records. The id is the marker minted above — the same string that appears in
+# $CHIEF_RUNS/<pid>.run as `runid=` and on every process in this run's tree — so a
+# parent can correlate its child's stdout with the registry and the state dir
+# without parsing a table. Silent unless headless.
+headless_announce() {
+  [ "$HEADLESS" = "1" ] || return 0
+  printf 'chief: run-id=%s\n' "$CHIEF_RUN_ID"
+  # Only announce the registry entry once it actually exists: the early no-runnable
+  # exit and a dry run never write one, and a path that resolves to nothing is worse
+  # than no line at all for a host that would go read it.
+  [ -f "$RUN_FILE" ] && printf 'chief: run-file=%s\n' "$RUN_FILE"
+  printf 'chief: state=%s\n' "$STATE_ROOT"
+}
+
+# HEADLESS EXIT-CODE CONTRACT (the table lives in docs/headless-invocation.md and is
+# pinned by test/headless.sh). A host must be able to tell what happened WITHOUT
+# reading the summary block, so a headless run exits with a code that names the
+# outcome instead of the historical 0/1.
+#
+# The codes apply to HEADLESS runs only. An interactive `chief run` keeps the exits
+# it has always had (0 success or "nothing ran, operator pause"; 1 everything blocked
+# on a dependency), because scripts and CI jobs already depend on those and a new
+# table must not silently redefine them for callers who never asked for it.
+HL_RC_OK=0          # every requested tasklist reached a merged/complete terminal state
+HL_RC_CONFIG=2      # invocation/config error — the run never started
+HL_RC_NOWORK=3      # nothing ran: nothing runnable, or every tasklist blocked on a dep
+HL_RC_VERIFY=4      # >=1 tasklist ended VERIFY-FAILED
+HL_RC_CONFLICT=5    # >=1 tasklist ended REBASE-CONFLICT / MERGE-CONFLICT
+HL_RC_FAILED=6      # >=1 tasklist failed for another reason (stall, incomplete, no-work guard)
+HL_RC_PAUSED=7      # work was withheld: an operator pause and/or a usage-limit window
+# Pick an exit code for the mode we are in. $1 = the headless code, $2 = the code a
+# NON-headless run has always exited with at this point. Every `exit` on a path the
+# contract names goes through here, so the two behaviours can never drift apart.
+hl_rc() { if [ "$HEADLESS" = "1" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+
+# The terminal state of ONE tasklist, in the vocabulary the contract publishes. This
+# is PURE TRANSLATION of state the driver already computed — the <name>.status line
+# its worker wrote and the scheduler state reap() mapped it to (both of which the
+# human summary prints verbatim). Nothing here decides anything, so there is exactly
+# one state machine in the driver, not a second one for machines.
+# $1 = tasklist name, $2 = its .status line (may be empty).
+tasklist_outcome() {
+  case "$2" in
+    MERGED*)                          printf 'merged' ;;
+    COMPLETE-UNMERGED*)               printf 'complete-unmerged' ;;   # --no-merge / AUTO_MERGE_MAIN=0
+    VERIFY-FAILED*)                   printf 'verify-failed' ;;
+    REBASE-CONFLICT*|MERGE-CONFLICT*) printf 'conflict' ;;
+    REBASE-REFUSED*)                  printf 'rebase-refused' ;;
+    RATE-LIMITED*)                    printf 'rate-limited' ;;
+    PAUSED*)                          printf 'paused' ;;
+    EMPTY-NO-WORK*)                   printf 'no-work' ;;
+    BAD-REPO*)                        printf 'bad-repo' ;;
+    # No status line (or one no worker writes): fall back to the scheduler state,
+    # which is what distinguishes "blocked on a dep" from "never launched" from
+    # "failed for a reason with no status" (INCOMPLETE/WORKTREE-FAILED land here).
+    *) case "$(get_state "$1")" in
+         blocked)      printf 'blocked' ;;
+         pending)      printf 'not-launched' ;;
+         done)         printf 'merged' ;;
+         rate-limited) printf 'rate-limited' ;;
+         paused)       printf 'paused' ;;
+         *)            printf 'failed' ;;
+       esac ;;
+  esac
+}
+
+# Machine-readable END-OF-RUN summary: the outcome half of the headless contract.
+# One line, one JSON object, on the same `chief: <key>=<value>` convention as the
+# run-id announcement — so a host reads the entire outcome with
+#   sed -n 's/^chief: summary=//p'
+# and never scrapes the human block printed above it. Built with jq (already a hard
+# requirement) so names and status lines are escaped correctly.
+# $1 = the run outcome, $2 = the exit code that goes with it.
+headless_summary() {
+  [ "$HEADLESS" = "1" ] || return 0
+  local outcome="$1" code="$2" n st f
+  f="$STATE/.summary.jsonl"; : > "$f" 2>/dev/null || return 0
+  for n in $NAMES; do
+    st="$(cat "$STATE/$n.status" 2>/dev/null || echo)"
+    jq -nc --arg name "$n" --arg state "$(get_state "$n")" --arg status "$st" \
+           --arg outcome "$(tasklist_outcome "$n" "$st")" --arg log "$STATE/$n.log" \
+           --argjson attempts "$(attempts_used "$n")" \
+      '{name:$name,state:$state,status:$status,outcome:$outcome,attempts:$attempts,log:$log}' >> "$f"
+  done
+  printf 'chief: outcome=%s\n' "$outcome"
+  printf 'chief: exit=%s\n'    "$code"
+  printf 'chief: summary=%s\n' \
+    "$(jq -nc --arg runId "$CHIEF_RUN_ID" --arg repo "$REPO" --arg base "$BASE_BRANCH" \
+              --arg state "$STATE_ROOT" --arg outcome "$outcome" --argjson exit "$code" \
+              --slurpfile tasklists "$f" \
+       '{runId:$runId,repo:$repo,base:$base,state:$state,outcome:$outcome,exit:$exit,ok:($exit==0),tasklists:$tasklists}')"
+  rm -f "$f" 2>/dev/null || true
+}
 # engine/agent.sh's exit-code contract: 0 = COMPLETE, 1 = genuine failure (stall or
 # hard cap), 2 = stopped on a Claude usage/session limit and won't retry, 3 = drained
 # at an iteration boundary because an OPERATOR PAUSE is armed. Keep in sync with the
@@ -249,7 +351,7 @@ source "$ENGINE/reap.sh"
 source "$ENGINE/live.sh"
 live_of() { printf '%s' "$STATE/$1.live.json"; }   # the record for tasklist $1
 
-command -v jq >/dev/null || { echo "ERROR: jq is required."; exit 1; }
+command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
 
 # ---------------------------------------------------------------------------
 # Small helpers (bash 3.2 — no associative arrays)
@@ -795,7 +897,15 @@ if [ -z "$NAMES" ]; then
     echo "No tasklists in $TASKS_REL/ yet."
     echo "Create one to get started (tasklist format: docs/tasklist-schema.md), then: chief run"
   fi
-  exit 0
+  # A host still gets the full contract on the emptiest possible run: the id (so the
+  # invocation is correlatable at all) and a summary with an empty tasklist array.
+  # No registry file exists yet on this path, so headless_announce prints no
+  # run-file — the same shape a dry run has. NOWORK is exactly what "no runnable
+  # tasklist" means, and it is a NON-ZERO a host can act on; an interactive run
+  # keeps its historical exit 0, because for a person this is not an error.
+  headless_announce
+  headless_summary no-work "$HL_RC_NOWORK"
+  exit "$(hl_rc "$HL_RC_NOWORK" 0)"
 fi
 
 # A dep is satisfied if recorded-done on disk OR marked done this run.
@@ -937,6 +1047,9 @@ audit_findings() {   # one WARNING block per under-tagged pair ($1: only this na
 # dependency + conflict + concurrency logic before a real, hours-long run.
 # ---------------------------------------------------------------------------
 if [ "$DRY_RUN" = "1" ]; then
+  # A dry run spawns nothing and writes no registry file, so the id it announces is
+  # this process's alone — correlate on stdout, not on $CHIEF_RUNS.
+  [ "$HEADLESS" = "1" ] && printf 'chief: run-id=%s\nchief: dry-run=1\n' "$CHIEF_RUN_ID"
   echo "DRY RUN — provider=$PROVIDER${MODEL:+ model=$MODEL} — PARALLEL=$PARALLEL — pending:$NAMES" | sed 's/  */ /g'
   # The gate is checked inline: op_paused() is defined with the scheduler helpers,
   # far below this early-exit block.
@@ -1028,7 +1141,7 @@ EOF
     done
     echo "       Two drivers on one repo race its branches, worktrees and merges." >&2
     echo "       Watch it:  chief ps      ·  stop it:  kill$ghosts      ·  then:  chief reap" >&2
-    exit 1
+    exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
 fi
 # Single-driver lock that AUTO-CLEARS a stale one (owner pid dead) — so a re-run
@@ -1039,7 +1152,7 @@ else
   opid="$(cat "$DRIVER_LOCK/pid" 2>/dev/null || echo)"
   if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null; then
     echo "ERROR: another Chief driver is active (pid $opid, lock: $DRIVER_LOCK). Never run two on one repo." >&2
-    exit 1
+    exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
   echo "  (clearing a stale driver lock from a dead run — owner pid ${opid:-unknown})" >&2
   rm -rf "$DRIVER_LOCK"; mkdir "$DRIVER_LOCK" && echo $$ > "$DRIVER_LOCK/pid"
@@ -1275,6 +1388,11 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
   echo "names=$NAMES"
 } > "$RUN_FILE" 2>/dev/null || true
+# The run file now exists, so the id a headless host reads here is immediately
+# resolvable in the registry. Emitted BEFORE the scheduler loop (and before the
+# orphan sweep below, which can spend seconds) so the parent can start correlating
+# at once instead of after the first tasklist launches.
+headless_announce
 # Reap ORPHANED agent loops left by a prior crashed run on THIS repo. We hold the
 # driver lock, so nothing legitimate is using them.
 #
@@ -1306,14 +1424,14 @@ if [ "$FORCE" != "1" ]; then
           git -C "$REPO" add -A 2>/dev/null || true
           git -C "$REPO" commit -q -m "wip(chief): recovered from an interrupted run on $cur" 2>/dev/null || true
         fi
-        git -C "$REPO" checkout "$BASE_BRANCH" >/dev/null 2>&1 || { echo "ERROR: could not restore '$BASE_BRANCH' from '$cur' — resolve by hand." >&2; exit 1; }
+        git -C "$REPO" checkout "$BASE_BRANCH" >/dev/null 2>&1 || { echo "ERROR: could not restore '$BASE_BRANCH' from '$cur' — resolve by hand." >&2; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
         cur="$BASE_BRANCH" ;;
-      *) echo "ERROR: not on '$BASE_BRANCH' (on '$cur'). git checkout $BASE_BRANCH (or FORCE=1)." >&2; exit 1 ;;
+      *) echo "ERROR: not on '$BASE_BRANCH' (on '$cur'). git checkout $BASE_BRANCH (or FORCE=1)." >&2; exit "$(hl_rc "$HL_RC_CONFIG" 1)" ;;
     esac
   fi
   if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
     echo "ERROR: uncommitted tracked changes on main — commit/stash first (or FORCE=1)." >&2
-    git -C "$REPO" status --short | head; exit 1
+    git -C "$REPO" status --short | head; exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
 fi
 
@@ -2111,6 +2229,40 @@ if [ -n "$audit_out" ]; then
   printf '%s\n' "$audit_out"
 fi
 echo "==================================================================="
+
+# ---------------------------------------------------------------------------
+# Headless outcome — the exit code + JSON summary a host codes against.
+# ---------------------------------------------------------------------------
+# Read from the SAME per-tasklist state the block above just printed (<name>.state
+# and <name>.status, via tasklist_outcome) — this surfaces the driver's decisions,
+# it does not make new ones. Run-level precedence is fixed and documented, so the
+# same set of terminal states always yields the same code: the outcome a human has
+# to act on first wins, and "nothing happened" only wins when nothing else did.
+hl_conflict=""; hl_verify=""; hl_failed=""; hl_held=""; hl_ok=""
+for n in $NAMES; do
+  case "$(tasklist_outcome "$n" "$(cat "$STATE/$n.status" 2>/dev/null || echo)")" in
+    merged|complete-unmerged) hl_ok=1 ;;
+    conflict)                 hl_conflict=1 ;;
+    verify-failed)            hl_verify=1 ;;
+    paused|rate-limited)      hl_held=1 ;;
+    blocked|not-launched)     ;;   # never ran — the no-work rule below covers these
+    no-work)                  hl_failed=1 ;;   # the false-complete guard fired: a fault
+    *)                        hl_failed=1 ;;
+  esac
+done
+if   [ -n "$hl_conflict" ]; then hl_outcome=conflict;      hl_code="$HL_RC_CONFLICT"
+elif [ -n "$hl_verify"   ]; then hl_outcome=verify-failed; hl_code="$HL_RC_VERIFY"
+elif [ -n "$hl_failed"   ]; then hl_outcome=failed;        hl_code="$HL_RC_FAILED"
+elif [ -n "$hl_held"     ]; then hl_outcome=paused;        hl_code="$HL_RC_PAUSED"
+# An operator pause that WITHHELD work is a held run, not an empty one — even when
+# no worker ever started and so no tasklist carries a PAUSED status of its own.
+elif op_paused && { [ -z "$ran" ] || [ -n "$(pending_names)" ]; }; then
+  hl_outcome=paused; hl_code="$HL_RC_PAUSED"
+elif [ -z "$ran" ] || [ -z "$hl_ok" ]; then hl_outcome=no-work; hl_code="$HL_RC_NOWORK"
+else hl_outcome=merged; hl_code="$HL_RC_OK"
+fi
+headless_summary "$hl_outcome" "$hl_code"
+
 # A run that launched nothing at all did no work — say so with a non-zero exit
 # rather than reporting success. An OPERATOR PAUSE is the one reason for that which
 # is not a fault: the run did exactly what it was told, so it says PAUSED and exits 0.
@@ -2119,8 +2271,9 @@ if [ -z "$ran" ]; then
     echo "Nothing ran: an OPERATOR PAUSE is armed for this repo — every tasklist was held," >&2
     echo "and their branches and worktrees are untouched. Lift it and pick up where they"  >&2
     echo "stopped:  chief resume  &&  chief run" >&2
-    exit 0
+    exit "$(hl_rc "$hl_code" 0)"
   fi
   echo "Nothing ran: every scheduled tasklist is blocked on a dependency (reasons above)." >&2
-  exit 1
+  exit "$(hl_rc "$hl_code" 1)"
 fi
+exit "$(hl_rc "$hl_code" 0)"
