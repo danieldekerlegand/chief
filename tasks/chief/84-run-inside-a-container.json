@@ -34,7 +34,7 @@
         "A run does not require an interactive git identity: a default committer identity is available or documented for the container case, so commits/merges do not fail for want of `user.name`/`user.email`",
         "The reap/run-registry keys (cwd / argv `--chief-run=` / inherited `CHIEF_RUN_ID`) still function inside a container's PID namespace, or degrade to nothing rather than mis-reaping — consistent with `engine/reap.sh`'s existing degradation model"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
