@@ -34,7 +34,7 @@
         "A roster-drift guard asserts the provider lists in `engine/agent.sh` and `bin/chief` accept the same set, so the two validators can never silently diverge again",
         "Fully hermetic (temp `CHIEF_*` prefixes, fake CLIs on `PATH`, no network, never touches `~/.chief`); `bash -n` + `shellcheck -S error` clean; bash 3.2 compatible; existing `test/*.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
