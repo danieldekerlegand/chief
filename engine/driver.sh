@@ -320,11 +320,18 @@ headless_summary() {
   done
   printf 'chief: outcome=%s\n' "$outcome"
   printf 'chief: exit=%s\n'    "$code"
+  # `account` names WHICH account the run spent, never its credentials: the operator's
+  # label and the env-file PATH, both null on an undesignated run. A pooler (chief-cloud
+  # 91) reconciles its assignment against this without ever seeing a secret.
   printf 'chief: summary=%s\n' \
     "$(jq -nc --arg runId "$CHIEF_RUN_ID" --arg repo "$REPO" --arg base "$BASE_BRANCH" \
               --arg state "$STATE_ROOT" --arg outcome "$outcome" --argjson exit "$code" \
+              --arg acctLabel "$ACCOUNT_LABEL" --arg acctEnv "$ACCOUNT_ENV_FILE" \
               --slurpfile tasklists "$f" \
-       '{runId:$runId,repo:$repo,base:$base,state:$state,outcome:$outcome,exit:$exit,ok:($exit==0),tasklists:$tasklists}')"
+       '{runId:$runId,repo:$repo,base:$base,state:$state,outcome:$outcome,exit:$exit,ok:($exit==0),
+         account:{label:(if $acctLabel=="" then null else $acctLabel end),
+                  envFile:(if $acctEnv=="" then null else $acctEnv end)},
+         tasklists:$tasklists}')"
   rm -f "$f" 2>/dev/null || true
 }
 # engine/agent.sh's exit-code contract: 0 = COMPLETE, 1 = genuine failure (stall or
@@ -386,6 +393,48 @@ CHIEF_EVENT_REPO="$REPO"
 export CHIEF_EVENTS_FILE CHIEF_EVENT_REPO
 
 command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
+
+# ACCOUNT DESIGNATION (docs/account-credentials.md) — the optional credential env
+# FILE this run's provider turns execute under. The driver only PLUMBS the path
+# through to engine/agent.sh, which applies it around the provider invocation and
+# nowhere else; git, the verify hook and the iteration hook keep running under
+# chief's own environment. Validated here, before a single worktree or agent turn,
+# so a bad designation is a config error at launch instead of a run that quietly
+# spends the inherited account's quota. bin/chief already resolved a relative path
+# against the invoking cwd — the driver and its workers run elsewhere, so a path
+# that is still relative here cannot be trusted to mean the same thing.
+ACCOUNT_ENV_FILE="${CHIEF_ACCOUNT_ENV_FILE:-}"
+if [ -n "$ACCOUNT_ENV_FILE" ]; then
+  case "$ACCOUNT_ENV_FILE" in /*) ;; *) ACCOUNT_ENV_FILE="$PWD/$ACCOUNT_ENV_FILE" ;; esac
+  if [ ! -f "$ACCOUNT_ENV_FILE" ] || [ ! -r "$ACCOUNT_ENV_FILE" ]; then
+    echo "ERROR: --account-env: no readable credential env file at $ACCOUNT_ENV_FILE" >&2
+    exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+  fi
+fi
+# THE PUBLIC HALF of the designation: the label this run's account is REPORTED under.
+# Chief publishes WHICH account a run uses (registry entry, run.started event, verbose
+# trace) and never WHAT it is — the label and the env-file PATH are reportable, the
+# file's values are not, and no chief-written surface ever reads a value out of the
+# file except the provider subshell in engine/agent.sh. Defaulted from the file's
+# basename so a designated run is always identifiable, and re-derived here (not just
+# in bin/chief) so a direct driver invocation reports the same thing.
+ACCOUNT_LABEL="${CHIEF_ACCOUNT_LABEL:-}"
+if [ -z "$ACCOUNT_LABEL" ] && [ -n "$ACCOUNT_ENV_FILE" ]; then
+  ACCOUNT_LABEL="$(basename "$ACCOUNT_ENV_FILE")"; ACCOUNT_LABEL="${ACCOUNT_LABEL%.env}"
+fi
+# Operator-supplied text on its way into a key=value registry line and into JSON.
+# An `if`, not `[ … ] && …`: the no-label path is the common one, and a top-level
+# AND-list would leave it as a non-zero $? for whatever reads it next.
+if [ -n "$ACCOUNT_LABEL" ]; then
+  ACCOUNT_LABEL="$(printf '%s' "$ACCOUNT_LABEL" | tr -d '"\\$`' | tr '\n\r\t' '   ' | cut -c1-60)"
+fi
+# Keep the designation OUT of the ambient environment from here on: the driver hands
+# it to engine/agent.sh explicitly (see run_worker), and nothing else in a run has
+# any business consulting it. Un-exporting it means the verify hook, the warmup
+# commands and the iteration hook see exactly the environment they would see on an
+# undesignated run.
+export -n CHIEF_ACCOUNT_ENV_FILE 2>/dev/null || true
+export -n CHIEF_ACCOUNT_LABEL 2>/dev/null || true
 
 # The state tree must be WRITABLE, not merely nameable — a distinction that only
 # bites in a container, where the prefix can land on a read-only mount or a path this
@@ -1482,6 +1531,13 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "staterel=$STATE_REL"
   echo "tasks=$SRC"
   echo "wt=$WT_ROOT"
+  # ACCOUNT DESIGNATION, reported not exposed (docs/account-credentials.md): the
+  # env-file PATH and the label, so `chief ps`/`chief monitor` and any registry reader
+  # can say WHICH account this run spends. Both are empty on an undesignated run.
+  # The file's VALUES are read only inside agent.sh's provider subshell and are never
+  # written here, to a live record, to a log, or to anything under .chief/state.
+  echo "account=$ACCOUNT_ENV_FILE"
+  echo "accountlabel=$ACCOUNT_LABEL"
   echo "events=$CHIEF_EVENTS_FILE"             # this run's NDJSON event log (docs/events.md)
   echo "runid=$CHIEF_RUN_ID"                   # the marker stamped on this run's tree
   echo "marker=$CHIEF_RUN_MARKER_REPO"         #   (and the prefix that matches this repo)
@@ -1498,7 +1554,7 @@ headless_announce
 # are pruned first — they outlive their run by design, so nothing else bounds them.
 events_prune "$CHIEF_RUNS" "${CHIEF_EVENTS_KEEP_DAYS:-14}"
 event_emit run.started state=running \
-  detail="base=$BASE_BRANCH parallel=$PARALLEL provider=$PROVIDER automerge=$AUTO_MERGE_MAIN names:$NAMES"
+  detail="base=$BASE_BRANCH parallel=$PARALLEL provider=$PROVIDER automerge=$AUTO_MERGE_MAIN${ACCOUNT_LABEL:+ account=$ACCOUNT_LABEL} names:$NAMES"
 # Reap ORPHANED agent loops left by a prior crashed run on THIS repo. We hold the
 # driver lock, so nothing legitimate is using them.
 #
@@ -1717,6 +1773,7 @@ run_worker() {
           CHIEF_STATE_DIR="$STATE_REL" CHIEF_TASKS_DIR="$TASKS_REL" \
           CHIEF_AGENT_CONTEXT="${CHIEF_AGENT_CONTEXT:-}" CHIEF_ITER_HOOK="$hook" \
           CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" CHIEF_VERBOSE="${CHIEF_VERBOSE:-}" \
+          CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" CHIEF_ACCOUNT_LABEL="$ACCOUNT_LABEL" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a

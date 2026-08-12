@@ -124,6 +124,19 @@ run flags:
                      6 failed · 7 held). Takes all the flags/env above unchanged. Also settable as
                      CHIEF_HEADLESS=1. Never inferred from stdout being a pipe — the whole
                      contract is docs/headless-invocation.md
+      --account-env FILE
+                     run this tasklist's AGENT TURNS under a designated provider account: a
+                     KEY=VALUE env file (e.g. CLAUDE_CONFIG_DIR=… or ANTHROPIC_API_KEY=…)
+                     applied around the provider invocation ONLY — git, the verify hook and
+                     the iteration hooks keep chief's own environment. A file so secrets never
+                     reach argv; unreadable = a launch error, never a silent fall-back to the
+                     inherited account. Also settable as CHIEF_ACCOUNT_ENV_FILE (environment or
+                     .chief/config). Chief designates ONE account per run and does no pooling.
+      --account-label NAME
+                     the name this run's account is REPORTED under — in `chief ps`/`chief monitor`,
+                     the run registry and the run.started event — so an operator can see which
+                     account a run spends without any surface carrying its secrets. Defaults to the
+                     --account-env file's basename. Also settable as CHIEF_ACCOUNT_LABEL.
       --no-merge     complete branches but don't merge into the base
 
 pause/resume flags:
@@ -221,7 +234,8 @@ cmd_list() {
 }
 
 cmd_run() {
-  local parallel=1 dry=0 merge="" provider="" model="" preset="" verbose="" headless="" ; local names=()
+  local parallel=1 dry=0 merge="" provider="" model="" preset="" verbose="" headless="" \
+        account_env="" account_label="" ; local names=()
   while [ "$#" -gt 0 ]; do case "$1" in
     -p|--parallel) parallel="$2"; shift 2 ;;
     -p*)           parallel="${1#-p}"; shift ;;
@@ -240,6 +254,10 @@ cmd_run() {
     --devin)       provider=devin; shift ;;
     --opencode)    provider=opencode; shift ;;
     --amp)         provider=amp; shift ;;
+    --account-env)   account_env="$2"; shift 2 ;;
+    --account-env=*) account_env="${1#*=}"; shift ;;
+    --account-label)   account_label="$2"; shift 2 ;;
+    --account-label=*) account_label="${1#*=}"; shift ;;
     --tool)        provider="$2"; shift 2 ;; # compatibility with pre-provider releases
     --tool=*)      provider="${1#*=}"; shift ;;
     -*)            echo "unknown flag: $1" >&2; exit 2 ;;
@@ -300,6 +318,43 @@ cmd_run() {
       ;;
     *) export CHIEF_HEADLESS=0 ;;
   esac
+  # ACCOUNT DESIGNATION (docs/account-credentials.md) — pin this run's provider turns
+  # to a designated account by naming a KEY=VALUE credential env FILE. A file, not
+  # flags: secret VALUES must never reach argv, where `ps` shows them to every user on
+  # the box. The flag beats .chief/config's CHIEF_ACCOUNT_ENV_FILE, and the path is
+  # resolved HERE, against the invoking cwd — the driver and every worker run from a
+  # worktree, so a relative path handed onward would resolve somewhere else entirely.
+  # Unreadable = a launch error, never a silent fall-back to the inherited account.
+  account_env="${account_env:-${CHIEF_ACCOUNT_ENV_FILE:-}}"
+  if [ -n "$account_env" ]; then
+    case "$account_env" in /*) ;; *) account_env="$PWD/$account_env" ;; esac
+    if [ ! -f "$account_env" ] || [ ! -r "$account_env" ]; then
+      echo "--account-env: no readable credential env file at $account_env" >&2
+      exit 2
+    fi
+    export CHIEF_ACCOUNT_ENV_FILE="$account_env"
+  else
+    unset CHIEF_ACCOUNT_ENV_FILE
+  fi
+  # THE LABEL IS THE PUBLIC HALF OF THE DESIGNATION. Everything the run publishes
+  # about its account — the registry entry `chief ps`/`chief monitor` read, the
+  # run.started event a headless host subscribes to, the verbose trace — names the
+  # account by this label and by the env-file PATH, never by a value out of the file.
+  # That is what lets an operator (or chief-cloud's pooler) see WHICH account a run is
+  # spending without any surface carrying the credential itself.
+  # Defaulted from the file's basename (minus a .env suffix) so a designated run is
+  # always identifiable even when nobody passed --account-label. Scrubbed here, once:
+  # it is operator-supplied text that ends up in a key=value registry line and in JSON.
+  account_label="${account_label:-${CHIEF_ACCOUNT_LABEL:-}}"
+  if [ -z "$account_label" ] && [ -n "$account_env" ]; then
+    account_label="$(basename "$account_env")"; account_label="${account_label%.env}"
+  fi
+  if [ -n "$account_label" ]; then
+    account_label="$(printf '%s' "$account_label" | tr -d '"\\$`' | tr '\n\r\t' '   ' | cut -c1-60)"
+    export CHIEF_ACCOUNT_LABEL="$account_label"
+  else
+    unset CHIEF_ACCOUNT_LABEL
+  fi
   CHIEF_PROVIDER="$provider" CHIEF_MODEL="$model" \
     PARALLEL="$parallel" DRY_RUN="$dry" \
     bash "$ENGINE/driver.sh" ${names[@]+"${names[@]}"}

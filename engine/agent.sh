@@ -111,6 +111,20 @@ if [ "$PROVIDER" = amp ] && [ -n "$MODEL" ]; then
   echo "note: amp has no model selector — ignoring model '$MODEL' (docs/providers.md#model-overrides)" >&2
   MODEL=""
 fi
+# ACCOUNT DESIGNATION — the run may be pinned to a specific provider account via a
+# credential env FILE (bin/chief --account-env / CHIEF_ACCOUNT_ENV_FILE). Only the
+# PATH travels in the environment; the values are read at the provider boundary
+# (_apply_account_env below). Checked here, at launch, because the alternative to a
+# loud failure is spending an operator's OTHER account's quota by accident: a
+# designation that cannot be read is never allowed to degrade into "inherit whatever
+# this shell happens to carry".
+if [ -n "${CHIEF_ACCOUNT_ENV_FILE:-}" ]; then
+  if [ ! -f "$CHIEF_ACCOUNT_ENV_FILE" ] || [ ! -r "$CHIEF_ACCOUNT_ENV_FILE" ]; then
+    echo "Error: account env file not readable: $CHIEF_ACCOUNT_ENV_FILE" >&2
+    echo "       (chief run --account-env <file> / CHIEF_ACCOUNT_ENV_FILE — no fallback to the inherited account)" >&2
+    exit 1
+  fi
+fi
 : "${CHIEF_PROJECT:?CHIEF_PROJECT must be set — run this via the driver, not directly}"
 STATE_DIR="$CHIEF_PROJECT/${CHIEF_STATE_DIR:-.chief/state}"
 mkdir -p "$STATE_DIR"
@@ -404,9 +418,76 @@ _is_rate_limit() {
   return 1
 }
 
+# ACCOUNT CREDENTIAL SEAM (docs/account-credentials.md) — read the designated
+# KEY=VALUE file and export its pairs into the CURRENT shell. Called only from the
+# provider subshell below, so nothing outside the provider invocation ever sees the
+# credential.
+#
+# Parsed, never SOURCED, on purpose: an env file is data handed to chief by an
+# operator (or by a pooler like chief-cloud), and `.`-ing it would execute whatever
+# it contains under the agent's privileges. Only lines that ARE assignments are
+# honoured; anything else is ignored rather than run. Values are exported by the
+# `export` BUILTIN — never spliced into a command line — so they never reach argv
+# where `ps` could read them.
+#
+# Format: `KEY=VALUE` (an optional leading `export ` is tolerated), one per line,
+# `#` comments and blank lines skipped, a single layer of surrounding double or
+# single quotes stripped. No expansion, no continuation lines: a value is the rest
+# of the line, verbatim.
+_apply_account_env() {
+  local file="$1" line key val n=0 xt=0
+  # NON-LEAKAGE, first line: this is the ONLY place in chief that holds a credential
+  # VALUE in a variable, so it is also the only place a shell TRACE could print one.
+  # An operator debugging a run with `bash -x` (or a host that sets SHELLOPTS) would
+  # otherwise get every `export KEY=VALUE` echoed to stderr — which agent.sh tees
+  # straight into the per-iteration log `chief logs` serves. Trace off for the body,
+  # restored exactly as we found it.
+  case "$-" in *x*) xt=1; set +x ;; esac
+  [ -r "$file" ] || { echo "ERROR: unreadable account env file: $file" >&2
+                      [ "$xt" = 1 ] && set -x; return 1; }
+  # Own redirect: the caller hands the provider its prompt on stdin, and reading the
+  # env file from there instead would swallow it.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    line="${line#export }"
+    key="${line%%=*}"; val="${line#*=}"
+    [ "$key" = "$line" ] && continue                      # no '=' — not an assignment
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue  # not a legal env name
+    case "$val" in
+      \"*\") val="${val#\"}"; val="${val%\"}" ;;
+      \'*\') val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    export "$key=$val"
+    n=$(( n + 1 ))
+  done < "$file"
+  [ "$n" -gt 0 ] || { echo "ERROR: account env file defines no KEY=VALUE pairs: $file" >&2
+                      [ "$xt" = 1 ] && set -x; return 1; }
+  # Reported, never exposed: the COUNT of variables applied and the file's path say
+  # the designation took effect; the names and values stay in this subshell.
+  [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] account env applied: %s var(s) from %s\n' \
+    "$n" "$file" >&2
+  [ "$xt" = 1 ] && set -x
+  return 0
+}
+
 # Run one provider in non-interactive mode. The prompt is supplied on stdin by the
 # caller so every provider receives the same Chief instructions and project context.
+#
+# When the run carries an account designation, the credential env is applied HERE and
+# nowhere else — inside the subshell that execs the provider — so the driver's git /
+# verify / merge phases and the iteration hook keep running under chief's own
+# environment. A designation that has become unreadable mid-run fails the turn loudly
+# instead of silently falling back to the inherited account.
 _run_provider() {
+  if [ -n "${CHIEF_ACCOUNT_ENV_FILE:-}" ]; then
+    ( _apply_account_env "$CHIEF_ACCOUNT_ENV_FILE" || exit 1
+      _provider_exec )
+  else
+    _provider_exec
+  fi
+}
+
+_provider_exec() {
   case "$PROVIDER" in
     claude)
       if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --model "$MODEL"
@@ -468,8 +549,13 @@ while :; do
   # CHIEF_VERBOSE traces the exact provider invocation into the log — which provider,
   # which model, and the composed prompt it's being handed — so a misconfigured
   # provider/model shows up plainly instead of as a silent stall.
-  [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] provider=%s%s · prompt=%s (%s lines)\n' \
-    "$PROVIDER" "${MODEL:+ model=$MODEL}" "$PROMPT_FILE" \
+  # The account DESIGNATION is traced with it — the label and the env-file path, so a
+  # run pinned to the wrong account is as visible as a misconfigured model. Values are
+  # never traced (see _apply_account_env); an undesignated run prints nothing extra.
+  [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] provider=%s%s%s · prompt=%s (%s lines)\n' \
+    "$PROVIDER" "${MODEL:+ model=$MODEL}" \
+    "${CHIEF_ACCOUNT_ENV_FILE:+ account=${CHIEF_ACCOUNT_LABEL:-$(basename "$CHIEF_ACCOUNT_ENV_FILE")} env=$CHIEF_ACCOUNT_ENV_FILE}" \
+    "$PROMPT_FILE" \
     "$(wc -l < "$PROMPT_FILE" 2>/dev/null | tr -d ' ')" >&2
   _beat_start
   OUTPUT=$(_run_provider < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
