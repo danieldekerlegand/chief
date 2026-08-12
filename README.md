@@ -295,7 +295,7 @@ tree at once.
 
 ## Status
 
-**v0.8.19** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.20** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the
