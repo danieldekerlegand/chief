@@ -135,6 +135,18 @@ The registry is read-only from the monitor's side — it never touches a run. It
 safe to run `chief ps` as often as you like, from any directory, while runs are in
 flight.
 
+## Is there a GUI?
+
+**Not in chief — by design.** `chief ps` / `chief monitor` / `chief logs` are the
+monitoring surface this repo ships, and the run registry above is deliberately plain
+files so *anything* can read it. The desktop **GUI** — and the cross-host, many-repo
+aggregation a fleet view needs — belongs to **chief-cloud**, the separate control
+plane, whose Tauri app builds over that data via its `chiefd` daemon. chief stays
+daemon-free and GUI-free; keeping the registry (and the machine-readable status
+stream) stable and documented is its side of that seam. See
+[`desktop-gui-decision.md`](desktop-gui-decision.md) for the full decision and
+rationale.
+
 ## Notes
 
 - `chief ps` is plain text when piped (no color/ANSI), so `chief ps | grep …`

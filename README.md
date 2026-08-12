@@ -116,6 +116,14 @@ Each tasklist shows its **state** (running / done / failed / blocked / pending),
 the agent logged. Run files are cleaned up when a driver exits and pruned on sight
 if its process died. See [`docs/monitoring.md`](docs/monitoring.md).
 
+**Monitoring here is the CLI — chief ships no desktop app.** `chief ps` /
+`chief monitor` / `chief logs` are the monitoring surface, and the registry they
+read is plain files anything else may read too. A desktop **GUI** (and any
+cross-host, multi-machine view) is **chief-cloud**'s, the separate control plane,
+whose Tauri app builds over that data — chief itself stays daemon-free and
+GUI-free by design. The reasoning is written down in
+[`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md).
+
 ## Concepts
 
 - **Tasklist** — one JSON file in `tasks/chief/<name>.json`: an ordered list of
@@ -225,6 +233,8 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - [`docs/verify-hook.md`](docs/verify-hook.md) — writing `verify.sh`.
 - [`docs/monitoring.md`](docs/monitoring.md) — `chief ps` / `chief monitor` and the
   run registry.
+- [`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md) — why monitoring is
+  CLI-only here and a desktop GUI belongs to chief-cloud.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.
 
 ## Development
@@ -260,7 +270,9 @@ programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the
 merge floor rather than perfect conflict tags (by design — see above). The run monitor
-is per host/user; runs on other machines don't appear.
+is per host/user; runs on other machines don't appear — cross-host aggregation and a
+desktop GUI are chief-cloud's, the separate control plane, not this repo's
+([`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md)).
 
 ## License
 
