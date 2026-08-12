@@ -114,13 +114,24 @@
 #   RATE_LIMIT_REDISPATCH_MAX_WAIT=21600  ceiling on any single wait (6h), so a
 #                         bogus far-future reset can't park the run for days. NEW.
 #   (the per-worker knobs — RATE_LIMIT_RETRY/WAIT/MAX_WAITS/PATTERN — are agent.sh's)
-#   WT_ROOT=<dir>         where worktrees live. Default is OUTSIDE the repo
-#                         (${CHIEF_PREFIX:-~/.chief}/worktrees/<repo>-<hash>) so a
-#                         `--print` agent can't resolve its root to the outer tree.
+#   WT_ROOT=<dir>         where THIS repo's worktrees live. Default is OUTSIDE the
+#                         repo ($CHIEF_WORKTREE_ROOT/<repo>-<hash>) so a `--print`
+#                         agent can't resolve its root to the outer tree.
+#   CHIEF_PREFIX=<dir>    host-wide state root (runs/repos/worktrees). Default
+#                         ~/.chief, with container fallbacks — engine/paths.sh.
+#   CHIEF_WORKTREE_ROOT=<dir>  the worktree tree ALL repos share. Default
+#                         $CHIEF_PREFIX/worktrees; set it to keep worktrees off a
+#                         container's ephemeral prefix.
 #
 set -uo pipefail
 
 ENGINE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Host-wide state paths (prefix / runs / repos / worktree root). Sourced HERE, well
+# before the first path is spelled, because the old inline `${CHIEF_PREFIX:-$HOME/.chief}`
+# aborted the driver outright under `set -u` when $HOME was unset — the shape a
+# container hands you. engine/paths.sh has the resolution order and the fallbacks.
+# shellcheck source=engine/paths.sh
+. "$ENGINE/paths.sh"
 : "${CHIEF_PROJECT:?CHIEF_PROJECT must be set — run this via 'chief run', not directly}"
 REPO="$CHIEF_PROJECT"
 # ---------------------------------------------------------------------------
@@ -176,7 +187,12 @@ SNAP_REL="$STATE_REL/snapshots"            # repo-relative — short enough for 
 # project root to the OUTER working tree and read/edit THAT instead of the
 # worktree — so it produces no committed work and the branch merges empty. Keeping
 # the worktree tree out of $REPO is what makes agent isolation actually hold.
-WT_ROOT="${WT_ROOT:-${CHIEF_PREFIX:-$HOME/.chief}/worktrees/$(basename "$REPO")-$(printf '%s' "$REPO" | cksum | cut -d' ' -f1)}"
+# WT_ROOT names THIS repo's worktree dir; $CHIEF_WORKTREE_ROOT relocates the tree
+# ALL repos share (chief_worktree_root). The per-repo key is <basename>-<cksum of the
+# absolute path>: inside a container the repo's bind-mount path differs from the
+# host's, so the same repo keys differently there — which is what keeps a container
+# run's worktrees from colliding with the host's.
+WT_ROOT="${WT_ROOT:-$(chief_worktree_root)/$(basename "$REPO")-$(printf '%s' "$REPO" | cksum | cut -d' ' -f1)}"
 STATE="$STATE_ROOT/parallel"
 MERGE_LOCK="$STATE_ROOT/merge.lock"
 WT_LOCK="$STATE_ROOT/wt.lock"              # serialize concurrent `git worktree add`
@@ -186,11 +202,11 @@ DRIVER_LOCK="$STATE_ROOT/driver.lock"      # one driver per repo
 # host-wide dir (default ~/.chief/runs). It lets `chief ps`/`chief monitor` see
 # every live run across ALL repos, not just this one. Written after the driver
 # lock is held; removed on exit. `chief monitor` prunes files whose pid is dead.
-CHIEF_RUNS="${CHIEF_RUNS:-${CHIEF_PREFIX:-$HOME/.chief}/runs}"
+CHIEF_RUNS="$(chief_runs_dir)"
 RUN_FILE="$CHIEF_RUNS/$$.run"
 # Known-repos registry (bin/chief exports it; defaulted here so the driver also
 # works standalone). Resolves the "<repo>:" half of a qualified cross-repo dep.
-CHIEF_REPOS="${CHIEF_REPOS:-${CHIEF_PREFIX:-$HOME/.chief}/repos}"
+CHIEF_REPOS="$(chief_repos_dir)"
 BASE_BRANCH="${CHIEF_BASE_BRANCH:-main}"
 VERIFY_HOOK=""; [ -n "${CHIEF_VERIFY:-}" ] && VERIFY_HOOK="$REPO/$CHIEF_VERIFY"
 mkdir -p "$COMPLETED" "$SNAP" "$WT_ROOT" "$STATE"
@@ -363,6 +379,25 @@ CHIEF_EVENT_REPO="$REPO"
 export CHIEF_EVENTS_FILE CHIEF_EVENT_REPO
 
 command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
+
+# The state tree must be WRITABLE, not merely nameable — a distinction that only
+# bites in a container, where the prefix can land on a read-only mount or a path this
+# uid does not own, and where a bind-mounted repo can itself be read-only. Every
+# symptom of that appears much later and somewhere unhelpful: `git worktree add`
+# failing with a permission error from deep inside git, or a run whose registry entry
+# silently never appears. So it is checked once, here, with the knobs named.
+for _d in "$WT_ROOT" "$STATE"; do
+  mkdir -p "$_d" 2>/dev/null || true
+  { [ -d "$_d" ] && [ -w "$_d" ]; } && continue
+  echo "ERROR: chief cannot write its state directory: $_d" >&2
+  case "$_d" in
+    "$REPO"/*) echo "       This lives inside the repo — mount/checkout $REPO writable." >&2 ;;
+    *)         echo "       Set CHIEF_PREFIX (all host-wide state) or CHIEF_WORKTREE_ROOT" >&2
+               echo "       (worktrees only) to a writable path — in a container, a volume or a tmpfs." >&2 ;;
+  esac
+  exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+done
+unset _d
 
 # ---------------------------------------------------------------------------
 # Small helpers (bash 3.2 — no associative arrays)
@@ -828,7 +863,7 @@ dep_task() { printf '%s' "${1##*:}"; }
 resolve_repo() {   # repo spec -> absolute path, or nothing when it can't be resolved
   local spec="$1" cand hits
   case "$spec" in
-    "~/"*) cand="$HOME/${spec#\~/}" ;;
+    "~/"*) cand="${HOME:-}/${spec#\~/}"; [ -n "${HOME:-}" ] || cand="" ;;
     /*)    cand="$spec" ;;
     */*)   cand="$REPO/$spec" ;;                      # relative to this repo
     *)     cand="" ;;

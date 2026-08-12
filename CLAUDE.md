@@ -67,6 +67,8 @@ engine/
   agent.sh           #   one agent iteration (implement a single story)
   monitor.sh         #   active-run registry view  (chief ps / chief monitor)
   lib.sh             #   shared helpers: run_verify / verify_branch, locks, state I/O
+  paths.sh           #   host-wide state paths (prefix · runs · repos · worktree root), resolved
+                     #   in one place — container-safe when $HOME is unset/read-only
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to

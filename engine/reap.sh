@@ -83,8 +83,13 @@ if ! command -v chief_scan_descendants >/dev/null 2>&1; then
   . "$_REAP_DIR/lib.sh"
 fi
 
-CHIEF_PREFIX_DEFAULT="${CHIEF_PREFIX:-$HOME/.chief}"
-CHIEF_WT_ROOT_ALL="$CHIEF_PREFIX_DEFAULT/worktrees"    # every repo's worktrees live here
+if ! command -v chief_prefix >/dev/null 2>&1; then
+  # shellcheck source=engine/paths.sh
+  . "$_REAP_DIR/paths.sh"
+fi
+
+CHIEF_PREFIX_DEFAULT="$(chief_prefix)"
+CHIEF_WT_ROOT_ALL="$(chief_worktree_root)"             # every repo's worktrees live here
 CHIEF_RUN_MARKER="--chief-run="                        # the argv spawn marker
 
 # ── primitives ───────────────────────────────────────────────────────────────

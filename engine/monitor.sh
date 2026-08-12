@@ -43,7 +43,9 @@
 # story counts; absent jq just yields "?/?".
 set -uo pipefail
 
-RUNS="${CHIEF_RUNS:-${CHIEF_PREFIX:-$HOME/.chief}/runs}"
+# shellcheck source=engine/paths.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/paths.sh"
+RUNS="$(chief_runs_dir)"
 MODE="${1:-once}"
 INTERVAL="${2:-2}"
 
