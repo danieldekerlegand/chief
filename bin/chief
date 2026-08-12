@@ -79,9 +79,12 @@ run flags:
                      also settable as CHIEF_VERBOSE=1 in the environment or .chief/config
       --headless     non-interactive/programmatic mode for a host app embedding chief: no ANSI
                      colour, no interactive step, line-oriented output, and the run announces its
-                     id on a greppable `chief: run-id=<id>` line before the loop starts. Takes all
-                     the flags/env above unchanged. Also settable as CHIEF_HEADLESS=1. Never
-                     inferred from stdout being a pipe — see docs/headless-invocation.md
+                     id on a greppable `chief: run-id=<id>` line before the loop starts, ends with
+                     a one-line JSON `chief: summary=…`, and EXITS with a code that names the
+                     outcome (0 merged · 2 config · 3 no-work · 4 verify-failed · 5 conflict ·
+                     6 failed · 7 held). Takes all the flags/env above unchanged. Also settable as
+                     CHIEF_HEADLESS=1. Never inferred from stdout being a pipe — the whole
+                     contract is docs/headless-invocation.md
       --no-merge     complete branches but don't merge into the base
 
 pause/resume flags:
