@@ -229,6 +229,9 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 
 - [`ROADMAP.md`](ROADMAP.md) — the roadmap: shipped capabilities vs. planned work.
 - [`docs/tasklist-schema.md`](docs/tasklist-schema.md) — the tasklist JSON format.
+- [`docs/roadmap-input.md`](docs/roadmap-input.md) — the roadmap-document contract
+  `chief gen` consumes: `phases[] → items[]`, the field mapping and defaults, and a
+  worked example. The programmatic way for an embedding host to author tasklists.
 - [`docs/drivers-and-safety.md`](docs/drivers-and-safety.md) — sequential vs
   parallel, `dependsOn`/`touches`/`warmup`, and the safety model.
 - [`docs/cross-repo-dependencies.md`](docs/cross-repo-dependencies.md) — waiting on

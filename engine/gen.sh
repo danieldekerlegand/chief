@@ -36,6 +36,9 @@
 #     (valid JSON · branchName == chief/<filename stem> · no mergedToMain) before
 #     chief calls it generated.
 #   - Nothing is overwritten without --force, and --dry-run writes nothing at all.
+#   - An unknown top-level/phase/item field is an ERROR (--allow-unknown warns
+#     instead), so the contract stays honest as embedding hosts evolve — a
+#     mis-spelled key can never be silently dropped from the emitted tasklist.
 #
 # bash 3.2: no associative arrays, no ${var^^}, no mapfile. jq is the only dependency
 # (already required by the engine).
@@ -49,7 +52,8 @@ usage() {
 chief gen — generate tasklists from a roadmap JSON document.
 
 Usage:
-  chief gen <roadmap.json> [--dry-run] [--force] [--out DIR] [--project NAME]
+  chief gen <roadmap.json> [--dry-run] [--force] [--allow-unknown]
+                           [--out DIR] [--project NAME]
 
   <roadmap.json>   the roadmap contract document ("-" reads stdin):
                    {"phases":[{"name":…,"items":[{"title":…,"description":…,
@@ -59,6 +63,10 @@ Usage:
   -n, --dry-run    emit the tasklists to stdout as NDJSON ({"path":…,"tasklist":…})
                    and write nothing — the review mode for an embedding host
   -f, --force      overwrite an existing tasklist file (default: refuse, write none)
+  -u, --allow-unknown
+                   warn about unknown roadmap fields instead of refusing (default:
+                   an unrecognised top-level/phase/item field is an error, so a
+                   host that mis-spells one is told rather than silently ignored)
   -o, --out DIR    write into DIR instead of the project's tasks dir (numbering is
                    still taken from the project's tasks dir, so a staged batch keeps
                    its band)
@@ -80,12 +88,13 @@ EOF
 die() { echo "chief gen: $*" >&2; exit 1; }
 
 # ── argv ─────────────────────────────────────────────────────────────────────
-roadmap=""; dry=0; force=0; outdir=""; project=""
+roadmap=""; dry=0; force=0; outdir=""; project=""; allow_unknown=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help)     usage; exit 0 ;;
     -n|--dry-run)  dry=1; shift ;;
     -f|--force)    force=1; shift ;;
+    -u|--allow-unknown) allow_unknown=1; shift ;;
     -o|--out)      outdir="${2:-}"; shift 2 ;;
     --out=*)       outdir="${1#*=}"; shift ;;
     --project)     project="${2:-}"; shift 2 ;;
@@ -201,9 +210,48 @@ problems="$(jq -r '
   end
   | .[]
 ' <<<"$ROADMAP_JSON" 2>/dev/null)"
-if [ -n "$problems" ]; then
+
+# ── unknown fields ───────────────────────────────────────────────────────────
+# A field the contract does not name is REPORTED, never silently dropped: a host
+# whose roadmap grew a "touched" or a "dependsOn" key would otherwise watch the
+# generator quietly ignore it and emit a tasklist missing the very thing the
+# roadmap asked for. --allow-unknown downgrades this to a warning, for a host that
+# carries its own metadata alongside the contract fields.
+unknowns="$(jq -r '
+  def unknown($at; $known):
+    if type == "object"
+      then ([keys_unsorted[] | . as $k | select($known | index($k) | not)]) as $u
+        | if ($u|length) == 0 then empty
+          else "\($at): unknown field\(if ($u|length) > 1 then "s" else "" end) "
+               + ($u | map("\"\(.)\"") | join(", "))
+               + " — the contract allows " + ($known | map("\"\(.)\"") | join(", "))
+          end
+    else empty end;
+
+  [ unknown("roadmap"; ["phases"]),
+    ( (.phases? // []) | select(type == "array") | to_entries[]
+      | .key as $pi | .value
+      | unknown("phases[\($pi)]"; ["name", "items"]),
+        ( (.items? // []) | select(type == "array") | to_entries[]
+          | .key as $ii | .value
+          | unknown("phases[\($pi)].items[\($ii)]";
+                    ["title", "description", "scope", "deps", "touches", "iters"]) ) )
+  ] | .[]
+' <<<"$ROADMAP_JSON" 2>/dev/null)"
+if [ -n "$unknowns" ] && [ "$allow_unknown" = 1 ]; then
+  { echo "chief gen: warning — unknown roadmap fields, ignored (--allow-unknown):"
+    printf '%s\n' "$unknowns" | sed 's/^/  - /' ; } >&2
+  unknowns=""
+fi
+
+if [ -n "$problems" ] || [ -n "$unknowns" ]; then
   { echo "chief gen: the roadmap does not match the input contract (docs/roadmap-input.md):"
-    printf '%s\n' "$problems" | sed 's/^/  - /' ; } >&2
+    [ -n "$problems" ] && printf '%s\n' "$problems" | sed 's/^/  - /'
+    if [ -n "$unknowns" ]; then
+      printf '%s\n' "$unknowns" | sed 's/^/  - /'
+      echo "  (pass --allow-unknown to ignore unknown fields instead of failing)"
+    fi
+  } >&2
   exit 2
 fi
 
@@ -252,7 +300,9 @@ PLAN="$(jq -c \
             description: ($desc + (if $scope != "" then " Scope: \($scope)" else "" end)),
             parked:      false,
             # defaults when the roadmap item is silent: no deps, no conflict domain
-            # (free to co-schedule), and the schema's own iteration budget.
+            # (free to co-schedule), and the default iteration budget the schema
+            # itself documents. NOTE: no apostrophes inside this jq program — it is
+            # single-quoted, so one would close the quote (see progress.txt).
             dependsOn:   ([($it.deps // [])[] | trim]),
             touches:     ($it.touches // []),
             iters:       ($it.iters // $defiters),

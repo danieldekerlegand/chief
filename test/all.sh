@@ -44,6 +44,7 @@ run_sh() {
 BASH_SUITE=(
   smoke ratelimit limitstate limitresume limitmonitor pause liveliness monitor teardown reapscope reapenv noworkguard noworkguard-jsononly headless events
   stale-resume conflict-forensics rebase-refusal touches-audit
+  gen
   crossrepo submodule nested-submodule nested-submodule-pointer retry-on-failure per-tasklist-verify retire-dirty-tasklist
   version-bump
 )
