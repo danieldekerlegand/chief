@@ -438,6 +438,37 @@ wt_busy() {
     exit 1 )
 }
 
+# Why would `git rebase` REFUSE to even start? A non-zero rebase exit is NOT by
+# itself a content collision: git also declines outright when the tree carries
+# uncommitted tracked changes, when a previous rebase/merge/cherry-pick was left in
+# progress, or when it will not operate on the repo at all (dubious ownership,
+# permissions). Every one of those leaves ZERO unmerged paths, so `--diff-filter=U`
+# reports nothing and the failure used to be labelled a conflict "with git reported
+# none" — the exact field symptom this exists to kill (three branches strictly AHEAD
+# of main, where a rebase is a no-op, all parked as REBASE-CONFLICT).
+#
+# wt_busy() above answers the same question as a yes/no for the integration path;
+# this one NAMES the cause for a human, and is the merge phase's pre-flight.
+#
+# $1 = repo (or worktree) path. Echoes ONE line naming the cause, or nothing at all
+# when no refusal cause is detectable — an empty answer means "go ahead and rebase".
+rebase_refusal_cause() {
+  ( cd "$1" 2>/dev/null || { echo "the work repo path does not exist or is unreadable"; exit 0; }
+    git rev-parse --git-dir >/dev/null 2>&1 \
+      || { echo "git will not operate on this repo (not a repository, dubious ownership, or permissions) — run \`git status\` in it"; exit 0; }
+    for d in rebase-merge rebase-apply; do
+      [ -e "$(git rev-parse --git-path "$d" 2>/dev/null)" ] || continue
+      echo "a previous rebase was left in progress ($d) — \`git rebase --abort\` clears it"; exit 0
+    done
+    for d in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+      [ -e "$(git rev-parse --git-path "$d" 2>/dev/null)" ] || continue
+      echo "a previous merge/cherry-pick/revert was left in progress ($d) — finish or abort it"; exit 0
+    done
+    [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] \
+      && { echo "the work repo has uncommitted tracked changes — commit or stash them"; exit 0; }
+    exit 0 )
+}
+
 # ITERATION-BOUNDARY integration — the throttled wrapper around integrate_base().
 # Called once between agent iterations (never during one). Same args as
 # integrate_base; always returns 0 — nothing here may end an iteration or a
@@ -1500,19 +1531,53 @@ run_worker() {
       # The fork point, read BEFORE the rebase rewrites the branch onto base — it is
       # what makes "which commits landed on base under this file" answerable in
       # EITHER conflict arm (see conflict_report). One rev-parse on the happy path.
-      local pre_mb rpt
+      local pre_mb rpt refusal rb_out rb_rc=0 conflicted
       pre_mb="$(git -C "$work_repo" merge-base "$branch" "$work_base" 2>/dev/null || echo)"
       # Rebase onto the LATEST base (may have advanced since we branched).
+      #
+      # NOT every failed rebase is a merge conflict. Git also REFUSES to rebase a
+      # dirty or half-operated-on repo, and that refusal used to be reported as a
+      # REBASE-CONFLICT whose conflicted-file list read "git reported none" — a false
+      # positive that parks a perfectly mergeable branch. So: diagnose the knowable
+      # refusals up front, and after a failure let the INDEX decide which arm this is
+      # (≥1 unmerged path = a real content conflict; zero = a refusal).
       live_set "$live" phase=rebasing
-      if ! git -C "$work_repo" rebase "$work_base" >/dev/null 2>&1; then
-        # Forensics FIRST: the unmerged paths live in the index the abort discards.
-        rpt="$SNAP/$name.rebase-conflict.md"
-        conflict_report "$name" "$branch" "$work_repo" "$work_base" "$pre_mb" "REBASE-CONFLICT" "$rpt"
-        rm -f "$SNAP/$name.merge-conflict.md" 2>/dev/null || true
-        git -C "$work_repo" rebase --abort 2>/dev/null || true
-        live_set "$live" phase=rebase-conflict
-        echo "REBASE-CONFLICT see $SNAP_REL/$name.rebase-conflict.md" > "$STATE/$name.status"
-        echo "!! $name rebase conflict onto $work_base${sub:+ in $sub} — left for manual merge; what collided and with whom: $rpt"; exit 0
+      refusal="$(rebase_refusal_cause "$work_repo")"
+      if [ -z "$refusal" ]; then
+        rb_out="$(git -C "$work_repo" rebase "$work_base" 2>&1)" || rb_rc=$?
+        if [ "$rb_rc" != 0 ]; then
+          # Read the index BEFORE the abort discards it — in EITHER arm.
+          conflicted="$(git -C "$work_repo" diff --name-only --diff-filter=U 2>/dev/null)"
+          if [ -n "$conflicted" ]; then
+            # Forensics FIRST: the unmerged paths live in the index the abort discards.
+            rpt="$SNAP/$name.rebase-conflict.md"
+            conflict_report "$name" "$branch" "$work_repo" "$work_base" "$pre_mb" "REBASE-CONFLICT" "$rpt"
+            rm -f "$SNAP/$name.merge-conflict.md" 2>/dev/null || true
+            git -C "$work_repo" rebase --abort 2>/dev/null || true
+            live_set "$live" phase=rebase-conflict
+            echo "REBASE-CONFLICT see $SNAP_REL/$name.rebase-conflict.md" > "$STATE/$name.status"
+            echo "!! $name rebase conflict onto $work_base${sub:+ in $sub} — left for manual merge; what collided and with whom: $rpt"; exit 0
+          fi
+          # Refused (or stopped for a non-content reason). Git's own message is the
+          # most accurate cause there is, so prefer it; then the pre-flight's reading
+          # of the repo; then an honest admission rather than an invented conflict.
+          refusal="$(printf '%s\n' "$rb_out" | sed -e 's/^[[:space:]]*//' -e '/^$/d' \
+                       -e 's/^error: //' -e 's/^fatal: //' | head -3 | tr '\n' ' ' \
+                       | sed -e 's/  */ /g' -e 's/ *$//' | cut -c1-200)"
+          [ -n "$refusal" ] || refusal="$(rebase_refusal_cause "$work_repo")"
+          [ -n "$refusal" ] || refusal="git rebase exited $rb_rc, left no conflicted paths, and printed nothing"
+          git -C "$work_repo" rebase --abort 2>/dev/null || true
+        fi
+      fi
+      if [ -n "$refusal" ]; then
+        # A refusal is an ENVIRONMENT fault, not a collision: nothing merged, nothing
+        # rewritten, $branch still exactly as the agent left it. Stale forensics from a
+        # previous attempt would misdescribe it, so they go.
+        rm -f "$SNAP/$name.rebase-conflict.md" "$SNAP/$name.merge-conflict.md" 2>/dev/null || true
+        live_set "$live" phase=rebase-refused
+        echo "REBASE-REFUSED $refusal" > "$STATE/$name.status"
+        echo "!! $name: git REFUSED to rebase $branch onto $work_base${sub:+ in $sub} — this is NOT a content conflict (no conflicted paths): $refusal"
+        echo "!! $name: nothing was merged and $branch is untouched — fix the cause above, then re-run \`chief run $name\`"; exit 0
       fi
       # Re-verify the REBASED branch against the latest base, IN the work repo. On
       # failure, PERSIST the output to snapshots/<name>.verify-failed.log so the NEXT
@@ -1650,6 +1715,10 @@ attempts_used() { _int "$(cat "$STATE/$1.attempts" 2>/dev/null)"; }
 #   WORKTREE-FAILED  tasklist is wrong, and running the agent again cannot fix any of
 #   BAD-REPO         them — it would just burn tokens against a broken setup.
 #   UNKNOWN
+#   REBASE-REFUSED   git declined to rebase at all (dirty work repo, a leftover
+#                    rebase/merge state, an unreadable repo). No content collided, so
+#                    there is nothing for an agent to integrate — the repo needs a
+#                    human. Retrying would re-refuse for the same reason, forever.
 #
 # INCOMPLETE and EMPTY-NO-WORK are also load-bearing for the SCHEDULER: a genuine stall is
 # TERMINAL, which is what blocks its dependents, while a usage-limit pause is not. Making

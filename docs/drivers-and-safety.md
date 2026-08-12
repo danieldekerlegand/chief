@@ -137,9 +137,20 @@ Two more guards back this up:
   successful merge clears it. Status *values* are unchanged. See
   [`failure-recovery-runbook.md`](failure-recovery-runbook.md) §2.
 
+- **Refusal is not conflict (`REBASE-REFUSED`).** A non-zero `git rebase` is only a
+  *content* collision when git leaves **≥1 unmerged path** behind. Git also refuses
+  outright — a work repo with uncommitted tracked changes, a leftover
+  `rebase-merge`/`rebase-apply`/`MERGE_HEAD`/`CHERRY_PICK_HEAD` state, a repo it will
+  not operate on (dubious ownership) — and those leave **zero** conflicted paths. The
+  merge phase pre-flights those causes before rebasing and, on a failure, lets the
+  index decide the arm: unmerged paths → `REBASE-CONFLICT` (forensics as above);
+  none → `REBASE-REFUSED <cause>`, quoting git's own refusal. A refusal merges
+  nothing and rewrites nothing — the branch is exactly as the agent left it — and it
+  is deliberately **not retryable**: the repo needs a human, not another agent run.
+
 Terminal per-tasklist statuses: `MERGED @<sha>`, `COMPLETE-UNMERGED`, `INCOMPLETE`,
 `EMPTY-NO-WORK`, `WORKTREE-FAILED`, `CHECKOUT-FAILED`, `REBASE-CONFLICT`,
-`VERIFY-FAILED`, `MERGE-CONFLICT`.
+`REBASE-REFUSED`, `VERIFY-FAILED`, `MERGE-CONFLICT`.
 
 ## Interruptions & resume
 
