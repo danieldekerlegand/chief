@@ -452,7 +452,8 @@ render() {
     pid="$(field pid "$f")"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || continue
 
-    local repo base par tool model state staterel tasks wt names label started limitmax retrymax pm
+    local repo base par tool model state staterel tasks wt names label started limitmax retrymax pm \
+          acct acctfile
     repo="$(field repo "$f")";       base="$(field base "$f")"
     par="$(field parallel "$f")";    tool="$(field tool "$f")"
     model="$(field model "$f")"
@@ -461,10 +462,18 @@ render() {
     names="$(field names "$f")";     started="$(field started "$f")"
     limitmax="$(field limitmax "$f")"
     retrymax="$(field retrymax "$f")"
+    # ACCOUNT DESIGNATION (docs/account-credentials.md) — WHICH account this run
+    # spends, never its credentials: the registry carries the operator's label and the
+    # env-file PATH, and the file's values are never written anywhere the monitor reads.
+    acct="$(field accountlabel "$f")"; acctfile="$(field account "$f")"
+    [ -n "$acct" ] || acct="$([ -n "$acctfile" ] && basename "$acctfile")"
     [ -n "$staterel" ] || staterel=".chief/state"
     label="$(basename "$repo")"
     # provider, plus its model when one was selected: "devin · claude-opus-5-high"
     pm="${tool:-claude}"; [ -n "$model" ] && pm="$pm · $model"
+    # An undesignated run says nothing here — the segment appears only when the run
+    # was actually pinned to an account, so "no segment" still reads as "inherited".
+    [ -n "$acct" ] && pm="$pm · acct:$acct"
 
     printf '\n%s%s%s  %s(pid %s · -p%s · %s · %s · →%s)%s\n' \
       "$BOLD" "$label" "$RST" "$DIM" "$pid" "${par:-1}" "$pm" "$(elapsed "${started:-}")" "${base:-main}" "$RST"

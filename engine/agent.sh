@@ -435,8 +435,16 @@ _is_rate_limit() {
 # single quotes stripped. No expansion, no continuation lines: a value is the rest
 # of the line, verbatim.
 _apply_account_env() {
-  local file="$1" line key val n=0
-  [ -r "$file" ] || { echo "ERROR: unreadable account env file: $file" >&2; return 1; }
+  local file="$1" line key val n=0 xt=0
+  # NON-LEAKAGE, first line: this is the ONLY place in chief that holds a credential
+  # VALUE in a variable, so it is also the only place a shell TRACE could print one.
+  # An operator debugging a run with `bash -x` (or a host that sets SHELLOPTS) would
+  # otherwise get every `export KEY=VALUE` echoed to stderr — which agent.sh tees
+  # straight into the per-iteration log `chief logs` serves. Trace off for the body,
+  # restored exactly as we found it.
+  case "$-" in *x*) xt=1; set +x ;; esac
+  [ -r "$file" ] || { echo "ERROR: unreadable account env file: $file" >&2
+                      [ "$xt" = 1 ] && set -x; return 1; }
   # Own redirect: the caller hands the provider its prompt on stdin, and reading the
   # env file from there instead would swallow it.
   while IFS= read -r line || [ -n "$line" ]; do
@@ -452,7 +460,13 @@ _apply_account_env() {
     export "$key=$val"
     n=$(( n + 1 ))
   done < "$file"
-  [ "$n" -gt 0 ] || { echo "ERROR: account env file defines no KEY=VALUE pairs: $file" >&2; return 1; }
+  [ "$n" -gt 0 ] || { echo "ERROR: account env file defines no KEY=VALUE pairs: $file" >&2
+                      [ "$xt" = 1 ] && set -x; return 1; }
+  # Reported, never exposed: the COUNT of variables applied and the file's path say
+  # the designation took effect; the names and values stay in this subshell.
+  [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] account env applied: %s var(s) from %s\n' \
+    "$n" "$file" >&2
+  [ "$xt" = 1 ] && set -x
   return 0
 }
 
@@ -535,8 +549,13 @@ while :; do
   # CHIEF_VERBOSE traces the exact provider invocation into the log — which provider,
   # which model, and the composed prompt it's being handed — so a misconfigured
   # provider/model shows up plainly instead of as a silent stall.
-  [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] provider=%s%s · prompt=%s (%s lines)\n' \
-    "$PROVIDER" "${MODEL:+ model=$MODEL}" "$PROMPT_FILE" \
+  # The account DESIGNATION is traced with it — the label and the env-file path, so a
+  # run pinned to the wrong account is as visible as a misconfigured model. Values are
+  # never traced (see _apply_account_env); an undesignated run prints nothing extra.
+  [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] provider=%s%s%s · prompt=%s (%s lines)\n' \
+    "$PROVIDER" "${MODEL:+ model=$MODEL}" \
+    "${CHIEF_ACCOUNT_ENV_FILE:+ account=${CHIEF_ACCOUNT_LABEL:-$(basename "$CHIEF_ACCOUNT_ENV_FILE")} env=$CHIEF_ACCOUNT_ENV_FILE}" \
+    "$PROMPT_FILE" \
     "$(wc -l < "$PROMPT_FILE" 2>/dev/null | tr -d ' ')" >&2
   _beat_start
   OUTPUT=$(_run_provider < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
