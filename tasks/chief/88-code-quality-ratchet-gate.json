@@ -39,7 +39,7 @@
         "Blocking output names the offending metric, its base value, its branch value, the tolerance, and the files that contributed most — an operator must be able to act on the message without rerunning anything",
         "The gate is skippable exactly like the existing suite (`CHIEF_VERIFY_TESTS=0`-style env, documented) so iterating locally is not punished, and `NO_VERIFY=1` continues to bypass the whole hook"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
