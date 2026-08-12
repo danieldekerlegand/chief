@@ -209,6 +209,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | Command | Purpose |
 | --- | --- |
 | `chief init` | Scaffold `.chief/` + `tasks/chief/` in the current repo. |
+| `chief gen <roadmap.json>` | Generate one schema-valid `tasks/chief/NN-slug.json` per roadmap item — the programmatic way to author tasklists (`-n` emits NDJSON and writes nothing; input contract: [`docs/roadmap-input.md`](docs/roadmap-input.md)). |
 | `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = concurrency (default 1). |
 | `chief run --provider P --model M` | Select Claude (default), Devin, OpenCode, or Amp (shortcuts: `--claude`, `--devin`, `--opencode`, `--amp`) and optionally override its model. Amp has no model selector, so `--model` is refused for it. |
 | `chief run --local` | Cost-avoidance preset: every agent turn on a LOCAL/self-hosted endpoint via OpenCode — zero API cost, materially lower coding quality, and an error rather than a paid fallback when unconfigured ([`docs/local-inference-preset.md`](docs/local-inference-preset.md)). |
@@ -289,7 +290,7 @@ tree at once.
 
 ## Status
 
-**v0.8.0** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.16** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

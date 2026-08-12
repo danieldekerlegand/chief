@@ -46,6 +46,7 @@ pay for what you changed. A tasklist may override it with its own `"verify":[...
 |---|---|
 | Shell engine (`bin/chief`, `engine/*.sh`, `install.sh`, `test/*.sh`) | `bash -n` clean + `shellcheck -S error` clean; behavioral core `test/{smoke,ratelimit,noworkguard}.sh` green |
 | Engine version discipline | editing `bin/`/`engine/`/`install.sh` **must** bump `VERSION` (`test/version-bump.sh`) |
+| Docs vs engine (`README.md`, `VERSION`, `bin/chief`) | README's bold `**vX.Y.Z**` == `VERSION` and its command table covers every `bin/chief` subcommand (`test/doc-sync.sh`) |
 | Tasklists (`tasks/chief/*.json`) | valid JSON (`jq -e .`); `branchName == chief/NN-slug`; `mergedToMain:false` until merged |
 
 Notes: `shellcheck` is enforced in CI (`.github/workflows/ci.yml`) and skipped locally if absent —
