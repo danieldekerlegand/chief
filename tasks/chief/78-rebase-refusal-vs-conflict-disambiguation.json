@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "fix",
   "branchName": "chief/78-rebase-refusal-vs-conflict-disambiguation",
-  "description": "The merge phase currently treats ANY non-zero `git rebase` exit as a REBASE-CONFLICT: `engine/driver.sh` runs the rebase, and on failure captures `git diff --name-only --diff-filter=U` and aborts (the ~L346 `rebase_or_note` path). But a rebase can exit non-zero for reasons that are NOT a content collision \u2014 a dirty/locked worktree, a git refusal ('cannot rebase: you have unstaged changes'), a leftover `rebase-merge`/`MERGE_HEAD` state, or a config/ownership error \u2014 in which cases `--diff-filter=U` reports ZERO conflicted files. This was observed in the field: three talos branches strictly ahead of main (main an ancestor, so a rebase is a genuine no-op) were all labelled REBASE-CONFLICT with 'git reported none' conflicted files, blocking merges that had no real conflict. This tasklist teaches the merge phase to distinguish a REAL content conflict (\u22651 `--diff-filter=U` path) from a rebase that was REFUSED for another reason, and to report/handle each correctly \u2014 so a dirty or locked worktree does not masquerade as a merge conflict. Scope: `engine/driver.sh` (the rebase/merge phase) + its test.",
+  "description": "The merge phase currently treats ANY non-zero `git rebase` exit as a REBASE-CONFLICT: `engine/driver.sh` runs the rebase, and on failure captures `git diff --name-only --diff-filter=U` and aborts (the ~L346 `rebase_or_note` path). But a rebase can exit non-zero for reasons that are NOT a content collision — a dirty/locked worktree, a git refusal ('cannot rebase: you have unstaged changes'), a leftover `rebase-merge`/`MERGE_HEAD` state, or a config/ownership error — in which cases `--diff-filter=U` reports ZERO conflicted files. This was observed in the field: three talos branches strictly ahead of main (main an ancestor, so a rebase is a genuine no-op) were all labelled REBASE-CONFLICT with 'git reported none' conflicted files, blocking merges that had no real conflict. This tasklist teaches the merge phase to distinguish a REAL content conflict (≥1 `--diff-filter=U` path) from a rebase that was REFUSED for another reason, and to report/handle each correctly — so a dirty or locked worktree does not masquerade as a merge conflict. Scope: `engine/driver.sh` (the rebase/merge phase) + its test.",
   "parked": false,
   "dependsOn": [],
   "touches": [
@@ -14,15 +14,15 @@
     {
       "id": "US-1",
       "title": "Distinguish a refused rebase from a real content conflict",
-      "description": "At the rebase failure point in `engine/driver.sh`, a non-zero exit with zero `--diff-filter=U` paths is NOT a content conflict \u2014 it is a refusal (dirty/locked worktree, leftover rebase/merge state, ownership/config). Classify the two and label them distinctly.",
+      "description": "At the rebase failure point in `engine/driver.sh`, a non-zero exit with zero `--diff-filter=U` paths is NOT a content conflict — it is a refusal (dirty/locked worktree, leftover rebase/merge state, ownership/config). Classify the two and label them distinctly.",
       "acceptanceCriteria": [
-        "When `git rebase <base>` exits non-zero AND `git diff --name-only --diff-filter=U` lists \u22651 path, the outcome is still reported as REBASE-CONFLICT exactly as today (no regression to the real-conflict path)",
+        "When `git rebase <base>` exits non-zero AND `git diff --name-only --diff-filter=U` lists ≥1 path, the outcome is still reported as REBASE-CONFLICT exactly as today (no regression to the real-conflict path)",
         "When it exits non-zero with ZERO conflicted paths, the outcome is reported as a distinct state (e.g. REBASE-REFUSED / not a content conflict) whose message names the likely cause (unstaged/uncommitted changes, a leftover `rebase-merge`/`rebase-apply`/`MERGE_HEAD`/`CHERRY_PICK_HEAD` state, or dubious-ownership) rather than 'conflict with git reported none'",
-        "The rebase is still aborted cleanly and the branch is left exactly as the agent left it (attached, un-rebased) in BOTH cases \u2014 this story changes the classification + message, not the safety behavior",
+        "The rebase is still aborted cleanly and the branch is left exactly as the agent left it (attached, un-rebased) in BOTH cases — this story changes the classification + message, not the safety behavior",
         "A pre-flight check detects the obvious refusal causes (a dirty worktree, or a leftover rebase/merge state dir under the git-dir) before attempting the rebase, so the common case is diagnosed rather than inferred from a bare non-zero exit",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -32,9 +32,9 @@
       "acceptanceCriteria": [
         "For a refused (non-content) rebase, the written operator note states it was a refusal and names the cause + the fix (e.g. clean/commit the worktree, clear the leftover rebase state), instead of the content-conflict resolution steps",
         "For a real content conflict, the existing snapshot content (conflicted files, colliders, 'resolve inside the rebase' guidance) is unchanged",
-        "A strictly-ahead branch (base is an ancestor \u2192 rebase is a no-op) is never reported as either a conflict or a refusal \u2014 it rebases cleanly and proceeds to merge (this is the exact field case that motivated the tasklist)"
+        "A strictly-ahead branch (base is an ancestor → rebase is a no-op) is never reported as either a conflict or a refusal — it rebases cleanly and proceeds to merge (this is the exact field case that motivated the tasklist)"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -46,7 +46,7 @@
         "The test is hermetic (scripted fake provider on PATH, temp `CHIEF_*` prefixes) and joins the behavioral subset the verify hook + CI run",
         "Editing `engine/` bumps `VERSION` (`test/version-bump.sh`); existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
