@@ -47,7 +47,7 @@
         "The test is hermetic (scripted fake provider on PATH, temp `CHIEF_*` prefixes) and joins the behavioral subset the verify hook + CI run",
         "Editing `engine/`/`bin/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
