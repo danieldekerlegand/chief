@@ -46,7 +46,7 @@
         "A hermetic test runs the generator on a small fixture roadmap and asserts the emitted files are schema-valid, numbered in a non-colliding band, carry correct `branchName`/`dependsOn`, and round-trip through `jq`",
         "Editing `bin/`/`engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
