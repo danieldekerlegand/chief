@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "feature",
   "branchName": "chief/84-run-inside-a-container",
-  "description": "An embedded chief run inside a container or a Cuneiform Riju workspace must behave the same as a host run \u2014 but the engine makes assumptions that can break in a container: the `~/.chief` prefix (HOME may be unset, minimal, or read-only), worktree creation under `~/.chief/worktrees`, git identity, git 'dubious ownership' on a bind-mounted repo owned by another uid, and the reap/run-registry keys inside a foreign PID namespace. This tasklist makes those assumptions hold \u2014 or degrade cleanly \u2014 inside a container, so an embedding host can run `chief` in a per-language Riju container and get identical implement\u2192verify\u2192merge behavior. Builds on 80's headless contract. Scope: `engine/driver.sh` + `engine/lib.sh` (prefix/worktree/git resolution), `engine/reap.sh` (registry-key degradation), `docs/`.",
+  "description": "An embedded chief run inside a container or a Cuneiform Riju workspace must behave the same as a host run — but the engine makes assumptions that can break in a container: the `~/.chief` prefix (HOME may be unset, minimal, or read-only), worktree creation under `~/.chief/worktrees`, git identity, git 'dubious ownership' on a bind-mounted repo owned by another uid, and the reap/run-registry keys inside a foreign PID namespace. This tasklist makes those assumptions hold — or degrade cleanly — inside a container, so an embedding host can run `chief` in a per-language Riju container and get identical implement→verify→merge behavior. Builds on 80's headless contract. Scope: `engine/driver.sh` + `engine/lib.sh` (prefix/worktree/git resolution), `engine/reap.sh` (registry-key degradation), `docs/`.",
   "parked": false,
   "dependsOn": [
     "80-headless-programmatic-invocation"
@@ -18,11 +18,11 @@
       "title": "Container-safe state prefix and worktrees",
       "description": "The state prefix and worktree root must resolve inside a container where HOME is unset/minimal/read-only or the repo is bind-mounted.",
       "acceptanceCriteria": [
-        "The state prefix (`CHIEF_PREFIX`/`CHIEF_RUNS`, default `~/.chief`) resolves correctly when HOME is unset or minimal \u2014 it is configurable via env with a documented container default, and a missing HOME does not crash the run",
-        "Worktree creation (default `~/.chief/worktrees/\u2026`) works against a bind-mounted / container repo and is relocatable via env, so the worktree isolation the driver relies on holds inside a container",
+        "The state prefix (`CHIEF_PREFIX`/`CHIEF_RUNS`, default `~/.chief`) resolves correctly when HOME is unset or minimal — it is configurable via env with a documented container default, and a missing HOME does not crash the run",
+        "Worktree creation (default `~/.chief/worktrees/…`) works against a bind-mounted / container repo and is relocatable via env, so the worktree isolation the driver relies on holds inside a container",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -30,9 +30,9 @@
       "title": "git assumptions hold under container ownership/identity",
       "description": "git must not refuse or prompt when the repo is owned by a different uid and no interactive identity exists.",
       "acceptanceCriteria": [
-        "git operations succeed for a repo owned by a uid different from the container user \u2014 the 'detected dubious ownership' case is handled or documented (e.g. a supported `safe.directory` setup)",
+        "git operations succeed for a repo owned by a uid different from the container user — the 'detected dubious ownership' case is handled or documented (e.g. a supported `safe.directory` setup)",
         "A run does not require an interactive git identity: a default committer identity is available or documented for the container case, so commits/merges do not fail for want of `user.name`/`user.email`",
-        "The reap/run-registry keys (cwd / argv `--chief-run=` / inherited `CHIEF_RUN_ID`) still function inside a container's PID namespace, or degrade to nothing rather than mis-reaping \u2014 consistent with `engine/reap.sh`'s existing degradation model"
+        "The reap/run-registry keys (cwd / argv `--chief-run=` / inherited `CHIEF_RUN_ID`) still function inside a container's PID namespace, or degrade to nothing rather than mis-reaping — consistent with `engine/reap.sh`'s existing degradation model"
       ],
       "passes": false,
       "notes": ""
@@ -43,7 +43,7 @@
       "description": "Document what an embedding host must set, and test the container-shaped conditions that need no real container.",
       "acceptanceCriteria": [
         "`docs/` gains a \"Running chief in a container / Riju workspace\" section: the env to set (state prefix, worktree root, git `safe.directory`, committer identity), the guarantees, and what degrades",
-        "A hermetic test exercises the container-shaped conditions without a real container: HOME unset \u2192 prefix resolves via env; a run against a repo dir with the container-config env; the registry keys degrade cleanly rather than erroring or mis-matching",
+        "A hermetic test exercises the container-shaped conditions without a real container: HOME unset → prefix resolves via env; a run against a repo dir with the container-config env; the registry keys degrade cleanly rather than erroring or mis-matching",
         "Editing `engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
       "passes": false,
