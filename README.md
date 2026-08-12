@@ -209,6 +209,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief init` | Scaffold `.chief/` + `tasks/chief/` in the current repo. |
 | `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = concurrency (default 1). |
 | `chief run --provider P --model M` | Select Claude (default), Devin, or OpenCode and optionally override its model. |
+| `chief run --local` | Cost-avoidance preset: every agent turn on a LOCAL/self-hosted endpoint via OpenCode — zero API cost, materially lower coding quality, and an error rather than a paid fallback when unconfigured ([`docs/local-inference-preset.md`](docs/local-inference-preset.md)). |
 | `chief run -n` | Dry run: print the schedule waves and exit (no git, no agents). |
 | `chief run --no-merge` | Complete branches but don't merge into the base. |
 | `chief run --headless` | Non-interactive embedding mode: no colour, a `chief: run-id=…` line, a JSON outcome summary and a documented exit-code table ([`docs/headless-invocation.md`](docs/headless-invocation.md)). |
@@ -241,6 +242,9 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - [`docs/events.md`](docs/events.md) — the machine-readable event stream: the NDJSON
   path, the versioned line schema, the event catalogue and `chief events`. The
   contract chief-cloud and embedding hosts subscribe to.
+- [`docs/local-inference-preset.md`](docs/local-inference-preset.md) — the
+  cost-avoidance mode: `chief run --local` routes every agent turn through a
+  LOCAL/self-hosted endpoint at zero API cost, and what you give up for it.
 - [`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md) — why monitoring is
   CLI-only here and a desktop GUI belongs to chief-cloud.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.
