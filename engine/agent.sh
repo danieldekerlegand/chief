@@ -258,6 +258,63 @@ _emit_story_events() {
   PASSED_IDS="$now"
   return 0
 }
+# --- USAGE / COST OBSERVATION (the event stream's `usage` block) ---------------
+# OBSERVATION ONLY. Chief never asks a provider what a turn cost — it reads what the
+# provider already printed on the stdout it was going to capture anyway. No API call,
+# no polling loop, no second invocation. When a provider prints nothing usage-shaped
+# (which is `claude --print` today), this yields nothing and the event's `usage` is
+# null: a nullable, provider-dependent field, exactly as docs/events.md promises.
+#
+# _parse_usage OUTPUT -> ' key=value …' event_emit keys ('' when nothing was found).
+# Two shapes, most trustworthy first:
+#   1. A STRUCTURED result object — the `{"type":"result","total_cost_usd":…,
+#      "usage":{"input_tokens":…}}` line that `claude --output-format json` (and
+#      anything mimicking it) prints. jq reads it, so a missing key is simply absent.
+#   2. A PLAIN-TEXT summary — "Total cost: $0.0421", "1234 input tokens". Deliberately
+#      narrow: a scrape that guesses is worse than a null, because a cost ledger
+#      cannot tell an invented number from a real one.
+_parse_usage() {
+  local out="$1" line got=""
+  command -v jq >/dev/null 2>&1 || return 0
+  line="$(printf '%s\n' "$out" \
+    | grep -E '"(total_cost_usd|cost_usd|input_tokens|output_tokens)"[[:space:]]*:' \
+    | tail -1)"
+  if [ -n "$line" ]; then
+    got="$(printf '%s' "$line" | jq -r '
+        def kv($k; $v): if ($v|type) == "number" then "\($k)=\($v)" else empty end;
+        [ kv("in_tokens";    (.usage.input_tokens  // .input_tokens)),
+          kv("out_tokens";   (.usage.output_tokens // .output_tokens)),
+          kv("total_tokens"; (.usage.total_tokens  // .total_tokens)),
+          kv("cost_usd";     (.total_cost_usd // .cost_usd)),
+          kv("duration_ms";  .duration_ms),
+          kv("turns";        .num_turns) ] | join(" ")' 2>/dev/null || echo "")"
+  fi
+  if [ -z "$got" ]; then
+    local cost tin tout
+    cost="$(printf '%s\n' "$out" | grep -oiE 'cost:?[[:space:]]*\$?[0-9]+\.[0-9]+' \
+      | tail -1 | grep -oE '[0-9]+\.[0-9]+' || echo "")"
+    tin="$(printf '%s\n' "$out"  | grep -oiE '[0-9]+[[:space:]]+input[[:space:]]+tokens' \
+      | tail -1 | grep -oE '[0-9]+' || echo "")"
+    tout="$(printf '%s\n' "$out" | grep -oiE '[0-9]+[[:space:]]+output[[:space:]]+tokens' \
+      | tail -1 | grep -oE '[0-9]+' || echo "")"
+    got="${cost:+cost_usd=$cost }${tin:+in_tokens=$tin }${tout:+out_tokens=$tout}"
+  fi
+  printf '%s' "$got"
+  return 0
+}
+# _emit_turn_event ITER — one `agent.turn` per provider turn that returned, emitted
+# at the same point the loop already writes the post-turn live_set. It is what carries
+# the per-turn usage figures (null when the provider printed none), so a host can keep
+# a spend ledger without re-running or re-parsing anything. `model` comes from the
+# engine's own configuration, not a scrape, so it is populated whenever one is set.
+_emit_turn_event() {
+  local u; u="$(_parse_usage "${OUTPUT:-}")"
+  # shellcheck disable=SC2086  # $u is a deliberate word-split list of key=value args
+  event_emit agent.turn name="${CHIEF_TASKLIST:-}" state=running \
+    detail="iteration ${1:-?} — $(_passes)/$(_total) passing" \
+    ${MODEL:+model=$MODEL} $u
+  return 0
+}
 LIVE_BEAT_SECONDS="${LIVE_BEAT_SECONDS:-15}"
 # A `claude --print` turn blocks this shell for MINUTES, so without a ticker the
 # heartbeat would freeze on every healthy turn and the staleness signal would be
@@ -389,6 +446,7 @@ while :; do
   _beat_stop
   live_set "$LIVE" phase=agent-turn story="$(_story)" passing="$(_passes)" total="$(_total)"
   _emit_story_events "$i"
+  _emit_turn_event "$i"
 
   # Completion signal — the token MUST be on a line by itself (optionally fenced in
   # backticks). Matching it ANYWHERE let an agent that merely QUOTED the token while
@@ -418,6 +476,13 @@ while :; do
       # hour must read as 'paused until <eta>', not as the hang it looks like.
       live_set "$LIVE" phase=rate-limited-waiting waits="$waits" \
         retry_at="$(( $(date +%s) + secs ))"
+      # The same pause, published to the event stream: a subscriber must be able to
+      # tell "asleep on a usage limit until <eta>" from "hung" WITHOUT diffing the
+      # live record, and the limit block is the quota half of chief-cloud's ledger.
+      event_emit tasklist.rate-limit-wait name="${CHIEF_TASKLIST:-}" state=rate-limited \
+        limit_hit=1 retry_at="$(( $(date +%s) + secs ))" waits="$waits" \
+        max_waits="$RATE_LIMIT_MAX_WAITS" \
+        detail="sleeping ${secs}s — wait $waits/$RATE_LIMIT_MAX_WAITS"
       sleep "$secs"
       i=$((i-1))   # the blocked turn doesn't consume the budget
       continue

@@ -1712,7 +1712,12 @@ run_worker() {
       rm -f "$STATE/$name.retry-at"
       [ -n "$retry_at" ] && printf '%s' "$retry_at" > "$STATE/$name.retry-at"
       live_set "$live" phase=rate-limited retry_at="$(_int "$retry_at")"
+      # The limit block projects the accounting that ALREADY happened here: the ETA
+      # agent.sh parsed out of the provider's own message, and the wait count its
+      # live record carries. Nothing is asked of the provider to fill it in — this is
+      # the quota half of the data source chief-cloud's cost ledger persists.
       event_emit tasklist.rate-limited name="$name" state=rate-limited \
+        limit_hit=1 retry_at="$retry_at" waits="$(live_get "$live" waits)" \
         detail="usage limit — branch kept${retry_at:+, reset ETA $retry_at}"
       echo "RATE-LIMITED $(( total - remaining ))/$total" > "$STATE/$name.status"
       echo "!! $name PAUSED on a Claude usage/session limit — branch $branch kept intact; resumes from its passes state${retry_at:+ (reset ETA $retry_at)}"
@@ -2064,7 +2069,8 @@ limit_resume() {
     printf '%s' "$(( $(retries_used "$n") + 1 ))" > "$STATE/$n.retries"
     rm -f "$STATE/$n.retry-at"
     live_set "$(live_of "$n")" phase=re-dispatch retry_at=0
-    event_emit tasklist.re-dispatch name="$n" state=pending \
+    event_emit tasklist.re-dispatch name="$n" state=pending limit_hit=1 \
+      waits="$(live_get "$(live_of "$n")" waits)" \
       detail="usage-limit window elapsed — retry $(retries_used "$n")/$RATE_LIMIT_REDISPATCH_MAX"
     set_state "$n" pending
     echo "  ↻ re-dispatching $n after the usage-limit window (retry $(retries_used "$n")/$RATE_LIMIT_REDISPATCH_MAX)"

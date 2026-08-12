@@ -30,6 +30,15 @@
 #     `ts` plus (name, event) is what a consumer orders on.
 #   • Versioned: every line carries `v` and `schema`. Fields are only ever ADDED within
 #     a major version, so a consumer must ignore keys it does not know.
+#   • OBSERVATION-ONLY usage/cost/limit. Two optional objects — `usage` (tokens, cost,
+#     duration for the turn) and `limit` (the usage-limit accounting the engine already
+#     does) — are populated ONLY from signals the engine ALREADY has in hand: a
+#     provider's own stdout, and the rate-limit bookkeeping in agent.sh/driver.sh.
+#     Nothing here calls a provider API, polls a quota endpoint, or infers a number.
+#     Every field is NULLABLE and PROVIDER-DEPENDENT: `claude --print` prints no usage
+#     figures today, so on that provider `usage` is simply null and the line stays
+#     schema-valid. A consumer (chief-cloud's spend/quota ledger) must treat null as
+#     "not available here", never as zero.
 #   • Bash 3.2 only: no associative arrays, no `declare -A`, no ${var^^}.
 
 # The schema version stamped on every line. Bump `v` (and the `schema` string with it)
@@ -44,6 +53,16 @@ CHIEF_EVENT_SCHEMA='chief.event/1'
 # subscribes to, and its id is already stamped in <pid>.run as `runid=`.
 events_file_for() { printf '%s/%s.events.jsonl' "${1:-}" "${2:-}"; }
 
+# _event_num VALUE -> VALUE when it is a bare number, else '' (= null downstream).
+# Usage figures are SCRAPED from provider output, so this is the gate that keeps a
+# scrape miss ("n/a", "$1.20", an error string) out of the numeric fields.
+_event_num() {
+  case "${1:-}" in
+    ''|*[!0-9.]*) printf '' ;;
+    *)            printf '%s' "$1" ;;
+  esac
+}
+
 # event_emit EVENT [KEY=VALUE …] — append one event. Always returns 0.
 #
 # Recognised keys (anything else is ignored, so a caller can pass a key a newer
@@ -53,6 +72,15 @@ events_file_for() { printf '%s/%s.events.jsonl' "${1:-}" "${2:-}"; }
 #   state   the coarse state it lands in    (scheduler word, or the run outcome)
 #   detail  free text for a HUMAN reading the stream — a sha, a git refusal, a
 #           reason. Nullable and NOT part of the machine contract: never parse it.
+#
+# Usage keys (folded into the `usage` object; omitted/empty -> that field is null,
+# and an all-null object is emitted as `usage: null` rather than a hollow shell):
+#   in_tokens · out_tokens · total_tokens · cost_usd · duration_ms · turns · model
+# Limit keys (folded into the `limit` object, same all-null rule):
+#   limit_hit (1/0) · retry_at (epoch) · waits · max_waits
+# Numeric values are sanitised here: anything that is not digits-and-dots is dropped
+# to null, so a provider that prints "unknown" can never put a string where a
+# consumer's ledger expects a number.
 event_emit() {
   local f="${CHIEF_EVENTS_FILE:-}" ev="${1:-}"
   [ -n "$f" ] && [ -n "$ev" ] || return 0
@@ -60,6 +88,8 @@ event_emit() {
   shift
   local kv k v dir line
   local e_name="" e_story="" e_state="" e_detail=""
+  local u_in="" u_out="" u_total="" u_cost="" u_dur="" u_turns="" u_model=""
+  local l_hit="" l_retry="" l_waits="" l_max=""
   for kv in "$@"; do
     k="${kv%%=*}"; v="${kv#*=}"
     case "$k" in
@@ -67,6 +97,17 @@ event_emit() {
       story)  e_story="$v" ;;
       state)  e_state="$v" ;;
       detail) e_detail="$v" ;;
+      in_tokens)    u_in="$(_event_num "$v")" ;;
+      out_tokens)   u_out="$(_event_num "$v")" ;;
+      total_tokens) u_total="$(_event_num "$v")" ;;
+      cost_usd)     u_cost="$(_event_num "$v")" ;;
+      duration_ms)  u_dur="$(_event_num "$v")" ;;
+      turns)        u_turns="$(_event_num "$v")" ;;
+      model)        u_model="$(printf '%s' "$v" | tr -d '"\\$`' | tr '\n\r\t' '   ' | cut -c1-80)" ;;
+      limit_hit)    l_hit="$v" ;;
+      retry_at)     l_retry="$(_event_num "$v")" ;;
+      waits)        l_waits="$(_event_num "$v")" ;;
+      max_waits)    l_max="$(_event_num "$v")" ;;
       *)      ;;
     esac
   done
@@ -76,17 +117,35 @@ event_emit() {
   # survives either way (jq escapes it), but a bounded one-line value keeps the
   # stream readable and the append inside the atomic-write size.
   e_detail="$(printf '%s' "$e_detail" | tr '\n\r\t' '   ' | cut -c1-300)"
+  # `usage`/`limit` collapse to null when NOTHING in them is known — an all-null
+  # object would read as "the provider reported zeros", which is a different claim.
   line="$(jq -nc \
       --argjson v "$CHIEF_EVENT_V" --arg schema "$CHIEF_EVENT_SCHEMA" \
       --argjson ts "$(date +%s)" \
       --arg runId "${CHIEF_RUN_ID:-}" --arg repo "${CHIEF_EVENT_REPO:-}" \
       --arg event "$ev" --arg name "$e_name" --arg story "$e_story" \
       --arg state "$e_state" --arg detail "$e_detail" \
-      '{v:$v, schema:$schema, ts:$ts, runId:$runId, repo:$repo, event:$event,
-        name:   (if $name   == "" then null else $name   end),
-        story:  (if $story  == "" then null else $story  end),
-        state:  (if $state  == "" then null else $state  end),
-        detail: (if $detail == "" then null else $detail end)}' 2>/dev/null)" || return 0
+      --arg uin "$u_in" --arg uout "$u_out" --arg utot "$u_total" \
+      --arg ucost "$u_cost" --arg udur "$u_dur" --arg uturns "$u_turns" \
+      --arg umodel "$u_model" \
+      --arg lhit "$l_hit" --arg lretry "$l_retry" --arg lwaits "$l_waits" \
+      --arg lmax "$l_max" \
+      'def num($s): if $s == "" then null else ($s|tonumber? // null) end;
+       def str($s): if $s == "" then null else $s end;
+       def obj($o): if ([$o[] | select(. != null)] | length) == 0 then null else $o end;
+       {v:$v, schema:$schema, ts:$ts, runId:$runId, repo:$repo, event:$event,
+        name:   str($name),
+        story:  str($story),
+        state:  str($state),
+        detail: str($detail),
+        usage:  obj({input_tokens:  num($uin),   output_tokens: num($uout),
+                     total_tokens:  num($utot),  cost_usd:      num($ucost),
+                     duration_ms:   num($udur),  turns:         num($uturns),
+                     model:         str($umodel)}),
+        limit:  obj({hit:     (if $lhit == "" then null
+                               else ($lhit == "1" or $lhit == "true") end),
+                     retry_at: num($lretry), waits: num($lwaits),
+                     max_waits: num($lmax)})}' 2>/dev/null)" || return 0
   [ -n "$line" ] || return 0
   printf '%s\n' "$line" >> "$f" 2>/dev/null || true
   return 0

@@ -98,6 +98,8 @@ Every line is an independently valid JSON object:
 | `story` | string \| null | the user-story id; non-null only on `story.passed` |
 | `state` | string \| null | the coarse state it lands in — the same vocabulary `chief ps` shows |
 | `detail` | string \| null | **free text for a human.** Not part of the machine contract — never parse it |
+| `usage` | object \| null | tokens / cost / duration for the turn, when the provider printed them — see [Usage, cost and limit](#usage-cost-and-limit-the-nullable-provider-dependent-block) |
+| `limit` | object \| null | the usage-limit accounting behind a rate-limit event — same section |
 
 `detail` is bounded to a single line of 300 characters, and every value is
 jq-encoded, so a git error or a story title can never break the framing.
@@ -132,9 +134,10 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `tasklist.checkout-failed` | `failed` | the branch could not be checked out for the merge phase |
 | `tasklist.no-work` | `failed` | the false-complete guard fired: COMPLETE with no commits |
 | `tasklist.incomplete` | `failed` | the iteration budget ran out with stories still unpassed |
-| `tasklist.rate-limited` | `rate-limited` | a provider usage limit paused it; branch kept, `detail` carries the reset ETA when known |
+| `tasklist.rate-limited` | `rate-limited` | a provider usage limit paused it; branch kept, `detail` carries the reset ETA when known — carries `limit` |
+| `tasklist.rate-limit-wait` | `rate-limited` | the agent loop hit a limit mid-turn and is **sleeping** until the window reopens, then retrying in place — carries `limit` |
 | `tasklist.paused` | `paused` | an operator pause (`chief pause`) drained it; branch + worktree kept |
-| `tasklist.re-dispatch` | `pending` | the usage-limit window elapsed and it is queued again |
+| `tasklist.re-dispatch` | `pending` | the usage-limit window elapsed and it is queued again — carries `limit` |
 
 ### Story scope (`name` + `story`)
 
@@ -145,6 +148,77 @@ Cross-check liveness against `chief ps` / the run file's pid.
 `story.passed` fires once per story per run; a RESUME does not re-announce stories
 that passed in an earlier run. That makes **complete-vs-incomplete work** live: count
 `story.passed` for a `name` against the tasklist's story total.
+
+### Turn scope (`name`, `story` null)
+
+| `event` | `state` | Emitted when |
+|---|---|---|
+| `agent.turn` | `running` | a provider turn returned — one per iteration, emitted right after the turn's `story.passed` events. This is the line that carries `usage` |
+
+A turn is the unit a spend ledger sums over, which is why it is its own event rather
+than a field on `story.passed`: a turn that lands no story still costs money, and a
+turn that lands two must not be double-counted.
+
+## Usage, cost and limit: the nullable, provider-dependent block
+
+Two optional objects ride on the lines above. **Both are observation-only.** Chief
+never asks a provider what a turn cost, never polls a quota endpoint, and never
+infers a figure: it reports what the provider already printed on the stdout it was
+capturing anyway, plus the rate-limit bookkeeping the engine already does to decide
+when to sleep and re-dispatch. If the signal is not there, the field is `null`.
+
+**This block is the runner-side data source for chief-cloud's
+`82-run-history-analytics-and-cost-persistence`** — the spend/quota ledger persists
+these fields; chief does not persist, aggregate, or bill anything itself.
+
+### `usage` — on `agent.turn`
+
+```json
+{"event":"agent.turn","name":"auth","usage":{"input_tokens":1200,"output_tokens":340,
+ "total_tokens":null,"cost_usd":0.0421,"duration_ms":18324,"turns":1,
+ "model":"claude-opus-5"},"limit":null}
+```
+
+| Field | Type | Source |
+|---|---|---|
+| `input_tokens` | int \| null | the provider's own printed usage figures |
+| `output_tokens` | int \| null | 〃 |
+| `total_tokens` | int \| null | 〃 |
+| `cost_usd` | number \| null | 〃 (`total_cost_usd` / `cost_usd`, or a `Total cost: $…` line) |
+| `duration_ms` | int \| null | 〃 |
+| `turns` | int \| null | 〃 (`num_turns` — the provider's internal turns, not chief's iteration) |
+| `model` | string \| null | chief's own configured model — **not** a scrape, so it is set whenever one is configured |
+
+**Expect `usage: null` on a default install.** `claude --print`, the provider chief
+runs by default, prints no usage figures, so only `model` is populated and the rest
+are null. A provider that emits a `{"type":"result","total_cost_usd":…,"usage":{…}}`
+line (or a plain `Total cost: $0.0421` / `1234 input tokens` summary) fills them in.
+The scrape is deliberately narrow: **a guessed number is worse than a null**, because
+a ledger cannot tell an invented figure from a measured one.
+
+### `limit` — on the rate-limit events
+
+```json
+{"event":"tasklist.rate-limit-wait","name":"auth","state":"rate-limited",
+ "limit":{"hit":true,"retry_at":1786004400,"waits":2,"max_waits":8},"usage":null}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hit` | bool \| null | this event is a usage-limit event |
+| `retry_at` | int \| null | epoch the window is expected to reopen — the ETA the engine parsed from the provider's own limit message. `null` when it printed none (the engine then falls back to its own bounded backoff) |
+| `waits` | int \| null | limit sleeps this tasklist's agent loop has spent |
+| `max_waits` | int \| null | the per-loop cap (`RATE_LIMIT_MAX_WAITS`) |
+
+Every field is nullable, and a `null` is **"not available"**, never zero. Absent and
+`null` mean the same thing: an older engine simply omits the keys, which is why a
+consumer must read `.usage?.cost_usd` defensively rather than assume the shape.
+
+**Reading quota from the stream.** `tasklist.rate-limit-wait` means the worker is
+asleep and will retry itself; `tasklist.rate-limited` means it stopped and the branch
+is parked until the scheduler re-dispatches it (`tasklist.re-dispatch`). Both are
+`state: rate-limited` — a limit is never a failure, and a ledger must not count it as
+one.
 
 ## Ordering and concurrency
 
@@ -161,7 +235,8 @@ that passed in an earlier run. That makes **complete-vs-incomplete work** live: 
 
 - Fields are only ever **added** within a major version. A consumer **must ignore
   keys it does not know** and **must ignore event names it does not know** — new
-  events are additive too.
+  events are additive too. `usage` / `limit` and `agent.turn` arrived this way: they
+  are additive, so `v` stayed **1**.
 - `v` / `schema` bump **only** on a breaking change: a removed field, or one whose
   meaning changed. Pin `v == 1` if you want to be strict; prefer ignoring the unknown.
 - Optional fields are **nullable, never absent-with-meaning**: treat `null` and
