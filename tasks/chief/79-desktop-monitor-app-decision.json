@@ -32,7 +32,7 @@
         "The README's monitoring section reflects the decision (CLI monitoring here; GUI via chief-cloud), consistent with the `docs/monitoring.md` content",
         "Docs-only change (no `bin/`/`engine/` edit under the default CLI-only decision, so no VERSION bump is required); `jq`/`bash -n` clean on anything edited that warrants it"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
