@@ -28,17 +28,20 @@ set -e
 # Parse arguments
 PROVIDER="${CHIEF_PROVIDER:-${CHIEF_TOOL:-claude}}"
 MODEL="${CHIEF_MODEL:-}"
+# What the caller actually ASKED for, as opposed to the default above — a preset
+# resolves the provider itself, and only an EXPLICIT provider can conflict with it.
+PROVIDER_EXPLICIT="${CHIEF_PROVIDER:-${CHIEF_TOOL:-}}"
 TOOL="$PROVIDER"                         # compatibility name in status output
 MAX_ITERATIONS=10
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --provider)
-      PROVIDER="$2"
+      PROVIDER="$2"; PROVIDER_EXPLICIT="$2"
       shift 2
       ;;
     --provider=*)
-      PROVIDER="${1#*=}"
+      PROVIDER="${1#*=}"; PROVIDER_EXPLICIT="${1#*=}"
       shift
       ;;
     --model)
@@ -50,12 +53,12 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --tool)
-      PROVIDER="$2"
+      PROVIDER="$2"; PROVIDER_EXPLICIT="$2"
       TOOL="$2"
       shift 2
       ;;
     --tool=*)
-      PROVIDER="${1#*=}"
+      PROVIDER="${1#*=}"; PROVIDER_EXPLICIT="${1#*=}"
       TOOL="${1#*=}"
       shift
       ;;
@@ -77,12 +80,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+ENGINE="${CHIEF_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+
+# PRESET — a named bundle (engine/preset.sh) that resolves to provider·model plus
+# whatever backend env that provider needs, BEFORE validation, so everything below
+# only ever sees a plain resolved provider. Idempotent: bin/chief usually resolves
+# it already and re-resolving the same pair here is a no-op, which keeps a direct
+# `agent.sh` invocation (a host embedding chief, the offline tests) honest too.
+# An unknown or unconfigured preset is a bad invocation — exit 1, never a silent
+# fall-through to the default (paid) provider.
+if [ -n "${CHIEF_PRESET:-}" ]; then
+  # shellcheck disable=SC1091
+  source "$ENGINE/preset.sh"
+  CHIEF_PROVIDER="$PROVIDER_EXPLICIT"; CHIEF_MODEL="$MODEL"
+  chief_preset_resolve || exit 1
+  PROVIDER="$CHIEF_PROVIDER"; MODEL="$CHIEF_MODEL"; TOOL="$PROVIDER"
+fi
+
 # Validate provider choice
 if [[ "$PROVIDER" != "claude" && "$PROVIDER" != "devin" && "$PROVIDER" != "opencode" && "$PROVIDER" != "amp" ]]; then
   echo "Error: Invalid provider '$PROVIDER'. Must be 'claude', 'devin', or 'opencode'."
   exit 1
 fi
-ENGINE="${CHIEF_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 : "${CHIEF_PROJECT:?CHIEF_PROJECT must be set — run this via the driver, not directly}"
 STATE_DIR="$CHIEF_PROJECT/${CHIEF_STATE_DIR:-.chief/state}"
 mkdir -p "$STATE_DIR"

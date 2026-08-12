@@ -45,6 +45,12 @@ Usage:
                               --provider claude|devin|opencode (default claude)
                               --model MODEL (provider-specific model override)
                               --claude, --devin, --opencode provider shortcuts
+                              --preset local (= --local) cost-avoidance mode: run every agent
+                              turn on a LOCAL/self-hosted endpoint via opencode, at zero API
+                              cost and materially lower coding quality. Configure it with
+                              CHIEF_LOCAL_ENDPOINT + CHIEF_LOCAL_MODEL (env or .chief/config);
+                              unconfigured it errors instead of falling back to a paid
+                              provider. See docs/local-inference-preset.md
   chief list                  list tasklists with pass status
   chief ps                    show active runs across ALL repos (one-shot table). Also flags an
                               UNREGISTERED driver — one that is running with no run file, which
@@ -120,6 +126,7 @@ load_project() {
   CHIEF_TASKS_DIR=tasks/chief; CHIEF_STATE_DIR=.chief/state
   CHIEF_VERIFY=.chief/verify.sh; CHIEF_AGENT_CONTEXT=.chief/agent-context.md
   CHIEF_AUTO_MERGE=1; CHIEF_BASE_BRANCH=main
+  CHIEF_PRESET="${CHIEF_PRESET:-}"   # named provider·model·endpoint bundle (engine/preset.sh)
   # shellcheck disable=SC1091
   source "$CHIEF_PROJECT/.chief/config"
   # CHIEF_TOOL is the pre-provider compatibility name. Preserve configurations
@@ -128,7 +135,7 @@ load_project() {
     CHIEF_PROVIDER="$CHIEF_TOOL"
   fi
   CHIEF_HOME="$ENGINE"
-  export CHIEF_PROJECT CHIEF_HOME CHIEF_TOOL CHIEF_PROVIDER CHIEF_MODEL \
+  export CHIEF_PROJECT CHIEF_HOME CHIEF_TOOL CHIEF_PROVIDER CHIEF_MODEL CHIEF_PRESET \
          CHIEF_TASKS_DIR CHIEF_STATE_DIR CHIEF_VERIFY CHIEF_AGENT_CONTEXT \
          CHIEF_AUTO_MERGE CHIEF_BASE_BRANCH
 }
@@ -173,7 +180,7 @@ cmd_list() {
 }
 
 cmd_run() {
-  local parallel=1 dry=0 merge="" provider="" model="" verbose="" headless="" ; local names=()
+  local parallel=1 dry=0 merge="" provider="" model="" preset="" verbose="" headless="" ; local names=()
   while [ "$#" -gt 0 ]; do case "$1" in
     -p|--parallel) parallel="$2"; shift 2 ;;
     -p*)           parallel="${1#-p}"; shift ;;
@@ -185,6 +192,9 @@ cmd_run() {
     --provider=*)  provider="${1#*=}"; shift ;;
     --model)       model="$2"; shift 2 ;;
     --model=*)     model="${1#*=}"; shift ;;
+    --preset)      preset="$2"; shift 2 ;;
+    --preset=*)    preset="${1#*=}"; shift ;;
+    --local)       preset=local; shift ;;   # shorthand for --preset local
     --claude)      provider=claude; shift ;;
     --devin)       provider=devin; shift ;;
     --opencode)    provider=opencode; shift ;;
@@ -194,6 +204,20 @@ cmd_run() {
     *)             names+=("$1"); shift ;;
   esac; done
   load_project
+  # PRESET first (engine/preset.sh): a named bundle that RESOLVES to a provider·model
+  # (+ whatever backend env it needs) before the ordinary provider/model defaulting, so
+  # the rest of the run — driver, ps/monitor, events — sees only the resolved pair.
+  # It is handed the EXPLICIT flags, not the config defaults, so a conflicting
+  # --provider is an error rather than something the preset silently overrides.
+  preset="${preset:-${CHIEF_PRESET:-}}"
+  if [ -n "$preset" ]; then
+    # shellcheck disable=SC1091
+    source "$ENGINE/preset.sh"
+    CHIEF_PRESET="$preset" CHIEF_PROVIDER="$provider" CHIEF_MODEL="$model"
+    chief_preset_resolve || exit 2
+    provider="$CHIEF_PROVIDER"; model="$CHIEF_MODEL"
+    export CHIEF_PRESET="$preset"
+  fi
   provider="${provider:-$CHIEF_PROVIDER}"; model="${model:-$CHIEF_MODEL}"
   case "$provider" in
     claude|devin|opencode|amp) ;;
