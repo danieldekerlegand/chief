@@ -149,14 +149,33 @@ supported; keep them agreeing with each other and with the code.
 
 ### 10. The conformance fixture
 
-Register a scripted fake in the hermetic provider conformance harness
-(`test/provider-conformance.sh`, wired into `test/all.sh`): one fake CLI script that
-records its argv + how it received the prompt, and one expected-invocation entry.
-That is the whole test — no new scaffolding, no network, no real agent. It asserts
-the exact argv the engine composes, prompt delivery on the documented channel,
-`--model` propagation where supported, and that a fake emitting
-`<promise>COMPLETE</promise>` after a commit ends the loop with exit 0. The same
-file carries the roster-drift guard from item 3.
+Register the provider in the hermetic conformance harness
+[`test/provider-conformance.sh`](../test/provider-conformance.sh) (wired into
+`test/all.sh`, CI, and `.chief/verify.sh`). **The registration point is the `ROSTER`
+array near the top of that file — add one line, and you are done:**
+
+```
+name|prompt-channel|model-stance|argv-WITH-model|argv-WITHOUT-model
+```
+
+- `prompt-channel` — `stdin` or `prompt-file`, matching item 2.
+- `model-stance` — `wired` (the argv interpolates `%MODEL%`) or `unwired` (it must
+  not); the harness rejects an entry whose stance and argv disagree, so the
+  [model-override decision](#model-overrides) can't be left implicit.
+- `argv-*` — the **exact, complete** argument vector, space-separated, with the
+  placeholders `%MODEL%` and `%PROMPT_FILE%` substituted at assert time.
+
+The scripted fake CLI is generated from a shared double, so no new test scaffolding
+is written per provider. From that one line the harness drives the real
+`engine/agent.sh` twice (with and without `--model`) and asserts the exact argv the
+engine composes, prompt delivery on the documented channel, that an `unwired`
+provider never leaks the model value into its argv, and that a fake emitting
+`<promise>COMPLETE</promise>` after a commit ends the loop with exit 0.
+
+The same file carries the **roster-drift guard** from item 3: it parses the provider
+list out of *both* validators and fails if they disagree with each other or with the
+`ROSTER` — so a provider that is accepted but untested (or tested but unaccepted) is
+a red build, not a discovery two audits later.
 
 ## Model overrides
 

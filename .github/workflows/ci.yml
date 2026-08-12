@@ -47,6 +47,9 @@ jobs:
       - name: Provider/model selection
         run: bash test/provider.sh
 
+      - name: Provider conformance (argv · prompt channel · model stance · roster-drift guard)
+        run: bash test/provider-conformance.sh
+
       - name: Token-limit pause+resume under the parallel driver
         run: bash test/ratelimit.sh
 
