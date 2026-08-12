@@ -10,3 +10,12 @@ CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode
 # CHIEF_VERIFY=.chief/verify.sh  # branch verification hook (exit 0 = pass; empty = skip)
 # CHIEF_AGENT_CONTEXT=.chief/agent-context.md   # project-specific agent instructions
 # CHIEF_AUTO_MERGE=1             # 1 = verify+merge completed branches; 0 = leave for review
+# --- cost-avoidance preset (docs/local-inference-preset.md) -------------------
+# CHIEF_PRESET=local             # one switch: run every agent turn on a LOCAL/self-hosted
+#                                # endpoint via opencode — zero API cost, lower coding quality
+# CHIEF_LOCAL_ENDPOINT=          # required by the preset: base URL of your local OpenAI-compatible
+#                                # server, e.g. http://127.0.0.1:11434/v1
+# CHIEF_LOCAL_MODEL=             # required by the preset: model id to ask it for (chief models opencode)
+# CHIEF_LOCAL_ENDPOINT_ENV=OPENAI_BASE_URL   # env var the endpoint is published as
+# CHIEF_LOCAL_API_KEY=local                  # placeholder credential local servers accept
+# CHIEF_LOCAL_API_KEY_ENV=OPENAI_API_KEY     # env var that credential is published as

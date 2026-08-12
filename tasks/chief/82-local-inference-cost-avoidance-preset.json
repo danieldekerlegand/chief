@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "feature",
   "branchName": "chief/82-local-inference-cost-avoidance-preset",
-  "description": "The `--provider opencode` seam already dispatches OpenCode (`engine/agent.sh` `_run_provider`: `opencode run [--model MODEL]`). But pointing a run at LOCAL / self-hosted inference \u2014 to run high-volume agentic testing at zero API cost, deliberately accepting lower coding quality \u2014 currently means knowing the right OpenCode + model + endpoint config by hand. This tasklist makes that a first-class, preset-driven \"cost-avoidance\" mode: a documented, named configuration that routes agent turns through the existing OpenCode dispatch against a configurable local endpoint, so an embedding host (Cuneiform's Riju agents) opts into cheap local execution with one switch. No new provider \u2014 a preset over the existing seam. Scope: `engine/agent.sh` (+ config resolution in `bin/chief`), `docs/`, and `test/provider.sh`.",
+  "description": "The `--provider opencode` seam already dispatches OpenCode (`engine/agent.sh` `_run_provider`: `opencode run [--model MODEL]`). But pointing a run at LOCAL / self-hosted inference — to run high-volume agentic testing at zero API cost, deliberately accepting lower coding quality — currently means knowing the right OpenCode + model + endpoint config by hand. This tasklist makes that a first-class, preset-driven \"cost-avoidance\" mode: a documented, named configuration that routes agent turns through the existing OpenCode dispatch against a configurable local endpoint, so an embedding host (Cuneiform's Riju agents) opts into cheap local execution with one switch. No new provider — a preset over the existing seam. Scope: `engine/agent.sh` (+ config resolution in `bin/chief`), `docs/`, and `test/provider.sh`.",
   "parked": false,
   "dependsOn": [],
   "touches": [
@@ -17,35 +17,35 @@
       "description": "Add a named preset that resolves to the opencode dispatch against a configurable local endpoint/model, with honest degradation when unconfigured.",
       "acceptanceCriteria": [
         "A documented, named preset (e.g. `--preset local` / `CHIEF_PRESET=local`, or a documented `CHIEF_PROVIDER=opencode` + model + endpoint env combination) configures a run to use OpenCode against a LOCAL / self-hosted inference endpoint; the endpoint and model are configurable via env with NO hard-coded host",
-        "When the required local config is absent, the run fails with a clear error naming exactly what to set (the `GEONAMES_USERNAME`-style optional-config pattern) \u2014 it never silently falls back to a paid provider",
-        "The preset composes with the existing provider/model plumbing (it ultimately sets provider=opencode + the local model), so `chief ps`/`monitor` show the resolved provider\u00b7model as they already do",
+        "When the required local config is absent, the run fails with a clear error naming exactly what to set (the `GEONAMES_USERNAME`-style optional-config pattern) — it never silently falls back to a paid provider",
+        "The preset composes with the existing provider/model plumbing (it ultimately sets provider=opencode + the local model), so `chief ps`/`monitor` show the resolved provider·model as they already do",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
       "id": "US-2",
       "title": "Document it as a supported mode with the honest tradeoff",
-      "description": "Embedding hosts (Cuneiform, formant, \u2026) reference this mode; document what it's for and its cost.",
+      "description": "Embedding hosts (Cuneiform, formant, …) reference this mode; document what it's for and its cost.",
       "acceptanceCriteria": [
         "`docs/` documents the cost-avoidance / local-inference mode: its purpose (high-volume agentic testing without API cost), how to configure OpenCode for a local endpoint, and the single switch to enable it",
-        "The tradeoff is stated plainly \u2014 lower coding quality in exchange for zero marginal cost \u2014 so it is chosen deliberately, not by accident",
+        "The tradeoff is stated plainly — lower coding quality in exchange for zero marginal cost — so it is chosen deliberately, not by accident",
         "`chief models opencode` (the existing command) is documented as the way to see the local models available"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
       "id": "US-3",
       "title": "Test the preset resolution offline",
-      "description": "Extend the existing provider test to prove the preset reaches the opencode dispatch with the local config \u2014 no real inference.",
+      "description": "Extend the existing provider test to prove the preset reaches the opencode dispatch with the local config — no real inference.",
       "acceptanceCriteria": [
         "`test/provider.sh` is extended to assert the preset resolves to the opencode command builder with the configured local model/endpoint, using the existing offline test-double pattern (no network, no real model), the way it already asserts `--provider`/`--model` propagation",
         "A negative case asserts the unconfigured preset errors with the actionable message rather than dispatching a paid provider",
         "Editing `engine/`/`bin/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
