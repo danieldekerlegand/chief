@@ -18,7 +18,8 @@ half-wired.
 > `driver.sh`'s header called it "a legacy alias", both invalid-provider error
 > strings named only three providers, and it appeared in no template, README row,
 > `chief models` case, or test. Every one of those is a line on the checklist
-> below that nobody knew to tick.
+> below that nobody knew to tick. Tasklist `85` worked the checklist and
+> **promoted amp** — every item below is now ticked for all four providers.
 
 ## Invariants a provider case must satisfy
 
@@ -101,14 +102,14 @@ There are **two**, in different files, and they must accept the same set:
 
 Add the name to both, **and update both error strings to name the full roster.**
 The strings are hand-maintained prose, not generated from the list, so they are the
-first thing to rot: today both say "claude, devin, or opencode" while both lists
-accept `amp` as well — a user who typed a real provider is told it isn't one.
-`test/provider-conformance.sh`'s drift guard (item 10) fails if the two lists
+first thing to rot: they said "claude, devin, or opencode" for as long as both lists
+had been accepting `amp` too — a user who typed a real provider was told it isn't
+one. `test/provider-conformance.sh`'s drift guard (item 10) fails if the two lists
 diverge; the error strings are on you.
 
 ### 4. The `--<provider>` shorthand (optional but expected)
 
-In `cmd_run`'s argument loop, next to `--claude` / `--devin` / `--opencode`:
+In `cmd_run`'s argument loop, next to `--claude` / `--devin` / `--opencode` / `--amp`:
 
 ```bash
     --newcli)      provider=newcli; shift ;;
@@ -116,7 +117,8 @@ In `cmd_run`'s argument loop, next to `--claude` / `--devin` / `--opencode`:
 
 Optional in the sense that `--provider newcli` already works. Expected in the sense
 that every other first-class provider has one, and its absence is how `amp` came to
-read as second-class.
+read as second-class. The conformance harness now asserts a shorthand exists for
+every provider in the roster, so this one is no longer on the honour system.
 
 ### 5. `chief models`
 
@@ -124,16 +126,17 @@ Add a case to `cmd_models` in [`bin/chief`](../bin/chief). Delegate to the CLI's
 enumeration if it has one (`devin models list`, `opencode models`) — never hardcode a
 model list, they're account-specific and change often. If the CLI has no listing
 command, print its stable aliases the way `_models_claude` does, or say plainly that
-it has none. Also extend the no-arg summary and the `unknown provider '…'` message.
+it has none — the `amp` case is the worked example of "no selector at all", and it
+points at the [model-override](#model-overrides) stance so the two can't disagree. Also extend the no-arg summary and the `unknown provider '…'` message.
 
 ### 6. `chief run --help`
 
-The `--provider claude|devin|opencode` line and the shortcuts line in `bin/chief`'s
-usage block.
+The `--provider claude|devin|opencode|amp` line and the shortcuts line in
+`bin/chief`'s usage block.
 
 ### 7. `templates/config`
 
-The roster comment on `CHIEF_PROVIDER` (`# AI provider: claude | devin | opencode`).
+The roster comment on `CHIEF_PROVIDER` (`# AI provider: claude | devin | opencode | amp`).
 This is what every new project scaffolded by `chief init` reads as the supported set.
 
 ### 8. README
@@ -190,6 +193,22 @@ written down in the [roster table](#current-roster):
   `chief models`, and make an explicit `--model` either refuse or warn. Never
   accept-and-ignore.
 
+`amp` is the worked example of the second stance, and it is implemented in two
+layers because there are two entry points:
+
+- `cmd_run` in [`bin/chief`](../bin/chief) **refuses** an explicit `--model`
+  (or a preset that resolves to one) with exit 2. A model merely inherited from
+  `.chief/config`'s `CHIEF_MODEL` is *dropped with a note* instead, so
+  `chief run --amp` still works in a project whose default provider takes one.
+- [`engine/agent.sh`](../engine/agent.sh) drops a leftover `$MODEL` once at startup
+  with a note, for the case where the engine is driven directly by an embedding
+  host. It has to happen there too: `$MODEL` is read after that point by the
+  banner, the liveliness record (`chief ps`) and the verbose trace, so leaving it
+  set would advertise a model the CLI never receives.
+
+Register the stance as `unwired` in the conformance `ROSTER` (item 10) and the
+harness proves the value never reaches argv.
+
 ## Usage-limit detection
 
 Chief distinguishes "the account hit a usage limit" from "the agent made no
@@ -236,15 +255,21 @@ day.
 | `claude` (default) | `--print` | `--dangerously-skip-permissions` | stdin | supported | family aliases (no live list) |
 | `devin` | `--print` | `--permission-mode bypass` (+ `--respect-workspace-trust false`) | `--prompt-file` | supported | `devin models list` |
 | `opencode` | `run` | *(none needed)* | stdin | supported | `opencode models [provider]` |
-| `amp` | *(default)* | `--dangerously-allow-all` | stdin | **not wired** — see below | none |
+| `amp` | *(default)* | `--dangerously-allow-all` | stdin | **unsupported** — refused, see [model overrides](#model-overrides) | none (amp has no selector) |
 
 `amp` is a genuine dispatch case, not an alias of anything: `CHIEF_PROVIDER=amp`
-runs `amp --dangerously-allow-all` with the prompt on stdin, and both validators
-accept it. Its remaining gaps are exactly the checklist items nobody ticked —
-the error strings, the `--amp` shorthand, the `chief models` case, the template and
-README mentions, the `--model` stance, and a conformance fixture. Tasklist
-`85-provider-onboarding-harness` settles them (promote or retire — no third state);
-this table is updated there.
+(or `--amp`) runs `amp --dangerously-allow-all` with the prompt on stdin. Tasklist
+`85-provider-onboarding-harness` settled its status by **promoting** it — the whole
+checklist above is ticked for amp: both validator lists and both error strings, the
+`--amp` shorthand, a `chief models` case, `run --help`, `templates/config`, README,
+ROADMAP, and a conformance fixture. Its one asymmetry is deliberate and recorded:
+amp's CLI has no model selector (it chooses its own model), so chief **refuses**
+`--model` for amp instead of ignoring it.
+
+**Limit detection caveat:** `RATE_LIMIT_PATTERN` has not been verified against
+devin's, opencode's or amp's limit phrasings — see
+[usage-limit detection](#usage-limit-detection). Their limit stops may still read as
+stalls; that gap is documented rather than assumed away.
 
 ## Related
 

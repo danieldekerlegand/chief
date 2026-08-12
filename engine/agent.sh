@@ -1,6 +1,6 @@
 #!/bin/bash
 # Chief Wiggum - Long-running AI agent loop
-# Usage: ./agent.sh [--provider claude|devin|opencode] [--model MODEL] [max_iterations]
+# Usage: ./agent.sh [--provider claude|devin|opencode|amp] [--model MODEL] [max_iterations]
 #
 # EXIT CODES — engine/driver.sh keys off these; keep them stable.
 #   0  the PRD completed: the agent emitted <promise>COMPLETE</promise>.
@@ -99,8 +99,17 @@ fi
 
 # Validate provider choice
 if [[ "$PROVIDER" != "claude" && "$PROVIDER" != "devin" && "$PROVIDER" != "opencode" && "$PROVIDER" != "amp" ]]; then
-  echo "Error: Invalid provider '$PROVIDER'. Must be 'claude', 'devin', or 'opencode'."
+  echo "Error: Invalid provider '$PROVIDER'. Must be 'claude', 'devin', 'opencode', or 'amp'."
   exit 1
+fi
+
+# amp has no model selector (docs/providers.md#model-overrides). `chief run` refuses
+# an explicit --model for it; when agent.sh is driven directly, say so ONCE here and
+# drop the value — accept-and-ignore would let the banner, the liveliness record and
+# the verbose trace all advertise a model the CLI never receives.
+if [ "$PROVIDER" = amp ] && [ -n "$MODEL" ]; then
+  echo "note: amp has no model selector — ignoring model '$MODEL' (docs/providers.md#model-overrides)" >&2
+  MODEL=""
 fi
 : "${CHIEF_PROJECT:?CHIEF_PROJECT must be set — run this via the driver, not directly}"
 STATE_DIR="$CHIEF_PROJECT/${CHIEF_STATE_DIR:-.chief/state}"
@@ -418,6 +427,8 @@ _run_provider() {
       fi
       ;;
     amp)
+      # No model branch by design: amp's CLI has no model selector (it picks its
+      # own), so $MODEL is refused/dropped above rather than passed here.
       amp --dangerously-allow-all
       ;;
   esac

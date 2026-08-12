@@ -19,7 +19,8 @@
 #   name|prompt-channel|model-stance|argv-WITH-model|argv-WITHOUT-model
 #
 #     prompt-channel  stdin | prompt-file   (the channel the case documents)
-#     model-stance    wired | unwired       (unwired ⇒ %MODEL% must NOT appear)
+#     model-stance    wired | unwired       (unwired ⇒ %MODEL% must NOT appear,
+#                                            and `chief run --model` must REFUSE)
 #     argv-*          space-separated, EXACT and complete; placeholders
 #                     %MODEL% and %PROMPT_FILE% are substituted at assert time.
 #                     (One arg per word — an expectation needing an embedded
@@ -45,9 +46,10 @@ note() { echo "provider-conformance: $*"; }
 CHIEF="$ROOT/bin/chief"
 
 # ── THE ROSTER ───────────────────────────────────────────────────────────────
-# amp is `unwired` by record, not by accident: its dispatch case takes no model
-# flag today. Tasklist 85 settles that stance (wire it, or reject/warn on an
-# explicit --model) — when it does, this line changes and the assertion follows.
+# amp is `unwired` by record, not by accident: its CLI has no model selector, so
+# chief REFUSES an explicit --model for it rather than ignoring it (settled by
+# tasklist 85 — docs/providers.md#model-overrides). Section 4 below asserts that
+# refusal for every `unwired` entry, so the stance stays a decision, not a drop.
 ROSTER=(
 "claude|stdin|wired|--dangerously-skip-permissions --print --model %MODEL%|--dangerously-skip-permissions --print"
 "devin|prompt-file|wired|--permission-mode bypass --respect-workspace-trust false --print --model %MODEL% --prompt-file %PROMPT_FILE%|--permission-mode bypass --respect-workspace-trust false --print --prompt-file %PROMPT_FILE%"
@@ -230,6 +232,27 @@ out="$( cd "$REPO" && env -u CHIEF_PRESET -u CHIEF_TOOL -u CHIEF_PROVIDER -u CHI
           "$CHIEF" run -n --provider notaprovider conf 2>&1 )"; rc=$?
 [ "$rc" = 2 ] || { echo "$out" >&2; fail "chief run accepted an unknown provider (exit $rc, expected 2)"; }
 
+# ── 4) THE ROSTER'S CLI SURFACE ──────────────────────────────────────────────
+# Two per-provider surfaces that used to be on the honour system (amp had neither):
+#   • the --<provider> shorthand (checklist item 4) — asserted for EVERY provider,
+#   • the model stance (checklist item 1 / #model-overrides) — an `unwired` provider
+#     must REFUSE an explicit --model, never accept-and-ignore it.
+for r in "${ROSTER[@]}"; do
+  IFS='|' read -r name _ stance _ _ <<<"$r"
+  out="$( cd "$REPO" && env -u CHIEF_PRESET -u CHIEF_TOOL -u CHIEF_PROVIDER -u CHIEF_MODEL \
+            "$CHIEF" run -n "--$name" conf 2>&1 )" \
+    || { echo "$out" >&2; fail "chief run --$name failed — every provider gets a shorthand (checklist item 4)"; }
+  case "$out" in *"provider=$name"*) ;; *) echo "$out" >&2; fail "chief run --$name did not select provider '$name'" ;; esac
+
+  if [ "$stance" = unwired ]; then
+    out="$( cd "$REPO" && env -u CHIEF_PRESET -u CHIEF_TOOL -u CHIEF_PROVIDER -u CHIEF_MODEL \
+              "$CHIEF" run -n --provider "$name" --model conformance/test-model conf 2>&1 )"; rc=$?
+    [ "$rc" = 2 ] || { echo "$out" >&2; fail "$name is model-unwired but 'chief run --model' was accepted (exit $rc, expected 2) — accept-and-ignore is barred"; }
+    case "$out" in *"no model selector"*) ;; *) echo "$out" >&2; fail "$name refused --model without saying why" ;; esac
+  fi
+done
+note "CLI surface OK — a --<provider> shorthand for each, and every unwired provider refuses --model"
+
 repo="$WORK/case-bogus"; scratch_repo "$repo" CONFORMANCE-SENTINEL-bogus
 out="$( cd "$repo" && env -u CHIEF_PRESET -u CHIEF_TOOL \
           CHIEF_PROVIDER=notaprovider CHIEF_PROJECT="$repo" CHIEF_HOME="$ROOT/engine" \
@@ -238,4 +261,4 @@ out="$( cd "$repo" && env -u CHIEF_PRESET -u CHIEF_TOOL \
 [ "$rc" = 1 ] || { echo "$out" >&2; fail "agent.sh accepted an unknown provider (exit $rc, expected 1)"; }
 case "$out" in *"Invalid provider"*) ;; *) echo "$out" >&2; fail "agent.sh did not report an invalid provider" ;; esac
 
-echo "PROVIDER-CONFORMANCE PASS — $(echo $agent_list | wc -w | tr -d ' ') providers: argv, prompt channel, model stance, completion; validators in lockstep"
+echo "PROVIDER-CONFORMANCE PASS — $(echo $agent_list | wc -w | tr -d ' ') providers: argv, prompt channel, model stance (wired propagates, unwired refuses), shorthand, completion; validators in lockstep"
