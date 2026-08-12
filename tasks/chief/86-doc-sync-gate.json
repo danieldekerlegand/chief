@@ -34,7 +34,7 @@
         "`.github/workflows/ci.yml` runs the check on Ubuntu and macOS alongside the existing suite; `test/all.sh` includes it",
         "The full existing suite (`test/*.sh`) and `shellcheck` stay green; docs (`CLAUDE.md` quality-gates table or `docs/verify-hook.md`) gain one line naming the new gate"
       ],
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
