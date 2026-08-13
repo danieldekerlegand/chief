@@ -1,0 +1,45 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/94-stall-flag-is-run-state-aware",
+  "parked": false,
+  "dependsOn": [],
+  "touches": [
+    "engine"
+  ],
+  "iters": 6,
+  "warmup": [
+    "sed -n '160,180p' engine/monitor.sh",
+    "sed -n '505,525p' engine/monitor.sh",
+    "grep -n 'live_age\\|live_phase_age\\|stale=' engine/monitor.sh | head -20"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A run chief itself calls quiet is not also called stalled",
+      "description": "`⚠ stalled — no activity for N` is derived from LOG WRITES, not from run state, so it fires on states where silence is the expected, correct behaviour — and it does so on the SAME LINE where chief has already printed the reason for that silence. The two halves of the line contradict each other, which trains an operator to ignore a flag that should mean something.\n\nMEASURED 2026-08-13, two independent cases:\n\n1. **rate-limited** — ten tasklists across three repos read `rate-limited-waiting for 16m · ⚠ stalled — no activity for 16m`. chief KNOWS it is rate-limited; it printed that itself, from the same `live_note()` call that then appended the stall marker. All three driver processes were alive (`S+`), nothing was wedged, and every one resumed when the usage window reopened.\n2. **long buffered gate** — `cuneiform:314` ran `⚠ stalled — no activity for 36m` while `cargo test` was working normally. Sampling the child PID showed the test binary CHANGING between samples (`render_oauth_session_gate` → `render_offline_walker`): real forward progress, invisible because a non-tty `cargo test` block-buffers its output.\n\nThe fix is local: `live_note()` (`engine/monitor.sh` ~line 169) already holds `$phase` in a variable at the exact point it appends the marker on ~line 175.",
+      "acceptanceCriteria": [
+        "The stall marker is NOT appended for a phase where quiet is the expected behaviour — at minimum `rate-limited-waiting`, and the phase list is data (one place to add a state), not a condition repeated at both call sites (`engine/monitor.sh` ~175 and ~519 both render it).",
+        "A test drives `live_note()` over a synthetic live-file for each known phase and asserts which do and do not gain the marker — so 'which states are exempt' is checkable rather than a reading of the shell.",
+        "The exemption is NOT unconditional silence: see US-2. A state that is quiet for a legitimate reason still becomes noteworthy eventually, and this story must not make it permanently unflaggable.",
+        "`bin/chief ps` and `bin/chief monitor` are both checked, since the two call sites render the flag differently (one via `live_note … stale`, one via a bare fallback string)."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "The threshold is per-phase, because forever is still wrong",
+      "description": "Suppressing the flag outright would replace a false positive with a blind spot: a rate limit that never clears, or a provider wait that has genuinely hung, is exactly what an operator needs told. What is wrong today is the THRESHOLD, not the concept — 15 minutes is alarming for an agent turn and unremarkable for a usage window.",
+      "acceptanceCriteria": [
+        "Each phase carries its own staleness threshold, with the DEFAULT unchanged so no existing behaviour moves for phases nobody re-tuned.",
+        "A quiet-by-design phase (`rate-limited-waiting`) gets a threshold long enough that a normal window reopen never trips it, and the chosen figure is justified in a comment against a measurement rather than picked round — the observed waits tonight were 5–16 minutes and resolved on their own.",
+        "A phase that exceeds its own threshold STILL flags, and the message says which state it was stuck in ('rate-limited for 2h') rather than the generic 'no activity', so the flag carries the diagnosis.",
+        "Liveness is checked before flagging where it is cheap to do so: a driver whose pid is gone is a DIFFERENT and more serious condition than a quiet one, and today both render as the same yellow note. If that check is not landed here, it is recorded as the follow-up rather than left implicit.",
+        "`shellcheck` (or the repo's existing shell lint) passes on `engine/monitor.sh`, and `.chief/verify.sh` is green."
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
