@@ -122,7 +122,7 @@ four rows close the gaps. **Run these before executing large tasklist backlogs.*
 
 ### Merge throughput — ⬜ proposed, sequenced *after* the quality band
 
-Added 2026-08-11 by **decision D1** in [`../ADOPT-DECIDE-REGISTER.md`](../ADOPT-DECIDE-REGISTER.md).
+Added 2026-08-11 by **decision D1** in `rosetta/strategy/DECISIONS.md` (private).
 **Chief's merge floor is no longer unique** (finding F7): [Gastown](https://github.com/steveyegge/gastown)
 (17,551★, MIT, active) ships a **Bors-style batch-then-bisect merge queue** — its "Refinery" batches
 pending merge requests, rebases them as a stack on `main`, **verifies the batch tip once**, and on
