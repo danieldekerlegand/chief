@@ -72,8 +72,8 @@ column:
 ## Two pauses, one glyph — which one is holding the run?
 
 `⏸` covers a **usage-limit** pause (state `rate-limited` — Chief waits out the
-window and re-dispatches, see [Interruptions & resume](drivers-and-safety.md#interruptions--resume)) and an **operator**
-pause (state `paused` — a human ran [`chief pause`](drivers-and-safety.md#pausing-a-run-the-operators-quota-lever),
+window and re-dispatches, see [Interruptions & resume](../explanation/drivers-and-safety.md#interruptions--resume)) and an **operator**
+pause (state `paused` — a human ran [`chief pause`](../explanation/drivers-and-safety.md#pausing-a-run-the-operators-quota-lever),
 and only `chief resume` lifts it). Confusing them is the difference between "wait 28
 minutes" and "wait for a person", so the label and the note say which:
 
@@ -151,7 +151,7 @@ chief events -f | jq -c 'select(.event == "tasklist.merged")'
 
 The stream is a *projection* of the very same transitions this page describes — the
 live records and `ps`/`monitor`/`logs` are unchanged by it. The path, the versioned
-line schema and the full event catalogue are in [`events.md`](events.md), which is
+line schema and the full event catalogue are in [`events.md`](../reference/events.md), which is
 the contract chief-cloud and embedding hosts code against.
 
 ## Is there a GUI?
@@ -163,7 +163,7 @@ aggregation a fleet view needs — belongs to **chief-cloud**, the separate cont
 plane, whose Tauri app builds over that data via its `chiefd` daemon. chief stays
 daemon-free and GUI-free; keeping the registry (and the machine-readable status
 stream) stable and documented is its side of that seam. See
-[`desktop-gui-decision.md`](desktop-gui-decision.md) for the full decision and
+[`desktop-gui-decision.md`](../decisions/desktop-gui-decision.md) for the full decision and
 rationale.
 
 ## Notes

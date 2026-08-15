@@ -66,7 +66,7 @@ must not read as "designated, but nothing applied".
 ## Where it applies — and where it deliberately doesn't
 
 The credential env is applied **inside the subshell that execs the provider**
-(`_run_provider` in [`engine/agent.sh`](../engine/agent.sh)) and nowhere else:
+(`_run_provider` in [`engine/agent.sh`](../../engine/agent.sh)) and nowhere else:
 
 | Phase | Environment |
 | --- | --- |
@@ -120,7 +120,7 @@ which suppresses `xtrace` around its body — otherwise `bash -x` (or an inherit
 `SHELLOPTS`) would echo every `export KEY=VALUE` into the per-iteration log that
 `chief logs` serves.
 
-[`test/account-env.sh`](../test/account-env.sh) pins all of this: a scripted fake
+[`test/account-env.sh`](../../test/account-env.sh) pins all of this: a scripted fake
 provider reports the variables it actually received, the verify hook reports what *it*
 saw, and a single token planted in both credential values is then grepped for across
 the run registry, the live records, the logs, the worktrees and `.chief/state`.
@@ -134,7 +134,7 @@ documentation. The common shapes:
 | Provider | What a designated account usually means |
 | --- | --- |
 | `claude` | `CLAUDE_CONFIG_DIR` — point Claude Code at a **separate config/OAuth home**, which is how you switch between subscription logins; or `ANTHROPIC_API_KEY` for API-key billing |
-| `opencode` | the provider credential its configured backend reads (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, an OpenAI-compatible `OPENAI_BASE_URL` + key — see [`docs/guides/local-inference-preset.md`](local-inference-preset.md)), and/or `XDG_CONFIG_HOME` to swap its `opencode/` auth store |
+| `opencode` | the provider credential its configured backend reads (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, an OpenAI-compatible `OPENAI_BASE_URL` + key — see [`docs/guides/local-inference-preset.md`](../guides/local-inference-preset.md)), and/or `XDG_CONFIG_HOME` to swap its `opencode/` auth store |
 | `devin` | its API/session credential, and/or the config home its `devin` CLI login is stored under |
 | `amp` | its API key (`AMP_API_KEY`) and/or its config home |
 
@@ -159,8 +159,8 @@ the seam and the non-leakage guarantee; the balancing is not chief's to make.
 
 ## See also
 
-- [`docs/guides/providers.md`](providers.md) — the provider seam this hangs off.
-- [`docs/guides/headless-invocation.md`](headless-invocation.md) — the summary JSON that
+- [`docs/guides/providers.md`](../guides/providers.md) — the provider seam this hangs off.
+- [`docs/guides/headless-invocation.md`](../guides/headless-invocation.md) — the summary JSON that
   reports the account back.
 - [`docs/reference/events.md`](events.md) — `run.started` and the rest of the stream.
-- [`docs/guides/monitoring.md`](monitoring.md) — the run registry `chief ps` reads.
+- [`docs/guides/monitoring.md`](../guides/monitoring.md) — the run registry `chief ps` reads.

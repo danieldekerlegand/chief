@@ -3,8 +3,8 @@
 > **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
 
 `chief ps` / `chief monitor` / `chief logs` are the **human** views of a run
-([`monitoring.md`](monitoring.md)); `--headless` gives a host a run-id and a final
-summary ([`headless-invocation.md`](headless-invocation.md)). Both are **snapshots**.
+([`monitoring.md`](../guides/monitoring.md)); `--headless` gives a host a run-id and a final
+summary ([`headless-invocation.md`](../guides/headless-invocation.md)). Both are **snapshots**.
 A control plane that wants to know *the moment* a tasklist merged, went
 VERIFY-FAILED, or hit a usage limit had only one option: poll `<name>.live.json` and
 diff it — which loses every transition that happens between two polls and
@@ -271,11 +271,11 @@ chief events "$id" -f | your-consumer
 
 ## See also
 
-- [`monitoring.md`](monitoring.md) — the human views (`ps` / `monitor` / `logs`) and
+- [`monitoring.md`](../guides/monitoring.md) — the human views (`ps` / `monitor` / `logs`) and
   the `.live.json` liveliness records this stream projects.
-- [`headless-invocation.md`](headless-invocation.md) — the run-id, the `chief:` lines
+- [`headless-invocation.md`](../guides/headless-invocation.md) — the run-id, the `chief:` lines
   and the exit-code table a host starts from.
-- [`desktop-gui-decision.md`](desktop-gui-decision.md) — why the GUI lives in
+- [`desktop-gui-decision.md`](../decisions/desktop-gui-decision.md) — why the GUI lives in
   chief-cloud and chief ships the stable data seam instead.
 - `engine/events.sh` — the emitter, and the engine-side half of this contract.
 - `test/events.sh` — the hermetic test that pins this document: it drives a real run

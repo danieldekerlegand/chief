@@ -153,5 +153,5 @@ the local model id — there is no separate "preset" field to special-case.
 ## See also
 
 - [`headless-invocation.md`](headless-invocation.md) — the non-interactive embedding mode.
-- [`events.md`](events.md) — where the resolved provider·model shows up on the wire.
+- [`events.md`](../reference/events.md) — where the resolved provider·model shows up on the wire.
 - `engine/preset.sh` — the resolver, and the place a second preset would be added.

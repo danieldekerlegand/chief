@@ -77,7 +77,7 @@ chief: state=/Users/me/myrepo/.chief/state
 - **`events`** is this run's append-only NDJSON **event stream** — every
   run/tasklist/story transition as it happens, the live counterpart to the one-shot
   summary below. Follow it with `chief events <run-id> -f`, or read the file
-  directly; the schema is the contract in [`events.md`](events.md).
+  directly; the schema is the contract in [`events.md`](../reference/events.md).
 - **`state`** is the run's state directory; per-tasklist logs live in
   `<state>/parallel/<name>.log` and live records in `<state>/parallel/<name>.live.json`.
 

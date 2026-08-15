@@ -43,10 +43,10 @@ provides the GUI that consumes it.** There is no third place a monitoring GUI be
   pipeline, and per-OS signing to a repo whose entire test suite is hermetic shell.
 - **It would be the second implementation.** chief-cloud's app already exists and already
   aggregates across hosts. A chief-native monitor would either duplicate it or diverge
-  from it, and cross-host aggregation is already recorded in [`ROADMAP.md`](../ROADMAP.md)
+  from it, and cross-host aggregation is already recorded in [`ROADMAP.md`](../../ROADMAP.md)
   as *by design, never a chief feature*. This decision is that row's single-host twin.
 - **The seam is better than the app.** What a GUI actually needs from chief is stable,
-  readable run data — the registry (see [`monitoring.md`](monitoring.md)) today, the JSON
+  readable run data — the registry (see [`monitoring.md`](../guides/monitoring.md)) today, the JSON
   event stream once `81` lands. Investing there serves chief-cloud, an embedding host like
   Cuneiform, and anyone's own dashboard equally; investing in one bundled app serves only
   that app.

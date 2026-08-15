@@ -152,7 +152,7 @@ Inside a container, with the environment above:
 | ephemeral prefix (the `/tmp` floor, no volume) | runs work; **state does not survive a restart** — an interrupted run's records are gone. Set `CHIEF_PREFIX` onto a volume for durability. |
 | a foreign `<pid>.run` in a shared registry | not shown, not counted, **not removed** — reported as a one-line footnote by `chief ps`. |
 | a foreign `driver.lock` | the run **stops** rather than guessing. Stop the other container's run, or `rm -rf` the lock if you know it is gone. |
-| `chief reap` across namespaces | foreign records are never a licence to kill. Reaping only ever *spares* on ambiguity — see [`drivers-and-safety.md`](drivers-and-safety.md#orphans-how-chief-work-is-identified-and-how-its-stopped). |
+| `chief reap` across namespaces | foreign records are never a licence to kill. Reaping only ever *spares* on ambiguity — see [`drivers-and-safety.md`](../explanation/drivers-and-safety.md#orphans-how-chief-work-is-identified-and-how-its-stopped). |
 | no `/proc` (macOS/BSD) | one machine-wide pid space; the token is the constant `host` and nothing changes. |
 | no `lsof` and no `/proc` | the reaper's cwd key is inert; the argv marker still carries the sweep — never a false positive. |
 | `CHIEF_GIT_SAFE_DIRECTORY` unset on a foreign-owned repo | the run **refuses to start**, with git's message and the knob. |
@@ -180,9 +180,9 @@ It is in `.chief/verify.sh`, `.github/workflows/ci.yml` and `test/all.sh`.
 
 - [`headless-invocation.md`](headless-invocation.md) — the non-interactive contract a
   container run almost always wants next to this one.
-- [`events.md`](events.md) — the NDJSON stream a host subscribes to instead of scraping
+- [`events.md`](../reference/events.md) — the NDJSON stream a host subscribes to instead of scraping
   output.
 - [`monitoring.md`](monitoring.md) — the run registry and live records, whose pid keys
   section 4 is about.
-- [`drivers-and-safety.md`](drivers-and-safety.md) — the scheduler, the safety floor and
+- [`drivers-and-safety.md`](../explanation/drivers-and-safety.md) — the scheduler, the safety floor and
   the reaper.

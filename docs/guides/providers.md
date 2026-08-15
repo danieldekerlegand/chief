@@ -3,7 +3,7 @@
 > **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
 
 Chief drives an agent CLI, it doesn't embed one. The whole seam is a single `case`
-in [`engine/agent.sh`](../engine/agent.sh)'s `_run_provider()`: chief composes the
+in [`engine/agent.sh`](../../engine/agent.sh)'s `_run_provider()`: chief composes the
 prompt, pipes it in, reads stdout, and preserves the CLI's exit status. Everything
 else about a provider — auth, sessions, tools, model catalogue — belongs to that
 CLI.
@@ -97,9 +97,9 @@ it's the identical bytes the caller is piping, so the two channels never disagre
 
 There are **two**, in different files, and they must accept the same set:
 
-- [`engine/agent.sh`](../engine/agent.sh) — the `if [[ "$PROVIDER" != … ]]` guard
+- [`engine/agent.sh`](../../engine/agent.sh) — the `if [[ "$PROVIDER" != … ]]` guard
   just above the state-dir setup (`Error: Invalid provider '…'`, exit 1).
-- [`bin/chief`](../bin/chief) — the `case "$provider" in claude|devin|opencode|amp)`
+- [`bin/chief`](../../bin/chief) — the `case "$provider" in claude|devin|opencode|amp)`
   in `cmd_run` (`invalid provider '…'`, exit 2).
 
 Add the name to both, **and update both error strings to name the full roster.**
@@ -124,7 +124,7 @@ every provider in the roster, so this one is no longer on the honour system.
 
 ### 5. `chief models`
 
-Add a case to `cmd_models` in [`bin/chief`](../bin/chief). Delegate to the CLI's own
+Add a case to `cmd_models` in [`bin/chief`](../../bin/chief). Delegate to the CLI's own
 enumeration if it has one (`devin models list`, `opencode models`) — never hardcode a
 model list, they're account-specific and change often. If the CLI has no listing
 command, print its stable aliases the way `_models_claude` does, or say plainly that
@@ -155,7 +155,7 @@ supported; keep them agreeing with each other and with the code.
 ### 10. The conformance fixture
 
 Register the provider in the hermetic conformance harness
-[`test/provider-conformance.sh`](../test/provider-conformance.sh) (wired into
+[`test/provider-conformance.sh`](../../test/provider-conformance.sh) (wired into
 `test/all.sh`, CI, and `.chief/verify.sh`). **The registration point is the `ROSTER`
 array near the top of that file — add one line, and you are done:**
 
@@ -198,11 +198,11 @@ written down in the [roster table](#current-roster):
 `amp` is the worked example of the second stance, and it is implemented in two
 layers because there are two entry points:
 
-- `cmd_run` in [`bin/chief`](../bin/chief) **refuses** an explicit `--model`
+- `cmd_run` in [`bin/chief`](../../bin/chief) **refuses** an explicit `--model`
   (or a preset that resolves to one) with exit 2. A model merely inherited from
   `.chief/config`'s `CHIEF_MODEL` is *dropped with a note* instead, so
   `chief run --amp` still works in a project whose default provider takes one.
-- [`engine/agent.sh`](../engine/agent.sh) drops a leftover `$MODEL` once at startup
+- [`engine/agent.sh`](../../engine/agent.sh) drops a leftover `$MODEL` once at startup
   with a note, for the case where the engine is driven directly by an embedding
   host. It has to happen there too: `$MODEL` is read after that point by the
   banner, the liveliness record (`chief ps`) and the verbose trace, so leaving it
@@ -224,7 +224,7 @@ _is_rate_limit(out, status):
   otherwise                                                    -> not a limit
 ```
 
-Both patterns live at the top of [`engine/agent.sh`](../engine/agent.sh) and are
+Both patterns live at the top of [`engine/agent.sh`](../../engine/agent.sh) and are
 overridable from the environment. `RATE_LIMIT_PATTERN` covers prose phrasings
 ("usage limit reached", "your limit will reset at", "5-hour limit reached ∙ resets
 3pm"); `RATE_LIMIT_STATUS_PATTERN` is deliberately weaker (`429`, `rate_limit_error`,
@@ -241,7 +241,7 @@ from a genuinely failed tasklist. So when onboarding:
 2. Extend `RATE_LIMIT_PATTERN` / `RATE_LIMIT_STATUS_PATTERN` to cover it — they are
    shared, provider-agnostic regexes, so widen carefully; a pattern that matches
    ordinary agent prose turns every iteration into a sleep.
-3. Add a case to [`test/ratelimit.sh`](../test/ratelimit.sh) (or `test/limitstate.sh`)
+3. Add a case to [`test/ratelimit.sh`](../../test/ratelimit.sh) (or `test/limitstate.sh`)
    with a fake emitting that phrasing, asserting the pause+resume path is taken.
 4. If the phrasing includes a reset time, check `_seconds_until_reset` parses it;
    otherwise chief falls back to its default wait.
@@ -276,9 +276,9 @@ stalls; that gap is documented rather than assumed away.
 ## Related
 
 - [`README.md`](../README.md) — provider selection in the quickstart + command table.
-- [`ROADMAP.md`](../ROADMAP.md) — provider breadth as a tracked capability.
+- [`ROADMAP.md`](../../ROADMAP.md) — provider breadth as a tracked capability.
 - [`docs/guides/local-inference-preset.md`](local-inference-preset.md) — presets: a named
   bundle that resolves to an existing provider·model, the right home for
   endpoint/credential wiring.
-- [`docs/reference/verify-hook.md`](verify-hook.md) — the merge gate every provider's work
+- [`docs/reference/verify-hook.md`](../reference/verify-hook.md) — the merge gate every provider's work
   passes through, whichever CLI produced it.
