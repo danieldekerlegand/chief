@@ -1,0 +1,66 @@
+{
+  "project": "chief",
+  "category": "feature",
+  "branchName": "chief/97-tasklist-state-report",
+  "description": "Chief can run a backlog but cannot DESCRIBE one. `chief list` prints one line per tasklist with a story count, for one repo, and nothing else — no totals, no live/parked split, no notion of what is runnable versus waiting on an unmerged edge. Answering \"what is left, and what can start now\" across a portfolio currently means an ad-hoc script, and the answer is stale the moment a run merges. Measured 2026-08-14 across 16 repos: 312 remaining tasklists, of which 93 parked and 82 blocked by an unmerged dependency — three numbers `chief list` cannot produce and a person cannot hold.\n\nThe expensive part is ALREADY BUILT and must be reused, not rewritten. `driver.sh` gates every launch on exactly this question: `deps_of()` (l.916) walks `dependsOn`, `is_merged()` (l.965) checks a `completed/` record for `mergedToMain`, and the cross-repo path (l.1075) resolves a `<repo>:<stem>` edge against the OTHER repo's records. A status view is that gate run in report mode instead of launch mode. A second, independent implementation of merge-resolution would drift from the scheduler and then LIE — reporting work as runnable that the driver would refuse to launch.\n\nScope note: `category` is NOT chief's concept. It is a convention of the repos this host happens to build, enforced by a `check-tasklist-categories.mjs` vendored into 16 of them. Chief must report the distribution of whatever string a tasklist puts in `category` WITHOUT blessing a vocabulary; a project that wants the ordering rule rendered declares its own vocabulary in `.chief/config`. Chief is a general harness with users beyond this host, and a hard-coded fix/unblock/replace/feature enum would make someone else's backlog unreportable.",
+  "dependsOn": [],
+  "touches": [
+    "engine",
+    "cli"
+  ],
+  "iters": 6,
+  "warmup": [
+    "sed -n '235,246p' bin/chief",
+    "sed -n '910,970p' engine/driver.sh",
+    "grep -n 'CHIEF_REPOS\\|register_repo\\|chief_repos_dir' bin/chief engine/*.sh | head",
+    "sed -n '1060,1085p' engine/driver.sh",
+    "find . -maxdepth 5 -type d -path '*/tasks/chief' | grep -v '^./tasks/chief$'"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "`chief status` reports one repo's backlog, reusing the scheduler's own dependency verdict",
+      "acceptanceCriteria": [
+        "`chief status` in a chief-initialized repo prints, for that repo: total remaining, the live/parked split, and how many are RUNNABLE (every dependsOn edge resolves to a completed record carrying mergedToMain) versus BLOCKED. Completed records are counted and reported separately — they are history, not backlog.",
+        "The runnable/blocked verdict comes from the driver's existing helpers (`deps_of`, `is_merged`, and the cross-repo resolution around driver.sh:1075), reached by sourcing or extracting them — NOT from a second implementation. A test asserts agreement: for every live tasklist in a fixture repo, `chief status`'s verdict matches whether the driver would launch it. This test is the point of the story; without it the report drifts from the scheduler and becomes actively misleading.",
+        "A tasklist whose dependsOn names a completed record with NO mergedToMain is reported as blocked, not runnable — the retirement trap. Its blocker is named in `--blocked` output, because that record can never satisfy the edge and the tasklist is therefore blocked FOREVER until repointed. Silently reporting it as merely 'waiting' would hide a permanent stall behind a transient-looking status.",
+        "Malformed input degrades, never aborts: a tasklist with unparseable JSON, an absent `dependsOn`, or a dependency naming a repo that does not exist is counted and flagged in a `problems` section, and the rest of the report still renders."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "It runs from a parent directory like ~/Development and reports every repo beneath it",
+      "acceptanceCriteria": [
+        "Run from a directory that is NOT a chief project, `chief status` discovers the chief-initialized repos beneath it and prints a per-repo table plus portfolio totals. It must not call `load_project`, which hard-exits with 'no .chief/config found' (bin/chief:load_project) — that exit is correct for `run` and wrong for `status`, so status resolves its scope without it. Run from INSIDE a repo it reports that repo (US-1); `--all` reports every repo in the CHIEF_REPOS registry regardless of cwd. Scope resolution is printed in the header so the reader always knows what the totals cover.",
+        "Discovery does not double-count and does not invent repos. Verified traps in this very tree, each of which a naive `find -name chief -path '*/tasks/chief'` hits: `chief/examples/minimal/tasks/chief` is a FIXTURE, not a backlog, and two sub-repos under a directory the operator considers out of scope (`AutomatedRetailAssociates/`) are real backlogs that must not silently join the portfolio total. A repo is one whose ROOT the walk finds — nested tasks/chief dirs below an already-matched repo are not separate repos — and the walk is depth-limited and skips dot-directories, node_modules and vendor trees.",
+        "Discovered-by-walk and known-by-registry are reconciled explicitly, not merged by luck: the header states which source produced the scope, a repo found both ways is counted ONCE (compared by resolved absolute path, so a symlink or a trailing slash cannot produce a phantom second repo), and `--all` reports registry repos that no longer exist on disk as stale rather than dropping them silently.",
+        "Worktrees cannot corrupt a count. They live under CHIEF_WORKTREE_ROOT (default outside the repo), so the walk is normally safe — but the guard is explicit and tested, since an operator who relocates CHIEF_WORKTREE_ROOT under the scanned tree would otherwise see every in-flight tasklist counted twice, in a report whose whole purpose is arithmetic.",
+        "An operator can exclude a subtree without editing the walk — a documented ignore mechanism covering the AutomatedRetailAssociates case — and an excluded repo is reported as excluded rather than vanishing, so a missing repo is never mistaken for an empty one."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "Categories are reported without chief adopting a vocabulary",
+      "acceptanceCriteria": [
+        "Where tasklists carry a `category`, the report breaks totals down by it, live and parked separately. Chief treats the value as an OPAQUE STRING: any set of categories renders, an absent category is reported as uncategorized rather than as an error, and no chief source file hard-codes fix/unblock/replace/feature as the vocabulary.",
+        "A project MAY declare an ordered vocabulary in `.chief/config`. When it does, categories render in that order and the report states how much work precedes the last category in the ordering — the ordering rule made visible. When it does not, categories render in a stable order (count then name) with no ordering claim. A declared category outside the vocabulary is reported, not dropped.",
+        "Chief never fails a build over a category, and `chief status` exits 0 whatever the backlog looks like. A separate opt-in flag exits non-zero for a CI job that wants the ordering enforced. The distinction is deliberate: a category is a statement ABOUT a tasklist, and the decision to run one out of order is the operator's.",
+        "docs/ states the deal for anyone who vendored a category guard: what chief now computes, what it deliberately does not decide, and how to declare a vocabulary. Consolidating N copies of a per-repo guard onto one implementation is the reason this story is scoped this way, and the doc is what makes that consolidation safe to act on."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-4",
+      "title": "`--json` and `--blocked` — the machine feed, and the view that names what to unblock",
+      "acceptanceCriteria": [
+        "`chief status --json` emits the whole report as one JSON document on stdout, with notes and warnings on stderr, so it pipes to jq cleanly — the same stdout-is-data discipline `chief events` already keeps. The shape is documented in docs/ and covers per-repo and portfolio totals, the category breakdown, and the blocked edges. chief-cloud is the intended consumer and its dashboard has no portfolio view today.",
+        "`chief --blocked` lists what is waiting and WHICH unmerged edge holds it, aggregated the useful way round: for each unmerged tasklist, how many others it would release if it merged, highest first. '82 blocked' is a number; 'these 9 merges release 82' is a plan, and the second is the only one an operator can act on.",
+        "The whole-portfolio run is fast enough to use casually — target under 5 seconds for this tree (~1,000 records across 16 repos). The existing `cmd_list` forks jq once per file, which does not survive that scale; the report reads each record once, in as few jq invocations as the shape allows. A timing assertion over a generated fixture guards the regression.",
+        "`chief list` keeps working exactly as it does now. It is a different tool — per-tasklist story progress, not aggregate state — and scripts and habits depend on its output."
+      ],
+      "notes": null
+    }
+  ]
+}
