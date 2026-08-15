@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/account-env.sh — pin the ACCOUNT CREDENTIAL SEAM (docs/account-credentials.md).
+# test/account-env.sh — pin the ACCOUNT CREDENTIAL SEAM (docs/reference/account-credentials.md).
 #
 # The seam lets a caller start a run UNDER A DESIGNATED PROVIDER ACCOUNT — the
 # runner-side prerequisite chief-cloud's account pooler drives (chief itself does no

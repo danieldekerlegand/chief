@@ -103,12 +103,12 @@ if [[ "$PROVIDER" != "claude" && "$PROVIDER" != "devin" && "$PROVIDER" != "openc
   exit 1
 fi
 
-# amp has no model selector (docs/providers.md#model-overrides). `chief run` refuses
+# amp has no model selector (docs/guides/providers.md#model-overrides). `chief run` refuses
 # an explicit --model for it; when agent.sh is driven directly, say so ONCE here and
 # drop the value — accept-and-ignore would let the banner, the liveliness record and
 # the verbose trace all advertise a model the CLI never receives.
 if [ "$PROVIDER" = amp ] && [ -n "$MODEL" ]; then
-  echo "note: amp has no model selector — ignoring model '$MODEL' (docs/providers.md#model-overrides)" >&2
+  echo "note: amp has no model selector — ignoring model '$MODEL' (docs/guides/providers.md#model-overrides)" >&2
   MODEL=""
 fi
 # ACCOUNT DESIGNATION — the run may be pinned to a specific provider account via a
@@ -305,7 +305,7 @@ _emit_story_events() {
 # provider already printed on the stdout it was going to capture anyway. No API call,
 # no polling loop, no second invocation. When a provider prints nothing usage-shaped
 # (which is `claude --print` today), this yields nothing and the event's `usage` is
-# null: a nullable, provider-dependent field, exactly as docs/events.md promises.
+# null: a nullable, provider-dependent field, exactly as docs/reference/events.md promises.
 #
 # _parse_usage OUTPUT -> ' key=value …' event_emit keys ('' when nothing was found).
 # Two shapes, most trustworthy first:
@@ -418,7 +418,7 @@ _is_rate_limit() {
   return 1
 }
 
-# ACCOUNT CREDENTIAL SEAM (docs/account-credentials.md) — read the designated
+# ACCOUNT CREDENTIAL SEAM (docs/reference/account-credentials.md) — read the designated
 # KEY=VALUE file and export its pairs into the CURRENT shell. Called only from the
 # provider subshell below, so nothing outside the provider invocation ever sees the
 # credential.

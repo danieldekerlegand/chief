@@ -222,7 +222,7 @@ STRICT_VERIFY="${STRICT_VERIFY:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 POLL_SECONDS="${POLL_SECONDS:-5}"
 FORCE="${FORCE:-0}"
-# HEADLESS — programmatic invocation (docs/headless-invocation.md). Set by
+# HEADLESS — programmatic invocation (docs/guides/headless-invocation.md). Set by
 # `chief run --headless` or CHIEF_HEADLESS=1 in the environment/.chief/config, and
 # NEVER inferred from `[ -t 1 ]`: a host that pipes a normal run through `tee` must
 # see exactly what it sees on a terminal, so the contract is switched on explicitly
@@ -242,13 +242,13 @@ headless_announce() {
   # exit and a dry run never write one, and a path that resolves to nothing is worse
   # than no line at all for a host that would go read it.
   [ -f "$RUN_FILE" ] && printf 'chief: run-file=%s\n' "$RUN_FILE"
-  # The NDJSON event log for this run (docs/events.md). Announced on the same
+  # The NDJSON event log for this run (docs/reference/events.md). Announced on the same
   # convention so a host can subscribe without knowing $CHIEF_RUNS' layout.
   [ -n "${CHIEF_EVENTS_FILE:-}" ] && printf 'chief: events=%s\n' "$CHIEF_EVENTS_FILE"
   printf 'chief: state=%s\n' "$STATE_ROOT"
 }
 
-# HEADLESS EXIT-CODE CONTRACT (the table lives in docs/headless-invocation.md and is
+# HEADLESS EXIT-CODE CONTRACT (the table lives in docs/guides/headless-invocation.md and is
 # pinned by test/headless.sh). A host must be able to tell what happened WITHOUT
 # reading the summary block, so a headless run exits with a code that names the
 # outcome instead of the historical 0/1.
@@ -394,7 +394,7 @@ export CHIEF_EVENTS_FILE CHIEF_EVENT_REPO
 
 command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
 
-# ACCOUNT DESIGNATION (docs/account-credentials.md) — the optional credential env
+# ACCOUNT DESIGNATION (docs/reference/account-credentials.md) — the optional credential env
 # FILE this run's provider turns execute under. The driver only PLUMBS the path
 # through to engine/agent.sh, which applies it around the provider invocation and
 # nowhere else; git, the verify hook and the iteration hook keep running under
@@ -1018,7 +1018,7 @@ if [ -z "$NAMES" ]; then
     echo "To get started, add a tasklist JSON (copy the parked example.json and drop its \"parked\" flag), then: chief run"
   else
     echo "No tasklists in $TASKS_REL/ yet."
-    echo "Create one to get started (tasklist format: docs/tasklist-schema.md), then: chief run"
+    echo "Create one to get started (tasklist format: docs/reference/tasklist-schema.md), then: chief run"
   fi
   # A host still gets the full contract on the emptiest possible run: the id (so the
   # invocation is correlatable at all) and a summary with an empty tasklist array.
@@ -1161,7 +1161,7 @@ audit_findings() {   # one WARNING block per under-tagged pair ($1: only this na
     echo "        $a touches: [${ta% }]"
     echo "        $b touches: [${tb% }]"
     echo "        Fix: give them a shared touches domain (or a dependsOn edge) so the"
-    echo "        scheduler stops co-scheduling them — docs/drivers-and-safety.md."
+    echo "        scheduler stops co-scheduling them — docs/explanation/drivers-and-safety.md."
   done
 }
 
@@ -1531,14 +1531,14 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "staterel=$STATE_REL"
   echo "tasks=$SRC"
   echo "wt=$WT_ROOT"
-  # ACCOUNT DESIGNATION, reported not exposed (docs/account-credentials.md): the
+  # ACCOUNT DESIGNATION, reported not exposed (docs/reference/account-credentials.md): the
   # env-file PATH and the label, so `chief ps`/`chief monitor` and any registry reader
   # can say WHICH account this run spends. Both are empty on an undesignated run.
   # The file's VALUES are read only inside agent.sh's provider subshell and are never
   # written here, to a live record, to a log, or to anything under .chief/state.
   echo "account=$ACCOUNT_ENV_FILE"
   echo "accountlabel=$ACCOUNT_LABEL"
-  echo "events=$CHIEF_EVENTS_FILE"             # this run's NDJSON event log (docs/events.md)
+  echo "events=$CHIEF_EVENTS_FILE"             # this run's NDJSON event log (docs/reference/events.md)
   echo "runid=$CHIEF_RUN_ID"                   # the marker stamped on this run's tree
   echo "marker=$CHIEF_RUN_MARKER_REPO"         #   (and the prefix that matches this repo)
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
@@ -2077,7 +2077,7 @@ done
 if [ -n "$any_blocked" ]; then
   echo "     Fix: land the dependency, drop the dependsOn edge, or — once the work has"
   echo "     really merged elsewhere — record it: echo '{\"mergedToMain\":true}' > $TASKS_REL/completed/<dep>.json"
-  echo "     (docs/cross-repo-dependencies.md)"
+  echo "     (docs/reference/cross-repo-dependencies.md)"
   echo
 fi
 

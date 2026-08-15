@@ -91,7 +91,7 @@ Options:
 
 Output: one JSON object, keys sorted, byte-identical for identical inputs.
 Exit: 0 on success, 2 on a usage/environment error. Measuring never blocks —
-the ratchet that CONSUMES this record is what blocks (see docs/verify-hook.md).
+the ratchet that CONSUMES this record is what blocks (see docs/reference/verify-hook.md).
 EOF
 }
 

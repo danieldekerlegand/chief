@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # engine/gen.sh — ROADMAP → TASKLISTS. Turn a structured roadmap document into one
-# schema-valid `tasks/chief/NN-slug.json` per roadmap item (docs/tasklist-schema.md).
+# schema-valid `tasks/chief/NN-slug.json` per roadmap item (docs/reference/tasklist-schema.md).
 #
 # This is the operation an EMBEDDING HOST calls (Cuneiform's Chief-in-Riju operator
 # loop, chief-cloud, a CI job) to author tasklists programmatically instead of
 # hand-writing JSON and hoping the numbered band, `branchName`, `dependsOn` and
 # `touches` conventions came out right. So the INPUT SHAPE IS A PUBLISHED CONTRACT,
-# not an internal detail — see docs/roadmap-input.md.
+# not an internal detail — see docs/reference/roadmap-input.md.
 #
 #   {
 #     "phases": [
@@ -45,7 +45,7 @@
 set -uo pipefail
 
 SLUG_MAX=48          # slug length cap, cut back to a word boundary
-DEFAULT_ITERS=5      # docs/tasklist-schema.md default when the item omits `iters`
+DEFAULT_ITERS=5      # docs/reference/tasklist-schema.md default when the item omits `iters`
 
 usage() {
   cat <<EOF
@@ -81,7 +81,7 @@ A dep is a tasklist name (the filename minus .json), NEVER a branch name; qualif
 another repo as "<repo>:<stem>". A dep that matches a sibling roadmap item's slug is
 rewritten to that item's generated "NN-slug" stem, so a roadmap can order its own
 items without knowing the band in advance.
-Contract + worked example: docs/roadmap-input.md   Schema: docs/tasklist-schema.md
+Contract + worked example: docs/reference/roadmap-input.md   Schema: docs/reference/tasklist-schema.md
 EOF
 }
 
@@ -143,7 +143,7 @@ problems="$(jq -r '
   def nonempty_string: type == "string" and (gsub("^\\s+|\\s+$"; "") | length) > 0;
 
   # dependsOn is the convention hand-authoring gets wrong most often
-  # (docs/cross-repo-dependencies.md), so each entry is checked on its own and the
+  # (docs/reference/cross-repo-dependencies.md), so each entry is checked on its own and the
   # message carries the correction, not just the complaint.
   def dep_problem($at):
     if type != "string"
@@ -245,7 +245,7 @@ if [ -n "$unknowns" ] && [ "$allow_unknown" = 1 ]; then
 fi
 
 if [ -n "$problems" ] || [ -n "$unknowns" ]; then
-  { echo "chief gen: the roadmap does not match the input contract (docs/roadmap-input.md):"
+  { echo "chief gen: the roadmap does not match the input contract (docs/reference/roadmap-input.md):"
     [ -n "$problems" ] && printf '%s\n' "$problems" | sed 's/^/  - /'
     if [ -n "$unknowns" ]; then
       printf '%s\n' "$unknowns" | sed 's/^/  - /'
@@ -338,7 +338,7 @@ if [ -n "$empty_slugs" ]; then
   exit 2
 fi
 
-# ── audit the plan against the tasklist gate (docs/tasklist-schema.md) ───────
+# ── audit the plan against the tasklist gate (docs/reference/tasklist-schema.md) ───────
 # The generator's whole point is that the conventions come out right, so it checks
 # its OWN output rather than trusting the transform above: filename stem is NN-slug,
 # branchName is that stem under chief/, no mergedToMain on unmerged work, and every
@@ -361,7 +361,7 @@ audit="$(jq -r '
           and all($t.dependsOn[];
                   type == "string" and length > 0
                   # only the STEM is a filename; the repo half of a cross-repo dep is
-                  # allowed to be a path (../pinakes:10-work) — see docs/cross-repo-dependencies.md
+                  # allowed to be a path (../pinakes:10-work) — see docs/reference/cross-repo-dependencies.md
                   and ((if test(":") then sub("^.*:"; "") else . end)
                        | length > 0 and (test("/")|not) and (endswith(".json")|not)))
        then empty else bad($path; "\"dependsOn\" must be tasklist names, never branch names (\"<stem>\", or \"<repo>:<stem>\")") end),

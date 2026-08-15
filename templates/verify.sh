@@ -48,7 +48,7 @@ changed="$(git diff --name-only "$CHIEF_BASE_BRANCH"...HEAD)"
 #      is deliberately no implicit way to switch one off.
 #
 # CHIEF_VERIFY_QUALITY=0 skips just this gate while iterating locally;
-# NO_VERIFY=1 bypasses the whole hook. Full contract: docs/verify-hook.md.
+# NO_VERIFY=1 bypasses the whole hook. Full contract: docs/reference/verify-hook.md.
 #
 # chief quality ratchet --base "$CHIEF_BASE_BRANCH" || exit 1
 

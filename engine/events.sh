@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS. Chief already publishes two views of a run: the human table
 # (`chief ps`/`chief monitor`, reading $CHIEF_RUNS/<pid>.run + the per-tasklist
-# <name>.live.json) and the end-of-run headless summary (docs/headless-invocation.md).
+# <name>.live.json) and the end-of-run headless summary (docs/guides/headless-invocation.md).
 # Both are SNAPSHOTS. A host that wants to know the moment a tasklist merged or went
 # VERIFY-FAILED has no choice but to poll the live records and diff them itself —
 # which loses every transition that happens between two polls and re-implements the
@@ -16,7 +16,7 @@
 # and deleting every event_emit call would leave the run byte-identical. That is the
 # invariant: if an event and the live record ever disagree, the event is the bug.
 #
-# CONTRACT (the consumer-facing half is docs/events.md — chief-cloud reads it)
+# CONTRACT (the consumer-facing half is docs/reference/events.md — chief-cloud reads it)
 #   • Path comes from $CHIEF_EVENTS_FILE. EMPTY (or absent jq) makes every emit a
 #     silent no-op, so agent.sh standalone and an older/partial install behave exactly
 #     as before. Diagnostics must never take down a run.
@@ -44,7 +44,7 @@
 # The schema version stamped on every line. Bump `v` (and the `schema` string with it)
 # only for a BREAKING change — a removed field, or one whose meaning changed. Purely
 # additive fields do not bump it; that is what lets a consumer pin `v` and still get
-# new data. docs/events.md is the contract this number refers to.
+# new data. docs/reference/events.md is the contract this number refers to.
 CHIEF_EVENT_V=1
 CHIEF_EVENT_SCHEMA='chief.event/1'
 

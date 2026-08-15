@@ -41,7 +41,7 @@ implements their work) and contract definitions (those live in `koine`).
   one `_run_provider` dispatch case each, both validator lists in lockstep, a `chief models` case,
   and a conformance fixture. Amp is its own dispatch case (never an alias); its CLI has no model
   selector, so `--model` is **refused** for it rather than ignored. Onboarding recipe:
-  [`docs/providers.md`](docs/providers.md).
+  [`docs/guides/providers.md`](docs/guides/providers.md).
 - **Safe by construction:** worktree isolation per tasklist, a serialized rebase → verify → merge
   floor, a no-work guard (EMPTY-NO-WORK), verify-failure re-engagement, mid-merge crash recovery,
   and orphan reaping keyed on the inherited `$CHIEF_RUN_ID` (`77`, merged).
@@ -157,9 +157,9 @@ ongoing bars are continuous upkeep, not discrete tasklists.
 | Status | Milestone | Tasklist |
 |---|---|---|
 | ⬜ | Rebase-refusal vs. real content-conflict disambiguation — the merge phase labels **any** non-zero `git rebase` as `REBASE-CONFLICT` (`engine/driver.sh` §1492), so a worktree that merely *refuses* / is dirty-or-locked masquerades as a content collision (a spurious failure observed in practice); distinguish the two so a branch isn't parked on a false positive · S/M | `chief/78-rebase-refusal-vs-conflict-disambiguation` *(proposed)* |
-| ✅ | Desktop monitor-app decision — **decided: chief is CLI-only.** No desktop app is planned or referenced here; the GUI monitoring surface (and any cross-host view) is chief-cloud's Tauri app over `chiefd`, which consumes chief's run registry + the `81` status stream. Rationale + reversal clause in [`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md) · S (decision) | `chief/79-desktop-monitor-app-decision` |
+| ✅ | Desktop monitor-app decision — **decided: chief is CLI-only.** No desktop app is planned or referenced here; the GUI monitoring surface (and any cross-host view) is chief-cloud's Tauri app over `chiefd`, which consumes chief's run registry + the `81` status stream. Rationale + reversal clause in [`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md) · S (decision) | `chief/79-desktop-monitor-app-decision` |
 | 🚧 | Provider breadth — the multi-provider seam dispatches Claude / Devin / OpenCode / Amp, all four first-class (dispatch case · both validators · shorthand · `chief models` · conformance fixture); Amp takes no `--model` (its CLI has no selector, so chief refuses it). Keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
-| ✅ | Provider onboarding harness — [`docs/providers.md`](docs/providers.md) is the 10-item onboarding recipe, and `test/provider-conformance.sh` is the roster-driven scripted-fake harness (argv · prompt channel · model stance · completion, plus a drift guard over both validator lists), so a new agent CLI = one `_run_provider` dispatch case + one `ROSTER` line. **Amp settled: promoted**, first-class on every surface, with `--model` refused rather than ignored · S/M | `chief/85-provider-onboarding-harness` |
+| ✅ | Provider onboarding harness — [`docs/guides/providers.md`](docs/guides/providers.md) is the 10-item onboarding recipe, and `test/provider-conformance.sh` is the roster-driven scripted-fake harness (argv · prompt channel · model stance · completion, plus a drift guard over both validator lists), so a new agent CLI = one `_run_provider` dispatch case + one `ROSTER` line. **Amp settled: promoted**, first-class on every surface, with `--model` refused rather than ignored · S/M | `chief/85-provider-onboarding-harness` |
 | ⬜ | Doc-sync gate — a grep-based, hermetic verify/CI check asserting README's version string == `VERSION` and the README command table covers every `bin/chief` subcommand (the exact drift class re-synced by hand on 2026-08-11, commit `995263c`) · S | `chief/86-doc-sync-gate` *(proposed)* |
 | 🚧 | bash-3.2 compatibility upkeep — hold the bash 3.2 + shellcheck-clean bar as the engine grows; CI on Ubuntu + macOS is the guard | — |
 
@@ -229,12 +229,12 @@ known item is either an authored tasklist, an ongoing bar, or a **By design** no
 Reference docs (living, kept in place):
 - [`README.md`](README.md) — install, quickstart, concepts, command reference.
 - [`CLAUDE.md`](CLAUDE.md) — engine layout, per-iteration contract, quality gates.
-- [`docs/tasklist-schema.md`](docs/tasklist-schema.md) — the tasklist JSON format.
-- [`docs/drivers-and-safety.md`](docs/drivers-and-safety.md) — sequential vs. parallel,
+- [`docs/reference/tasklist-schema.md`](docs/reference/tasklist-schema.md) — the tasklist JSON format.
+- [`docs/explanation/drivers-and-safety.md`](docs/explanation/drivers-and-safety.md) — sequential vs. parallel,
   `dependsOn`/`touches`/`warmup`, and the safety model.
-- [`docs/verify-hook.md`](docs/verify-hook.md) — writing `verify.sh`, the merge gate.
-- [`docs/providers.md`](docs/providers.md) — the provider onboarding recipe: every roster
+- [`docs/reference/verify-hook.md`](docs/reference/verify-hook.md) — writing `verify.sh`, the merge gate.
+- [`docs/guides/providers.md`](docs/guides/providers.md) — the provider onboarding recipe: every roster
   surface a new agent CLI must be wired into, and the limit-detection caveat.
-- [`docs/monitoring.md`](docs/monitoring.md) — `chief ps`/`chief monitor` and the run registry.
-- [`docs/cross-repo-dependencies.md`](docs/cross-repo-dependencies.md) — cross-repo `dependsOn`.
+- [`docs/guides/monitoring.md`](docs/guides/monitoring.md) — `chief ps`/`chief monitor` and the run registry.
+- [`docs/reference/cross-repo-dependencies.md`](docs/reference/cross-repo-dependencies.md) — cross-repo `dependsOn`.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.

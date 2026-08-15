@@ -5,7 +5,7 @@
 # branch has been rebased onto the base. cwd = repo root, the finished branch is
 # checked out. Exit 0 ALLOWS the merge; any non-zero BLOCKS it (the branch is left
 # for re-engagement, status VERIFY-FAILED, output saved to
-# .chief/state/snapshots/<name>.verify-failed.log). See docs/verify-hook.md.
+# .chief/state/snapshots/<name>.verify-failed.log). See docs/reference/verify-hook.md.
 #
 # Contract facts this script depends on:
 #   - Invoked with NO argv; the base branch is $CHIEF_BASE_BRANCH (default main),

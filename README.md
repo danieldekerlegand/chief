@@ -67,7 +67,7 @@ chief init                     # scaffolds .chief/ + tasks/chief/ (+ gitignores 
 # 1. edit .chief/config           — tool, base branch, path overrides
 # 2. edit .chief/verify.sh        — your build/test/lint; exit 0 = allow the merge
 # 3. edit .chief/agent-context.md — your project's quality checks + conventions
-# 4. write tasklists in tasks/chief/*.json   (see docs/tasklist-schema.md)
+# 4. write tasklists in tasks/chief/*.json   (see docs/reference/tasklist-schema.md)
 
 chief list                     # tasklists + how many stories pass
 chief run -n -p 3              # DRY RUN — print the schedule waves, spawn nothing
@@ -82,7 +82,7 @@ Claude Code remains the default provider. Use `--provider claude|devin|opencode|
 `--model MODEL`; the same settings can be persisted as `CHIEF_PROVIDER` and
 `CHIEF_MODEL` in `.chief/config`. Amp has no model selector — it picks its own
 model — so `--model` is refused for it rather than silently ignored
-([`docs/providers.md`](docs/providers.md#model-overrides)). The older `CHIEF_TOOL`/`--tool` setting remains
+([`docs/guides/providers.md`](docs/guides/providers.md#model-overrides)). The older `CHIEF_TOOL`/`--tool` setting remains
 accepted for compatibility with existing projects.
 
 `chief init` is safe to re-run: it keeps any `.chief/` files you've already edited.
@@ -116,7 +116,7 @@ web  (pid 12346 · -p2 · claude · 3m · →main)
 Each tasklist shows its **state** (running / done / failed / blocked / pending),
 **stories passing/total**, and **branch**; running ones also show the latest note
 the agent logged. Run files are cleaned up when a driver exits and pruned on sight
-if its process died. See [`docs/monitoring.md`](docs/monitoring.md).
+if its process died. See [`docs/guides/monitoring.md`](docs/guides/monitoring.md).
 
 **Monitoring here is the CLI — chief ships no desktop app.** `chief ps` /
 `chief monitor` / `chief logs` are the monitoring surface, and the registry they
@@ -124,7 +124,7 @@ read is plain files anything else may read too. A desktop **GUI** (and any
 cross-host, multi-machine view) is **chief-cloud**'s, the separate control plane,
 whose Tauri app builds over that data — chief itself stays daemon-free and
 GUI-free by design. The reasoning is written down in
-[`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md).
+[`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md).
 
 ## Concepts
 
@@ -143,7 +143,7 @@ GUI-free by design. The reasoning is written down in
   branches land on the base branch.
 - **verify.sh** — your project's quality gate. `chief` calls it to decide whether a
   rebased branch may merge (exit 0 = allow). This is where your real build/test/lint
-  lives — see [`docs/verify-hook.md`](docs/verify-hook.md).
+  lives — see [`docs/reference/verify-hook.md`](docs/reference/verify-hook.md).
 
 ## How it fits together
 
@@ -185,7 +185,7 @@ Interference degrades to a caught failure and a wasted rebase — **never a sile
 bad merge**. There's no AI auto-conflict-resolution: conflicts stop that tasklist.
 Over-tagging `touches` only costs parallelism; under-tagging only costs a rebase.
 Use `chief run -n` to preview the schedule waves before a real run. Full detail in
-[`docs/drivers-and-safety.md`](docs/drivers-and-safety.md).
+[`docs/explanation/drivers-and-safety.md`](docs/explanation/drivers-and-safety.md).
 
 ## Resuming interrupted runs
 
@@ -209,21 +209,21 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | Command | Purpose |
 | --- | --- |
 | `chief init` | Scaffold `.chief/` + `tasks/chief/` in the current repo. |
-| `chief gen <roadmap.json>` | Generate one schema-valid `tasks/chief/NN-slug.json` per roadmap item — the programmatic way to author tasklists (`-n` emits NDJSON and writes nothing; input contract: [`docs/roadmap-input.md`](docs/roadmap-input.md)). |
+| `chief gen <roadmap.json>` | Generate one schema-valid `tasks/chief/NN-slug.json` per roadmap item — the programmatic way to author tasklists (`-n` emits NDJSON and writes nothing; input contract: [`docs/reference/roadmap-input.md`](docs/reference/roadmap-input.md)). |
 | `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = concurrency (default 1). |
 | `chief run --provider P --model M` | Select Claude (default), Devin, OpenCode, or Amp (shortcuts: `--claude`, `--devin`, `--opencode`, `--amp`) and optionally override its model. Amp has no model selector, so `--model` is refused for it. |
-| `chief run --local` | Cost-avoidance preset: every agent turn on a LOCAL/self-hosted endpoint via OpenCode — zero API cost, materially lower coding quality, and an error rather than a paid fallback when unconfigured ([`docs/local-inference-preset.md`](docs/local-inference-preset.md)). |
+| `chief run --local` | Cost-avoidance preset: every agent turn on a LOCAL/self-hosted endpoint via OpenCode — zero API cost, materially lower coding quality, and an error rather than a paid fallback when unconfigured ([`docs/guides/local-inference-preset.md`](docs/guides/local-inference-preset.md)). |
 | `chief run -n` | Dry run: print the schedule waves and exit (no git, no agents). |
 | `chief run --no-merge` | Complete branches but don't merge into the base. |
-| `chief run --headless` | Non-interactive embedding mode: no colour, a `chief: run-id=…` line, a JSON outcome summary and a documented exit-code table ([`docs/headless-invocation.md`](docs/headless-invocation.md)). |
-| `chief run --account-env FILE` | Run this run's AGENT TURNS under a designated provider account: a `KEY=VALUE` credential env file applied at the provider boundary only (`--account-label NAME` names it in `ps`/`monitor`/events; also `CHIEF_ACCOUNT_ENV_FILE`). Values never reach logs, the registry or `argv` ([`docs/account-credentials.md`](docs/account-credentials.md)). |
+| `chief run --headless` | Non-interactive embedding mode: no colour, a `chief: run-id=…` line, a JSON outcome summary and a documented exit-code table ([`docs/guides/headless-invocation.md`](docs/guides/headless-invocation.md)). |
+| `chief run --account-env FILE` | Run this run's AGENT TURNS under a designated provider account: a `KEY=VALUE` credential env file applied at the provider boundary only (`--account-label NAME` names it in `ps`/`monitor`/events; also `CHIEF_ACCOUNT_ENV_FILE`). Values never reach logs, the registry or `argv` ([`docs/reference/account-credentials.md`](docs/reference/account-credentials.md)). |
 | `chief list` | List tasklists with pass status. |
 | `chief ps` | One-shot table of active runs across all repos. |
 | `chief monitor [interval]` | Live-refreshing run view (default 2s; Ctrl-C to exit). |
 | `chief logs [name] [-f]` | Tail a tasklist's per-iteration log from a live run (`-f` follows; `-n N` sets the tail size). |
-| `chief events [id] [-f]` | Subscribe to a run's machine-readable NDJSON event stream — run/tasklist/story transitions as they happen, stdout is pure NDJSON (`-l` lists the logs on this host). The contract chief-cloud and embedding hosts read ([`docs/events.md`](docs/events.md)). |
+| `chief events [id] [-f]` | Subscribe to a run's machine-readable NDJSON event stream — run/tasklist/story transitions as they happen, stdout is pure NDJSON (`-l` lists the logs on this host). The contract chief-cloud and embedding hosts read ([`docs/reference/events.md`](docs/reference/events.md)). |
 | `chief models [provider]` | List the models you can pass to `--model` (live from devin/opencode; stable aliases for claude; none for amp). |
-| `chief quality ratchet` | The merge gate's second, MEASURED axis: deterministic code-quality metrics (duplication, function length, nesting depth, single-use helpers, lint counts) compared branch-vs-base, exiting non-zero when one regressed past its tolerance — so `verify.sh` can BLOCK a merge that made the codebase worse with every test still green. No model judgment anywhere; `measure` emits the raw record, `--write-baseline` is the reviewable re-baseline hatch ([`docs/verify-hook.md`](docs/verify-hook.md)). |
+| `chief quality ratchet` | The merge gate's second, MEASURED axis: deterministic code-quality metrics (duplication, function length, nesting depth, single-use helpers, lint counts) compared branch-vs-base, exiting non-zero when one regressed past its tolerance — so `verify.sh` can BLOCK a merge that made the codebase worse with every test still green. No model judgment anywhere; `measure` emits the raw record, `--write-baseline` is the reviewable re-baseline hatch ([`docs/reference/verify-hook.md`](docs/reference/verify-hook.md)). |
 | `chief reap [-n] [--grace N]` | Stop orphaned chief work — agent trees with no live, registered run behind them (`-n` reports only). |
 | `chief pause [--all]` | Withhold agent turns — drain, never kill: in-flight iterations finish, the rest park as paused. |
 | `chief resume [--all]` | Lift the pause and re-arm parked tasklists as pending for the next `chief run`. |
@@ -233,38 +233,38 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 ## Docs
 
 - [`ROADMAP.md`](ROADMAP.md) — the roadmap: shipped capabilities vs. planned work.
-- [`docs/tasklist-schema.md`](docs/tasklist-schema.md) — the tasklist JSON format.
-- [`docs/roadmap-input.md`](docs/roadmap-input.md) — the roadmap-document contract
+- [`docs/reference/tasklist-schema.md`](docs/reference/tasklist-schema.md) — the tasklist JSON format.
+- [`docs/reference/roadmap-input.md`](docs/reference/roadmap-input.md) — the roadmap-document contract
   `chief gen` consumes: `phases[] → items[]`, the field mapping and defaults, and a
   worked example. The programmatic way for an embedding host to author tasklists.
-- [`docs/drivers-and-safety.md`](docs/drivers-and-safety.md) — sequential vs
+- [`docs/explanation/drivers-and-safety.md`](docs/explanation/drivers-and-safety.md) — sequential vs
   parallel, `dependsOn`/`touches`/`warmup`, and the safety model.
-- [`docs/cross-repo-dependencies.md`](docs/cross-repo-dependencies.md) — waiting on
+- [`docs/reference/cross-repo-dependencies.md`](docs/reference/cross-repo-dependencies.md) — waiting on
   a tasklist in another repo with `"<repo>:<tasklist>"`.
-- [`docs/verify-hook.md`](docs/verify-hook.md) — writing `verify.sh`.
-- [`docs/providers.md`](docs/providers.md) — the provider seam: the onboarding
+- [`docs/reference/verify-hook.md`](docs/reference/verify-hook.md) — writing `verify.sh`.
+- [`docs/guides/providers.md`](docs/guides/providers.md) — the provider seam: the onboarding
   checklist for adding an agent CLI (one `_run_provider` case + one conformance
   fixture), the invariants a provider must satisfy, and how usage-limit detection
   depends on its output.
-- [`docs/monitoring.md`](docs/monitoring.md) — `chief ps` / `chief monitor` and the
+- [`docs/guides/monitoring.md`](docs/guides/monitoring.md) — `chief ps` / `chief monitor` and the
   run registry.
-- [`docs/headless-invocation.md`](docs/headless-invocation.md) — embedding chief in
+- [`docs/guides/headless-invocation.md`](docs/guides/headless-invocation.md) — embedding chief in
   a host app: `chief run --headless`, the run-id line, the exit-code table and the
   machine-readable summary.
-- [`docs/containers.md`](docs/containers.md) — running chief inside a container or a
+- [`docs/guides/containers.md`](docs/guides/containers.md) — running chief inside a container or a
   Riju workspace: the env an embedding host sets (state prefix, worktree root, git
   `safe.directory`, committer identity), the guarantees, and what degrades.
-- [`docs/events.md`](docs/events.md) — the machine-readable event stream: the NDJSON
+- [`docs/reference/events.md`](docs/reference/events.md) — the machine-readable event stream: the NDJSON
   path, the versioned line schema, the event catalogue and `chief events`. The
   contract chief-cloud and embedding hosts subscribe to.
-- [`docs/account-credentials.md`](docs/account-credentials.md) — running under a
+- [`docs/reference/account-credentials.md`](docs/reference/account-credentials.md) — running under a
   DESIGNATED provider account: `chief run --account-env <file>`, the file format, the
   provider-boundary-only application, the loud-failure rule and the non-leakage
   guarantee. The runner-side seam a multi-account pooler (chief-cloud) drives.
-- [`docs/local-inference-preset.md`](docs/local-inference-preset.md) — the
+- [`docs/guides/local-inference-preset.md`](docs/guides/local-inference-preset.md) — the
   cost-avoidance mode: `chief run --local` routes every agent turn through a
   LOCAL/self-hosted endpoint at zero API cost, and what you give up for it.
-- [`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md) — why monitoring is
+- [`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md) — why monitoring is
   CLI-only here and a desktop GUI belongs to chief-cloud.
 - [`examples/minimal/`](examples/minimal/) — a 3-tasklist demo you can `chief run -n`.
 
@@ -303,7 +303,7 @@ crash recovery), and offline end-to-end tests. Known limit: parallel drivers rel
 merge floor rather than perfect conflict tags (by design — see above). The run monitor
 is per host/user; runs on other machines don't appear — cross-host aggregation and a
 desktop GUI are chief-cloud's, the separate control plane, not this repo's
-([`docs/desktop-gui-decision.md`](docs/desktop-gui-decision.md)).
+([`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md)).
 
 ## License
 

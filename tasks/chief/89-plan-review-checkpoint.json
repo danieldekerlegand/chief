@@ -11,7 +11,7 @@
   "iters": 8,
   "warmup": [
     "sed -n '300,420p' engine/agent.sh",
-    "cat docs/tasklist-schema.md"
+    "cat docs/reference/tasklist-schema.md"
   ],
   "userStories": [
     {
@@ -45,7 +45,7 @@
       "title": "Opt-in per tasklist, documented, tested",
       "description": "Make it a tasklist-level choice with a sane default, so unattended runs and the 40%-of-tasks-are-one-shot reality both stay served.",
       "acceptanceCriteria": [
-        "The tasklist schema gains an optional review field (e.g. `\"review\": \"plan\"` | `\"none\"`, default `\"none\"`) documented in `docs/tasklist-schema.md`; enabling it for a tasklist is a visible, reviewable diff",
+        "The tasklist schema gains an optional review field (e.g. `\"review\": \"plan\"` | `\"none\"`, default `\"none\"`) documented in `docs/reference/tasklist-schema.md`; enabling it for a tasklist is a visible, reviewable diff",
         "`docs/` explains the review-leverage rationale (research > plan > code), when to enable plan review (large/architectural tasklists) and when not to (one-shots, refactors, doc fixes) \u2014 matching the research's own ~40%/medium/large distribution guidance",
         "A hermetic test covers all three paths with a scripted fake reviewer: approved \u2192 implementation proceeds; rejected-with-feedback \u2192 the plan step re-runs with annotations and the retry budget is honored; no reviewer \u2192 the tasklist parks in the awaiting-review state, the scheduler proceeds with siblings, and a later approval resumes it",
         "Editing `engine/` bumps `VERSION`; existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"

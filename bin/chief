@@ -64,7 +64,7 @@ Usage:
                               overwrites; --out DIR stages elsewhere. An unknown roadmap field
                               is an error (--allow-unknown warns instead). Input contract
                               (phases[] → items[] with title/description required and scope/
-                              deps/touches/iters optional): docs/roadmap-input.md
+                              deps/touches/iters optional): docs/reference/roadmap-input.md
   chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
                               --provider claude|devin|opencode|amp (default claude)
                               --model MODEL (provider-specific model override; amp has no
@@ -75,7 +75,7 @@ Usage:
                               cost and materially lower coding quality. Configure it with
                               CHIEF_LOCAL_ENDPOINT + CHIEF_LOCAL_MODEL (env or .chief/config);
                               unconfigured it errors instead of falling back to a paid
-                              provider. See docs/local-inference-preset.md
+                              provider. See docs/guides/local-inference-preset.md
   chief list                  list tasklists with pass status
   chief ps                    show active runs across ALL repos (one-shot table). Also flags an
                               UNREGISTERED driver — one that is running with no run file, which
@@ -91,7 +91,7 @@ Usage:
                               most recent log); -f/--follow streams events as they land, -l/--list
                               enumerates the logs on this host, -n N starts N lines back. stdout is
                               pure NDJSON (pipe it to jq) — notes go to stderr. This is the contract
-                              chief-cloud and embedding hosts read: docs/events.md
+                              chief-cloud and embedding hosts read: docs/reference/events.md
   chief models [provider]     list the models you can pass to --model: live from the provider for
                               devin/opencode, the stable family aliases for claude, none for amp
                               (no arg = all)
@@ -109,7 +109,7 @@ Usage:
                               — awk over text, offline, byte-identical output. Configure per repo
                               in .chief/quality.conf; `--write-baseline` is the reviewable
                               re-baseline hatch; CHIEF_VERIFY_QUALITY=0 skips it.
-                              See docs/verify-hook.md
+                              See docs/reference/verify-hook.md
   chief pause [--all]         withhold AGENT TURNS: launch no tasklist and start no new agent
                               iteration — but DRAIN, never kill: the iteration in flight runs to
                               completion so its commits land, a tasklist whose agent loop already
@@ -134,7 +134,7 @@ run flags:
                      outcome (0 merged · 2 config · 3 no-work · 4 verify-failed · 5 conflict ·
                      6 failed · 7 held). Takes all the flags/env above unchanged. Also settable as
                      CHIEF_HEADLESS=1. Never inferred from stdout being a pipe — the whole
-                     contract is docs/headless-invocation.md
+                     contract is docs/guides/headless-invocation.md
       --account-env FILE
                      run this tasklist's AGENT TURNS under a designated provider account: a
                      KEY=VALUE env file (e.g. CLAUDE_CONFIG_DIR=… or ANTHROPIC_API_KEY=…)
@@ -295,13 +295,13 @@ cmd_run() {
     claude|devin|opencode|amp) ;;
     *) echo "invalid provider '$provider' (choose claude, devin, opencode, or amp)" >&2; exit 2 ;;
   esac
-  # amp has no model selector — it picks its own (docs/providers.md#model-overrides).
+  # amp has no model selector — it picks its own (docs/guides/providers.md#model-overrides).
   # Accept-and-ignore is barred, so an EXPLICIT --model is a bad invocation. A model
   # merely inherited from .chief/config is dropped with a note instead, so `chief run
   # --amp` still works in a project whose default provider takes a model.
   if [ "$provider" = amp ] && [ -n "$model" ]; then
     if [ -n "$model_explicit" ]; then
-      echo "amp has no model selector — drop --model '$model_explicit' (docs/providers.md#model-overrides)" >&2
+      echo "amp has no model selector — drop --model '$model_explicit' (docs/guides/providers.md#model-overrides)" >&2
       exit 2
     fi
     echo "  note: amp has no model selector — dropping CHIEF_MODEL='$model' for this run" >&2
@@ -312,7 +312,7 @@ cmd_run() {
   # assignment, so bash tries to RUN it ("AUTO_MERGE_MAIN=0: command not found").
   [ -n "$verbose" ] && export CHIEF_VERBOSE=1    # inherited by the driver, forwarded to agent.sh
   [ -n "$merge" ]   && export AUTO_MERGE_MAIN="$merge"
-  # HEADLESS — the programmatic entry point (docs/headless-invocation.md). Explicit,
+  # HEADLESS — the programmatic entry point (docs/guides/headless-invocation.md). Explicit,
   # never inferred from `[ -t 1 ]`: a host that pipes an interactive run through `tee`
   # must get the SAME behavior it gets on a terminal, and a contract that changes
   # shape depending on how stdout happens to be attached is not one you can code
@@ -329,7 +329,7 @@ cmd_run() {
       ;;
     *) export CHIEF_HEADLESS=0 ;;
   esac
-  # ACCOUNT DESIGNATION (docs/account-credentials.md) — pin this run's provider turns
+  # ACCOUNT DESIGNATION (docs/reference/account-credentials.md) — pin this run's provider turns
   # to a designated account by naming a KEY=VALUE credential env FILE. A file, not
   # flags: secret VALUES must never reach argv, where `ps` shows them to every user on
   # the box. The flag beats .chief/config's CHIEF_ACCOUNT_ENV_FILE, and the path is
@@ -437,7 +437,7 @@ cmd_logs() {
   fi
 }
 
-# ── the machine-readable EVENT STREAM (docs/events.md) ───────────────────────
+# ── the machine-readable EVENT STREAM (docs/reference/events.md) ───────────────────────
 # `chief logs` hands you an agent's raw stdout for a HUMAN to read; this is its
 # machine-facing sibling. engine/events.sh appends one JSON object per
 # run/tasklist/story transition to $CHIEF_RUNS/<run-id>.events.jsonl, and this
@@ -567,7 +567,7 @@ cmd_models() {
     devin)    if command -v devin    >/dev/null 2>&1; then devin models list;            else echo "devin CLI not on PATH";    return 1; fi ;;
     opencode) if command -v opencode >/dev/null 2>&1; then opencode models ${2:+"$2"};   else echo "opencode CLI not on PATH"; return 1; fi ;;
     amp)      echo "amp — no model selector: the CLI chooses its own model, so there is nothing to pass to --model."
-              echo "      chief refuses an explicit '--model' for amp rather than ignoring it (docs/providers.md#model-overrides)." ;;
+              echo "      chief refuses an explicit '--model' for amp rather than ignoring it (docs/guides/providers.md#model-overrides)." ;;
     ""|all|help)
       _models_claude
       echo
@@ -592,7 +592,7 @@ cmd_reap()    { bash "$ENGINE/reap.sh" "$@" ; }
 # judgment anywhere — and its `ratchet` subcommand is what a verify hook calls to
 # BLOCK a merge that made the numbers worse. Not gated on load_project: measuring
 # a repo is useful with or without a chief run behind it. Contract + defaults:
-# docs/verify-hook.md.
+# docs/reference/verify-hook.md.
 cmd_quality() { bash "$ENGINE/quality.sh" "$@" ; }
 
 # ── operator pause / resume (the human's quota lever) ────────────────────────

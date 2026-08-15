@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/headless.sh — pin the HEADLESS EMBEDDING CONTRACT (docs/headless-invocation.md).
+# test/headless.sh — pin the HEADLESS EMBEDDING CONTRACT (docs/guides/headless-invocation.md).
 #
 # A host app embedding chief drives it non-interactively and reads the outcome from
 # the exit code + the machine-readable summary — never by scraping the human block.

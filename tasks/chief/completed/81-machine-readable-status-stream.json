@@ -32,7 +32,7 @@
       "description": "Give hosts a live way to consume the stream, analogous to `chief logs -f`, and document the schema as the contract chief-cloud reads.",
       "acceptanceCriteria": [
         "A documented live-consume surface exists (e.g. `chief events [--follow] [<run-id>]`) that tails the NDJSON and writes each event to stdout as it lands",
-        "`docs/` (extend `docs/monitoring.md` or add a doc) documents the event path, the versioned schema, and a consumer example — explicitly named as the contract chief-cloud + embedding hosts read",
+        "`docs/` (extend `docs/guides/monitoring.md` or add a doc) documents the event path, the versioned schema, and a consumer example — explicitly named as the contract chief-cloud + embedding hosts read",
         "Backward-compatible: `ps` / `monitor` / `logs` and the `.live.json` records are unchanged; the event stream is purely additive"
       ],
       "passes": true,

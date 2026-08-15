@@ -32,7 +32,7 @@
       "acceptanceCriteria": [
         "`.chief/verify.sh` runs `test/doc-sync.sh` when a changed path touches `bin/`, `engine/`, `VERSION`, or `README.md` (same path-scoped pattern the existing subsets use), so a version bump or a CLI surface change without a README sync blocks the merge",
         "`.github/workflows/ci.yml` runs the check on Ubuntu and macOS alongside the existing suite; `test/all.sh` includes it",
-        "The full existing suite (`test/*.sh`) and `shellcheck` stay green; docs (`CLAUDE.md` quality-gates table or `docs/verify-hook.md`) gain one line naming the new gate"
+        "The full existing suite (`test/*.sh`) and `shellcheck` stay green; docs (`CLAUDE.md` quality-gates table or `docs/reference/verify-hook.md`) gain one line naming the new gate"
       ],
       "passes": true,
       "notes": ""

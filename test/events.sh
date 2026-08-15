@@ -4,7 +4,7 @@
 # What this pins: engine/events.sh + the emit points in driver.sh/agent.sh publish a
 # per-run, append-only NDJSON log ($CHIEF_RUNS/<run-id>.events.jsonl) that a host —
 # chief-cloud, an embedding UI — subscribes to instead of polling <name>.live.json and
-# diffing it. docs/events.md is the contract; this test is what keeps the contract
+# diffing it. docs/reference/events.md is the contract; this test is what keeps the contract
 # honest. It asserts against a REAL hermetic run (fake `claude` on PATH, temp CHIEF_*
 # prefixes), not fixtures, so the events cannot drift from the transitions they project.
 #
@@ -18,7 +18,7 @@
 # and a runId that matches the file it lives in. Each run gets its OWN log file, and
 # `chief events` replays it byte-for-byte on a pure stdout.
 #
-# Two more runs pin the OBSERVATION-ONLY usage/cost/limit block (docs/events.md), the
+# Two more runs pin the OBSERVATION-ONLY usage/cost/limit block (docs/reference/events.md), the
 # runner-side data source chief-cloud's spend/quota ledger persists — both halves of
 # "populated only when the provider exposes the signal":
 #   3. A provider that PRINTS usage and trips a limit mid-turn — the sleep-and-retry
@@ -158,7 +158,7 @@ n1="$(validate "$LOG1" "run 1")"
 echo "--- $(basename "$LOG1") ($n1 events) ---"; cat "$LOG1"
 
 # The filename IS the run id — that is how a host holding only `chief: run-id=` finds
-# the log (docs/events.md), so the two must never disagree.
+# the log (docs/reference/events.md), so the two must never disagree.
 rid1="$(basename "$LOG1" .events.jsonl)"
 [ "$(jq -r '.runId' "$LOG1" | sort -u | wc -l | tr -d ' ')" = 1 ] || fail "run 1's log mixes runIds"
 [ "$(jq -r '.runId' "$LOG1" | head -1)" = "$rid1" ] \
@@ -218,7 +218,7 @@ echo "   ok  \`chief events <run-id>\` replays the log verbatim; \`-l\` lists it
 echo "events: run 2 — a verify-failed tasklist"
 mkrepo "$WORK/bad" evbad "US-1" 'echo "verify: deliberately red"; exit 1'
 # --headless so the run's outcome is also visible as an EXIT CODE, and the stream can
-# be crossed against it: the contract is one decision published twice (docs/events.md).
+# be crossed against it: the contract is one decision published twice (docs/reference/events.md).
 # (A plain `chief run` reports the same outcome in words but always exits 0 — hl_rc.)
 # RETRY_MAX=2 pins the retry budget so the sequence below is exact: a verify failure is
 # RETRYABLE (docs — a flaky gate must not rot a branch), so the tasklist is re-armed and

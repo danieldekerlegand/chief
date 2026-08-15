@@ -38,7 +38,7 @@
 #
 # Bash 3.2 compatible. Sourced by engine/driver.sh (whose exports every child git
 # inherits) and by bin/chief for the same diagnosis at init time. What an embedding
-# host sets, and what each knob below degrades to, is docs/containers.md.
+# host sets, and what each knob below degrades to, is docs/guides/containers.md.
 
 # Why git will not operate on $1 — 'ok' | 'ownership' | 'norepo' | 'nogit'.
 # The message is git's own; we only classify it, so a rewording upstream degrades to

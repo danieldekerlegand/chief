@@ -48,7 +48,7 @@ log of the second of the pair to merge:
         ir-voting-and-artifacts touches: [ir docs]
         studioos-trigger-surface touches: [studioos-data]
         Fix: give them a shared touches domain (or a dependsOn edge) so the
-        scheduler stops co-scheduling them — docs/drivers-and-safety.md.
+        scheduler stops co-scheduling them — docs/explanation/drivers-and-safety.md.
 ```
 
 **Acting on one:** add the missing shared domain to both tasklists (they collide

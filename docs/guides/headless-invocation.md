@@ -180,8 +180,8 @@ anything in this document therefore means changing that test in the same commit.
 
 ## Related
 
-- `docs/monitoring.md` — the run registry and live records these lines point at.
-- `docs/drivers-and-safety.md` — what the scheduler does with the run once it starts.
-- `docs/verify-hook.md` — the gate that decides whether a branch merges.
-- `docs/containers.md` — the other half of an embedded run: what a container needs set
+- `docs/guides/monitoring.md` — the run registry and live records these lines point at.
+- `docs/explanation/drivers-and-safety.md` — what the scheduler does with the run once it starts.
+- `docs/reference/verify-hook.md` — the gate that decides whether a branch merges.
+- `docs/guides/containers.md` — the other half of an embedded run: what a container needs set
   (state prefix, worktree root, git ownership and identity) for this contract to hold.

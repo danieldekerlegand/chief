@@ -134,7 +134,7 @@ documentation. The common shapes:
 | Provider | What a designated account usually means |
 | --- | --- |
 | `claude` | `CLAUDE_CONFIG_DIR` — point Claude Code at a **separate config/OAuth home**, which is how you switch between subscription logins; or `ANTHROPIC_API_KEY` for API-key billing |
-| `opencode` | the provider credential its configured backend reads (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, an OpenAI-compatible `OPENAI_BASE_URL` + key — see [`docs/local-inference-preset.md`](local-inference-preset.md)), and/or `XDG_CONFIG_HOME` to swap its `opencode/` auth store |
+| `opencode` | the provider credential its configured backend reads (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, an OpenAI-compatible `OPENAI_BASE_URL` + key — see [`docs/guides/local-inference-preset.md`](local-inference-preset.md)), and/or `XDG_CONFIG_HOME` to swap its `opencode/` auth store |
 | `devin` | its API/session credential, and/or the config home its `devin` CLI login is stored under |
 | `amp` | its API key (`AMP_API_KEY`) and/or its config home |
 
@@ -159,8 +159,8 @@ the seam and the non-leakage guarantee; the balancing is not chief's to make.
 
 ## See also
 
-- [`docs/providers.md`](providers.md) — the provider seam this hangs off.
-- [`docs/headless-invocation.md`](headless-invocation.md) — the summary JSON that
+- [`docs/guides/providers.md`](providers.md) — the provider seam this hangs off.
+- [`docs/guides/headless-invocation.md`](headless-invocation.md) — the summary JSON that
   reports the account back.
-- [`docs/events.md`](events.md) — `run.started` and the rest of the stream.
-- [`docs/monitoring.md`](monitoring.md) — the run registry `chief ps` reads.
+- [`docs/reference/events.md`](events.md) — `run.started` and the rest of the stream.
+- [`docs/guides/monitoring.md`](monitoring.md) — the run registry `chief ps` reads.

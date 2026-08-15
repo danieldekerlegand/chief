@@ -11,7 +11,7 @@
   "iters": 7,
   "warmup": [
     "sed -n '1,60p' .chief/verify.sh",
-    "cat docs/verify-hook.md"
+    "cat docs/reference/verify-hook.md"
   ],
   "userStories": [
     {
@@ -49,7 +49,7 @@
       "acceptanceCriteria": [
         "`.chief/verify.sh` (this repo, self-hosting) runs the quality ratchet as a gate, path-scoped and cheapest-first consistent with the existing structure, and blocks on regression",
         "`templates/verify.sh` gains the same gate (commented, and off or lenient by default so `chief init` in a brownfield repo is not immediately unmergeable) plus a baseline-bootstrap instruction",
-        "`docs/verify-hook.md` documents the quality axis: what is measured, ratchet semantics, the baseline file, re-baselining, per-repo config, and the explicit statement that the gate is deterministic and contains no model judgment",
+        "`docs/reference/verify-hook.md` documents the quality axis: what is measured, ratchet semantics, the baseline file, re-baselining, per-repo config, and the explicit statement that the gate is deterministic and contains no model judgment",
         "A hermetic test asserts the ratchet: a branch that adds a deeply-nested duplicated block regresses a tracked metric and is BLOCKED; a branch that refactors it away IMPROVES the metric and is ALLOWED; a language with no analyzer reports UNMEASURED rather than passing silently",
         "Editing `bin/`/`engine/` bumps `VERSION` (`test/version-bump.sh`); existing `test/{smoke,ratelimit,noworkguard,pause,teardown}.sh` still pass"
       ],

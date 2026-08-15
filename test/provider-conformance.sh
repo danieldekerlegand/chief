@@ -14,7 +14,7 @@
 # ── REGISTERING A NEW PROVIDER (the whole job) ───────────────────────────────
 # Add ONE line to the ROSTER array below. Nothing else in this file changes —
 # the fake CLI is generated from a shared double, so there is no new scaffolding.
-# See docs/providers.md ("The checklist", item 10) for the surrounding surfaces.
+# See docs/guides/providers.md ("The checklist", item 10) for the surrounding surfaces.
 #
 #   name|prompt-channel|model-stance|argv-WITH-model|argv-WITHOUT-model
 #
@@ -48,7 +48,7 @@ CHIEF="$ROOT/bin/chief"
 # ── THE ROSTER ───────────────────────────────────────────────────────────────
 # amp is `unwired` by record, not by accident: its CLI has no model selector, so
 # chief REFUSES an explicit --model for it rather than ignoring it (settled by
-# tasklist 85 — docs/providers.md#model-overrides). Section 4 below asserts that
+# tasklist 85 — docs/guides/providers.md#model-overrides). Section 4 below asserts that
 # refusal for every `unwired` entry, so the stance stays a decision, not a drop.
 ROSTER=(
 "claude|stdin|wired|--dangerously-skip-permissions --print --model %MODEL%|--dangerously-skip-permissions --print"
@@ -82,7 +82,7 @@ roster_list="$(roster_names)"
 if [ "$agent_list" != "$chief_list" ]; then
   echo "engine/agent.sh accepts:" >&2; printf '  %s\n' $agent_list >&2
   echo "bin/chief cmd_run accepts:" >&2; printf '  %s\n' $chief_list >&2
-  fail "the two validator lists have diverged (docs/providers.md checklist item 3)"
+  fail "the two validator lists have diverged (docs/guides/providers.md checklist item 3)"
 fi
 if [ "$agent_list" != "$roster_list" ]; then
   echo "validators accept:" >&2; printf '  %s\n' $agent_list >&2

@@ -2,7 +2,7 @@
 # test/gen.sh — ROADMAP → TASKLISTS GENERATOR (tasklist 83, US-3).
 #
 # `chief gen` is the operation an EMBEDDING HOST calls to author tasklists
-# programmatically (docs/roadmap-input.md is the published input contract), so the
+# programmatically (docs/reference/roadmap-input.md is the published input contract), so the
 # things that must not drift are the CONVENTIONS of what it emits and the HONESTY of
 # what it rejects. Both are pinned here against one fixture roadmap.
 #
@@ -64,7 +64,7 @@ cat > tasks/chief/completed/41-old-thing.json <<'JSON'
   "userStories":[{"id":"US-1","title":"x","acceptanceCriteria":["x"],"passes":true,"notes":""}] }
 JSON
 
-# ── 3. The fixture roadmap (the contract shape, docs/roadmap-input.md) ────────
+# ── 3. The fixture roadmap (the contract shape, docs/reference/roadmap-input.md) ────────
 cat > "$WORK/roadmap.json" <<'JSON'
 {
   "phases": [

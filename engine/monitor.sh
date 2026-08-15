@@ -462,7 +462,7 @@ render() {
     names="$(field names "$f")";     started="$(field started "$f")"
     limitmax="$(field limitmax "$f")"
     retrymax="$(field retrymax "$f")"
-    # ACCOUNT DESIGNATION (docs/account-credentials.md) — WHICH account this run
+    # ACCOUNT DESIGNATION (docs/reference/account-credentials.md) — WHICH account this run
     # spends, never its credentials: the registry carries the operator's label and the
     # env-file PATH, and the file's values are never written anywhere the monitor reads.
     acct="$(field accountlabel "$f")"; acctfile="$(field account "$f")"

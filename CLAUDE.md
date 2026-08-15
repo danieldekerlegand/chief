@@ -12,7 +12,7 @@ the parallel-safety model are in `docs/`.
   `engine/monitor.sh` run registry, `engine/lib.sh` shared helpers, `engine/live.sh` per-tasklist
   liveliness records, `engine/events.sh` the NDJSON event stream, `engine/reap.sh` orphan reaping)
   and the **CLI** (`bin/chief`), including the roadmap → tasklists generator
-  (`engine/gen.sh`, `chief gen` — input contract in `docs/roadmap-input.md`).
+  (`engine/gen.sh`, `chief gen` — input contract in `docs/reference/roadmap-input.md`).
 - The hermetic **test suite** (`test/*.sh`), the `chief init` **templates** (`templates/`), and the
   **docs** (`docs/`).
 
@@ -97,7 +97,7 @@ VERSION              # engine version — bump on any engine/bin/install change
   changes, not just the `passes` flags** (a doc-only merge that flipped every flag built nothing).
 - **One story per iteration; keep `main` green.** The engine merges with `--no-ff` only after a clean
   rebase + a green `verify.sh`; a non-zero verify leaves the branch as `VERIFY-FAILED` for re-engagement.
-- **Verify is the quality bar** (`docs/verify-hook.md`): exit 0 allows the merge, non-zero blocks it,
+- **Verify is the quality bar** (`docs/reference/verify-hook.md`): exit 0 allows the merge, non-zero blocks it,
   cwd is the repo root with the finished branch checked out, and the hook **must stay executable**.
   `NO_VERIFY=1` skips it (don't); `STRICT_VERIFY=1` blocks on pre-existing issues too.
 - **Self-run:** after `chief init`, drive chief on chief from the repo root — `bin/chief run -n` prints

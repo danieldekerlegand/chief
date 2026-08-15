@@ -29,7 +29,7 @@
       "description": "Ensure the docs are internally consistent with the decision.",
       "acceptanceCriteria": [
         "`git grep -n 'app/'` (and the README) carries no dangling reference to a nonexistent chief desktop app; any monitoring-GUI mention points to chief-cloud",
-        "The README's monitoring section reflects the decision (CLI monitoring here; GUI via chief-cloud), consistent with the `docs/monitoring.md` content",
+        "The README's monitoring section reflects the decision (CLI monitoring here; GUI via chief-cloud), consistent with the `docs/guides/monitoring.md` content",
         "Docs-only change (no `bin/`/`engine/` edit under the default CLI-only decision, so no VERSION bump is required); `jq`/`bash -n` clean on anything edited that warrants it"
       ],
       "passes": true,

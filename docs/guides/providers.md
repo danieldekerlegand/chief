@@ -277,8 +277,8 @@ stalls; that gap is documented rather than assumed away.
 
 - [`README.md`](../README.md) — provider selection in the quickstart + command table.
 - [`ROADMAP.md`](../ROADMAP.md) — provider breadth as a tracked capability.
-- [`docs/local-inference-preset.md`](local-inference-preset.md) — presets: a named
+- [`docs/guides/local-inference-preset.md`](local-inference-preset.md) — presets: a named
   bundle that resolves to an existing provider·model, the right home for
   endpoint/credential wiring.
-- [`docs/verify-hook.md`](verify-hook.md) — the merge gate every provider's work
+- [`docs/reference/verify-hook.md`](verify-hook.md) — the merge gate every provider's work
   passes through, whichever CLI produced it.

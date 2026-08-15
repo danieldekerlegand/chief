@@ -103,7 +103,7 @@ An unrecognised field at the top level, on a phase, or on an item **fails the ge
 with the offending path and the allowed field list:
 
 ```
-chief gen: the roadmap does not match the input contract (docs/roadmap-input.md):
+chief gen: the roadmap does not match the input contract (docs/reference/roadmap-input.md):
   - roadmap: unknown field "version" — the contract allows "phases"
   - phases[0].items[0]: unknown field "touched" — the contract allows "title", "description", "scope", "deps", "touches", "iters"
   (pass --allow-unknown to ignore unknown fields instead of failing)

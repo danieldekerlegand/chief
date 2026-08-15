@@ -83,7 +83,7 @@ verify_branch() {
   if [ -z "${VERIFY_HOOK:-}" ]; then echo "  verify: (no hook configured — skipped)"; return 0; fi
   if [ ! -x "$VERIFY_HOOK" ]; then echo "  ✗ verify hook not executable: $VERIFY_HOOK"; return 1; fi
   # Export STRICT_VERIFY/NO_VERIFY too, so a hook can baseline NEW failures vs the
-  # base branch rather than failing on debt that pre-exists on it (see docs/verify-hook.md).
+  # base branch rather than failing on debt that pre-exists on it (see docs/reference/verify-hook.md).
   ( cd "$cwd" && CHIEF_BASE_BRANCH="${work_base:-$BASE_BRANCH}" CHIEF_PROJECT="$cwd" \
       STRICT_VERIFY="${STRICT_VERIFY:-0}" NO_VERIFY="${NO_VERIFY:-0}" "$VERIFY_HOOK" )
 }

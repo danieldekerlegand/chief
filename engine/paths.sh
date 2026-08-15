@@ -26,7 +26,7 @@
 #                                    another. Ephemeral by nature: state does not
 #                                    survive a container restart, which is why a
 #                                    host that wants durable runs sets (1) onto a
-#                                    volume. See docs/containers.md.
+#                                    volume. See docs/guides/containers.md.
 #
 # NOTHING HERE CREATES A DIRECTORY. These are pure path resolvers, called from the
 # top of scripts that may only be printing help; the callers that need the tree
