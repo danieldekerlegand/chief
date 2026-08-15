@@ -1,5 +1,7 @@
 # The local-inference preset — cost avoidance as a supported mode
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 `chief run --local` (long form `--preset local`, or `CHIEF_PRESET=local`) runs
 **every agent turn on a LOCAL / self-hosted inference server**, through the existing
 OpenCode provider dispatch. Tokens cost nothing, so a run can be as long and as

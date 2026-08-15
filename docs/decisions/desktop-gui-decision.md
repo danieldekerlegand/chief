@@ -1,5 +1,7 @@
 # Decision: chief stays CLI-only — the desktop GUI is chief-cloud's
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 **Status:** decided · **Scope:** product boundary (no engine change) · **Supersedes:** the
 referenced-but-absent `app/` desktop monitor
 

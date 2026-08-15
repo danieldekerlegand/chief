@@ -1,5 +1,7 @@
 # Cross-repo dependencies
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 A tasklist can wait on work that lands in a **different repo** by qualifying the
 dep as `<repo>:<tasklist>`:
 

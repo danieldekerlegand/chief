@@ -1,5 +1,7 @@
 # Tasklist schema
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 A tasklist is one JSON file in `tasks/chief/<name>.json`. `<name>` is its id
 (used for the branch, deps, and the completed record). It's a coherent unit of
 work run to completion by a chain of agent iterations.

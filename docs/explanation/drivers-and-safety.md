@@ -1,5 +1,7 @@
 # Drivers, scheduling, and the safety model
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 `chief run` uses one driver; `-p N` (`--parallel`) sets max concurrency (default 1
 = sequential). Every tasklist — even at `-p 1` — runs in its own **git worktree**
 (isolated HEAD/index/working tree + gitignored `.chief/state`), so agent loops

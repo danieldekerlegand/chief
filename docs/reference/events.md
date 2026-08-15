@@ -1,5 +1,7 @@
 # The event stream — chief's machine-readable status contract
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 `chief ps` / `chief monitor` / `chief logs` are the **human** views of a run
 ([`monitoring.md`](monitoring.md)); `--headless` gives a host a run-id and a final
 summary ([`headless-invocation.md`](headless-invocation.md)). Both are **snapshots**.

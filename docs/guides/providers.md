@@ -1,5 +1,7 @@
 # Providers — the onboarding recipe
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 Chief drives an agent CLI, it doesn't embed one. The whole seam is a single `case`
 in [`engine/agent.sh`](../engine/agent.sh)'s `_run_provider()`: chief composes the
 prompt, pipes it in, reads stdout, and preserves the CLI's exit status. Everything

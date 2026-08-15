@@ -1,5 +1,7 @@
 # Running chief in a container / Riju workspace
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 An embedded chief run inside a container — a Cuneiform **Riju** per-language workspace,
 a `docker run` against a bind-mounted checkout, a CI job in an image — must behave
 exactly like a host run: same scheduling, same `implement → verify → merge`, same

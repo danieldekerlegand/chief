@@ -1,5 +1,7 @@
 # Monitoring active runs
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 Every `chief run` registers itself in a **host-wide run registry** so you can see
 what's happening across *all* your repos from anywhere — not just the terminal a
 run is printing to. Two commands read it:

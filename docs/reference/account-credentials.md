@@ -1,5 +1,7 @@
 # Account credentials — running under a designated provider account
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 By default a chief run spends **whatever account the invoking shell already carries**:
 `engine/agent.sh` execs the provider CLI (`claude`, `devin`, `opencode`, `amp`) and it
 inherits the environment, so it authenticates the same way it would if you had typed

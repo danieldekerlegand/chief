@@ -1,5 +1,7 @@
 # Roadmap input contract (`chief gen`)
 
+> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+
 `chief gen <roadmap.json>` turns a **roadmap document** into one schema-valid tasklist
 per roadmap item — `tasks/chief/NN-slug.json`, numbered in the next free band, with
 `branchName`, `dependsOn` and `touches` already correct
