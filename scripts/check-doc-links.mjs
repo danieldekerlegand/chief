@@ -61,7 +61,28 @@ function scan() {
         if (!existsSync(p)) broken.push({ from: rel, to: raw, kind: 'link' });
       }
     }
+    // Structured cross-repo references are NOT rot. insimul's contract files carry objects like
+    // { "repo": "chief", "path": `docs/events.md` } — the path is correct RELATIVE TO THAT REPO,
+    // and flagging it would make the gate noisy about things that are right. A noisy gate gets
+    // switched off, so the parser skips any docs/ path inside an object that names another repo.
+    const foreign = new Set();
+    if (rel.endsWith('.json')) {
+      const own = (() => { try { return execFileSync('git', ['rev-parse', '--show-toplevel'],
+        { encoding: 'utf8' }).trim().split('/').pop(); } catch { return ''; } })();
+      const walk = (node, inForeign) => {
+        if (Array.isArray(node)) return node.forEach((n) => walk(n, inForeign));
+        if (!node || typeof node !== 'object') return;
+        const named = node.repo || node.owner;
+        const isForeign = inForeign || (typeof named === 'string' && named && named !== own);
+        for (const v of Object.values(node)) {
+          if (typeof v === 'string' && isForeign && v.startsWith('docs/')) foreign.add(v);
+          else walk(v, isForeign);
+        }
+      };
+      try { walk(JSON.parse(body), false); } catch { /* not parseable — fall through */ }
+    }
     for (const m of body.matchAll(BARE_DOC)) {
+      if (foreign.has(m[1])) continue;
       if (!existsSync(m[1])) broken.push({ from: rel, to: m[1], kind: 'path' });
     }
   }
