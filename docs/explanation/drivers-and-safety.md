@@ -137,7 +137,7 @@ Two more guards back this up:
   `snapshots/<name>.rebase-conflict.md` (or `<name>.merge-conflict.md` for the final
   `--no-ff` merge), the worker log and the `.status` line point at it, and a later
   successful merge clears it. Status *values* are unchanged. See
-  [`failure-recovery-runbook.md`](failure-recovery-runbook.md) §2.
+  `failure-recovery-runbook.md` §2.
 
 - **Refusal is not conflict (`REBASE-REFUSED`).** A non-zero `git rebase` is only a
   *content* collision when git leaves **≥1 unmerged path** behind. Git also refuses
