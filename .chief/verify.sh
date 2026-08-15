@@ -29,6 +29,21 @@ if [ -z "$changed" ]; then
   exit 0
 fi
 
+# --- documentation link gate -------------------------------------------------
+# Every local doc reference must resolve. RATCHET, not a wall: it compares this
+# branch against the base and blocks only a REGRESSION, so pre-existing rot is
+# retired deliberately instead of blocking every merge from day one. Local refs
+# only — an external URL checker fails for network reasons, and a gate that fails
+# for reasons unrelated to the change is a gate that gets switched off.
+# Set CHIEF_VERIFY_DOCLINKS=0 to skip while iterating.
+if [ "${CHIEF_VERIFY_DOCLINKS:-1}" = 1 ] \
+   && echo "$changed" | grep -qE '\.md$|^docs/' \
+   && [ -f scripts/check-doc-links.mjs ] && command -v node >/dev/null 2>&1; then
+  node scripts/check-doc-links.mjs --ratchet --base "${CHIEF_BASE_BRANCH:-main}" \
+    || { echo "verify: doc-link regression (see above)"; exit 1; }
+fi
+
+
 say()     { echo "verify: $*"; }
 block()   { say "BLOCK — $*"; exit 1; }
 touches() { grep -qE "$1" <<<"$changed"; }
