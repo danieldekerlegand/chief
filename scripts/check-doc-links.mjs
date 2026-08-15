@@ -47,6 +47,12 @@ function scan() {
   const broken = [];
   for (const rel of tracked()) {
     if (SKIP_DIR.some((s) => `/${rel}`.includes(s))) continue;
+    // Archived documents are NOT gated as citers. An archived doc records a past state; its
+    // links described the tree AS IT WAS. Repointing them at today's files would make the
+    // document misrepresent what it documented — the same reason an ADR is superseded rather
+    // than edited. The archive banner already tells the reader it is not current. Links INTO
+    // archive/ from live docs are still checked: those are a live document's promise.
+    if (rel.includes('docs/archive/')) continue;
     if (SKIP_EXT.some((e) => rel.toLowerCase().endsWith(e))) continue;
     let body;
     try { body = readFileSync(rel, 'utf8'); } catch { continue; }
