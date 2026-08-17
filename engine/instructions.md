@@ -36,7 +36,19 @@ story, so keep each iteration self-contained.
    **Never go looking for the tasklist outside your worktree.** Editing the project's
    copy corrupts the driver's bookkeeping — it can block the merge checkout and
    silently prevent the finished tasklist from being retired.
-8. **Append to `.chief/state/progress.txt`** (never replace): what you did, files
+8. **Record what you OBSERVED** in that story's `notes` field, in the same edit.
+   If any of its `acceptanceCriteria` states a bar — a number, or a word like
+   *green*, *passes*, *clean*, *identical* — chief will **demote the story back to
+   `passes: false` and refuse to merge the branch** when `notes` carries no
+   observation. It cannot evaluate the bar itself, so it will not record a claim it
+   cannot check; the status is `UNVERIFIED`, and it is a merge blocker, not a warning.
+   The bar is lenient: any number, or any of those result words, satisfies it. Write
+   the value you actually saw, not the value you expected.
+       "notes": "cargo build + clippy -D warnings + cargo test: green, 42 passed"
+       "notes": "npm run build green; suite 118 passed, 0 failed"
+   A story whose criteria state no bar needs no number — but a one-line note saying
+   HOW it was satisfied is still the norm.
+9. **Append to `.chief/state/progress.txt`** (never replace): what you did, files
    changed, and a short **Learnings for future iterations** note (patterns,
    gotchas). Promote genuinely reusable patterns to a `## Codebase Patterns`
    section at the top.

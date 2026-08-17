@@ -19,6 +19,16 @@
 #            US-2 left false but WITH evidence in `notes` → promoted, verified, merged.
 set -euo pipefail
 
+# THE PROMPT MUST ASK FOR WHAT THE GATE ENFORCES. This gate demotes a passing story
+# whose criteria state a bar and whose notes carry no observation — but for its first
+# release engine/instructions.md never mentioned `notes` at all, so agents wrote them
+# only by accident. chief-cloud lost a whole run to it on 2026-08-17: three tasklists,
+# 16 commits of finished work, every story UNVERIFIED. A gate the prompt never states
+# is a trap, so assert the two halves stay together.
+INSTR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/engine/instructions.md"
+grep -qi 'notes' "$INSTR" || { echo "EVIDENCE FAIL: engine/instructions.md never tells the agent to write notes" >&2; exit 1; }
+grep -qiE 'observ|bar' "$INSTR" || { echo "EVIDENCE FAIL: engine/instructions.md never explains the observed-value requirement" >&2; exit 1; }
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
