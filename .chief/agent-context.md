@@ -40,4 +40,6 @@ than the research turn that would precede them. Turn it on when several stories 
 one body of code (the map is paid for once and reused), when the change lands somewhere
 unfamiliar, or when a wrong mental model would be expensive. Leave it off for small,
 obvious, single-story work. `CHIEF_RESEARCH=1` / `CHIEF_RESEARCH=0` overrides the
-tasklist for one run, in both directions.
+tasklist for one run, in both directions. The full contract — the required sections,
+what sub-agents may return, and what happens when the phase cannot produce a map — is
+chief's own `docs/research-phase.md`.

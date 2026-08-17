@@ -39,6 +39,10 @@
 #      research with review off never opens a reviewer, and plan review with research
 #      off is exactly what it was.
 #
+# THE REFERENCE. docs/research-phase.md — the required sections, the sub-agent
+# structured-output contract, the persistence path, the reuse-on-resume guarantee, the
+# human-edit path, the when-to-skip rule and the bounded-failure state, in prose.
+#
 # CONSUMED BY. engine/agent.sh (dispatch + validation + promotion to the durable path)
 # and engine/driver.sh (the durable path itself, and the RESEARCH-FAILED status).
 # research_review_gate additionally uses engine/review.sh's primitives when that file

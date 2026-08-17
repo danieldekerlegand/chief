@@ -296,6 +296,8 @@ event, the stall counter reset, and the next iteration puts it in front of a hum
 - `test/plan-review.sh` — the hermetic proof of all three paths (approved · sent back
   within budget · nobody there), with a scripted fake reviewer speaking the annotate
   gate above. It is in the merge gate for any branch that touches the engine.
+- [research-phase.md](research-phase.md) — the rung above: the map every story
+  implements from, and how this checkpoint reviews it first
 - [tasklist-schema.md](tasklist-schema.md) — the rest of the tasklist fields
 - [events.md](events.md) — the `story.plan-*` / `tasklist.plan-invalid` contract
 - [monitoring.md](monitoring.md) — the phase vocabulary `chief ps` renders

@@ -106,7 +106,8 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
 docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
-                     # model · containers.md (running chief in a container/Riju workspace)
+                     # model · containers.md (running chief in a container/Riju workspace) ·
+                     # research-phase.md + plan-review.md (the two opt-in review checkpoints)
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
 VERSION              # engine version — bump on any engine/bin/install change
 ```

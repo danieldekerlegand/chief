@@ -132,7 +132,9 @@ Notes:
   document is **reviewable and editable**: a human can correct it between iterations and
   the next story reads the correction, and on a tasklist that also sets `"review":
   "plan"` the map goes to the same reviewer first — research, then plan, then code.
-  Neither field requires the other.
+  Neither field requires the other. The required sections, the sub-agent contract, the
+  reuse-on-resume guarantee and the bounded-failure state:
+  [../research-phase.md](../research-phase.md).
 - **`repo` targets a nested repo (e.g. a submodule).** The agent runs in a worktree of
   that repo, so its checks/deps must resolve there (use `warmup` to provision them, and a
   verify hook that dispatches off its cwd). All merges are serialized, so two tasklists
