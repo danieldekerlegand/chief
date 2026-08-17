@@ -8,6 +8,9 @@
 #
 # Two tasklists, one run, one fake agent, so both halves of the rule are proven at
 # once — a gate that fails honest work is worse than no gate:
+# The fixtures name only LOCAL work on purpose: a criterion naming another repo is
+# stopped earlier and for a different reason (test/criteria-scope.sh), and this test
+# has to reach the evidence gate to say anything about it.
 #   ev-bad   commits real work, emits COMPLETE, leaves its stories false with an empty
 #            `notes` → UNVERIFIED, nothing merged or retired, and the message names the
 #            story and quotes the criterion it claimed.
@@ -66,8 +69,8 @@ cat > tasks/chief/ev-bad.json <<'JSON'
 { "project":"ev","branchName":"chief/ev-bad","description":"silent promotion",
   "iters":2,"dependsOn":[],"touches":["bad"],"warmup":[],
   "userStories":[
-    {"id":"US-1","title":"file argos:82 to completed/","description":"",
-     "acceptanceCriteria":["the tasklist argos:82 is filed under completed/"],"passes":false,"notes":""},
+    {"id":"US-1","title":"file 82-some-work to completed/","description":"",
+     "acceptanceCriteria":["the tasklist 82-some-work is filed under completed/"],"passes":false,"notes":""},
     {"id":"US-2","title":"reach GREEN acceptance","description":"",
      "acceptanceCriteria":["the baseline to beat is 77 failed"],"passes":false,"notes":""}
   ] }
@@ -101,8 +104,8 @@ git checkout -q main
 LOG="$REPO/.chief/state/parallel/ev-bad.log"
 [ -f "$LOG" ]                          || fail "no worker log at $LOG"
 grep -q 'UNVERIFIED' "$WORK/run.log"   || fail "the run summary never surfaces the UNVERIFIED status"
-grep -q '✗ US-1 — file argos:82 to completed/' "$LOG" || fail "the failure never names the story (id + title)"
-grep -q 'the tasklist argos:82 is filed under completed/' "$LOG" \
+grep -q '✗ US-1 — file 82-some-work to completed/' "$LOG" || fail "the failure never names the story (id + title)"
+grep -q 'the tasklist 82-some-work is filed under completed/' "$LOG" \
   || fail "the failure never quotes the criterion the story claimed"
 grep -q 'the baseline to beat is 77 failed' "$LOG"  || fail "only the first unevidenced story was reported"
 # Not INCOMPLETE: the iteration budget did not run out, the evidence did, and the two
