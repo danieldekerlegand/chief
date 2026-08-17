@@ -45,23 +45,27 @@
 # criteria_scope_report TASKLIST [ROOT] — print one block per criterion that names
 # something outside ROOT (default: the tasklist's own directory tree — at runtime
 # the worktree, at authoring time the project). Empty output = clean.
+# Sibling checkouts: the repos that sit NEXT TO this project on disk and are not
+# part of this worktree, one per line. Absent (a container, a lone clone) the rule
+# simply does not fire — rules 1 and 2 do not depend on it.
+criteria_siblings() {
+  local proj="$1" root="${2:-}" self d n
+  self="$(basename "${proj:-.}")"
+  [ -n "$proj" ] && [ -d "$proj/.." ] || return 0
+  for d in "$proj/.."/*/; do
+    [ -e "$d.git" ] || continue
+    n="$(basename "$d")"
+    [ "$n" = "$self" ] && continue                    # the project is not foreign to itself
+    [ -n "$root" ] && [ -e "$root/$n" ] && continue   # …nor is a name that resolves in here
+    printf '%s\n' "$n"
+  done
+}
+
 criteria_scope_report() {
-  local tl="$1" root="${2:-}" proj self sibs="" d n
+  local tl="$1" root="${2:-}" proj self sibs
   proj="${CHIEF_PROJECT:-$root}"
   self="$(basename "${proj:-.}")"
-  # Sibling checkouts: the repos that sit NEXT TO this project on disk and are not
-  # part of this worktree. Absent (a container, a lone clone) the rule simply does
-  # not fire — rules 1 and 2 do not depend on it.
-  if [ -n "$proj" ] && [ -d "$proj/.." ]; then
-    for d in "$proj/.."/*/; do
-      [ -e "$d.git" ] || continue
-      n="$(basename "$d")"
-      [ "$n" = "$self" ] && continue                    # the project is not foreign to itself
-      [ -n "$root" ] && [ -e "$root/$n" ] && continue   # …nor is a name that resolves in here
-      sibs="$sibs$n
-"
-    done
-  fi
+  sibs="$(criteria_siblings "$proj" "$root")"
   jq -r --arg sibs "$sibs" --arg self "$self" '
     def toks: [ splits("[^A-Za-z0-9_./:~-]+") ] | map(sub("[./:-]+$"; "")) | map(select(length > 0));
     def clip: if (. | length) > 200 then .[0:197] + "..." else . end;
@@ -71,6 +75,13 @@ criteria_scope_report() {
       elif test("^[a-z][a-z0-9_-]*:[0-9]") then sub(":.*$"; "")   # NB: no dot — `driver.sh:1075` is a line reference, not a repo
       else "" end;
     . as $t
+    # The branch namespace of THIS repo, taken from the tasklist rather than hardcoded:
+    # branchName is "<ns>/NN-slug", so a token "<ns>/63" names a BRANCH IN THIS REPO, not
+    # a path into a sibling checkout that happens to share the name. Without this, the
+    # sibling rule below fired on the universal chief branch convention in every repo that
+    # cites one of its own tasklists: 83 such findings across 14 repos, none of them real.
+    # The cross-repo form is the colon notation ("chief:290"), which rule 2 still catches.
+    | ( $t.branchName // "" | sub("/.*$"; "") ) as $ns
     | ( [ $t.userStories[]? | (.title // ""), (.description // ""), ((.acceptanceCriteria // [])[]?) ]
         + [ $t.description // "" ] ) as $text
     | ( [ $text[] | toks[] | outside_ref ]
@@ -87,6 +98,16 @@ criteria_scope_report() {
         | ( ($tok | outside_ref) as $r
             | if $r != "" then $r
               elif ($tok | test("^[A-Za-z0-9._-]+/")) and ($foreign | index($tok | sub("/.*$"; "")))
+                     # …unless it is the branch namespace of this repo followed by a tasklist
+                     # stem ("chief/63", "chief/33-collab-community-browser") or the literal
+                     # placeholder the docs use ("chief/NN-slug").
+                     and (($ns == "") or (($tok | test("^" + $ns + "/([0-9]|NN-slug)")) | not))
+                     # …and unless EVERY later component is itself a repo name, which makes it
+                     # prose listing repos with slashes ("koine/agora", "argos/cuneiform/formant"),
+                     # not a path. The tail of a real path is directories and files, not repos.
+                     and ((($tok | split("/"))[1:]
+                            | map(select(. as $c | ($foreign + [$self]) | index($c))) | length)
+                          < (($tok | split("/"))[1:] | length))
                 then ($tok | sub("/.*$"; ""))
               else "" end ) as $repo
         | select($repo != "" and (($declared | index($repo)) | not))
