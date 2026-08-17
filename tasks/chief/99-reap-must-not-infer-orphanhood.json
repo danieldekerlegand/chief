@@ -24,7 +24,8 @@
         "A process whose argv carries a `--chief-run=` id the sweep cannot resolve is reported and LEFT ALONE, not reaped. Refusing to act on an unresolvable process is the conservative direction, and reaping is irreversible while leaving an orphan is not.",
         "The behaviour is identical on macOS and Linux. Today the environment-scoped path is inert under SIP, so the platform with the weaker mechanism gets the more destructive behaviour — the fallback must be safer than the primary, never more aggressive."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     },
     {
       "id": "US-2",

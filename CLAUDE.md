@@ -49,7 +49,10 @@ pay for what you changed. A tasklist may override it with its own `"verify":[...
 | Docs vs engine (`README.md`, `VERSION`, `bin/chief`) | README's bold `**vX.Y.Z**` == `VERSION` and its command table covers every `bin/chief` subcommand (`test/doc-sync.sh`) |
 | Tasklists (`tasks/chief/*.json`) | valid JSON (`jq -e .`); `branchName == chief/NN-slug`; `mergedToMain:false` until merged |
 
-Notes: `shellcheck` is enforced in CI (`.github/workflows/ci.yml`) and skipped locally if absent —
+Notes: the behavioral tests install chief from **`git rev-parse HEAD`**, not from your working
+tree — an uncommitted `engine/` edit is invisible to them. Commit first, then run the test, then
+`--amend`; or source `engine/reap.sh` (etc.) straight from the worktree to smoke-test before
+committing. `shellcheck` is enforced in CI (`.github/workflows/ci.yml`) and skipped locally if absent —
 install it for parity. The behavioral subset is hermetic (a scripted fake `claude` on `PATH`, temp
 prefixes — it never touches your real `~/.chief`); set `CHIEF_VERIFY_TESTS=0` to skip it while
 iterating. `monitor.sh` is intentionally out of the auto-gate (timing-sensitive under parallel load)

@@ -401,6 +401,76 @@ chief_run_id_wellformed() {   # $1 = run id
   return 0
 }
 
+# ── CAN THIS SWEEP EVEN SEE THE REGISTRY THE RUN BELONGS TO? ─────────────────
+#
+# "No run file for this marker" is the entire evidence for "orphan", and an ABSENCE
+# is only evidence when you are looking in the right place. Point a sweep at a
+# $CHIEF_RUNS that is not the one a run registered into — a hermetic test's temp
+# prefix, a container's, a second install's — and every perfectly healthy run on the
+# host reads as orphaned. That is not hypothetical: `test/reapscope.sh` and
+# `test/reapenv.sh` invoked a host-wide `chief reap` out of a temp prefix and it
+# killed three live runs in three sibling repos (2026-08-17). Only the run the sweep
+# was executing inside survived, because $CHIEF_RUN_ID excluded it by construction.
+#
+# So a run-marked process may only be reaped when THIS install can ACCOUNT for the
+# run its marker names. Three independent reads, any one of which is enough:
+#
+#   1. a run file in our $CHIEF_RUNS claims the id — we are looking at its registry,
+#      so what that registry says (or does not say) about it is meaningful;
+#   2. the id's cksum names a repo in our known-repos registry ($CHIEF_REPOS) — the
+#      same lookup chief_find_unregistered_drivers already scopes itself with;
+#   3. the id's cksum names a worktree dir under OUR worktree root. The driver
+#      mkdir's $WT_ROOT for itself before it does anything else, so this holds for
+#      every run this prefix has ever started — including one whose repo fell out of
+#      the known-repos registry, which must not turn a real orphan unreapable.
+#
+# None of the three: the run belongs to somebody else's prefix, our registry was
+# never going to know about it, and its absence there says NOTHING. Report it and
+# leave it alone. The asymmetry decides it — an orphan that survives this sweep is
+# reaped by the next one, and a live run that does not survive cannot be un-killed.
+#
+# This applies to the argv key and the inherited key alike, on purpose. The cwd key
+# needs no such check: it only ever matches inside $CHIEF_WT_ROOT_ALL, which IS this
+# prefix, so a cwd match is resolvable by construction. And applying it to argv is
+# what makes macOS and Linux agree — under SIP the environment key is inert, so argv
+# is the FALLBACK there, and a fallback must never be more aggressive than the
+# primary it stands in for.
+
+# (1) Does a run file in THIS registry claim the id? Matched on the runid= field, the
+# same way chief_run_id_live reads it.
+chief_run_id_registered() {   # $1 = run id
+  local id="${1:-}" runs f
+  [ -n "$id" ] || return 1
+  runs="${CHIEF_RUNS:-$CHIEF_PREFIX_DEFAULT/runs}"
+  for f in "$runs"/*.run; do
+    [ -e "$f" ] || continue
+    [ "$(sed -n 's/^runid=//p' "$f" 2>/dev/null | head -1)" = "$id" ] && return 0
+  done
+  return 1
+}
+
+# (3) Does OUR worktree root hold that repo's worktrees? The per-repo dir is
+# `<basename>-<cksum of the repo's absolute path>` and the run id carries the same
+# cksum, so the glob answers it without needing the repo path itself.
+chief_run_id_has_worktree() { # $1 = run id
+  local ck d
+  ck="$(chief_run_id_cksum "${1:-}")"
+  case "$ck" in ''|*[!0-9]*) return 1 ;; esac
+  for d in "$CHIEF_WT_ROOT_ALL"/*-"$ck"; do
+    [ -d "$d" ] && return 0
+  done
+  return 1
+}
+
+chief_run_id_resolvable() {   # $1 = run id -> 0 when this install can account for it
+  local id="${1:-}"
+  [ -n "$id" ] || return 1
+  chief_run_id_registered "$id"   && return 0
+  [ -n "$(chief_repo_for_run "$id")" ] && return 0
+  chief_run_id_has_worktree "$id" && return 0
+  return 1
+}
+
 # Gate (b). Both answers compare the WHOLE id, epoch included — that is what tells two
 # runs of the same repo apart, and what makes pid reuse unable to fake a live run: a
 # recycled pid would have to be wearing the same marker to pass.
@@ -475,8 +545,11 @@ chief_run_label() {    # $1 = a path under .../worktrees/
 
 CHIEF_ORPHANS=""        # space-separated pids to reap
 CHIEF_ORPHAN_INFO=""    # one "<pid><TAB><why>" line per pid, for the report
+CHIEF_UNRESOLVED=""     # space-separated pids DELIBERATELY LEFT ALONE (not reaped)
+CHIEF_UNRESOLVED_INFO="" # one "<pid><TAB><run id>" line per pid, for the report
 
 _chief_cand=" "
+_chief_unres=" "
 _chief_cand_add() {     # $1 = pid, $2 = why — record a candidate (no filtering yet)
   local p="${1:-}"
   case "$p" in ''|*[!0-9]*) return 0 ;; esac
@@ -488,13 +561,28 @@ _chief_cand_add() {     # $1 = pid, $2 = why — record a candidate (no filterin
 "
 }
 
+# A process wearing a run marker this install cannot resolve. NOT a candidate — this
+# records it so the sweep can SAY it declined, which is the difference between a clean
+# sweep and a blind one an operator has no way to notice.
+_chief_unresolved_add() {   # $1 = pid, $2 = run id (may be empty)
+  local p="${1:-}"
+  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$p" = "$$" ] && return 0
+  [ "$p" -le 1 ] && return 0
+  case "$_chief_unres" in *" $p "*) return 0 ;; esac
+  _chief_unres="$_chief_unres$p "
+  CHIEF_UNRESOLVED_INFO="$CHIEF_UNRESOLVED_INFO$p	${2:-<no run id on argv>}
+"
+}
+
 # chief_find_orphans SCOPE_DIR [MARKER] — sets CHIEF_ORPHANS + CHIEF_ORPHAN_INFO.
 #   SCOPE_DIR  a worktree root: one repo's ($WT_ROOT) or the host's (all repos).
 #   MARKER     the argv marker to match, e.g. "--chief-run=chief-1234-" for one
 #              repo's runs, or "--chief-run=" for every chief run on the host.
 chief_find_orphans() {
-  local scope="${1:-}" marker="${2:-}" line pid rest p q keep="" info=""
+  local scope="${1:-}" marker="${2:-}" line pid rest p q tag keep="" info="" spared="" sinfo=""
   CHIEF_ORPHANS=""; CHIEF_ORPHAN_INFO=""; _chief_cand=" "
+  CHIEF_UNRESOLVED=""; CHIEF_UNRESOLVED_INFO=""; _chief_unres=" "
 
   chief_protected_pids                     # snapshot 1 — before the scan
 
@@ -509,7 +597,15 @@ EOF
   fi
   if [ -n "$marker" ]; then
     for p in $(chief_pids_tagged "$marker"); do
-      _chief_cand_add "$p" "[argv] chief engine process · run $(chief_pid_tag "$p")"
+      tag="$(chief_pid_tag "$p")"
+      # The registry we are about to consult has to be the one this run belongs to.
+      # When it is not, the run file we will fail to find proves nothing — see "can
+      # this sweep even see the registry the run belongs to".
+      if ! chief_run_id_resolvable "$tag"; then
+        _chief_unresolved_add "$p" "$tag"
+        continue
+      fi
+      _chief_cand_add "$p" "[argv] chief engine process · run $tag"
     done
     # Key 3 — the same run id, inherited through the environment. Reaches the process
     # that escaped BOTH of the others: chdir'd out of the worktree AND wearing a
@@ -526,6 +622,10 @@ EOF
       chief_run_id_wellformed "$rest" || continue      # (a) names no run chief minted
       if chief_run_id_live "$rest"; then               # (b) a stale marker cannot kill
         _chief_protect_tree "$(chief_run_id_pid "$rest")"
+        continue
+      fi
+      if ! chief_run_id_resolvable "$rest"; then        # a registry we cannot read
+        _chief_unresolved_add "$pid" "$rest"
         continue
       fi
       chief_is_interactive_shell "$pid" && continue    # (c) somebody's terminal
@@ -555,6 +655,21 @@ EOF
   set -- $keep
   CHIEF_ORPHANS="$*"
   CHIEF_ORPHAN_INFO="$info"
+
+  # The declined list, minus anything that ended up a candidate on an EARNED key
+  # anyway (a cwd match inside our own worktree root, or a descendant of one) — those
+  # are resolvable by construction and are not being left alone at all.
+  for p in $_chief_unres; do
+    case " $CHIEF_ORPHANS " in *" $p "*) continue ;; esac
+    chief_pid_alive "$p" || continue
+    spared="$spared $p"
+    sinfo="$sinfo$(printf '%s\n' "$CHIEF_UNRESOLVED_INFO" | awk -F'\t' -v q="$p" '$1==q {print; exit}')
+"
+  done
+  # shellcheck disable=SC2086
+  set -- $spared
+  CHIEF_UNRESOLVED="$*"
+  CHIEF_UNRESOLVED_INFO="$sinfo"
   return 0
 }
 
@@ -607,11 +722,30 @@ chief_report_orphans() {   # $1 = headline
   return 0
 }
 
+# The other half of the report: what the sweep found, recognised as chief work, and
+# DECLINED to touch. An operator has to be able to tell a clean sweep ("nothing here")
+# from a blind one ("plenty here, none of it mine to judge") — the second means the
+# sweep is pointed at the wrong prefix, which is the failure this exists to stop.
+chief_report_unresolved() {
+  local pid rid
+  [ -n "$CHIEF_UNRESOLVED" ] || return 0
+  echo "  ↷ left alone — chief processes whose run this install cannot resolve." \
+       "Their run files are not in ${CHIEF_RUNS:-$CHIEF_PREFIX_DEFAULT/runs}, and that" \
+       "is evidence the sweep is looking elsewhere, NOT that the run is dead:" >&2
+  printf '%s\n' "$CHIEF_UNRESOLVED_INFO" | while IFS=$'\t' read -r pid rid; do
+    [ -n "$pid" ] || continue
+    printf '       · pid %-7s unresolvable · run %s\n' "$pid" "$rid" >&2
+    printf '         %s\n' "$(chief_pid_cmd "$pid")" >&2
+  done
+  return 0
+}
+
 # chief_reap_orphans SCOPE MARKER LABEL [GRACE] — find, report, reap. The one call
 # driver.sh makes at startup; also the body of `chief reap`.
 chief_reap_orphans() {
   local scope="${1:-}" marker="${2:-}" label="${3:-a previous run}" grace="${4:-${CHIEF_REAP_GRACE:-5}}"
   chief_find_orphans "$scope" "$marker"
+  chief_report_unresolved
   [ -n "$CHIEF_ORPHANS" ] || return 0
   chief_report_orphans "  ⚠ orphaned chief processes from $label — still running with no live registered run:"
   chief_reap_pids "$CHIEF_ORPHANS" "$label" "$grace"
@@ -784,6 +918,7 @@ chief_reap_main() {
     esac
   done
   chief_find_orphans "$CHIEF_WT_ROOT_ALL" "$CHIEF_RUN_MARKER"
+  chief_report_unresolved
   if [ -z "$CHIEF_ORPHANS" ]; then
     echo "chief reap: no orphaned chief processes (worktrees: $CHIEF_WT_ROOT_ALL)"
     # An empty env read is not evidence of an empty host — say which keys actually ran.

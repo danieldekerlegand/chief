@@ -42,7 +42,12 @@ cd "$WORK"
 # succeed on one, and every decoy here is a child of this shell, so a TERMed decoy
 # would look alive forever and every "was it reaped?" assertion would misfire.
 alive()  { ps -o pid=,stat= -p "$1" 2>/dev/null | awk '$2 !~ /^Z/ {f=1} END{exit !f}'; }
-listed() { grep -q "pid $1 " <<<"$2"; }
+# LISTED FOR REAPING, specifically: a report line carrying one of the key tags
+# ([cwd]/[argv]/[env]/[tree]). The sweep also prints a "left alone" block naming pids
+# it declined to touch, and a bare "pid N" grep cannot tell the two apart — which is
+# the distinction decoy (7) below exists to pin.
+listed() { grep -qE "pid $1 +\\[" <<<"$2"; }
+spared() { grep -qE "pid $1 +unresolvable" <<<"$2"; }
 
 # ── decoys ────────────────────────────────────────────────────────────────────
 # spawn CWD ARGV0 -> $SPAWNED = pid of a `sleep` with that cwd and that argv.
@@ -82,6 +87,14 @@ printf 'CHIEF_TOOL=claude\n' > "$locked_repo/.chief/config"
 spawn "$WTS/alpha-111/tl-a" "bash /e/driver.sh --chief-run=alpha-111-1700-4244"; locked_drv="$SPAWNED"
 echo "$locked_drv" > "$locked_repo/.chief/state/driver.lock/pid"
 printf '%s\n' "$locked_repo" > "$CHIEF_REPOS"
+# (7) THE BYSTANDER. A chief driver of some OTHER install: a well-formed run marker
+#     whose repo this prefix has never heard of — no run file claiming the id, no
+#     entry in $CHIEF_REPOS, no worktree dir under $WTS. Exactly the shape of a live
+#     run in a sibling repo seen by a sweep with a hermetic $CHIEF_RUNS, which is the
+#     configuration that killed three real runs. Its ABSENCE from this registry is
+#     evidence the registry is the wrong one, never evidence the run is dead, so it
+#     must be REPORTED and LEFT ALONE rather than reaped.
+spawn "$WORK/elsewhere" "bash /e/driver.sh --chief-run=gamma-999888777-1700-4245";  foreign_drv="$SPAWNED"
 sleep 0.5
 
 # ── 1. host-wide dry run: found the engine, spared everything else ─────────────
@@ -100,6 +113,10 @@ if listed "$live_child" "$out"; then fail "a live run's child (pid $live_child) 
 $out"; fi
 if listed "$locked_drv" "$out"; then fail "a live driver holding its repo's driver.lock (pid $locked_drv) was listed:
 $out"; fi
+if listed "$foreign_drv" "$out"; then fail "a driver of ANOTHER install (pid $foreign_drv) was listed for reaping — an unreadable registry is not evidence of orphanhood:
+$out"; fi
+spared "$foreign_drv" "$out" || fail "the unresolvable driver (pid $foreign_drv) was neither reaped nor REPORTED — a sweep that silently declines is indistinguishable from a clean host:
+$out"
 case "$out" in *"alpha · tl-a"*) ;; *) fail "the report does not name the run an orphan belonged to (repo · tasklist):
 $out" ;; esac
 case "$out" in *"dry run"*)      ;; *) fail "-n did not say it was a dry run:
@@ -133,6 +150,8 @@ $out"
 alive "$live_child" || fail "a registered live run's child was KILLED by the sweep:
 $out"
 alive "$locked_drv" || fail "a lock-holding live driver was KILLED by the sweep:
+$out"
+alive "$foreign_drv" || fail "a driver belonging to ANOTHER install was KILLED by the sweep — this is the 2026-08-17 incident:
 $out"
 case "$out" in *TERM*|*KILL*) ;; *) fail "the reap did not report how it signalled:
 $out" ;; esac
