@@ -390,6 +390,9 @@ source "$ENGINE/lib.sh"
 # `chief gen` and `chief lint`, so authoring time and run time cannot disagree about
 # what "outside this worktree" means.
 source "$ENGINE/criteria.sh"
+# The BAR rule on acceptance criteria (engine/measure.sh): a story claiming a
+# checkable bar must record the value it observed, or it is `unverified`, not passed.
+source "$ENGINE/measure.sh"
 # git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
 # another uid, and an image with no committer identity. Sourced before anything runs
 # git on $REPO; its exports are inherited by every child — agent.sh, the verify hook,
@@ -1947,9 +1950,9 @@ run_worker() {
     # stories it left stale-false as passed so the branch proceeds to the verify gate
     # (verify — not the pass-flags — is the real merge bar). Not unconditionally —
     # evidence_gate promotes only the ones whose `notes` say how, and reports the rest.
-    local unevidenced=""
+    local unevidenced="" unmeasured=""
     if [ "$agent_rc" = "0" ] && [ "$skip_agent" != "1" ] && [ -n "$has_work" ]; then
-      unevidenced="$(evidence_gate "$wtstate/prd.json")"
+      unevidenced="$(evidence_gate "$wtstate/prd.json")"; unmeasured="$(measure_gate "$wtstate/prd.json")"
     fi
     local remaining total
     remaining="$(jq '[.userStories[]|select(.passes==false)]|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
@@ -2029,10 +2032,11 @@ run_worker() {
       echo "EMPTY-NO-WORK 0/$total" > "$STATE/$name.status"
       echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"; return 0
     fi
-    # EVIDENCE GUARD: evidence_gate found a story the COMPLETE path wanted promoted
-    # that says nothing about how it was done. Ordered BEFORE the INCOMPLETE arm —
-    # see unverified_stop for why the two must not be conflated.
+    # EVIDENCE + BAR GUARDS: a story the COMPLETE path wanted promoted that says
+    # nothing about how it was done, and one claiming a bar with no value measured
+    # against it. Both ordered BEFORE the INCOMPLETE arm — see unverified_stop.
     [ -n "$unevidenced" ] && { unverified_stop "$unevidenced"; return 0; }
+    [ -n "$unmeasured" ] && { unmeasured_stop "$unmeasured"; return 0; }
     if [ "$remaining" != "0" ]; then
       live_set "$live" phase=incomplete
       event_emit tasklist.incomplete name="$name" state=failed detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out"

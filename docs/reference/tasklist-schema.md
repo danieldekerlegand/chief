@@ -62,7 +62,17 @@ work run to completion by a chain of agent iterations.
         "Another one."
       ],
       "passes": false,                   // flipped true when the story is done
-      "notes": ""                        // agent scratch space
+      "notes": ""                        // agent scratch space — AND the story's
+                                         //   evidence: a story chief passes on the
+                                         //   agent's behalf must say HOW here, and one
+                                         //   whose criteria state a measurable bar
+                                         //   ("green", "exit 0", "77 failed") must
+                                         //   record the value it OBSERVED. Neither and
+                                         //   the run stops UNVERIFIED
+      // "unverified": true              // written BY chief, never by hand: the story
+                                         //   claimed a bar chief cannot evaluate and
+                                         //   recorded no observation, so it is neither
+                                         //   passing nor silently ignored
     }
   ]
 }
@@ -73,6 +83,11 @@ Notes:
   build on earlier ones. Parallelism is *across* tasklists, never within one.
 - **Acceptance criteria are the contract.** Write them concrete and checkable; the
   agent implements a story until they hold and won't mark it done otherwise.
+- **A criterion that states a bar must be measured.** One containing a checkable
+  numeric or state bar makes the story owe an observed value in its `notes`; without
+  it the story is marked `unverified` rather than `passes` and the branch stops. Chief
+  does not judge whether the observation MEETS the bar — see
+  [verify-hook.md](verify-hook.md) for which layer checks what.
 - **A criterion must be satisfiable from this tasklist's worktree.** One that names
   another repo is stopped before the run starts (`UNSATISFIABLE`) unless the tasklist
   declares `crossRepo`; `chief lint` reports the same finding while it is still a text

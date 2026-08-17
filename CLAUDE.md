@@ -83,6 +83,10 @@ engine/
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
                      #   UNSATISFIABLE before the first agent turn unless "crossRepo" declares it
+  measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
+                     #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
+                     #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
+                     #   silently ignored. Chief requires the measurement; it never judges it
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
