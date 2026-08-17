@@ -46,7 +46,8 @@
         "The decoy is killed deliberately at the end of the test, so the suite does not itself leak processes — `/var/folders/**/tmp.*/bin/chief run sr-clean` was still running from an earlier suite when this was investigated.",
         "The real sweep still works: an actual orphan, with a readable registry showing its driver gone, is still reaped. A fix that makes `chief reap` refuse everything has traded one failure for another."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     },
     {
       "id": "US-4",
