@@ -7,7 +7,7 @@
   "touches": [
     "engine"
   ],
-  "iters": 6,
+  "iters": 8,
   "warmup": [
     "sed -n '160,180p' engine/monitor.sh",
     "sed -n '505,525p' engine/monitor.sh",
@@ -22,7 +22,8 @@
         "The stall marker is NOT appended for a phase where quiet is the expected behaviour — at minimum `rate-limited-waiting`, and the phase list is data (one place to add a state), not a condition repeated at both call sites (`engine/monitor.sh` ~175 and ~519 both render it).",
         "A test drives `live_note()` over a synthetic live-file for each known phase and asserts which do and do not gain the marker — so 'which states are exempt' is checkable rather than a reading of the shell.",
         "The exemption is NOT unconditional silence: see US-2. A state that is quiet for a legitimate reason still becomes noteworthy eventually, and this story must not make it permanently unflaggable.",
-        "`bin/chief ps` and `bin/chief monitor` are both checked, since the two call sites render the flag differently (one via `live_note … stale`, one via a bare fallback string)."
+        "`bin/chief ps` and `bin/chief monitor` are both checked, since the two call sites render the flag differently (one via `live_note … stale`, one via a bare fallback string).",
+        "`provider-waiting` is classified explicitly and the classification is justified: it is NOT quiet-by-design like `rate-limited-waiting`, because a provider that never returns is a real hang. It takes a long threshold under US-2 rather than an exemption. Two runs on 2026-08-17 sat in this phase having produced 0 bytes and never reached iteration 1 — the case an exemption would hide."
       ],
       "passes": false,
       "notes": ""
@@ -40,6 +41,18 @@
       ],
       "passes": false,
       "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Elapsed-in-phase is shown routinely, not only when something is flagged",
+      "acceptanceCriteria": [
+        "`chief ps` and `chief monitor` show how long the current phase has been held, beside the phase. US-2 already puts the duration in the FLAG message; this puts it in the ordinary view, which is where an operator decides whether to wait or intervene — and is the single line that would have resolved 2026-08-17 immediately.",
+        "The duration comes from the live-file's existing timestamps rather than a new clock, so a phase that has not been re-stamped reads as long-held instead of as fresh. A duration derived from the render time would show every run as instantaneous.",
+        "It renders in both call sites (`engine/monitor.sh` ~175 and ~519), which US-1 already notes diverge — a duration that appears in one view and not the other reproduces the current problem for whichever half an operator happens to be reading.",
+        "A run whose driver pid is GONE is visually distinct from one that is merely quiet. US-2 records this as landing here or as an explicit follow-up; either way the two must not render identically, because on 2026-08-17 nine runs were killed on the assumption they were the same thing."
+      ],
+      "notes": null
     }
-  ]
+  ],
+  "description": "🔴 **chief flags a run as stalled for being quiet in states where quiet is what it is supposed to look like — and gives an operator no way to tell slow from stuck.**\n\n**Measured 2026-08-17.** Nine runs were stopped as 'stalled'. Seven were working: logs of 73KB, 47KB and 21KB at iterations 1–2, no limit hits, nothing wrong. They looked stalled because `chief monitor` showed `provider-waiting` and never changed, and there was no elapsed time beside it to say whether that meant *forty seconds into a turn* or *forty minutes into nothing*.\n\n**`provider-waiting` is the whole duration of every agent turn.** `agent.sh:713` sets it immediately before invoking the provider CLI and it holds until the provider returns. It is not an error, and it is not counted as a stall — `stall=$((stall+1))` fires only at an iteration boundary with no new passing story and no new commit (`agent.sh:846`). So the phase label and the stall counter measure different things, and the display shows the one that cannot progress.\n\n⚠️ **`provider-waiting` must NOT be exempted the way `rate-limited-waiting` is.** A rate-limit wait is quiet by design and resolves itself. A provider that never returns is a real hang, and two of the nine runs produced **0 bytes and never reached iteration 1** — the only genuine anomalies of the set. Exempting the phase would make exactly that case invisible. It needs a LONG threshold, which US-2's per-phase design already provides, not an exemption.\n\nThe diagnosis cost about an hour and three wrong theories — rate limits (the 429s were from logs days old), the provider (only one repo was even on Devin), and the installed-version gap. Every one of those would have been a glance if the display carried elapsed-in-phase."
 }
