@@ -134,6 +134,13 @@ VERSION              # engine version — bump on any engine/bin/install change
   `scripts/check-doc-links.mjs` scans every *tracked* file (its `BARE_DOC` regex, not just `.md`) and
   `.chief/verify.sh` runs it as a ratchet, so pointing at a doc a later story will write is a new dead
   link that blocks the merge. Reference the module, not the doc that doesn't exist yet.
+- **A new `test/*.sh` is a gate only when it is in THREE lists**: `.chief/verify.sh`'s
+  `CHIEF_BYSTANDER_TESTS` (the merge gate), `test/all.sh`'s `BASH_SUITE`, and
+  `.github/workflows/ci.yml`. Nothing derives one from another. Relatedly, a behavioural
+  test must not assert on prompt text that a **doc quotes** — `templates/agent-context.md`
+  quotes the engine's injected headings verbatim while explaining them, so grepping a
+  prompt for one matches even when nothing was injected. Assert on a string only the
+  engine emits, plus a marker your own fixture planted.
 - **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
   "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
   locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when
