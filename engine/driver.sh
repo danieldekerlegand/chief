@@ -1952,8 +1952,9 @@ run_worker() {
     # evidence_gate promotes only the ones whose `notes` say how, and reports the rest.
     local unevidenced="" unmeasured=""
     if [ "$agent_rc" = "0" ] && [ "$skip_agent" != "1" ] && [ -n "$has_work" ]; then
-      unevidenced="$(evidence_gate "$wtstate/prd.json")"; unmeasured="$(measure_gate "$wtstate/prd.json")"
+      unevidenced="$(evidence_gate "$wtstate/prd.json")"
     fi
+    unmeasured="$(measure_gate "$wtstate/prd.json")"   # EVERY path to a merge — engine/measure.sh
     local remaining total
     remaining="$(jq '[.userStories[]|select(.passes==false)]|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
     total="$(jq '.userStories|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"

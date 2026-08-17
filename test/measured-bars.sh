@@ -14,6 +14,8 @@
 #            `unverified:true` with `passes:false`, and the message names the story,
 #            the bar that fired and the criterion verbatim.
 #   mb-good  identical criteria, but its notes carry the observed numbers → merged.
+# Then mb-bad is run a SECOND time, to prove the stop is not one-shot: its committed
+# tasklist still says passes:true, so run two skips the agent entirely.
 # mb-bad marks its stories ITSELF on purpose: the evidence gate (test/evidence-gate.sh)
 # exempts self-reported work from having to say HOW, and this rule deliberately does
 # not — an unrecorded number is unrecorded whoever typed the pass-flag.
@@ -51,6 +53,9 @@ else
 fi
 t="$(mktemp)"
 jq --arg n "$note" '.userStories |= map(.passes=true | .notes=$n)' "$PRD" > "$t" && mv "$t" "$PRD"
+# …and in the git-tracked tasklist, exactly as the loop instructions tell an agent to.
+# That is what makes a SECOND run take the agent-free "all stories already pass" path.
+cp "$PRD" "tasks/chief/$name.json"
 git add -A >/dev/null 2>&1 || true
 git commit -q -m "feat: US-1 - $name" >/dev/null 2>&1 || true
 echo "<promise>COMPLETE</promise>"
@@ -125,5 +130,16 @@ case "$(status mb-good)" in MERGED*) ;; *) fail "the measured branch did not mer
 [ -f out/mb-good.txt ]                    || fail "the measured branch's work is not on main"
 [ -f tasks/chief/completed/mb-good.json ] || fail "the measured tasklist was not retired"
 if grep -q 'unverified' "$REPO/tasks/chief/completed/mb-good.json"; then fail "a measured story was marked unverified"; fi
+
+# ── 5. the stop is not one-shot: a second run must not walk through it ────────
+# The demotion lands in the RUNTIME record only — the branch's committed tasklist
+# still says passes:true, so run two takes the agent-free "all stories already pass,
+# skip agent" path. The bar gate has to hold there too or the stop costs one re-run.
+PATH="$WORK/fakebin:$PATH" "$CHIEF" run >"$WORK/run2.log" 2>&1 || { cat "$WORK/run2.log"; fail "second run exited non-zero"; }
+grep -q 'skip agent' "$REPO/.chief/state/parallel/mb-bad.log" || fail "run two did not take the agent-free all-pass path — the bypass is untested"
+case "$(status mb-bad)" in UNVERIFIED*) ;; *) fail "the second run walked through the bar gate, got: '$(status mb-bad)'" ;; esac
+git checkout -q main
+[ ! -f out/mb-bad.txt ]                    || fail "the unmeasured branch merged on the second run"
+[ ! -f tasks/chief/completed/mb-bad.json ] || fail "the unmeasured tasklist was retired on the second run"
 
 echo "MEASURE PASS — a claimed bar with no observed value is 'unverified', not passing (story + bar + criterion quoted); a run that recorded its numbers still merges"

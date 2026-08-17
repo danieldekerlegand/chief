@@ -30,6 +30,13 @@
 # one that only demands the measurement be written down costs an honest run nothing,
 # because a run that took a measurement has the number to hand.
 #
+# RUNS ON EVERY PATH TO A MERGE, including the agent-free all-pass resume. A demotion
+# lands in the RUNTIME record, while the branch's committed tasklist still reads
+# `passes:true` — so the next run re-seeds it as passing, prints "all stories already
+# pass — skip agent", and would walk straight through the gate that just stopped it.
+# The evidence gate can only run where an agent ran, because it PROMOTES; this one
+# only ever demotes, which makes it safe to run everywhere and useless if it does not.
+#
 # bash 3.2 · jq only. Called from engine/driver.sh's COMPLETE path, once per run.
 
 # The bar phrases, as one Oniguruma alternation (matched case-insensitively). Kept in
