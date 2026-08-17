@@ -24,7 +24,8 @@
         "The requirement is on stories chief force-passes, NOT on stories an agent explicitly marked passing with its own reasoning — the point is to stop silent promotion, not to add ceremony to work that reported itself honestly.",
         "The failure message names the story and quotes the criterion, so an operator sees WHAT was claimed rather than that a count did not match."
       ],
-      "notes": null
+      "notes": "Added evidence_gate()/unverified_stop() to engine/driver.sh: the COMPLETE path now promotes a stale-false story only when its `notes` are non-empty, leaves the rest false, and stops the branch as UNVERIFIED with the story id, title and each claimed criterion printed verbatim (ordered before the INCOMPLETE arm so the two failures stay distinguishable). Stories the agent marked passing itself are untouched. Proven by test/evidence-gate.sh (two tasklists, one run): ev-bad -> UNVERIFIED, not merged, not retired, message quotes both criteria; ev-good -> MERGED, so honest self-reported work pays no ceremony. Wired into test/all.sh and the .chief/verify.sh bystander subset; both green.",
+      "passes": true
     },
     {
       "id": "US-2",
