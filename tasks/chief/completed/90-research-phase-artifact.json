@@ -53,5 +53,6 @@
       "passes": true,
       "notes": "docs/research-phase.md (linked from docs/README.md — \"a document not linked here does not exist\" — plus plan-review.md, tasklist-schema.md and the agent-context template) covers the four required sections, the sub-agent structured-output contract, the durable path .chief/state/research/<name>.md, the reuse-on-resume guarantee, the hand-edit surface, the when-to-skip rule and the exit-6 RESEARCH-FAILED state. test/research.sh pins all four assertions the criterion names. Observed: .chief/verify.sh green end to end — doc-link ratchet 4 dead vs 4 on main (no regression), quality ratchet OK (function_length_max 455->465 tol 15, single_use_functions 34->31, duplicate_blocks 0->0), bash -n clean on every shell file, VERSION-BUMP PASS (0.8.38), DOC-SYNC PASS, and all 28 hermetic behavioral tests green under the bystander guard — [9/28] test/research.sh RESEARCH PASS, with smoke, ratelimit, noworkguard, pause and teardown all passing in the same block. shellcheck is not installed on this host (the gate says so and skips; CI enforces it)."
     }
-  ]
+  ],
+  "mergedToMain": "e8a54ec"
 }
