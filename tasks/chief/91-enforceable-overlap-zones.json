@@ -37,8 +37,8 @@
         "When `89`'s plan-review checkpoint is enabled for the same tasklist, the two do not double-prompt: an overlap-zone approval and a plan approval are distinct decisions at distinct times, and the docs state which is asked when",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verify gate GREEN end to end (2026-08-17, this branch): `.chief/verify.sh` = OK (allowing merge) — quality ratchet ok (function_length_max 465->478 delta +13 tol 15; single_use_functions 49->50 delta +1 tol 2), bash -n clean on bin/chief + engine/*.sh + test/*.sh, 28/28 behavioural tests PASS under test/bystander.sh, DOC-SYNC PASS (README v0.8.41), tasklists jq-parse ok. shellcheck not installed locally (CI enforces). Behaviour proven on a hermetic scratch repo (fake claude, temp prefixes): a serialize-policy zone MERGED (no regression); a review-policy zone held a rebased + verified-GREEN branch at AWAITING-APPROVAL 1/1, state awaiting-approval, request written, branch kept, not merged; `chief approve --list` reported it and `chief approve` granted it (second call \"already approved\", exit 0); a SEPARATE later run read the verdict off disk (\"this exact change is APPROVED\") and MERGED + retired; `chief ps` renders the row as zone-hold naming the matched zone."
     },
     {
       "id": "US-2",
