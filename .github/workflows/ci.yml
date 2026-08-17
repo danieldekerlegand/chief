@@ -83,6 +83,9 @@ jobs:
       - name: Inherited-$CHIEF_RUN_ID key — gated to a dead run, never a shell or a live run
         run: bash test/reapenv.sh
 
+      - name: Bystander guard — the suite must not reap a run it did not start
+        run: bash test/bystander.sh
+
       - name: No-work guard (false-complete must not merge/retire)
         run: bash test/noworkguard.sh
 
