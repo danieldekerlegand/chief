@@ -94,6 +94,44 @@ expect_exit 1 0 "no-progress turn"     'I read the code but could not finish thi
 expect_exit 1 1 "non-limit CLI error"  'Error: the tool crashed while editing a file.'
 expect_exit 1 0 "429 text, rc=0"       'API Error: 429'   # weak hint alone is NOT a limit
 
+# ── the RESET ETA, not just the detection ────────────────────────────────────
+# Detecting a limit is only half the contract: agent.sh also has to sleep for the
+# RIGHT LENGTH. A provider that meters a rolling throughput window states the
+# window as a RELATIVE duration ("reset in 16 minutes") and never as an epoch or a
+# clock time. That used to miss every parse arm and fall back to RATE_LIMIT_WAIT,
+# so a 16-minute block slept a full hour — and under -p N every co-scheduled worker
+# slept it too. With RATE_LIMIT_RETRY=0 the loop records the ETA it computed in
+# .limit-retry-at, which is exactly the number the driver re-dispatches on.
+eta_minutes_for() {  # <claude-rc> <fixture-text> -> whole minutes from now
+  rm -f "$FIXREPO/.chief/state/.limit-retry-at"
+  agent_exit_for "$1" "$2" >/dev/null
+  local at; at="$(cat "$FIXREPO/.chief/state/.limit-retry-at" 2>/dev/null || echo)"
+  case "$at" in ''|*[!0-9]*) echo "unparsed"; return 0 ;; esac
+  echo $(( (at - $(date +%s)) / 60 ))
+}
+expect_eta() {  # <lo-min> <hi-min> <label> <fixture-text>
+  local lo="$1" hi="$2" label="$3" text="$4" got
+  got="$(eta_minutes_for 0 "$text")"
+  case "$got" in *[!0-9-]*) fail "eta [$label]: no ETA recorded ($got)" ;; esac
+  { [ "$got" -ge "$lo" ] && [ "$got" -le "$hi" ]; } || \
+    fail "eta [$label]: slept ~${got}min, want ${lo}-${hi}min"
+  echo "   ok  ~${got}min  ← $label"
+}
+
+echo "ratelimit: reset-ETA parse (relative windows must not sleep the 60min fallback)"
+# The real Devin message, verbatim — the one that regressed a 16-minute window
+# into an hour of idle across four co-scheduled workers.
+expect_eta 16 18 "devin throughput window (16 min)" \
+  'Error: Agent error: Reached overall message rate limit. Please try again later. Your limit will reset in 16 minutes. (trace ID: 287e1e84): {"cognition.ai/retryable": true}'
+expect_eta 1 2  "retry in 30 seconds"   'Rate limit exceeded. retry in 30 seconds'
+expect_eta 5 7  "try again in 5 min"    'Too many requests, try again in 5 min'
+expect_eta 60 62 "reset in 1 hour"      'Your limit will reset in 1 hour.'
+# The fallback must still be the fallback: a limit with NO stated window, and a
+# duration that is just prose, both sleep RATE_LIMIT_WAIT rather than guess.
+expect_eta 59 61 "no window stated → fallback" 'Claude AI usage limit reached.'
+expect_eta 59 61 "prose duration must not arm the timer" \
+  "You've reached your usage limit. I spent 5 minutes reading the code."
+
 # ══ PART 2 — PAUSE + RESUME UNDER THE PARALLEL DRIVER ════════════════════════
 # ── fake `claude`: trip the limit ONCE, then implement the story ──────────────
 mkdir -p "$WORK/fakebin"
