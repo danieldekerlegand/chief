@@ -97,7 +97,7 @@ Every line is an independently valid JSON object:
 | `repo` | string | absolute path of the repo the run is driving |
 | `event` | string | the transition, from the catalogue below |
 | `name` | string \| null | the tasklist it is about; `null` on `run.*` events |
-| `story` | string \| null | the user-story id; non-null only on `story.passed` |
+| `story` | string \| null | the user-story id; non-null on the `story.*` events, and on the two tasklist-scope plan-review parks (`tasklist.plan-invalid`, `tasklist.awaiting-review`), which name the story they stopped on |
 | `state` | string \| null | the coarse state it lands in — the same vocabulary `chief ps` shows |
 | `detail` | string \| null | **free text for a human.** Not part of the machine contract — never parse it |
 | `usage` | object \| null | tokens / cost / duration for the turn, when the provider printed them — see [Usage, cost and limit](#usage-cost-and-limit-the-nullable-provider-dependent-block) |
@@ -139,6 +139,8 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `tasklist.rate-limited` | `rate-limited` | a provider usage limit paused it; branch kept, `detail` carries the reset ETA when known — carries `limit` |
 | `tasklist.rate-limit-wait` | `rate-limited` | the agent loop hit a limit mid-turn and is **sleeping** until the window reopens, then retrying in place — carries `limit` |
 | `tasklist.paused` | `paused` | an operator pause (`chief pause`) drained it; branch + worktree kept |
+| `tasklist.plan-invalid` | `failed` | plan review is on and the PLAN turn wrote no well-formed plan artifact; branch + worktree kept (see [plan-review.md](plan-review.md)) |
+| `tasklist.awaiting-review` | `awaiting-review` | plan review is on and the story's plan has **no human approval**, with none obtainable here (no reviewer, non-interactive host, the window elapsed, or the annotate → re-plan budget is spent). A **park, not a failure**: branch, worktree, plan and annotations kept, and the next run reads the verdict off disk rather than re-asking |
 | `tasklist.re-dispatch` | `pending` | the usage-limit window elapsed and it is queued again — carries `limit` |
 
 ### Story scope (`name` + `story`)
@@ -146,6 +148,9 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `event` | `state` | Emitted when |
 |---|---|---|
 | `story.passed` | `running` | the agent loop observes a story flip to `passes: true` (emitted the moment the provider turn returns, so the last story of a tasklist is never missed) |
+| `story.plan-ready` | `running` | plan review is on and the story's PLAN turn produced a schema-valid plan artifact; the next turn implements it |
+| `story.plan-invalid` | `failed` | the story's PLAN turn produced no schema-valid artifact — the loop stops here rather than implementing an unreviewable plan (the tasklist-scope `tasklist.plan-invalid` follows) |
+| `story.awaiting-review` | `awaiting-review` | the story has a schema-valid plan that no human approved, and the loop stopped rather than implement it (the tasklist-scope `tasklist.awaiting-review` follows) |
 
 `story.passed` fires once per story per run; a RESUME does not re-announce stories
 that passed in an earlier run. That makes **complete-vs-incomplete work** live: count

@@ -19,6 +19,21 @@
 #      failure and NOT a stall: every commit the last iteration made is on the
 #      branch, and `chief resume` continues from the committed passes state. The
 #      check happens ONLY at an iteration boundary (see OPERATOR PAUSE below).
+#   4  THE PLAN PHASE COULD NOT PRODUCE A WELL-FORMED PLAN — this tasklist has
+#      plan review enabled ("review":"plan") and the PLAN turn either wrote no
+#      artifact or wrote one that fails the schema check. Like 2 and 3 this is NOT
+#      a stall and NOT a merge-blocking code failure: it is an ACTIONABLE stop with
+#      the branch untouched. It exists so a bad plan can never fall through into
+#      code — the one outcome plan review is there to prevent (see PLAN PHASE below
+#      and docs/plan-review.md).
+#   5  AWAITING REVIEW — a well-formed plan exists but NO HUMAN HAS APPROVED IT, and
+#      no approval can be obtained here: the reviewer is not installed, the host is
+#      non-interactive, the review window elapsed, or the annotate -> re-plan budget
+#      is spent. Like 2 and 3 this is a PARK, not a failure — the branch, the plan
+#      and every annotation are kept, and re-running resumes with the verdict already
+#      on disk (a given approval is never asked for twice). It is the one thing the
+#      gate must do instead of proceeding: an unreachable reviewer is not an
+#      approval (see engine/review.sh and docs/plan-review.md).
 # A usage limit is detected BEFORE the progress/stall accounting (see
 # _is_rate_limit below), so a limit-blocked turn can never be misread as a
 # no-progress iteration that trips STALL_LIMIT and exits 1.
@@ -138,16 +153,28 @@ LAST_BRANCH_FILE="$STATE_DIR/.last-branch"
 # and the scheduler agree on the ETA instead of parsing the message twice.
 LIMIT_RETRY_FILE="$STATE_DIR/.limit-retry-at"
 rm -f "$LIMIT_RETRY_FILE"
-# Compose the agent prompt: generic loop instructions + the project's context.
+# _compose_prompt INSTRUCTIONS DEST — the prompt one turn is handed: the engine's
+# loop instructions followed by the project's own context. A turn picks its
+# INSTRUCTIONS (implement, or the PLAN turn below) and everything downstream of that
+# choice must stay identical — a plan written against different project conventions
+# than the code it becomes is worse than no plan at all.
+_compose_prompt() {
+  local src="$1" dest="$2" ctx="${CHIEF_AGENT_CONTEXT:-}"
+  {
+    cat "$src"
+    if [ -n "$ctx" ] && [ -f "$CHIEF_PROJECT/$ctx" ]; then
+      printf '\n\n---\n\n# Project-specific instructions (%s)\n\n' "$ctx"
+      cat "$CHIEF_PROJECT/$ctx"
+    fi
+  } > "$dest"
+}
 PROMPT_FILE="$STATE_DIR/.prompt.md"
-{
-  cat "$ENGINE/instructions.md"
-  ctx="${CHIEF_AGENT_CONTEXT:-}"
-  if [ -n "$ctx" ] && [ -f "$CHIEF_PROJECT/$ctx" ]; then
-    printf '\n\n---\n\n# Project-specific instructions (%s)\n\n' "$ctx"
-    cat "$CHIEF_PROJECT/$ctx"
-  fi
-} > "$PROMPT_FILE"
+_compose_prompt "$ENGINE/instructions.md" "$PROMPT_FILE"
+# The prompt the CURRENT turn is running with — the implement prompt above, or the
+# PLAN turn's (see PLAN PHASE below). Providers read it two different ways (stdin for
+# claude/opencode, --prompt-file for devin), so it has to be one variable both paths
+# use, or the plan turn would hand devin the implement prompt.
+ACTIVE_PROMPT="$PROMPT_FILE"
 
 # Archive previous run if branch changed
 if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
@@ -253,6 +280,84 @@ _story()  { jq -r '[.userStories[]? | select(.passes==false)][0].id // empty' "$
 # name WHICH story passed instead of just that one more did.
 _passed_ids() { jq -r '[.userStories[]? | select(.passes==true) | .id] | join(" ")' "$PRD_FILE" 2>/dev/null || echo ""; }
 
+# --- PLAN PHASE (docs/plan-review.md) -----------------------------------------
+# OPT-IN, and off by default. A tasklist that sets "review":"plan" gets one extra
+# turn per story BEFORE any edit: the agent writes a structured plan artifact and
+# nothing else. The leverage argument is the whole point — a misread requirement
+# caught in a ten-line plan is a misread requirement that never became three hundred
+# lines of code — but it only holds if the plan phase can never be skipped silently
+# and can never fall through into implementation half-formed. Hence:
+#
+#   • ENABLEMENT is read from the runtime PRD (`.review`), so it travels with the
+#     tasklist and shows up in a reviewable diff. $CHIEF_REVIEW overrides it for a
+#     host embedding chief. Anything other than "plan" is off.
+#   • THE ARTIFACT IS A FILE, not a message. It lands under $STATE_DIR/plans/ — the
+#     same filesystem-resumable state everything else in chief lives in — so process
+#     death, a usage-limit stop and an operator pause all leave it intact and the
+#     next turn (or the next RUN) reads the plan already written instead of paying
+#     for it twice. The driver mirrors the directory into its snapshots so it also
+#     survives the worktree being rebuilt.
+#   • WELL-FORMEDNESS IS CHECKED HERE, by schema, not by trusting the turn's prose.
+#     A plan that fails the check stops the loop with exit 4 and a PLAN-INVALID
+#     state. It is deliberately NOT retried in place: the bounded contract is one
+#     plan turn per story, and a loop that re-asks for a plan until it parses is
+#     exactly the unbounded spend the budget exists to prevent.
+#   • AND A PLAN IS NOT A PERMISSION. US-1 stopped here; the checkpoint is only worth
+#     its iteration if a HUMAN sees the plan, so engine/review.sh gates implementation
+#     on an approval from plannotator's documented annotate gate. An unreachable
+#     reviewer parks the tasklist (exit 5) — it never counts as a yes.
+PLAN_DIR="$STATE_DIR/plans"
+PLAN_PROMPT_FILE="$STATE_DIR/.plan-prompt.md"
+REVIEW_MODE="${CHIEF_REVIEW:-$(jq -r '.review // "none"' "$PRD_FILE" 2>/dev/null || echo none)}"
+case "$REVIEW_MODE" in plan) ;; *) REVIEW_MODE=none ;; esac
+
+# _plan_valid FILE STORY — does the artifact satisfy the documented schema?
+# Silent (the caller reports); returns non-zero for a missing file, unparseable
+# JSON, or any missing/empty required field. `and` short-circuits in jq, so the
+# type guards ahead of each `all(...)` keep a null field from raising.
+_plan_valid() {
+  local f="${1:-}" id="${2:-}"
+  [ -s "$f" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 0   # no jq: cannot check, do not block
+  jq -e --arg id "$id" '
+    def nes: (type == "string") and (length > 0);
+    (.story == $id)
+    and (.summary | nes)
+    and (.changes | type == "array") and ((.changes | length) > 0)
+    and (all(.changes[];
+          (.path | nes) and (.change | nes)
+          and (.action == "create" or .action == "modify" or .action == "delete")))
+    and (.verification | type == "array") and ((.verification | length) > 0)
+    and (all(.verification[]; (.phase | nes) and (.command | nes)))
+  ' "$f" >/dev/null 2>&1
+}
+
+# _plan_prompt STORY PLAN_FILE — compose the PLAN turn's prompt. Same engine+project
+# stack as the implement turn, plus a concrete `## This turn` footer naming the story
+# the plan must declare and the exact path to write it to. Both are computed by the
+# caller (they depend on $CHIEF_STATE_DIR), and an agent left to guess either produces
+# an artifact the check above cannot find.
+_plan_prompt() {
+  local id="$1" rel="${2#"$CHIEF_PROJECT"/}" fb
+  mkdir -p "$PLAN_DIR" 2>/dev/null || true
+  _compose_prompt "$ENGINE/plan-instructions.md" "$PLAN_PROMPT_FILE"
+  {
+    printf '\n\n---\n\n## This turn\n\n'
+    printf -- '- Story to plan: **%s** — `%s`\n' "$id" \
+      "$(jq -r --arg id "$id" '[.userStories[]?|select(.id==$id)][0].title // ""' \
+           "$PRD_FILE" 2>/dev/null || echo "")"
+    printf -- '- Write the plan artifact to: `%s` (relative to the repo root)\n' "$rel"
+    printf -- '- `"story"` in that artifact must be exactly `%s`.\n' "$id"
+    # THE REVIEWER'S OWN WORDS, verbatim, when a previous plan for this story was
+    # sent back. This is the entire value of a rejection: a re-plan briefed with
+    # "you missed the S3 path" is a different plan, while a re-plan told only that
+    # it was rejected is the same plan with different adjectives.
+    [ -z "${REVIEW_LIB_MISSING:-}" ] && fb="$(review_feedback "$2")"
+    [ -n "$fb" ] && printf '\n### A human reviewed your previous plan and sent it back\n\nRe-plan so that these are answered. Do not re-submit the same plan.\n\n%s\n' "$fb"
+  } >> "$PLAN_PROMPT_FILE"
+  return 0
+}
+
 # --- LIVELINESS ---------------------------------------------------------------
 # The driver hands us the path of this tasklist's liveliness record; unset (a
 # standalone run) makes every live_* call a no-op. See engine/live.sh: this is what
@@ -279,6 +384,13 @@ if [ -f "$_AGENT_DIR/events.sh" ]; then
 else
   event_emit() { return 0; }
 fi
+# The HUMAN-APPROVAL half of the plan checkpoint (engine/review.sh), on the same
+# terms again — with one difference that matters: its absent-file fallback is not a
+# no-op. A plan-review tasklist running on an install that has no review.sh has no
+# reviewer, and "no reviewer" already has a state (a park, exit 5). Degrading it to
+# a no-op would be the one behaviour the checkpoint forbids: proceeding unapproved.
+# shellcheck source=engine/review.sh
+[ -f "$_AGENT_DIR/review.sh" ] && . "$_AGENT_DIR/review.sh" || REVIEW_LIB_MISSING=1
 LIVE="${CHIEF_LIVE_FILE:-}"
 # Stories already passing when this loop started. The event stream reports the SET
 # DIFFERENCE against it after every turn, so a turn that lands two stories reports
@@ -498,8 +610,8 @@ _provider_exec() {
       # devin's --print mode reads the prompt from --prompt-file (or a -- <PROMPT> arg),
       # NOT from stdin like claude/opencode — without it, it panics "print mode requires
       # a prompt" every iteration. PROMPT_FILE is the same file the caller pipes on stdin.
-      if [ -n "$MODEL" ]; then devin --permission-mode bypass --respect-workspace-trust false --print --model "$MODEL" --prompt-file "$PROMPT_FILE"
-      else devin --permission-mode bypass --respect-workspace-trust false --print --prompt-file "$PROMPT_FILE"
+      if [ -n "$MODEL" ]; then devin --permission-mode bypass --respect-workspace-trust false --print --model "$MODEL" --prompt-file "$ACTIVE_PROMPT"
+      else devin --permission-mode bypass --respect-workspace-trust false --print --prompt-file "$ACTIVE_PROMPT"
       fi
       ;;
     opencode)
@@ -535,11 +647,64 @@ while :; do
     exit 3
   fi
   i=$((i+1))
+  # TURN MODE — what this iteration is FOR. Decided here, at the top, from state on
+  # disk only (the PRD's review field + whether this story's plan artifact already
+  # exists and parses), so it survives a restart: a resumed run re-derives the same
+  # answer instead of needing a remembered position in the loop.
+  TURN_MODE=implement; TURN_PHASE=agent-turn; TURN_LABEL=""; ACTIVE_PROMPT="$PROMPT_FILE"
+  TURN_STORY="$(_story)"
+  # The artifact path for this story. The id is a schema-controlled slug ("US-1"), but
+  # it reaches us from a JSON file an agent edits, so anything not filename-safe is
+  # folded to '_' rather than trusted into a path.
+  TURN_PLAN="$PLAN_DIR/${TURN_STORY//[^A-Za-z0-9._-]/_}.plan.json"
+  # THE REVIEW GATE (engine/review.sh). Asked only when a well-formed plan already
+  # exists — there is nothing to approve before that — and answered entirely from
+  # disk, so a resumed run reads the verdict it was already given instead of asking
+  # a human the same question twice. Three answers, and the two that are not
+  # "implement" both land back in the plan/park machinery below rather than starting
+  # a second state machine:
+  #   0  approved  — fall through to the implement turn.
+  #   1  re-plan   — the reviewer sent it back; review_gate has ALREADY removed the
+  #                  plan artifact and recorded the annotations, so the very next
+  #                  check re-derives "plan turn" and _plan_prompt briefs it with
+  #                  the feedback. Bounded by $CHIEF_REVIEW_MAX_ROUNDS.
+  #   2  park      — no approval, and none obtainable here. Exit 5, below.
+  REVIEW_RC=0
+  if [ "$REVIEW_MODE" = plan ] && [ -n "$TURN_STORY" ] && _plan_valid "$TURN_PLAN" "$TURN_STORY"; then
+    # No review.sh in this install = no reviewer, which is a park and not a stub that
+    # waves the plan through. Same answer as an absent plannotator, said differently.
+    [ -n "${REVIEW_LIB_MISSING:-}" ] && echo "Plan review: this install has no engine/review.sh — nothing here can approve a plan."
+    review_gate "$TURN_STORY" "$TURN_PLAN" || REVIEW_RC=$?
+  fi
+  # AWAITING REVIEW. The park, and the whole reason the gate can be trusted: every
+  # way of failing to reach a reviewer ends HERE and not in an implement turn. It is
+  # the operator-pause drain in a different colour — branch, worktree, plan and
+  # annotations all kept, nothing half-done, and `chief run` picks it back up.
+  if [ "$REVIEW_RC" = "2" ]; then
+    echo ""
+    echo "Chief is stopping: $TURN_STORY has a plan, but no human approval — and none can be obtained here."
+    echo "$(_passes)/$(_total) stories pass; everything committed so far is kept on the branch, and the plan + annotations are kept for a reviewer."
+    echo "Exit 5 = AWAITING-REVIEW — parked for a person, NOT a failed tasklist. Approve the plan (or fix the story), then re-run."
+    live_set "$LIVE" phase=awaiting-review iter="$i" story="$TURN_STORY" \
+      passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" retry_at=0
+    # STORY scope; the driver emits the tasklist-scope terminal when it sees exit 5 —
+    # the same two-scope split as plan-invalid, so nothing is double-counted.
+    event_emit story.awaiting-review name="${CHIEF_TASKLIST:-}" story="$TURN_STORY" \
+      state=awaiting-review detail="the plan is unapproved and no reviewer could be reached"
+    exit 5
+  fi
+  # A plan already on disk and valid is never re-bought — that is what makes the phase
+  # idempotent across a restart, a usage-limit stop, or a rebuilt worktree.
+  if [ "$REVIEW_MODE" = plan ] && [ -n "$TURN_STORY" ] && ! _plan_valid "$TURN_PLAN" "$TURN_STORY"; then
+    TURN_MODE=plan; TURN_PHASE=plan-turn; TURN_LABEL=" — PLAN turn for $TURN_STORY"
+    _plan_prompt "$TURN_STORY" "$TURN_PLAN"
+    ACTIVE_PROMPT="$PLAN_PROMPT_FILE"
+  fi
   echo ""
   echo "==============================================================="
-  echo "  Chief Iteration $i ($TOOL) — budget $MAX_ITERATIONS · cap $HARD_MAX · $(_passes)/$(_total) passing"
+  echo "  Chief Iteration $i ($TOOL)$TURN_LABEL — budget $MAX_ITERATIONS · cap $HARD_MAX · $(_passes)/$(_total) passing"
   echo "==============================================================="
-  live_set "$LIVE" phase=agent-turn iter="$i" story="$(_story)" \
+  live_set "$LIVE" phase="$TURN_PHASE" iter="$i" story="$(_story)" \
     passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" retry_at=0
 
   # Run the selected provider with the composed Chief prompt. The provider's own
@@ -555,12 +720,12 @@ while :; do
   [ -n "${CHIEF_VERBOSE:-}" ] && printf '>> [verbose] provider=%s%s%s · prompt=%s (%s lines)\n' \
     "$PROVIDER" "${MODEL:+ model=$MODEL}" \
     "${CHIEF_ACCOUNT_ENV_FILE:+ account=${CHIEF_ACCOUNT_LABEL:-$(basename "$CHIEF_ACCOUNT_ENV_FILE")} env=$CHIEF_ACCOUNT_ENV_FILE}" \
-    "$PROMPT_FILE" \
-    "$(wc -l < "$PROMPT_FILE" 2>/dev/null | tr -d ' ')" >&2
+    "$ACTIVE_PROMPT" \
+    "$(wc -l < "$ACTIVE_PROMPT" 2>/dev/null | tr -d ' ')" >&2
   _beat_start
-  OUTPUT=$(_run_provider < "$PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
+  OUTPUT=$(_run_provider < "$ACTIVE_PROMPT" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
   _beat_stop
-  live_set "$LIVE" phase=agent-turn story="$(_story)" passing="$(_passes)" total="$(_total)"
+  live_set "$LIVE" phase="$TURN_PHASE" story="$(_story)" passing="$(_passes)" total="$(_total)"
   _emit_story_events "$i"
   _emit_turn_event "$i"
 
@@ -572,11 +737,21 @@ while :; do
   # to a standalone line accepts a real emission and rejects a prose mention. Bias is
   # deliberate: a false negative just costs one extra iteration, a false positive
   # short-circuits the whole tasklist.
+  #
+  # NEVER honoured on a PLAN turn. That turn is instructed to write one file and stop,
+  # so a COMPLETE from it cannot be true — and honouring it would hand the driver an
+  # exit 0 with no commits, which is the exact false-complete the no-work guard exists
+  # to catch. Said out loud rather than swallowed: a plan turn emitting it means the
+  # plan prompt is being misread, and that is worth seeing in the log.
   if printf '%s\n' "$OUTPUT" | grep -qE '^[[:space:]]*`?<promise>COMPLETE</promise>`?[[:space:]]*$'; then
-    echo ""
-    echo "Chief completed all tasks! (iteration $i)"
-    live_set "$LIVE" phase=complete passing="$(_passes)" total="$(_total)" story=
-    exit 0
+    if [ "$TURN_MODE" = plan ]; then
+      echo "!! the PLAN turn emitted the completion token — IGNORED (a plan turn writes a plan, it never completes a tasklist)."
+    else
+      echo ""
+      echo "Chief completed all tasks! (iteration $i)"
+      live_set "$LIVE" phase=complete passing="$(_passes)" total="$(_total)" story=
+      exit 0
+    fi
   fi
 
   # Session/usage limit -> sleep until reset and resume (a blocked turn is free).
@@ -614,6 +789,51 @@ while :; do
     echo "Exit 2 = blocked on a usage limit — resumable once the window resets, NOT a failed tasklist."
     echo "Reset ETA recorded for the driver: $(cat "$LIMIT_RETRY_FILE" 2>/dev/null) (in ~$(( secs/60 )) min)."
     exit 2
+  fi
+
+  # PLAN TURN OUTCOME. Placed AFTER the limit check on purpose — a plan turn blocked
+  # by a usage limit produced no artifact for a reason that has nothing to do with the
+  # plan, and calling that PLAN-INVALID would burn an actionable state on a quota
+  # window. Two outcomes, no third:
+  #
+  #   valid   — the artifact is on disk and parses. The plan is progress, so the stall
+  #             counter resets, and the loop restarts at the top: the same story now
+  #             reads plan-ready and the NEXT turn implements it. (The iteration
+  #             boundary hook is skipped for this one turn — it re-integrates base
+  #             under a branch a plan turn did not touch, so there is nothing to
+  #             re-integrate and one turn of drift costs nothing.)
+  #   invalid — exit 4, ONE plan turn per story, no retry-until-it-parses. Falling
+  #             through to implementation is the one thing this phase must never do.
+  if [ "$TURN_MODE" = plan ]; then
+    if _plan_valid "$TURN_PLAN" "$TURN_STORY"; then
+      echo ""
+      echo "Iteration $i: PLAN ready for $TURN_STORY -> $TURN_PLAN"
+      live_set "$LIVE" phase=plan-ready stall=0 story="$TURN_STORY"
+      event_emit story.plan-ready name="${CHIEF_TASKLIST:-}" story="$TURN_STORY" \
+        state=running detail="iteration $i — plan artifact written and schema-valid"
+      stall=0
+      # Re-baseline: a plan turn is not a code turn, and the next iteration's progress
+      # check must not read anything it happened to touch as implementation progress.
+      prev_pass=$(_passes); prev_head=$(_head)
+      continue
+    fi
+    echo ""
+    echo "Chief's PLAN turn did not produce a well-formed plan for $TURN_STORY."
+    echo "Expected (schema in docs/plan-review.md): $TURN_PLAN"
+    if [ -s "$TURN_PLAN" ]; then
+      echo "The file exists but fails the schema check — story/summary/changes[]/verification[] must all be present and non-empty, and .story must equal $TURN_STORY."
+    else
+      echo "No artifact was written at that path."
+    fi
+    echo "Exit 4 = PLAN-INVALID — an actionable stop, NOT a stall: the branch is untouched and re-running asks for the plan again."
+    live_set "$LIVE" phase=plan-invalid iter="$i" story="$TURN_STORY" \
+      passing="$(_passes)" total="$(_total)"
+    # STORY scope here; the driver emits the TASKLIST-scope terminal event when it
+    # sees exit 4. Two scopes, one transition — same split as story.passed vs the
+    # tasklist.* terminals, so a consumer counting tasklist outcomes never double-counts.
+    event_emit story.plan-invalid name="${CHIEF_TASKLIST:-}" story="$TURN_STORY" \
+      state=failed detail="the plan turn wrote no well-formed artifact at $TURN_PLAN"
+    exit 4
   fi
 
   # Progress check: did a story pass, or a new commit land?

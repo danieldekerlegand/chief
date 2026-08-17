@@ -39,6 +39,10 @@ work run to completion by a chain of agent iterations.
                                          //   hook dispatching off cwd. Omit to use
                                          //   the project hook.
   "parked": false,                       // true = skipped by auto-discovery
+  "review": "none",                      // "plan" = a HUMAN approves the agent's plan
+                                         //   before it writes any code (one extra turn
+                                         //   per story). "none" (default) is the
+                                         //   straight-to-code loop. See plan-review.md.
 
   "userStories": [
     {
@@ -68,6 +72,15 @@ Notes:
 - A dep name is the **filename minus `.json`**, not a branch name — `some-tasklist`,
   never `chief/some-tasklist`. Qualify it as `<repo>:<tasklist>` to wait on work in
   another repo; see [cross-repo-dependencies.md](cross-repo-dependencies.md).
+- **`review` is the only field that puts a human in the loop.** `"plan"` makes each
+  story spend one turn writing a plan artifact that a person approves (or annotates)
+  before any edit; anything else — and the default — is off, and the loop is exactly
+  what it was. Enable it on the tasklists where a misread requirement is expensive
+  (architectural, wide-blast-radius, "I'm not sure this is the right seam") and leave
+  it off for the one-shots, refactors and doc fixes that are most of a roadmap. It is
+  a one-word, reviewable diff either way. The rationale, the artifact schema, the
+  reviewer contract and what happens when nobody is there:
+  [plan-review.md](plan-review.md).
 - **`repo` targets a nested repo (e.g. a submodule).** The agent runs in a worktree of
   that repo, so its checks/deps must resolve there (use `warmup` to provision them, and a
   verify hook that dispatches off its cwd). All merges are serialized, so two tasklists

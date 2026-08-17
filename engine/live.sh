@@ -2,7 +2,8 @@
 # engine/live.sh — the per-tasklist LIVELINESS record (shared by agent/driver/monitor).
 #
 # WHY THIS EXISTS. The scheduler persists exactly ONE coarse word per tasklist
-# ($STATE/<name>.state: pending|running|done|failed|blocked|rate-limited). Everything
+# ($STATE/<name>.state: pending|running|done|failed|blocked|rate-limited|paused|
+# awaiting-review). Everything
 # that answers "is this 'running' tasklist WORKING or HUNG?" — which iteration it is
 # on, which story, what it is doing right now, when it last did anything — only ever
 # reached the worker's stdout and was lost. That is how a tasklist sat for ~2h with no
@@ -25,9 +26,16 @@
 #
 # PHASE VOCABULARY (the fine-grained sub-phase; the coarse lifecycle is `state`):
 #   agent.sh   agent-turn · provider-waiting · writing · rate-limited-waiting · stalled ·
-#              operator-paused
+#              operator-paused · plan-turn · plan-ready · plan-invalid · review-wait ·
+#              awaiting-review
 #   driver.sh  worktree · warmup · reconcile · merge-wait · rebasing · verifying ·
-#              merging · merged · done · operator-paused
+#              merging · merged · done · operator-paused · plan-invalid · awaiting-review
+# The plan-* phases belong to the opt-in PLAN REVIEW checkpoint (docs/plan-review.md)
+# and appear only on a tasklist that enabled it: 'plan-turn' is the agent writing a
+# plan instead of code, 'plan-ready' the artifact passing its schema check, and
+# 'plan-invalid' the stop when it does not. 'review-wait' is the bounded window in
+# which a human reviewer is being waited on, and 'awaiting-review' the park when that
+# window closes with no approval — a hold, not a fault (docs/plan-review.md).
 # 'operator-paused' is the OPERATOR pause (a human's `chief pause`); the two
 # rate-limited phases are the account's usage-limit window. Never conflate them — a
 # reader has to be able to tell which one is holding the run.

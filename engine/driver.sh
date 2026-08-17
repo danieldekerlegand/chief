@@ -32,8 +32,9 @@
 #     and leaves its branch for a human.
 #
 # SCHEDULER STATES (per tasklist, in $STATE/<name>.state):
-#   pending · running · done · failed · blocked · rate-limited · paused
-# Two of these are NON-TERMINAL, and neither is a failure:
+#   pending · running · done · failed · blocked · rate-limited · paused ·
+#   awaiting-review
+# THREE of these are NON-TERMINAL, and none of them is a failure:
 #   · 'rate-limited' — the worker's agent loop exited 2, i.e. it stopped on a Claude
 #     usage/session limit (see engine/agent.sh's exit-code contract). Nothing is
 #     wrong with that branch — it is merely blocked until the limit window resets —
@@ -44,8 +45,16 @@
 #     worker drained at a safe checkpoint. Its branch and worktree are kept, so the
 #     next run RESUMEs it from its committed passes state. Chief never lifts this
 #     one by itself: it stays 'paused' until a human runs `chief resume`.
-# dep_broken() treats NEITHER as broken: the dependents of a tasklist that is only
-# waiting stay 'pending' (schedulable) instead of cascading to 'blocked'.
+#   · 'awaiting-review' — the worker's agent loop exited 5: plan review is enabled
+#     for that tasklist, it has a well-formed plan, and no human has approved it
+#     (docs/plan-review.md). Deliberately the SAME park as an operator pause, in a
+#     distinct state so `chief ps` can say which of the two is holding the work:
+#     branch, worktree, plan and annotations all kept, the scheduler carries on with
+#     the siblings, and the next run resumes reading the verdict off disk instead of
+#     re-asking. Chief never manufactures the missing approval — an unreachable
+#     reviewer is not a yes.
+# dep_broken() treats NONE of them as broken: the dependents of a tasklist that is
+# only waiting stay 'pending' (schedulable) instead of cascading to 'blocked'.
 #
 # OPERATOR PAUSE (the human lever, deliberately NOT the usage-limit one):
 #   • $STATE/.paused is armed by `chief pause` and cleared by `chief resume`. While
@@ -285,6 +294,8 @@ tasklist_outcome() {
     RATE-LIMITED*)                    printf 'rate-limited' ;;
     PAUSED*)                          printf 'paused' ;;
     EMPTY-NO-WORK*)                   printf 'no-work' ;;
+    PLAN-INVALID*)                    printf 'plan-invalid' ;;
+    AWAITING-REVIEW*)                 printf 'awaiting-review' ;;
     BAD-REPO*)                        printf 'bad-repo' ;;
     # No status line (or one no worker writes): fall back to the scheduler state,
     # which is what distinguishes "blocked on a dep" from "never launched" from
@@ -294,8 +305,9 @@ tasklist_outcome() {
          pending)      printf 'not-launched' ;;
          done)         printf 'merged' ;;
          rate-limited) printf 'rate-limited' ;;
-         paused)       printf 'paused' ;;
-         *)            printf 'failed' ;;
+         paused)          printf 'paused' ;;
+         awaiting-review) printf 'awaiting-review' ;;
+         *)               printf 'failed' ;;
        esac ;;
   esac
 }
@@ -336,11 +348,15 @@ headless_summary() {
 }
 # engine/agent.sh's exit-code contract: 0 = COMPLETE, 1 = genuine failure (stall or
 # hard cap), 2 = stopped on a Claude usage/session limit and won't retry, 3 = drained
-# at an iteration boundary because an OPERATOR PAUSE is armed. Keep in sync with the
-# header of agent.sh — the whole limit-vs-failure distinction rides on these codes,
-# and 3 is the second one that must never be read as a failed tasklist.
+# at an iteration boundary because an OPERATOR PAUSE is armed, 4 = a plan-review
+# tasklist whose PLAN turn produced no well-formed plan, 5 = one whose plan is
+# well-formed but UNAPPROVED with no reviewer reachable. Keep in sync with the header
+# of agent.sh — the whole limit-vs-failure distinction rides on these codes, and 3
+# and 5 must never be read as failed tasklists.
 AGENT_RC_LIMIT=2
 AGENT_RC_PAUSED=3
+AGENT_RC_PLAN=4
+AGENT_RC_REVIEW=5
 # Driver-level usage-limit self-heal (see SCHEDULER STATES above). Deliberately a
 # separate family from agent.sh's RATE_LIMIT_* per-worker knobs: those govern how
 # long ONE agent loop sleeps mid-story, these govern how many times the SCHEDULER
@@ -512,6 +528,21 @@ prd_state_source() {
   else
     cat "$SRC/$name.json"
   fi
+}
+
+# plan_sync SRC DEST — copy the PLAN ARTIFACTS (docs/plan-review.md) one way.
+#
+# Called twice per worker, in both directions. A worktree's .chief/state/ is
+# gitignored and a fresh worktree starts empty, so a plan a previous run paid for —
+# and that a human may already have reviewed — would be re-asked for every time the
+# worktree was rebuilt. Snapshots outlive worktrees; that is the same reason
+# prd.json is mirrored there. Silent and free when plan review is off: the source
+# directory simply does not exist. Never fatal — a plan is re-derivable, and losing
+# a run over a bookkeeping copy is not a trade worth making.
+plan_sync() {
+  [ -n "$(ls "$1/"*.json 2>/dev/null)" ] || return 0
+  mkdir -p "$2" 2>/dev/null && cp "$1/"*.json "$2/" 2>/dev/null
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -972,7 +1003,7 @@ set_state() {
   printf '%s' "$2" > "$STATE/$1.state"; live_set "$(live_of "$1")" name="$1" state="$2"
   # Event stream: the two coarse transitions a subscriber cannot derive from a
   # worker's own outcome event — a tasklist STARTING, and one the scheduler ruled
-  # unstartable. The rest (done/failed/rate-limited/paused) are reap()'s translation
+  # unstartable. The rest (done/failed/rate-limited/paused/awaiting-review) are reap()'s translation
   # of a <name>.status the worker already emitted an event for, so re-emitting them
   # here would double-report one transition under two names.
   case "$2" in
@@ -1042,10 +1073,11 @@ deps_satisfied() {
   return 0
 }
 dep_broken() {   # a dep failed/blocked -> this tasklist can never run
-  # 'rate-limited' and 'paused' are deliberately absent: a dep waiting out a usage
-  # limit, or parked by an operator pause, is not broken — it is unfinished work with
-  # its branch intact that the next run resumes. Its dependents must therefore stay
-  # pending (schedulable on resume) rather than cascade to 'blocked'.
+  # 'rate-limited', 'paused' and 'awaiting-review' are deliberately absent: a dep
+  # waiting out a usage limit, parked by an operator pause, or waiting on a human's
+  # verdict is not broken — it is unfinished work with its branch intact that the next
+  # run resumes. Its dependents must therefore stay pending (schedulable on resume)
+  # rather than cascade to 'blocked'.
   local d
   for d in $(deps_of "$1"); do
     case "$(get_state "$(dep_key "$d")")" in failed|blocked) return 0 ;; esac
@@ -1597,6 +1629,38 @@ if [ "$FORCE" != "1" ]; then
   fi
 fi
 
+# worker_park OUTCOME DETAIL MESSAGE — record a worker that stopped BEFORE the merge
+# phase with its branch and worktree intact, and say so four ways at once.
+#
+# Three arms of run_worker end this way (an operator pause, an unformable plan, an
+# unapproved one), and each of them used to spell out the same five lines. They are
+# the same transition, so they are one function: the four surfaces a stop has to
+# reach — the liveliness record `chief ps` renders, the event a subscriber sees, the
+# <name>.status line reap() maps to a scheduler state, and the human log — are
+# written together or not at all. A future arm that writes only three of them is the
+# bug this exists to make impossible.
+#
+# $live/$name/$total/$remaining/$STATE are the caller's, by dynamic scope (the same
+# idiom as prd_state_source above). Returns 0; the caller still owns its `return`,
+# because a helper cannot return out of run_worker for it.
+worker_park() {
+  local phase status ev state story
+  story="$(live_get "$live" story)"
+  case "$1" in
+    # The operator pause is the only one that clears the story: a human stopped the
+    # tasklist between stories, so naming one would imply a turn that never started.
+    paused)          phase=operator-paused; status=PAUSED;          ev=tasklist.paused;          state=paused;          story="" ;;
+    plan-invalid)    phase=plan-invalid;    status=PLAN-INVALID;    ev=tasklist.plan-invalid;    state=failed ;;
+    awaiting-review) phase=awaiting-review; status=AWAITING-REVIEW; ev=tasklist.awaiting-review; state=awaiting-review ;;
+    *) return 0 ;;
+  esac
+  live_set "$live" phase="$phase" story="$story"
+  event_emit "$ev" name="$name" story="$story" state="$state" detail="$2"
+  echo "$status $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
+  echo "$3"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Worker — one per tasklist. Runs the agent loop in an isolated worktree, then
 # (serialized) rebases → verifies → merges. Writes $STATE/<name>.status + .log.
@@ -1715,6 +1779,7 @@ run_worker() {
     mkdir -p "$wtstate"
     prd_state_source > "$wtstate/prd.json" 2>/dev/null; [ -s "$wtstate/prd.json" ] || cp "$SRC/$name.json" "$wtstate/prd.json"
     echo "$branch" > "$wtstate/.last-branch"
+    plan_sync "$SNAP/$name.plans" "$wtstate/plans"          # plans a prior run already paid for
     { echo "# Chief Progress — $name"; echo "Started: $(date)"; echo "---"; } > "$wtstate/progress.txt"
     # If the last run's rebased branch failed the verify gate, surface those errors
     # into the agent's log so this run fixes them before reporting COMPLETE again.
@@ -1820,6 +1885,7 @@ run_worker() {
     remaining="$(jq '[.userStories[]|select(.passes==false)]|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
     total="$(jq '.userStories|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
     cp "$wtstate/prd.json" "$SNAP/$name.json" 2>/dev/null || true
+    plan_sync "$wtstate/plans" "$SNAP/$name.plans"          # bank what this run planned
     # _int() (defined with the self-heal helpers below, resolved at call time) keeps
     # an unreadable prd.json's '?' out of the arithmetic.
     live_set "$live" passing="$(( $(_int "$total") - $(_int "$remaining") ))" total="$(_int "$total")"
@@ -1850,29 +1916,40 @@ run_worker() {
       echo "!! $name PAUSED on a Claude usage/session limit — branch $branch kept intact; resumes from its passes state${retry_at:+ (reset ETA $retry_at)}"
       return 0
     fi
-    # OPERATOR-PAUSE DRAIN: agent.sh exits $AGENT_RC_PAUSED when it found the pause
-    # armed at an iteration boundary and stopped starting turns. Like the limit arm
-    # above this is NOT a failure and is checked BEFORE the no-work and INCOMPLETE
-    # guards — a pause armed before the first turn legitimately leaves zero commits,
-    # and calling that EMPTY-NO-WORK would fail a tasklist for obeying the operator.
-    # Branch AND worktree are kept (we return before the merge phase, which is the
-    # only thing that removes the worktree), so run_worker's RESUME path picks this
-    # up from its committed passes state with nothing rebuilt.
+    # THE PRE-GUARD PARKS (this arm and the two below it). Three agent exits stop
+    # BEFORE the no-work and INCOMPLETE guards, because each legitimately leaves zero
+    # commits and calling that EMPTY-NO-WORK would fail a tasklist for doing as it was
+    # told: an operator pause armed at an iteration boundary, a plan that would not
+    # form, and a plan nobody has approved. All three keep branch AND worktree (we
+    # return before the merge phase, the only thing that removes one), so the RESUME
+    # path picks them up from their committed passes state with nothing rebuilt.
     #
-    # The one case that does NOT park: the drain found every story passing with real
-    # commits behind them. Finishing that is verify+merge — cheap, agent-free work —
-    # and a pause withholds AGENT TURNS, not the completion of finished work. Parking
-    # it would leave an unmerged branch that blocks its dependents for as long as the
-    # (unbounded) pause lasts, which is exactly what US-2 forbids.
+    # The one case that does NOT park: a drain that found every story passing with
+    # real commits behind them. Finishing that is verify+merge — cheap, agent-free
+    # work — and a pause withholds AGENT TURNS, not the completion of finished work.
+    # Parking it would strand a mergeable branch, and its dependents, for as long as
+    # the (unbounded) hold lasts.
     if [ "$agent_rc" = "$AGENT_RC_PAUSED" ] && { [ "$remaining" != "0" ] || [ -z "$has_work" ]; }; then
-      live_set "$live" phase=operator-paused story=
-      event_emit tasklist.paused name="$name" state=paused detail="operator pause — branch + worktree kept"
-      echo "PAUSED $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
-      echo "!! $name PARKED on an OPERATOR PAUSE — branch $branch and its worktree kept; 'chief resume' continues from its passes state"
+      worker_park paused "operator pause — branch + worktree kept" \
+        "!! $name PARKED on an OPERATOR PAUSE — branch $branch and its worktree kept; 'chief resume' continues from its passes state"
       return 0
     fi
     if [ "$agent_rc" = "$AGENT_RC_PAUSED" ]; then
       echo ">> $name drained on an OPERATOR PAUSE with all $total stor$([ "$total" = 1 ] && echo y || echo ies) passing — finishing verify+merge (a pause withholds agent turns, not finished work)"
+    fi
+    # The other two pre-guard parks (docs/plan-review.md). $AGENT_RC_PLAN is a plan
+    # that would not form — a failed tasklist, but a NAMED one. $AGENT_RC_REVIEW is a
+    # well-formed plan NO HUMAN HAS APPROVED, which reap() maps to the NON-terminal
+    # 'awaiting-review' so dependents stay pending and the next run reads the verdict.
+    if [ "$agent_rc" = "$AGENT_RC_PLAN" ]; then
+      worker_park plan-invalid "the plan turn wrote no well-formed plan artifact — branch + worktree kept" \
+        "!! $name stopped in the PLAN phase — no well-formed plan artifact (docs/plan-review.md); branch $branch and its worktree kept"
+      return 0
+    fi
+    if [ "$agent_rc" = "$AGENT_RC_REVIEW" ]; then
+      worker_park awaiting-review "the plan is unapproved and no reviewer could be reached — branch + worktree + plan kept" \
+        "!! $name PARKED AWAITING REVIEW — its plan needs a human (docs/plan-review.md); branch $branch, its worktree and the plan are kept, and re-running resumes from an approval already given"
+      return 0
     fi
     # NO-WORK GUARD: an all-"pass" branch with zero diff vs base never did the work.
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
@@ -2128,6 +2205,11 @@ attempts_used() { _int "$(cat "$STATE/$1.attempts" 2>/dev/null)"; }
 # TERMINAL, which is what blocks its dependents, while a usage-limit pause is not. Making
 # either retryable blurs that distinction and leaves dependents neither blocked nor
 # progressing — caught by test/limitstate.sh, which is how both got here.
+# Deliberately NOT retryable: PLAN-INVALID. The three above are transient-shaped (a
+# flaky test, a base that moved), so another attempt is a real chance. A plan turn
+# that produced no well-formed artifact is a comprehension failure — usually a story
+# whose criteria the agent could not turn into a file list — and re-running it spends
+# another turn to reach the same wall while burying the one signal an operator needs.
 retryable_status() {
   case "$1" in
     VERIFY-FAILED*|MERGE-CONFLICT*|REBASE-CONFLICT*) return 0 ;;
@@ -2235,6 +2317,11 @@ reap() {   # collect any finished workers, update state
       # nothing in this run may. Only `chief resume` lifts a human's hold; the
       # scheduler's job is to record the park and let the run end.
       PAUSED*) set_state "$n" paused ;;
+      # Parked for a HUMAN REVIEWER (docs/plan-review.md). Non-terminal on exactly
+      # the same terms as the operator pause: dep_broken() ignores it, nothing here
+      # re-arms it (only a verdict can), and the run ends with the branch, the plan
+      # and every annotation kept for the next `chief run`.
+      AWAITING-REVIEW*) set_state "$n" awaiting-review ;;
       *) set_state "$n" failed ;;
     esac
     echo "  ● $n finished → $st"
@@ -2332,7 +2419,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""
+ran=""; paused=""; parked=""; inreview=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -2341,6 +2428,7 @@ for n in $NAMES; do
     done|failed) ran=1 ;;
     rate-limited) ran=1; paused="$paused $n" ;;   # it ran; it is paused, not failed
     paused) ran=1; parked="$parked $n" ;;         # it ran; the operator stopped it
+    awaiting-review) ran=1; inreview="$inreview $n" ;;  # it ran; a human hasn't approved its plan
   esac
 done
 echo "   (logs: $STATE/<name>.log)"
@@ -2397,6 +2485,19 @@ if [ -n "$parked" ]; then
   echo "    Nothing is half-done: no tasklist was stopped mid-rebase, mid-verify or mid-merge."
   echo "    Resume where they stopped (their committed passes state):  chief resume  &&  chief run"
 fi
+# Parked on a HUMAN VERDICT. Reported next to the operator pause and never among the
+# failures, for the same reason: nothing is wrong with the branch, someone simply has
+# not looked at the plan yet. The plan artifact is named because that is the thing to
+# open — and because an approval, once given, is read off disk on the next run rather
+# than asked for again.
+if [ -n "$inreview" ]; then
+  echo "   ⏸ AWAITING REVIEW — $(set -- $inreview; echo $#) tasklist(s) parked on a human verdict (not failed, not blocked):$inreview"
+  for n in $inreview; do
+    printf '    · %-30s %s — plan: %s\n' "$n" "$(cat "$STATE/$n.status" 2>/dev/null || echo AWAITING-REVIEW)" \
+      "$STATE_REL/snapshots/$n.plans/"
+  done
+  echo "    Approve the plan (docs/plan-review.md), then pick it up where it stopped:  chief run"
+fi
 # Only claim there are branches to review if there actually are: chief/* heads not
 # yet reachable from the base branch. A blanket "unmerged branches remain" sends
 # people hunting for work that a no-op run never created.
@@ -2433,6 +2534,7 @@ for n in $NAMES; do
     conflict)                 hl_conflict=1 ;;
     verify-failed)            hl_verify=1 ;;
     paused|rate-limited)      hl_held=1 ;;
+    awaiting-review)          hl_held=1 ;;   # withheld pending a human verdict, not failed
     blocked|not-launched)     ;;   # never ran — the no-work rule below covers these
     no-work)                  hl_failed=1 ;;   # the false-complete guard fired: a fault
     *)                        hl_failed=1 ;;

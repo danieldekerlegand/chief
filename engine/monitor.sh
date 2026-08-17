@@ -20,6 +20,12 @@
 # hold — … resume: chief resume' — and when BOTH are armed on a repo the run header
 # says so explicitly, because lifting either one alone changes nothing.
 #
+# There is a THIRD hold on the same glyph: 'awaiting-review' (label 'in-review'), a
+# plan-review tasklist whose plan no human has approved yet (docs/plan-review.md).
+# Same reasoning again — quota, operator and reviewer are three different people to
+# go and find — so it gets its own label and its own note. It is a hold, never a
+# fault: the branch, the worktree and the plan are all intact.
+#
 # For a tasklist that is actually working, the coarse word 'running' says nothing
 # about whether it is WORKING or HUNG. So each row also carries the fine-grained
 # liveliness record (engine/live.sh, written by agent.sh + driver.sh): the current
@@ -201,6 +207,11 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     # glyph), a distinct label so `chief ps | grep` can tell the two apart, and a
     # distinct note below.
     paused)          printf '%s⏸%s|paused-op' "$YEL" "$RST" ;;
+    # Parked on a HUMAN VERDICT (docs/plan-review.md). A hold, so the same ⏸ and
+    # never a failure glyph — and its own label, because "who is holding this" is
+    # the only question the row has to answer: an account's quota, an operator, or
+    # a reviewer who has not looked yet.
+    awaiting-review) printf '%s⏸%s|in-review' "$CYN" "$RST" ;;
     pending)         printf '%s○%s|pending' "$DIM" "$RST" ;;
     *)               printf '%s·%s|%s'      "$DIM" "$RST" "${1:-unknown}" ;;
   esac
@@ -510,6 +521,13 @@ render() {
         # record's phase here is always 'operator-paused', which would only repeat
         # the word without saying what was kept or how to pick it back up.
         printf '       %s↳ %s%s\n' "$YEL" "$(op_note "$n" "$state")" "$RST"
+      elif [ "$st" = awaiting-review ]; then
+        # Inline rather than a note function: unlike the usage-limit and operator
+        # holds there is no per-tasklist state to read (no reset ETA, no flag file) —
+        # the whole answer is "a person has not approved the plan yet", plus how to
+        # unblock it. Same ⏸ colour as the row.
+        printf '       %s↳ %s%s\n' "$CYN" \
+          "awaiting review: a human has not approved its plan · branch + worktree + plan kept · approve it, then: chief run" "$RST"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)
         # above the note the agent last wrote. Both are optional; neither line prints

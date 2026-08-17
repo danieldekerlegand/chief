@@ -188,6 +188,12 @@ load_project() {
   export CHIEF_PROJECT CHIEF_HOME CHIEF_TOOL CHIEF_PROVIDER CHIEF_MODEL CHIEF_PRESET \
          CHIEF_TASKS_DIR CHIEF_STATE_DIR CHIEF_VERIFY CHIEF_AGENT_CONTEXT \
          CHIEF_AUTO_MERGE CHIEF_BASE_BRANCH
+  # PLAN REVIEW (docs/plan-review.md). Exported — not merely sourced — so a repo that
+  # opts into the checkpoint can name its reviewer and its window in .chief/config
+  # rather than in every operator's shell. All are optional and all default to the
+  # unattended-safe value; a project that sets none of them behaves exactly as before.
+  export CHIEF_REVIEW CHIEF_REVIEWER CHIEF_REVIEW_TIMEOUT CHIEF_REVIEW_MAX_ROUNDS \
+         CHIEF_REVIEW_NONINTERACTIVE
 }
 
 cmd_init() {

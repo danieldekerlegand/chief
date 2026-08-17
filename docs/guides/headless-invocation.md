@@ -105,7 +105,7 @@ machine.
 | `4` | `verify-failed` | ≥1 tasklist ended `VERIFY-FAILED` — its branch is kept for re-engagement |
 | `5` | `conflict` | ≥1 tasklist ended `REBASE-CONFLICT` or `MERGE-CONFLICT` — a human owns it (chief never auto-resolves) |
 | `6` | `failed` | ≥1 tasklist failed for another reason: `INCOMPLETE`, `EMPTY-NO-WORK` (the false-complete guard), `REBASE-REFUSED`, `BAD-REPO`, `WORKTREE-FAILED` |
-| `7` | `paused` | work was **withheld, not broken**: an operator pause (`chief pause`) and/or a Claude usage-limit window. Branches and worktrees are kept; re-run to resume |
+| `7` | `paused` | work was **withheld, not broken**: an operator pause (`chief pause`), a Claude usage-limit window, and/or a tasklist parked `AWAITING-REVIEW` (a plan nobody has approved — [plan-review.md](plan-review.md)). Branches and worktrees are kept; re-run to resume |
 | `129` `130` `143` | — | the run was signalled (`SIGHUP` / `SIGINT` / `SIGTERM`); unchanged from an interactive run |
 
 **Precedence**, when a run ends in more than one of these: `5` → `4` → `6` → `7` →
@@ -145,8 +145,8 @@ Per tasklist:
 | field | |
 |---|---|
 | `name` | the tasklist stem (`tasks/<project>/<name>.json`) |
-| `outcome` | `merged` · `complete-unmerged` · `verify-failed` · `conflict` · `rebase-refused` · `rate-limited` · `paused` · `no-work` · `bad-repo` · `blocked` · `not-launched` · `failed` |
-| `state` | the raw scheduler state (`done` · `failed` · `blocked` · `rate-limited` · `paused` · `pending`) |
+| `outcome` | `merged` · `complete-unmerged` · `verify-failed` · `conflict` · `rebase-refused` · `rate-limited` · `paused` · `awaiting-review` · `no-work` · `plan-invalid` · `bad-repo` · `blocked` · `not-launched` · `failed` |
+| `state` | the raw scheduler state (`done` · `failed` · `blocked` · `rate-limited` · `paused` · `awaiting-review` · `pending`) |
 | `status` | the driver's own status line, verbatim (`MERGED @<sha>`, `INCOMPLETE 2/5`, `REBASE-CONFLICT see …`) — the detail behind `outcome` |
 | `attempts` | attempts spent this run (`RETRY_MAX` governs the budget); `0` when it was never retried |
 | `log` | that tasklist's log file — what to show a user who asks "why?" |

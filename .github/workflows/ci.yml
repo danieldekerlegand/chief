@@ -65,6 +65,9 @@ jobs:
       - name: Operator pause drains at a safe checkpoint, parks, and resumes from committed state
         run: bash test/pause.sh
 
+      - name: Plan review (approved implements · annotated re-plans within budget · no reviewer parks)
+        run: bash test/plan-review.sh
+
       - name: Fine-grained liveliness record + `chief ps` (progress · stalled · paused)
         run: bash test/liveliness.sh
 
