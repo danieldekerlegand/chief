@@ -449,25 +449,19 @@ chief_run_id_registered() {   # $1 = run id
   return 1
 }
 
-# (3) Does OUR worktree root hold that repo's worktrees? The per-repo dir is
-# `<basename>-<cksum of the repo's absolute path>` and the run id carries the same
-# cksum, so the glob answers it without needing the repo path itself.
-chief_run_id_has_worktree() { # $1 = run id
-  local ck d
-  ck="$(chief_run_id_cksum "${1:-}")"
+# The three reads, cheapest first. (3) is inline because it is one glob: the per-repo
+# worktree dir is `<basename>-<cksum of the repo's absolute path>` and the run id
+# carries the same cksum, so it answers without needing the repo path itself.
+chief_run_id_resolvable() {   # $1 = run id -> 0 when this install can account for it
+  local id="${1:-}" ck d
+  [ -n "$id" ] || return 1
+  chief_run_id_registered "$id"        && return 0     # (1) our registry claims it
+  [ -n "$(chief_repo_for_run "$id")" ] && return 0     # (2) its repo is one of ours
+  ck="$(chief_run_id_cksum "$id")"                     # (3) its worktrees are ours
   case "$ck" in ''|*[!0-9]*) return 1 ;; esac
   for d in "$CHIEF_WT_ROOT_ALL"/*-"$ck"; do
     [ -d "$d" ] && return 0
   done
-  return 1
-}
-
-chief_run_id_resolvable() {   # $1 = run id -> 0 when this install can account for it
-  local id="${1:-}"
-  [ -n "$id" ] || return 1
-  chief_run_id_registered "$id"   && return 0
-  [ -n "$(chief_repo_for_run "$id")" ] && return 0
-  chief_run_id_has_worktree "$id" && return 0
   return 1
 }
 
@@ -558,35 +552,27 @@ chief_run_label() {    # $1 = a path under .../worktrees/
 #                          and that its driver pid is gone. An orphan line and a
 #                          "left alone" line must not be mistakable for one another.
 
-# The repo a run id belongs to: its absolute path from the known-repos registry, else
-# the worktree dir carrying the same cksum (named, because the path itself is not
-# knowable from a cksum), else the cksum, which is at least stable across reports.
-chief_reap_repo_of() {   # $1 = run id  [$2 = a path under the worktree root]
-  local rid="${1:-}" hint="${2:-}" r ck d b rel
-  r="$(chief_repo_for_run "$rid")"
-  [ -n "$r" ] && { printf '%s' "$r"; return 0; }
-  ck="$(chief_run_id_cksum "$rid")"
-  case "$ck" in ''|*[!0-9]*) ck="" ;; esac
-  if [ -n "$ck" ]; then
-    for d in "$CHIEF_WT_ROOT_ALL"/*-"$ck"; do
-      [ -d "$d" ] || continue
-      b="${d##*/}"; printf '%s (by worktree)' "${b%-*}"; return 0
-    done
-  fi
-  case "$hint" in
-    */worktrees/*) rel="${hint#*/worktrees/}"; rel="${rel%%/*}"
-                   printf '%s (by worktree)' "${rel%-*}"; return 0 ;;
-  esac
-  if [ -n "$ck" ]; then printf 'unknown (repo cksum %s)' "$ck"; else printf 'unknown'; fi
-}
-
+# The repo is named from the first of these that answers: the known-repos registry
+# (an absolute path), a worktree dir carrying the run id's cksum, the worktree path
+# that matched this pid, else the cksum — which is at least stable across reports.
 chief_reap_origin() {    # $1 = run id  [$2 = a path under the worktree root]
-  local rid="${1:-}" hint="${2:-}" rel task=""
+  local rid="${1:-}" hint="${2:-}" rel wt="" task="" repo ck d b
   case "$hint" in
-    */worktrees/*) rel="${hint#*/worktrees/}"
+    */worktrees/*) rel="${hint#*/worktrees/}"; wt="${rel%%/*}"
                    case "$rel" in */*) task="${rel#*/}"; task="${task%%/*}" ;; esac ;;
   esac
-  printf 'repo %s' "$(chief_reap_repo_of "$rid" "$hint")"
+  repo="$(chief_repo_for_run "$rid")"
+  ck="$(chief_run_id_cksum "$rid")"
+  case "$ck" in ''|*[!0-9]*) ck="" ;; esac
+  if [ -z "$repo" ] && [ -n "$ck" ]; then
+    for d in "$CHIEF_WT_ROOT_ALL"/*-"$ck"; do
+      [ -d "$d" ] || continue
+      b="${d##*/}"; repo="${b%-*} (by worktree)"; break
+    done
+  fi
+  [ -n "$repo" ] || [ -z "$wt" ] || repo="${wt%-*} (by worktree)"
+  [ -n "$repo" ] || repo="unknown${ck:+ (repo cksum $ck)}"
+  printf 'repo %s' "$repo"
   [ -n "$task" ] && printf ' · tasklist %s' "$task"
   printf ' · run %s' "${rid:-unknown (no --chief-run= marker on argv)}"
 }
@@ -678,23 +664,17 @@ _chief_unresolved_add() {   # $1 = pid, $2 = run id (may be empty)
 # it — i.e. ignoring the overrides that are the very thing being tested for.
 chief_reap_default_runs() { ( unset CHIEF_RUNS CHIEF_PREFIX; chief_runs_dir ) ; }
 
-chief_reap_foreign_registry() {   # 0 when $CHIEF_RUNS is NOT this host's own
-  local now def cnow cdef
-  now="$(chief_runs_dir)"; def="$(chief_reap_default_runs)"
-  [ "${now%/}" = "${def%/}" ] && return 1            # literally the same path
-  cnow="$(chief_reap_canon "$now")"; cdef="$(chief_reap_canon "$def")"
-  [ -n "$cnow" ] && [ "$cnow" = "$cdef" ] && return 1  # the same dir by another name
-  return 0
-}
-
 # The guard itself. Refuses (1, with a diagnosis on stderr) only the one combination:
 # an EMPTY run-id prefix — "every chief run on the host" — read against a registry
 # that is not this host's.
 chief_reap_scope_guard() {   # $1 = argv marker
-  local marker="${1:-}"
+  local marker="${1:-}" now def cnow cdef
   [ -n "$marker" ] || return 0                            # cwd-only: bounded by our own prefix
   [ -z "${marker#"$CHIEF_RUN_MARKER"}" ] || return 0       # scoped to a run-id prefix
-  chief_reap_foreign_registry || return 0
+  now="$(chief_runs_dir)"; def="$(chief_reap_default_runs)"
+  [ "${now%/}" = "${def%/}" ] && return 0                 # our own registry: nothing to refuse
+  cnow="$(chief_reap_canon "$now")"; cdef="$(chief_reap_canon "$def")"
+  [ -n "$cnow" ] && [ "$cnow" = "$cdef" ] && return 0      # the same dir by another name
   {
     echo "chief reap: REFUSING a host-wide sweep from a registry that is not this host's."
     echo "  Process discovery would cover every --chief-run= process this user owns,"
