@@ -17,9 +17,13 @@
 # alongside every negative one: without a process the env key DOES match, "it was not
 # listed" would prove only that the key never fired.
 #
-# Hermetic: temp $CHIEF_PREFIX/$CHIEF_RUNS/$CHIEF_REPOS, fake worktrees, decoys that
-# are all `sleep`, and only DRY RUNS — this test signals nothing at all. It never
-# touches the real ~/.chief.
+# Hermetic in STATE and in PROCESSES, which are two different things. The temp
+# $CHIEF_PREFIX/$CHIEF_RUNS/$CHIEF_REPOS bounds what this test READS; it does not
+# bound `pgrep -f --chief-run=` or a /proc environ walk, both of which see the whole
+# box. So every sweep here is SCOPED to `$RE`, a run-id prefix only these fixtures
+# wear — an unscoped sweep out of this registry is refused by the engine now, and
+# test/reapscope.sh pins that refusal. Decoys are all `sleep`, and only DRY RUNS
+# happen: this test signals nothing at all and never touches the real ~/.chief.
 #
 # Where the platform will not show another process's environment (macOS: `ps -E` is
 # accepted and prints none), key 3 is inert by construction. The end-to-end half is
@@ -40,7 +44,12 @@ CHIEF_REPO="file://$ROOT" CHIEF_VERSION="$(git -C "$ROOT" rev-parse HEAD)" \
   CHIEF_BINDIR="$BIN" sh "$ROOT/install.sh" >/dev/null || fail "install failed"
 CHIEF="$BIN/chief"
 WTS="$PREFIX/worktrees"
-mkdir -p "$WTS/envrepo-4242/tl-x" "$CHIEF_RUNS" "$WORK/elsewhere"
+# THE FIXTURE NAMESPACE — see the header. A run id is `<repo>-<cksum>-<epoch>-<pid>`
+# and no repo on this host is named `reapenv-*`, so a sweep scoped to $RE cannot
+# reach a real run however the platform enumerates processes.
+RE="reapenv-"
+SCOPE="--chief-run=$RE"
+mkdir -p "$WTS/${RE}envrepo-4242/tl-x" "$CHIEF_RUNS" "$WORK/elsewhere"
 : > "$CHIEF_REPOS"
 cd "$WORK"
 
@@ -68,24 +77,24 @@ done
 
 # (b) liveness. Registered: a run file CLAIMING the id, whose pid is alive.
 sleep 300 & live_drv=$!; PIDS="$PIDS $live_drv"; disown "$live_drv" 2>/dev/null || true
-LIVE_ID="livrepo-5151-1700000000-$live_drv"
+LIVE_ID="${RE}livrepo-5151-1700000000-$live_drv"
 printf 'pid=%s\nrunid=%s\nrepo=%s\nnames=tl-x\n' "$live_drv" "$LIVE_ID" "$WORK/repo-live" \
   > "$CHIEF_RUNS/$live_drv.run"
 chief_run_id_live "$LIVE_ID" || fail "a registered run whose driver is alive was not seen as live"
 # The whole id is compared, epoch included — that is what tells two runs of one repo
 # apart, and what stops a recycled pid from passing as a live run.
-if chief_run_id_live "livrepo-5151-1699999999-$live_drv"; then
+if chief_run_id_live "${RE}livrepo-5151-1699999999-$live_drv"; then
   fail "a DIFFERENT run id sharing the driver pid was mistaken for the live run"
 fi
 # Unregistered but alive: `$$` inside `bash -c` survives the exec, so the id names the
 # very pid that ends up wearing it — a driver that lost its run file.
-bash -c 'exec -a "bash /e/driver.sh --chief-run=unregrepo-777-1700000000-$$" sleep 300' &
+bash -c 'exec -a "bash /e/driver.sh --chief-run='"$RE"'unregrepo-777-1700000000-$$" sleep 300' &
 unreg_drv=$!; PIDS="$PIDS $unreg_drv"; disown "$unreg_drv" 2>/dev/null || true
 sleep 0.5
-UNREG_ID="unregrepo-777-1700000000-$unreg_drv"
+UNREG_ID="${RE}unregrepo-777-1700000000-$unreg_drv"
 [ "$(chief_pid_tag "$unreg_drv")" = "$UNREG_ID" ] || fail "could not stage an unregistered live driver (pid $unreg_drv)"
 chief_run_id_live "$UNREG_ID" || fail "a live driver with no run file was treated as a dead run"
-DEAD_ID="envrepo-4242-1700000000-999999"
+DEAD_ID="${RE}envrepo-4242-1700000000-999999"
 if chief_run_id_live "$DEAD_ID"; then fail "an id naming no live process was reported live"; fi
 
 # (c) the interactive shell. A shell with no SCRIPT OPERAND is one somebody is typing
@@ -122,11 +131,11 @@ spawn_env "not-a-chief-run" "$WORK/elsewhere" sleep; env_bogus="$SPAWNED"
 # Same process, no marker — proves the env key is what matched, not a wider pattern.
 spawn_env ""          "$WORK/elsewhere" sleep;   env_none="$SPAWNED"
 # Key 1's own finding, untouched by any of this — and the [cwd] line in the report.
-spawn_env ""          "$WTS/envrepo-4242/tl-x" sleep; wt_orphan="$SPAWNED"
+spawn_env ""          "$WTS/${RE}envrepo-4242/tl-x" sleep; wt_orphan="$SPAWNED"
 sleep 0.5
 
 # ── the dry run: every match is labelled with the KEY that made it ────────────
-out="$("$CHIEF" reap -n 2>&1)" || fail "chief reap -n exited non-zero: $out"
+out="$("$CHIEF" reap -n --scope "$RE" 2>&1)" || fail "chief reap -n exited non-zero: $out"
 case "$out" in *"dry run"*) ;; *) fail "-n did not say it was a dry run:
 $out" ;; esac
 alive "$env_orphan" || fail "-n signalled a candidate — a dry run must not touch anything"
@@ -134,7 +143,7 @@ case "$out" in *"keys: [cwd]"*) ;; *) fail "the report has no key legend, so an 
 $out" ;; esac
 listed "$wt_orphan" "$out" || fail "key 1's own orphan (pid $wt_orphan) was not found — the gates must not touch cwd matches:
 $out"
-case "$out" in *"[cwd]  working in envrepo · tl-x"*) ;; *) fail "the cwd match is not labelled [cwd]:
+case "$out" in *"[cwd]  working in ${RE}envrepo · tl-x"*) ;; *) fail "the cwd match is not labelled [cwd]:
 $out" ;; esac
 
 if [ -z "$(chief_env_key_mode)" ]; then
@@ -167,7 +176,7 @@ n="$(awk '/^chief_find_orphans\(\)/ {f=1} f && /chief_protected_pids/ {c++} f &&
 [ "$n" = "2" ] || fail "chief_find_orphans calls chief_protected_pids $n time(s); the before/after pair 75 established must stay"
 
 chief_protected_reset
-chief_find_orphans "$WTS" "$CHIEF_RUN_MARKER" || fail "chief_find_orphans errored"
+chief_find_orphans "$WTS" "$SCOPE" || fail "chief_find_orphans errored"
 case " $CHIEF_PROTECTED " in *" $live_drv "*) ;; *) fail "the live registered run's driver (pid $live_drv) is not in the protected set after a full scan" ;; esac
 case " $CHIEF_ORPHANS "   in *" $wt_orphan "*) ;; *) fail "the cwd-keyed orphan (pid $wt_orphan) was lost: '$CHIEF_ORPHANS'" ;; esac
 case " $CHIEF_ORPHANS "   in *" $env_live "*) fail "a process carrying a live run's marker (pid $env_live) survived into CHIEF_ORPHANS" ;; esac
@@ -178,14 +187,14 @@ case " $CHIEF_ORPHANS "   in *" $env_shell "*) fail "an operator's interactive s
 # with no positive control proves nothing. So stand in for the ONE thing macOS cannot
 # do — read another process's environment — and leave every gate beneath it real. The
 # decoys are the same live processes; only the platform read is scripted.
-chief_pids_env_marked() {   # $1 = run id prefix (every id here shares the empty one)
+chief_pids_env_marked() {   # $1 = run id prefix (every id here shares $RE)
   printf '%s %s\n' "$env_orphan" "$DEAD_ID"
   printf '%s %s\n' "$env_live"   "$LIVE_ID"
   printf '%s %s\n' "$env_bogus"  "not-a-chief-run"
   printf '%s %s\n' "$env_shell"  "$DEAD_ID"
 }
 chief_protected_reset
-chief_find_orphans "$WTS" "$CHIEF_RUN_MARKER" || fail "chief_find_orphans errored with a scripted environment read"
+chief_find_orphans "$WTS" "$SCOPE" || fail "chief_find_orphans errored with a scripted environment read"
 case " $CHIEF_ORPHANS " in *" $env_orphan "*) ;; *) fail "the escaped-cwd orphan carrying a DEAD run's marker (pid $env_orphan) was not reached by the env key: '$CHIEF_ORPHANS'" ;; esac
 case "$CHIEF_ORPHAN_INFO" in *"[env]  inherited run marker · run $DEAD_ID"*) ;; *) fail "the env match is not labelled [env] with the run it came from:
 $CHIEF_ORPHAN_INFO" ;; esac

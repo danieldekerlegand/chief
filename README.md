@@ -224,7 +224,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief events [id] [-f]` | Subscribe to a run's machine-readable NDJSON event stream — run/tasklist/story transitions as they happen, stdout is pure NDJSON (`-l` lists the logs on this host). The contract chief-cloud and embedding hosts read ([`docs/reference/events.md`](docs/reference/events.md)). |
 | `chief models [provider]` | List the models you can pass to `--model` (live from devin/opencode; stable aliases for claude; none for amp). |
 | `chief quality ratchet` | The merge gate's second, MEASURED axis: deterministic code-quality metrics (duplication, function length, nesting depth, single-use helpers, lint counts) compared branch-vs-base, exiting non-zero when one regressed past its tolerance — so `verify.sh` can BLOCK a merge that made the codebase worse with every test still green. No model judgment anywhere; `measure` emits the raw record, `--write-baseline` is the reviewable re-baseline hatch ([`docs/reference/verify-hook.md`](docs/reference/verify-hook.md)). |
-| `chief reap [-n] [--grace N]` | Stop orphaned chief work — agent trees with no live, registered run behind them (`-n` reports only). |
+| `chief reap [-n] [--grace N] [--scope P]` | Stop orphaned chief work — agent trees with no live, registered run behind them (`-n` reports only). **Host-wide**: every repo on the box, not just the current one; `--scope <repo>-<cksum>-` narrows it to one repo's runs. |
 | `chief pause [--all]` | Withhold agent turns — drain, never kill: in-flight iterations finish, the rest park as paused. |
 | `chief resume [--all]` | Lift the pause and re-arm parked tasklists as pending for the next `chief run`. |
 | `chief update` | Self-update the installed engine (`CHIEF_VERSION` pins a tag). |
@@ -296,7 +296,7 @@ tree at once.
 
 ## Status
 
-**v0.8.23** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.27** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

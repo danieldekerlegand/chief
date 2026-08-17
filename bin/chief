@@ -96,9 +96,12 @@ Usage:
                               devin/opencode, the stable family aliases for claude, none for amp
                               (no arg = all)
   chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
-                              still spending quota) with no live, registered run behind
-                              them. -n reports without signalling. Never touches a live
-                              run, another user's processes, or your own claude sessions.
+       [--scope PREFIX]       still spending quota) with no live, registered run behind
+                              them. -n reports without signalling. HOST-WIDE by default:
+                              every repo on this box, not just the one you are in —
+                              --scope <repo>-<cksum>- narrows it to one repo's runs.
+                              Never touches a live run, another user's processes, or
+                              your own claude sessions.
   chief quality SUB [opts]    the code-quality RATCHET — the merge gate's second, MEASURED axis.
                               `measure` emits a deterministic metric record (size · complexity ·
                               duplication · decomposition · lint violations) for a file set;

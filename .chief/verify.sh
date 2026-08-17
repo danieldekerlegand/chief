@@ -93,11 +93,17 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   # Behavioral core: the hermetic CI subset (fake claude, temp prefixes — no ~/.chief
   # pollution). monitor.sh is deliberately excluded here (timing-sensitive under the
   # parallel load verify runs beneath); CI still covers it and the full suite.
+  #
+  # The block runs THROUGH test/bystander.sh, which stands up a run belonging to
+  # another install — its own driver argv, its own $CHIEF_RUNS, its own worktree root,
+  # all outside every prefix these tests mint — runs the list below, and fails the
+  # moment one of them signals it. On 2026-08-17 this block killed live runs in three
+  # sibling repos, so the guard is not hypothetical. It runs the block itself: nothing
+  # here is paid for twice, and a failing test is named and its output streamed.
   if [ "${CHIEF_VERIFY_TESTS:-1}" = "1" ]; then
-    for t in smoke provider-conformance ratelimit limitstate limitresume limitmonitor pause plan-review liveliness teardown reapscope reapenv noworkguard headless events container account-env stale-resume conflict-forensics rebase-refusal touches-audit quality-ratchet gen; do
-      say "behavioral — test/$t.sh"
-      bash "test/$t.sh" || block "test/$t.sh failed"
-    done
+    say "behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)"
+    CHIEF_BYSTANDER_TESTS="smoke provider-conformance ratelimit limitstate limitresume limitmonitor pause plan-review liveliness teardown reapscope reapenv noworkguard headless events container account-env stale-resume conflict-forensics rebase-refusal touches-audit quality-ratchet gen" \
+      bash test/bystander.sh || block "behavioral tests failed (see above)"
   else
     say "behavioral tests skipped (CHIEF_VERIFY_TESTS=0)"
   fi

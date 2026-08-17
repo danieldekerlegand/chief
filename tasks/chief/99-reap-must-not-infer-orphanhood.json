@@ -24,7 +24,8 @@
         "A process whose argv carries a `--chief-run=` id the sweep cannot resolve is reported and LEFT ALONE, not reaped. Refusing to act on an unresolvable process is the conservative direction, and reaping is irreversible while leaving an orphan is not.",
         "The behaviour is identical on macOS and Linux. Today the environment-scoped path is inert under SIP, so the platform with the weaker mechanism gets the more destructive behaviour — the fallback must be safer than the primary, never more aggressive."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     },
     {
       "id": "US-2",
@@ -34,7 +35,8 @@
         "A guard makes it impossible to reintroduce: a sweep running with a `$CHIEF_RUNS` that is not the default refuses a host-wide (empty-prefix) invocation outright. A test that means to sweep everything is not a test, it is an incident.",
         "The tests still assert what they were written to assert — the two halves of the original bug reapscope.sh documents — so this is a scoping fix and not a coverage reduction."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     },
     {
       "id": "US-3",
@@ -44,7 +46,8 @@
         "The decoy is killed deliberately at the end of the test, so the suite does not itself leak processes — `/var/folders/**/tmp.*/bin/chief run sr-clean` was still running from an earlier suite when this was investigated.",
         "The real sweep still works: an actual orphan, with a readable registry showing its driver gone, is still reaped. A fix that makes `chief reap` refuse everything has traded one failure for another."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     },
     {
       "id": "US-4",
@@ -54,7 +57,8 @@
         "The output distinguishes 'orphan, registry confirms the driver is gone' from 'unresolvable, left alone' so an operator can tell a clean sweep from a blind one.",
         "`docs/` records that a host-wide `chief reap` affects every repo on the host, not just the current one. It is a reasonable thing to want and a surprising thing to discover by losing work."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     }
   ]
 }

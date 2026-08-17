@@ -49,7 +49,14 @@ pay for what you changed. A tasklist may override it with its own `"verify":[...
 | Docs vs engine (`README.md`, `VERSION`, `bin/chief`) | README's bold `**vX.Y.Z**` == `VERSION` and its command table covers every `bin/chief` subcommand (`test/doc-sync.sh`) |
 | Tasklists (`tasks/chief/*.json`) | valid JSON (`jq -e .`); `branchName == chief/NN-slug`; `mergedToMain:false` until merged |
 
-Notes: `shellcheck` is enforced in CI (`.github/workflows/ci.yml`) and skipped locally if absent —
+Notes: the behavioral tests install chief from **`git rev-parse HEAD`**, not from your working
+tree — an uncommitted `engine/` edit is invisible to them. Commit first, then run the test, then
+`--amend`; or source `engine/reap.sh` (etc.) straight from the worktree to smoke-test before
+committing. `test/version-bump.sh` reads history the same way — it diffs the last commit touching
+`VERSION` against HEAD, so an *uncommitted* bump still fails it, and any follow-up commit touching
+`engine/`/`bin/`/`scripts/`/`install.sh` (a ratchet-clearing refactor counts) re-stales `VERSION`.
+Bump `VERSION` and README's bold `**vX.Y.Z**` together — bumping one alone just trades a
+version-bump block for a `doc-sync` one. `shellcheck` is enforced in CI (`.github/workflows/ci.yml`) and skipped locally if absent —
 install it for parity. The behavioral subset is hermetic (a scripted fake `claude` on `PATH`, temp
 prefixes — it never touches your real `~/.chief`); set `CHIEF_VERIFY_TESTS=0` to skip it while
 iterating. `monitor.sh` is intentionally out of the auto-gate (timing-sensitive under parallel load)
@@ -82,6 +89,9 @@ templates/           # scaffolded into a repo by `chief init` (config · verify.
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
 test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git + jq)
+                     #   bystander.sh — runs the behavioural block with a decoy run from ANOTHER
+                     #   install alive, and fails the test that signals it (hermetic in STATE is
+                     #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
 docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace)
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
