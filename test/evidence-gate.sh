@@ -20,8 +20,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=ev GIT_AUTHOR_EMAIL=ev@test GIT_COMMITTER_NAME=ev GIT_COMMITTER_EMAIL=ev@test
-export CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos"   # hermetic: don't touch ~/.chief
-fail() { echo "EVIDENCE FAIL: $*" >&2; [ -f "$WORK/run.log" ] && tail -60 "$WORK/run.log" >&2; exit 1; }
+export CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos" CHIEF_WORKTREE_ROOT="$WORK/wt"  # hermetic: don't touch ~/.chief
+fail() { echo "EVIDENCE FAIL: $*" >&2; [ -f "$WORK/run.log" ] && tail -40 "$WORK/run.log" >&2
+         [ -f "$WORK/repo/.chief/state/parallel/ev-bad.log" ] && tail -40 "$WORK/repo/.chief/state/parallel/ev-bad.log" >&2
+         exit 1; }
 command -v jq >/dev/null || fail "jq required"
 
 # ── install chief from this checkout ──────────────────────────────────────────
@@ -95,10 +97,14 @@ git checkout -q main
 [ ! -f tasks/chief/completed/ev-bad.json ] || fail "a completed record was written for an evidence-free run"
 
 # ── 2. the operator is told WHAT was claimed, not that a count did not match ──
-grep -q 'US-1' "$WORK/run.log"                                  || fail "the failure never names the story"
-grep -q 'the tasklist argos:82 is filed under completed/' "$WORK/run.log" \
+# The detail lands in the worker log (the run summary carries the status line).
+LOG="$REPO/.chief/state/parallel/ev-bad.log"
+[ -f "$LOG" ]                          || fail "no worker log at $LOG"
+grep -q 'UNVERIFIED' "$WORK/run.log"   || fail "the run summary never surfaces the UNVERIFIED status"
+grep -q '✗ US-1 — file argos:82 to completed/' "$LOG" || fail "the failure never names the story (id + title)"
+grep -q 'the tasklist argos:82 is filed under completed/' "$LOG" \
   || fail "the failure never quotes the criterion the story claimed"
-grep -q 'the baseline to beat is 77 failed' "$WORK/run.log"     || fail "only the first unevidenced story was reported"
+grep -q 'the baseline to beat is 77 failed' "$LOG"  || fail "only the first unevidenced story was reported"
 # Not INCOMPLETE: the iteration budget did not run out, the evidence did, and the two
 # are fixed by different things (raise `iters` vs. read what was claimed).
 case "$(status ev-bad)" in *INCOMPLETE*) fail "reported as INCOMPLETE rather than UNVERIFIED" ;; *) ;; esac
