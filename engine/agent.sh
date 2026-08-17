@@ -251,7 +251,7 @@ HARD_MAX="${HARD_MAX:-$(( MAX_ITERATIONS*3 > 20 ? MAX_ITERATIONS*3 : 20 ))}"
 RATE_LIMIT_RETRY="${RATE_LIMIT_RETRY:-1}"
 RATE_LIMIT_WAIT="${RATE_LIMIT_WAIT:-3600}"
 RATE_LIMIT_MAX_WAITS="${RATE_LIMIT_MAX_WAITS:-8}"
-RATE_LIMIT_PATTERN="${RATE_LIMIT_PATTERN:-(usage limit reached|session limit reached|((5|five)[ -]hour|weekly|daily|monthly|hourly|plan|account|output|token)[ -]limit reached|(hit|reached|exceeded) (your|the) ([a-z0-9-]+ )?(session|usage|rate|weekly|daily|monthly|plan|output|token) limit|(your|the) limit will reset at|rate limit exceeded|rate_limit_error|too many requests|upgrade to increase your usage limit)}"
+RATE_LIMIT_PATTERN="${RATE_LIMIT_PATTERN:-(usage limit reached|session limit reached|((5|five)[ -]hour|weekly|daily|monthly|hourly|plan|account|output|token)[ -]limit reached|(hit|reached|exceeded) (your|the) ([a-z0-9-]+ )?(session|usage|rate|weekly|daily|monthly|plan|output|token) limit|(your|the) limit will reset (at|in)|rate limit exceeded|rate_limit_error|too many requests|upgrade to increase your usage limit)}"
 RATE_LIMIT_STATUS_PATTERN="${RATE_LIMIT_STATUS_PATTERN:-(429|rate[_ -]?limit|usage limit|session limit|overloaded_error)}"
 
 # --- OPERATOR PAUSE (the drain checkpoint; see engine/driver.sh's header) -----
@@ -496,11 +496,11 @@ _beat_stop() {
 }
 trap '_beat_stop' EXIT
 
-# Seconds to sleep after a limit message: prefer a parsed reset time (a unix
-# epoch near "reset", or a "…3pm"-style clock time), else RATE_LIMIT_WAIT; +60s
-# buffer; capped at 6h.
+# Seconds to sleep after a limit message: prefer a parsed reset time — a unix
+# epoch near "reset", a "…3pm"-style clock time, or a RELATIVE "…in 16 minutes"
+# — else RATE_LIMIT_WAIT; +60s buffer; capped at 6h.
 _seconds_until_reset() {
-  local out="$1" now epoch t secs; now=$(date +%s)
+  local out="$1" now epoch t rel n secs; now=$(date +%s)
   epoch=$(printf '%s' "$out" | grep -oiE '(reset|limit)[^0-9]{0,40}1[0-9]{9}' | grep -oE '1[0-9]{9}' | head -1)
   if [ -z "$epoch" ]; then
     t=$(printf '%s' "$out" | grep -oiE '[0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)' | head -1)
@@ -509,6 +509,26 @@ _seconds_until_reset() {
       # Only trust a clock time that's still ahead today; a past time is ambiguous
       # (stale/tomorrow) so fall back to RATE_LIMIT_WAIT rather than oversleep.
       [ -n "$epoch" ] && [ "$epoch" -le "$now" ] && epoch=""
+    fi
+  fi
+  # RELATIVE DURATION — "your limit will reset in 16 minutes", "retry in 30s". A
+  # provider that meters a rolling THROUGHPUT window (Devin's overall message rate
+  # limit) only ever phrases it this way: no epoch, no clock time. Without this arm
+  # such a message fell through to RATE_LIMIT_WAIT, so a 16-minute block slept a
+  # full hour — and under -p N every co-scheduled worker slept it too, because they
+  # all trip the throughput cap in the same burst. Anchored to a reset/try-again
+  # phrase so an unrelated "5 minutes" in the agent's own prose cannot set the
+  # timer, and read as the LAST number in the match so an anchor's own digits never
+  # become the duration.
+  if [ -z "$epoch" ]; then
+    rel=$(printf '%s' "$out" | grep -oiE '(reset|try again|retry in|available again)[^0-9]{0,20}[0-9]{1,4}[[:space:]]*(seconds?|minutes?|hours?|secs?|mins?|hrs?)' | head -1)
+    if [ -n "$rel" ]; then
+      n=$(printf '%s' "$rel" | grep -oE '[0-9]{1,4}' | tail -1)
+      case "$(printf '%s' "$rel" | tr '[:upper:]' '[:lower:]')" in
+        *hour*|*hr*) epoch=$(( now + n * 3600 )) ;;
+        *min*)       epoch=$(( now + n * 60 ))   ;;
+        *sec*)       epoch=$(( now + n ))        ;;
+      esac
     fi
   fi
   if [ -n "$epoch" ] && [ "$epoch" -gt "$now" ]; then secs=$(( epoch - now + 60 )); else secs="$RATE_LIMIT_WAIT"; fi
