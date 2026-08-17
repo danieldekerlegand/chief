@@ -57,7 +57,8 @@
         "The output distinguishes 'orphan, registry confirms the driver is gone' from 'unresolvable, left alone' so an operator can tell a clean sweep from a blind one.",
         "`docs/` records that a host-wide `chief reap` affects every repo on the host, not just the current one. It is a reasonable thing to want and a surprising thing to discover by losing work."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     }
   ]
 }
