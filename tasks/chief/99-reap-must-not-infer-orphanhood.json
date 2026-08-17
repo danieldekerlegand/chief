@@ -1,0 +1,60 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/99-reap-must-not-infer-orphanhood",
+  "description": "🔴 **Running one chief tasklist killed every other chief run on the host. Measured 2026-08-17: runs in cuneiform, vita and rosetta were all destroyed by starting `chief:98` in the chief repo. Only the run whose tree the sweep was executing inside survived.**\n\n**The mechanism, and `engine/reap.sh` already describes it.** `.chief/verify.sh` runs a behavioural block including `test/reapscope.sh` and `test/reapenv.sh`, which invoke **`chief reap`** — a HOST-WIDE sweep with an empty run-id prefix (reapscope.sh:88, :121, :143; reapenv.sh:129). Those tests are hermetic in `CHIEF_PREFIX` / `CHIEF_RUNS` / `CHIEF_REPOS`, and hermetic in the wrong dimension: process discovery is not scoped by any of them.\n\n```bash\nchief_pids_tagged() {   # pgrep -u \"$(id -u)\" -f -- \"--chief-run=…\"\n```\n\nThat is a global argv search across every process this user owns. The sweep finds a real run in another repo, looks for its run file in the **temp** `$CHIEF_RUNS`, does not find it, concludes orphan, and kills it.\n\n`reap.sh:256` states the trap exactly and does not prevent it:\n\n> *\"the registry check below is the wrong place to learn it, because a sweep run with a hermetic `$CHIEF_RUNS` (**the test suite does exactly this**) cannot see the real run's file.\"*\n\n**Why only the local run survived.** `chief_pids_env_marked` excludes `self` via `CHIEF_RUN_ID`, so the tree the sweep runs inside is protected by construction. Everything else looked orphaned — which is precisely the observed pattern.\n\n**macOS makes it worse, and this host is macOS.** `chief_env_key_mode` needs `CHIEF_RUN_ID` read back from the environment; under SIP `ps -E` is accepted and prints nothing (reap.sh:217), so the environment-scoped path is INERT and the global argv path is the only one that runs. The safe mechanism is unavailable exactly where the dangerous one is not.\n\n**Cost.** Three runs lost. They had produced no commits, so nothing was destroyed beyond time — but that is luck, not design: a run killed mid-story loses whatever it had not committed, and `chief:89` is already carrying 6 commits of finished work its tasklist records as 0/3.",
+  "dependsOn": [],
+  "touches": [
+    "engine",
+    "test"
+  ],
+  "iters": 8,
+  "warmup": [
+    "sed -n '240,300p' engine/reap.sh",
+    "sed -n '200,230p' engine/reap.sh",
+    "grep -n 'chief reap' test/reapscope.sh test/reapenv.sh",
+    "sed -n '92,102p' .chief/verify.sh"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "An unreadable registry is not evidence of orphanhood",
+      "acceptanceCriteria": [
+        "A sweep that cannot READ the registry a process belongs to must not kill that process. Absence of a run file in a `$CHIEF_RUNS` the sweep was pointed at is not evidence the run is dead — it is evidence the sweep is looking somewhere else, which is the whole defect.",
+        "A process whose argv carries a `--chief-run=` id the sweep cannot resolve is reported and LEFT ALONE, not reaped. Refusing to act on an unresolvable process is the conservative direction, and reaping is irreversible while leaving an orphan is not.",
+        "The behaviour is identical on macOS and Linux. Today the environment-scoped path is inert under SIP, so the platform with the weaker mechanism gets the more destructive behaviour — the fallback must be safer than the primary, never more aggressive."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "The test suite stops running host-wide sweeps",
+      "acceptanceCriteria": [
+        "`test/reapscope.sh` and `test/reapenv.sh` no longer invoke an unscoped `chief reap` against the real host. They exercise the sweep against their own fixtures — which is what they were trying to do and what their hermetic prefixes suggest they believed they were doing.",
+        "A guard makes it impossible to reintroduce: a sweep running with a `$CHIEF_RUNS` that is not the default refuses a host-wide (empty-prefix) invocation outright. A test that means to sweep everything is not a test, it is an incident.",
+        "The tests still assert what they were written to assert — the two halves of the original bug reapscope.sh documents — so this is a scoping fix and not a coverage reduction."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "Prove a bystander survives",
+      "acceptanceCriteria": [
+        "A test starts a decoy run whose argv and registry live OUTSIDE the suite's hermetic prefix, runs the full verify behavioural block, and asserts the decoy is STILL ALIVE afterwards. That is the exact scenario that occurred and nothing currently covers it.",
+        "The decoy is killed deliberately at the end of the test, so the suite does not itself leak processes — `/var/folders/**/tmp.*/bin/chief run sr-clean` was still running from an earlier suite when this was investigated.",
+        "The real sweep still works: an actual orphan, with a readable registry showing its driver gone, is still reaped. A fix that makes `chief reap` refuse everything has traded one failure for another."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-4",
+      "title": "Say what a sweep is about to do before it does it",
+      "acceptanceCriteria": [
+        "`chief reap` without `-n` names each process it is about to kill, with the run id and repo it believes it belongs to, before killing it. The original defect this file documents at line 7 was that the sweep was *silent* (`kill -9` with output suppressed); it is less silent now and still killed three runs without naming them.",
+        "The output distinguishes 'orphan, registry confirms the driver is gone' from 'unresolvable, left alone' so an operator can tell a clean sweep from a blind one.",
+        "`docs/` records that a host-wide `chief reap` affects every repo on the host, not just the current one. It is a reasonable thing to want and a surprising thing to discover by losing work."
+      ],
+      "notes": null
+    }
+  ]
+}
