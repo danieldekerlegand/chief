@@ -59,7 +59,10 @@ MEASURE_BAR_RE="$MEASURE_BAR_RE"'|\bbaseline\b[^.]{0,60}[0-9]'
 #
 # Demotes offenders in place (`passes:false`, `unverified:true`), clears a stale
 # `unverified` off any story that now records its value, and prints one block per
-# offender: the bar that fired, the criterion verbatim, and what the notes did say.
+# offender: EVERY bar the criterion states, the criterion verbatim, and what the notes
+# did say. Every bar, not just the first — cuneiform:348/US-2's own criterion opens on
+# "reaches GREEN acceptance" and carries "77 failed, 860 passed, 39 errors" past the
+# 200-char clip, so reporting one match hid the number that made the case.
 # Empty output = every claimed bar has an observation beside it.
 measure_gate() {
   local prd="$1" t
@@ -83,7 +86,8 @@ measure_gate() {
     | select(($bars | length) > 0 and (($n | observed) | not))
     | "   ✗ \($us.id // "?") — \($us.title // "(untitled)")\n"
       + ( [ $bars[]
-            | "       states a bar: \"\(match($bar; "i").string)\"\n       claimed: \"\(clip)\"" ]
+            | "       states a bar: " + ([match($bar; "gi").string | "\"\(.)\""] | join(", "))
+              + "\n       claimed: \"\(clip)\"" ]
           | join("\n") )
       + "\n       recorded: "
       + (if ($n | test("\\S")) then "\"\($n | clip)\" — no observed value in it" else "(nothing)" end)
