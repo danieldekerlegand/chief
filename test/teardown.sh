@@ -392,8 +392,14 @@ for p in $orphans; do
 $ps_out" ;; esac
 done
 
-# `chief reap -n` — the on-demand path, from anywhere, signalling nothing.
-reap_out="$("$CHIEF" reap -n 2>&1)" || fail "chief reap -n exited non-zero: $reap_out"
+# `chief reap -n` — the on-demand path, from anywhere, signalling nothing. SCOPED to
+# this fixture's own run-id prefix for the same reason the real reap below is: process
+# discovery is host-wide whatever the prefix, so an unscoped sweep out of this temp
+# $CHIEF_RUNS would be reasoning about the developer's live runs from a registry that
+# has never heard of them. The engine refuses that combination outright now
+# (test/reapscope.sh pins the refusal); this is the scoped form it asks for.
+reap_out="$("$CHIEF" reap -n --scope "${DRV_MARKER#--chief-run=}" 2>&1)" \
+  || fail "chief reap -n exited non-zero: $reap_out"
 for p in $orphans; do
   case "$reap_out" in
     *"pid $p "*) ;;
