@@ -87,6 +87,11 @@ engine/
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
                      #   silently ignored. Chief requires the measurement; it never judges it
+  research.sh        #   the RESEARCH PHASE contract: the four required sections of the per-tasklist
+                     #   research document, its validator, and the sub-agent structured-output prompt.
+                     #   Runs ONCE per tasklist before the first story (opt-in: "research":true /
+                     #   CHIEF_RESEARCH=1); the document is persisted, human-editable and reused, never
+                     #   regenerated. agent.sh dispatches it; a failure is exit 6 -> RESEARCH-FAILED
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
@@ -101,7 +106,8 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
 docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
-                     # model · containers.md (running chief in a container/Riju workspace)
+                     # model · containers.md (running chief in a container/Riju workspace) ·
+                     # research-phase.md + plan-review.md (the two opt-in review checkpoints)
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
 VERSION              # engine version — bump on any engine/bin/install change
 ```
@@ -115,6 +121,30 @@ VERSION              # engine version — bump on any engine/bin/install change
   changes, not just the `passes` flags** (a doc-only merge that flipped every flag built nothing).
 - **One story per iteration; keep `main` green.** The engine merges with `--no-ff` only after a clean
   rebase + a green `verify.sh`; a non-zero verify leaves the branch as `VERIFY-FAILED` for re-engagement.
+- **Durable per-tasklist state lives OUTSIDE the worktree.** `run_worker` does `rm -rf "$wt"` at the
+  top of every run, so anything written only under `$wt/.chief/state/` is rebuilt by each resumed run.
+  The working shape: the driver owns an absolute path under `$STATE_ROOT`, hands it down as an env var
+  (`CHIEF_PAUSE_FILE`, `CHIEF_RESEARCH_FILE`), and `agent.sh` seeds FROM it and promotes back TO it the
+  moment the artifact is valid — not at the end of the loop, or a mid-run death loses it. Relatedly, a
+  new `agent.sh` exit code needs its `run_worker` arm placed **above** the EMPTY-NO-WORK guard whenever
+  that stop can legitimately leave zero commits (as 2, 3, 4, 5 and 6 all can). Exit codes are a
+  **contended namespace** across parallel tasklists — grep `AGENT_RC_` in `driver.sh` *and* agent.sh's
+  exit-code header before claiming one, and expect to renumber after a rebase.
+- **A `docs/…​.md` path in a shell comment is a link the merge gate checks.**
+  `scripts/check-doc-links.mjs` scans every *tracked* file (its `BARE_DOC` regex, not just `.md`) and
+  `.chief/verify.sh` runs it as a ratchet, so pointing at a doc a later story will write is a new dead
+  link that blocks the merge. Reference the module, not the doc that doesn't exist yet.
+- **A new `test/*.sh` is a gate only when it is in THREE lists**: `.chief/verify.sh`'s
+  `CHIEF_BYSTANDER_TESTS` (the merge gate), `test/all.sh`'s `BASH_SUITE`, and
+  `.github/workflows/ci.yml`. Nothing derives one from another. Relatedly, a behavioural
+  test must not assert on prompt text that a **doc quotes** — `templates/agent-context.md`
+  quotes the engine's injected headings verbatim while explaining them, so grepping a
+  prompt for one matches even when nothing was injected. Assert on a string only the
+  engine emits, plus a marker your own fixture planted.
+- **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
+  "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
+  locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when
+  the tokens being matched are ASCII.
 - **Verify is the quality bar** (`docs/reference/verify-hook.md`): exit 0 allows the merge, non-zero blocks it,
   cwd is the repo root with the finished branch checked out, and the hook **must stay executable**.
   `NO_VERIFY=1` skips it (don't); `STRICT_VERIFY=1` blocks on pre-existing issues too.

@@ -45,8 +45,13 @@ Chief guarded none of the three: its loop went from acceptance criteria straight
 commit, and the first thing a human saw was the diff. This checkpoint adds the
 **middle** rung — the cheapest one with a mechanical artifact to hang a verdict on. A
 plan is short, it is structured (files, changes, checks), and a person can be wrong
-about it out loud in one sentence. Research review has no such artifact yet; code
-review already has git.
+about it out loud in one sentence. Code review already has git; **research now has an
+artifact too** — a tasklist that sets `"research": true` writes a structured map of the
+code before its first story, and when this checkpoint is also on, that map is handed to
+the same reviewer *first*. The order on the surface matches the order in the table:
+research, then plan, then code. Neither feature requires the other — research with
+review off never opens a reviewer, and plan review with research off is exactly what it
+was. See [reference/tasklist-schema.md](reference/tasklist-schema.md).
 
 The corollary matters as much as the rationale: **the leverage is only worth an
 iteration when there is a design to get wrong.** Below, "when to turn it on".
@@ -212,6 +217,12 @@ Five things park a story: no reviewer on `PATH`, `CHIEF_REVIEW_TIMEOUT=0`, a
 non-interactive host (`$CI` / `CHIEF_REVIEW_NONINTERACTIVE`), a review window that
 elapses with no verdict, and an annotate → re-plan budget that runs out.
 
+The **research map** parks on exactly the same five, when a tasklist has both this
+checkpoint and `"research": true`. The only differences are that it happens before the
+first story (so the park names no story, and nothing at all was implemented) and that
+its verdict is stored beside the durable map rather than beside a plan. Everything
+below applies unchanged.
+
 | surface | value |
 |---|---|
 | `agent.sh` exit code | `5` |
@@ -285,6 +296,8 @@ event, the stall counter reset, and the next iteration puts it in front of a hum
 - `test/plan-review.sh` — the hermetic proof of all three paths (approved · sent back
   within budget · nobody there), with a scripted fake reviewer speaking the annotate
   gate above. It is in the merge gate for any branch that touches the engine.
+- [research-phase.md](research-phase.md) — the rung above: the map every story
+  implements from, and how this checkpoint reviews it first
 - [tasklist-schema.md](tasklist-schema.md) — the rest of the tasklist fields
 - [events.md](events.md) — the `story.plan-*` / `tasklist.plan-invalid` contract
 - [monitoring.md](monitoring.md) — the phase vocabulary `chief ps` renders

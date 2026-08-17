@@ -68,6 +68,9 @@ jobs:
       - name: Plan review (approved implements · annotated re-plans within budget · no reviewer parks)
         run: bash test/plan-review.sh
 
+      - name: Research phase (produced once · carried into every story · reused on resume · hand-editable)
+        run: bash test/research.sh
+
       - name: Fine-grained liveliness record + `chief ps` (progress · stalled · paused)
         run: bash test/liveliness.sh
 
