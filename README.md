@@ -218,6 +218,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief run --headless` | Non-interactive embedding mode: no colour, a `chief: run-id=…` line, a JSON outcome summary and a documented exit-code table ([`docs/guides/headless-invocation.md`](docs/guides/headless-invocation.md)). |
 | `chief run --account-env FILE` | Run this run's AGENT TURNS under a designated provider account: a `KEY=VALUE` credential env file applied at the provider boundary only (`--account-label NAME` names it in `ps`/`monitor`/events; also `CHIEF_ACCOUNT_ENV_FILE`). Values never reach logs, the registry or `argv` ([`docs/reference/account-credentials.md`](docs/reference/account-credentials.md)). |
 | `chief list` | List tasklists with pass status. |
+| `chief lint [names…]` | Check tasklists before a run spends turns on them: valid JSON, `branchName` == `chief/<stem>`, no `mergedToMain` on unmerged work, and no acceptance criterion naming work in **another repo** — which the tasklist's worktree cannot reach. Declare real coordination with `"crossRepo":["<repo>"]`. Non-zero on any finding. |
 | `chief ps` | One-shot table of active runs across all repos. |
 | `chief monitor [interval]` | Live-refreshing run view (default 2s; Ctrl-C to exit). |
 | `chief logs [name] [-f]` | Tail a tasklist's per-iteration log from a live run (`-f` follows; `-n N` sets the tail size). |
@@ -282,6 +283,8 @@ compatibility floor. The core tests:
   `EMPTY-NO-WORK`, never merged or retired.
 - `test/evidence-gate.sh` — a story chief force-passes with an empty `notes` is
   caught as `UNVERIFIED`; honest and self-reported work still merges.
+- `test/criteria-scope.sh` — a criterion naming another repo is caught as
+  `UNSATISFIABLE` before any agent turn; declared (`crossRepo`) and local work merges.
 
 Beyond the core set, `test/` holds focused tests for pause/resume, liveliness,
 reaping, providers, submodule handling, retry-on-failure, and more.
@@ -298,7 +301,7 @@ tree at once.
 
 ## Status
 
-**v0.8.29** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.30** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

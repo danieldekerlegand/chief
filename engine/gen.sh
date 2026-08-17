@@ -87,6 +87,13 @@ EOF
 
 die() { echo "chief gen: $*" >&2; exit 1; }
 
+# The SCOPE rule on acceptance criteria, shared verbatim with the driver and
+# `chief lint` (engine/criteria.sh). Here it only WARNS: the author is standing
+# right there, and a generated criterion is a starting point they are about to
+# edit anyway.
+# shellcheck source=engine/criteria.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/criteria.sh"
+
 # ── argv ─────────────────────────────────────────────────────────────────────
 roadmap=""; dry=0; force=0; outdir=""; project=""; allow_unknown=0
 while [ "$#" -gt 0 ]; do
@@ -184,7 +191,10 @@ problems="$(jq -r '
            else "phases[\($pi)].items[\($ii)]: \"touches\" must be an array of non-empty strings" end),
           (if ($it|has("iters")|not)
               or (($it.iters|type == "number") and ($it.iters == ($it.iters|floor)) and ($it.iters > 0)) then empty
-           else "phases[\($pi)].items[\($ii)]: \"iters\" must be a positive integer" end)
+           else "phases[\($pi)].items[\($ii)]: \"iters\" must be a positive integer" end),
+          (if ($it|has("crossRepo")|not)
+              or (($it.crossRepo|type == "array") and ([$it.crossRepo[] | select(nonempty_string|not)]|length) == 0) then empty
+           else "phases[\($pi)].items[\($ii)]: \"crossRepo\" must be an array of repo names — the repos the criteria of this item may reference" end)
         ]
       end;
 
@@ -235,7 +245,7 @@ unknowns="$(jq -r '
         ( (.items? // []) | select(type == "array") | to_entries[]
           | .key as $ii | .value
           | unknown("phases[\($pi)].items[\($ii)]";
-                    ["title", "description", "scope", "deps", "touches", "iters"]) ) )
+                    ["title", "description", "scope", "deps", "touches", "iters", "crossRepo"]) ) )
   ] | .[]
 ' <<<"$ROADMAP_JSON" 2>/dev/null)"
 if [ -n "$unknowns" ] && [ "$allow_unknown" = 1 ]; then
@@ -294,7 +304,10 @@ PLAN="$(jq -c \
           name: $name,
           slug: $slug,
           phase: $phase,
-          tasklist: {
+          # `crossRepo` is emitted ONLY when the item declares it: the escape hatch for
+          # criteria that name another repo is meant to be a visible, deliberate line
+          # in the record, not a field every tasklist carries empty.
+          tasklist: ((if ($it|has("crossRepo")) then {crossRepo: $it.crossRepo} else {} end) + {
             project:     $project,
             branchName:  "chief/\($name)",
             description: ($desc + (if $scope != "" then " Scope: \($scope)" else "" end)),
@@ -315,7 +328,7 @@ PLAN="$(jq -c \
                 passes: false,
                 notes: "" }
             ]
-          } }
+          }) }
     )
   # A host writing the roadmap cannot know the band it will land in, so an item may
   # order itself after a SIBLING by the slug of that sibling; rewrite those to the stem
@@ -398,6 +411,30 @@ gate_file() {
     (.branchName == "chief/\($n)") and (has("mergedToMain")|not)
   ' "$1" >/dev/null 2>&1
 }
+
+# ── scope warning: a criterion that names another repo ───────────────────────
+# Same rule the driver refuses to run on, applied while the fix is still a text
+# edit. A WARNING, not an error: the generated criterion is the item description,
+# and mentioning a sibling repo in prose is not yet a promise to edit it. `chief
+# lint` is the one that fails, and the run is the one that refuses.
+scope_warn=""
+i=0
+while [ "$i" -lt "$count" ]; do
+  gtmp="$(mktemp)"
+  jq --argjson i "$i" '.[$i].tasklist' <<<"$PLAN" > "$gtmp"
+  rep="$(criteria_scope_report "$gtmp" "$CHIEF_PROJECT")"
+  [ -n "$rep" ] && scope_warn="$scope_warn$(jq -r --argjson i "$i" '.[$i].path' <<<"$PLAN")
+$rep
+"
+  rm -f "$gtmp"
+  i="$((i + 1))"
+done
+if [ -n "$scope_warn" ]; then
+  { echo "chief gen: warning — an acceptance criterion names work in ANOTHER repo, which the tasklist's own worktree cannot reach:"
+    printf '%s' "$scope_warn"
+    echo "  Rewrite it as work in THIS repo, or declare the coordination on the roadmap item: \"crossRepo\": [\"<repo>\"]."
+    echo "  ('chief lint' fails on this, and a run refuses to spend an agent turn on it.)"; } >&2
+fi
 
 # ── dry run: emit, write nothing ─────────────────────────────────────────────
 if [ "$dry" = 1 ]; then

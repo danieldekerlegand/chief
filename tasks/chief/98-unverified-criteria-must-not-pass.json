@@ -15,6 +15,12 @@
     "python3 -c \"import json;d=json.load(open('../cuneiform/tasks/chief/completed/347-mcp-a2a-extension-seam.json'));[print(s['id'],repr(s.get('notes'))[:80]) for s in d['userStories']]\"",
     "cat docs/reference/verify-hook.md"
   ],
+  "crossRepo": [
+    "cuneiform",
+    "insimul",
+    "argos",
+    "pinakes"
+  ],
   "userStories": [
     {
       "id": "US-1",

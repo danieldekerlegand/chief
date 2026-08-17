@@ -65,6 +65,12 @@ Usage:
                               is an error (--allow-unknown warns instead). Input contract
                               (phases[] → items[] with title/description required and scope/
                               deps/touches/iters optional): docs/reference/roadmap-input.md
+  chief lint [names…]         check this repo's tasklists BEFORE a run spends turns on them:
+                              valid JSON, branchName == chief/<filename stem>, no mergedToMain
+                              on unmerged work, and no acceptance criterion naming work in
+                              ANOTHER repo (which the tasklist's worktree cannot reach — declare
+                              it with "crossRepo":["<repo>"] when the coordination is real).
+                              No args = every tasklist in the tasks dir. Non-zero on any finding.
   chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
                               --provider claude|devin|opencode|amp (default claude)
                               --model MODEL (provider-specific model override; amp has no
@@ -239,6 +245,47 @@ cmd_init() {
 cmd_gen() {
   case "${1:-}" in -h|--help|'') ;; *) load_project ;; esac
   bash "$ENGINE/gen.sh" "$@"
+}
+
+# chief lint [names…] — the AUTHORING-TIME half of the gates a run enforces, run
+# against tasklists on disk. The tasklist gate (docs/reference/tasklist-schema.md)
+# plus the criteria SCOPE rule the driver refuses to launch on (engine/criteria.sh):
+# a criterion naming another repo cannot be satisfied from the worktree the story
+# runs in, and catching that here costs a text edit instead of a run.
+cmd_lint() {
+  load_project
+  . "$ENGINE/criteria.sh"
+  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n rep findings=0 checked=0
+  local files=()
+  if [ "$#" -gt 0 ]; then
+    for n in "$@"; do files+=("$d/${n%.json}.json"); done
+  else
+    for f in "$d"/*.json; do [ -e "$f" ] && files+=("$f"); done
+  fi
+  [ "${#files[@]}" -gt 0 ] || { echo "no tasklists in $d"; return 0; }
+  for f in "${files[@]}"; do
+    n="$(basename "$f" .json)"
+    [ -f "$f" ] || { echo "  ✗ $n — no such tasklist: $f"; findings=$((findings + 1)); continue; }
+    checked=$((checked + 1))
+    if ! jq -e . "$f" >/dev/null 2>&1; then
+      echo "  ✗ $n — not valid JSON"; findings=$((findings + 1)); continue
+    fi
+    jq -e --arg n "$n" '.branchName == "chief/\($n)"' "$f" >/dev/null 2>&1       || { echo "  ✗ $n — branchName is $(jq -r '.branchName // "(missing)"' "$f"), expected chief/$n"; findings=$((findings + 1)); }
+    jq -e 'has("mergedToMain")|not' "$f" >/dev/null 2>&1       || { echo "  ✗ $n — carries mergedToMain; an unmerged tasklist must not claim to be merged"; findings=$((findings + 1)); }
+    rep="$(criteria_scope_report "$f" "$CHIEF_PROJECT")"
+    if [ -n "$rep" ]; then
+      echo "  ✗ $n — an acceptance criterion names work in another repo:"
+      printf '%s
+' "$rep"
+      findings=$((findings + $(printf '%s
+' "$rep" | grep -c '✗')))
+    fi
+  done
+  if [ "$findings" -gt 0 ]; then
+    echo "✗ $findings finding(s) across $checked tasklist(s). A cross-repo criterion is either rewritten as work in THIS repo, or declared: \"crossRepo\": [\"<repo>\"]." >&2
+    return 1
+  fi
+  echo "✓ $checked tasklist(s) clean"
 }
 
 cmd_list() {
@@ -778,6 +825,7 @@ case "$cmd" in
   init)                 cmd_init ;;
   run)                  cmd_run "$@" ;;
   list)                 cmd_list ;;
+  lint)                 cmd_lint "$@" ;;
   gen|generate)         cmd_gen "$@" ;;
   ps)                   cmd_ps ;;
   monitor|watch)        cmd_monitor "$@" ;;

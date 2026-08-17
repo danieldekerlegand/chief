@@ -386,6 +386,10 @@ LIMIT_PAUSE_FILE="$STATE/.limit-pause-until"
 OPERATOR_PAUSE_FILE="$STATE/.paused"
 
 source "$ENGINE/lib.sh"
+# The SCOPE rule on acceptance criteria (engine/criteria.sh) — shared verbatim with
+# `chief gen` and `chief lint`, so authoring time and run time cannot disagree about
+# what "outside this worktree" means.
+source "$ENGINE/criteria.sh"
 # git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
 # another uid, and an image with no committer identity. Sourced before anything runs
 # git on $REPO; its exports are inherited by every child — agent.sh, the verify hook,
@@ -1836,6 +1840,13 @@ run_worker() {
     mkdir -p "$wtstate"
     prd_state_source > "$wtstate/prd.json" 2>/dev/null; [ -s "$wtstate/prd.json" ] || cp "$SRC/$name.json" "$wtstate/prd.json"
     echo "$branch" > "$wtstate/.last-branch"
+    # SCOPE GATE (engine/criteria.sh): a criterion naming another repo cannot be met
+    # from this worktree, so it is caught HERE — before the first agent turn, rather
+    # than after a run's worth of them ends in a story that reports green because
+    # nothing ever read it. Undeclared cross-repo work is what produced
+    # cuneiform:346/US-3 and 347/US-4; declaring it (`"crossRepo": […]`) clears this.
+    local outside; outside="$(criteria_scope_report "$wtstate/prd.json" "$wt")"
+    if [ -n "$outside" ]; then criteria_scope_stop "$outside"; return 0; fi
     plan_sync "$SNAP/$name.plans" "$wtstate/plans"          # plans a prior run already paid for
     { echo "# Chief Progress — $name"; echo "Started: $(date)"; echo "---"; } > "$wtstate/progress.txt"
     # If the last run's rebased branch failed the verify gate, surface those errors
