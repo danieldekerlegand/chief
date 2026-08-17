@@ -1,6 +1,6 @@
 # The verify hook (`.chief/verify.sh`)
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-17 · **Owner:** chief
 
 Chief calls this to decide whether a completed, rebased branch may merge. It's the
 one place your project's real quality bar lives.
@@ -42,6 +42,66 @@ new_failures() { comm -23 <(printf '%s\n' "$1"|sort -u) <(printf '%s\n' "$2"|sor
 
 (The extraction this tool came from ships a full baselined verify — copy that
 approach if your suite is noisy.)
+
+## Who checks what: chief, this hook, and you
+
+**Chief's own comment says it plainly — `verify.sh` is the real merge bar, not the
+`passes` flags.** That is a deliberate design choice and it holds: an agent that
+genuinely finished should not be blocked by a stale flag, and the flags are a
+self-report while this hook is a measurement. But it means a tasklist author has to
+know which of their acceptance criteria anything will actually check. This is that
+division.
+
+| Layer | What it checks | What it can never check |
+| --- | --- | --- |
+| **Chief (the engine)** | That the branch produced real commits (`EMPTY-NO-WORK`); that a story chief passed on the agent's behalf says HOW in its `notes` (`UNVERIFIED`); that a story claiming a **measurable bar** records the value it observed (`UNVERIFIED`); that no criterion names a path outside the worktree (`UNSATISFIABLE`, before the first agent turn) | Whether the work is *correct*, or whether an observed value actually **meets** the bar. Chief cannot run your suite and does not know what GREEN means in your repo |
+| **`.chief/verify.sh`** (this file) | Everything mechanical and repo-specific: build, tests, lint, the quality ratchet. **Exit 0 allows the merge; non-zero blocks it.** This is where a bar like "the suite is green" is genuinely *enforced* | Anything it was not written to run. A criterion about a subsystem the hook does not gate is unchecked, however well it is worded |
+| **A human** | That the criterion was the right thing to ask for, that the recorded observation is honest and relevant, and every judgement no script can make ("reads clearly", "the seam is in the right place") | — |
+
+### Writing criteria the engine can help with
+
+- **State a bar and it gets held to one.** A criterion containing a checkable bar —
+  `exit 0`, `green`, `0 failures`, `at least 3`, `95%`, `byte-identical`, a baseline
+  with a number — makes the story owe an **observed value** in its `notes`. Without
+  one the story is marked **`unverified`** rather than `passes`, and the branch stops
+  instead of merging.
+- **`unverified` is an honest third state, not a failure verdict.** It is the same
+  rule the quality ratchet uses for a metric no analyzer could measure: it goes in
+  `unmeasured[]` and is *skipped*, because an absent number must never be read as a
+  good one. A story chief cannot check is recorded as unchecked.
+- **The observation is not judged, only required.** Chief does not compare `25 failed`
+  against `GREEN`; it requires that `25 failed` be written down where you can. The
+  gate is lenient on purpose — any number or result word in the `notes` satisfies it —
+  because a gate that failed honest work would be switched off, and a switched-off
+  gate checks nothing.
+- **If you want a bar *enforced*, put it in this hook.** A criterion is a claim; a
+  line in `verify.sh` is a check. Anything you are unwilling to write as a check is,
+  by construction, left to a human — which is fine, as long as the tasklist knows it.
+
+### What the engine layer costs, and what it was proven against
+
+These gates run on **every story of every tasklist**, so the cost is part of the
+contract — a slow check gets switched off, and a switched-off gate checks nothing.
+
+| | Cost | When |
+| --- | --- | --- |
+| Scope gate (`criteria_scope_report`) | ~31 ms per tasklist (one `jq` pass + one `ls`) | Once per run, **before** the first agent turn |
+| Bar gate (`measure_gate`) | ~24 ms per tasklist (one `jq` report + one `jq` rewrite) | Once per run, on the COMPLETE path |
+| Evidence gate (`evidence_gate`) | one `jq` pass, same order | Once per run, only where an agent ran |
+
+Measured over this repo's largest tasklist (12 KB, 4 stories, 13 criteria), 5 passes
+each. **Nothing runs inside the agent loop** — the whole engine layer is ~55 ms per
+tasklist per run, against runs measured in minutes.
+
+`test/five-cases.sh` is the proving run. It replays, as fixtures, the recorded shape
+of the five stories that reported green against criteria they had not met
+(2026-08-16/17) and asserts each now fails — two of them before an agent turn is
+spent — and, in the same run, replays three tasklists that were genuinely green and
+asserts they still merge. One of the three is the honest cost: a tasklist whose
+criteria say *"reports zero errors"* and whose filed record says nothing at all is
+stopped, because from the record it is indistinguishable from the one that claimed
+GREEN and delivered 25 failures. The remedy is one line of `notes`, and the fixture
+proves it.
 
 ## The code-quality ratchet (`chief quality`)
 

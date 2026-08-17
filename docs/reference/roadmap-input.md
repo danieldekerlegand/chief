@@ -37,7 +37,8 @@ the human reading the roadmap; they do **not** affect numbering, ordering or dep
           "scope":       "…",
           "deps":        ["…"],
           "touches":     ["…"],
-          "iters":       6 }
+          "iters":       6,
+          "crossRepo":   ["…"] }
       ] }
   ]
 }
@@ -53,6 +54,11 @@ the human reading the roadmap; they do **not** affect numbering, ordering or dep
 | `deps` | no | array of strings | `dependsOn` | `[]` (starts as soon as the scheduler reaches it) |
 | `touches` | no | array of non-empty strings | `touches` | `[]` (no conflict domain — free to co-schedule with anything) |
 | `iters` | no | positive integer | `iters` | `5` (the schema's default soft budget) |
+| `crossRepo` | no | array of non-empty strings (repo names) | `crossRepo` | omitted — and then an acceptance criterion naming another repo (`argos:82`, `argos/tasks/…`) is **warned about** here and **fails the tasklist** at run time as `UNSATISFIABLE`, because a worktree cannot do work that lives elsewhere ([tasklist-schema.md](tasklist-schema.md)) |
+
+`crossRepo` is emitted only when the item declares it — the hatch for criteria that name
+another repo is meant to be a visible, deliberate line in the record, not a field every
+tasklist carries empty.
 
 Every other tasklist field is emitted with a fixed value: `parked: false`, `warmup: []`,
 `project` (see `--project`), and `branchName`/`userStories` as described below.
@@ -105,7 +111,7 @@ with the offending path and the allowed field list:
 ```
 chief gen: the roadmap does not match the input contract (docs/reference/roadmap-input.md):
   - roadmap: unknown field "version" — the contract allows "phases"
-  - phases[0].items[0]: unknown field "touched" — the contract allows "title", "description", "scope", "deps", "touches", "iters"
+  - phases[0].items[0]: unknown field "touched" — the contract allows "title", "description", "scope", "deps", "touches", "iters", "crossRepo"
   (pass --allow-unknown to ignore unknown fields instead of failing)
 ```
 

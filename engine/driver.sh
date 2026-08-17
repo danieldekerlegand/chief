@@ -386,6 +386,13 @@ LIMIT_PAUSE_FILE="$STATE/.limit-pause-until"
 OPERATOR_PAUSE_FILE="$STATE/.paused"
 
 source "$ENGINE/lib.sh"
+# The SCOPE rule on acceptance criteria (engine/criteria.sh) — shared verbatim with
+# `chief gen` and `chief lint`, so authoring time and run time cannot disagree about
+# what "outside this worktree" means.
+source "$ENGINE/criteria.sh"
+# The BAR rule on acceptance criteria (engine/measure.sh): a story claiming a
+# checkable bar must record the value it observed, or it is `unverified`, not passed.
+source "$ENGINE/measure.sh"
 # git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
 # another uid, and an image with no committer identity. Sourced before anything runs
 # git on $REPO; its exports are inherited by every child — agent.sh, the verify hook,
@@ -513,6 +520,63 @@ branch_has_real_work() {
   # branches (harmless) and closes the false-complete loophole for project ones.
   git -C "${work_repo:-$REPO}" diff --name-only "${work_base:-$BASE_BRANCH}...$1" \
     -- . ":(exclude)$TASKS_REL/$2.json" 2>/dev/null | head -1
+}
+
+# EVIDENCE GATE — a story CHIEF promotes must say how it was done.
+#
+# The COMPLETE path trusts an agent that committed real work and marks every story
+# it left stale-false as passed (verify, not the pass-flags, is the merge bar). That
+# trust is what lets a story report green against a criterion nobody read: a silent
+# promotion is indistinguishable from finished work in the record. The cheapest
+# signal separating them is already in the data — a story that did its work has
+# something to say about HOW, and force-passed stories carry an EMPTY `notes`.
+#
+# So the promotion becomes conditional, and ONLY on the stories chief promotes
+# itself. A story the agent explicitly marked passing is left alone: the point is to
+# stop silent promotion, not to add ceremony to work that reported itself honestly.
+# A stale-false story WITH evidence in `notes` is promoted as before; one WITHOUT is
+# left false and reported here, so the branch fails instead of merging.
+#
+# $1 = the runtime prd.json. Promotes in place, and prints one block per unevidenced
+# story — its id, title and the criteria it would have claimed — on stdout. Empty
+# output means every promotion carried evidence and the branch may proceed.
+evidence_gate() {
+  local prd="$1" t
+  # The report first: it must describe the stories as the agent left them, before
+  # the promotion below rewrites any pass-flag.
+  jq -r '
+    def unpassed: (.passes != true);
+    def evidenced: (((.notes // "") | tostring) | test("\\S"));
+    def clip: if (. | length) > 200 then .[0:197] + "..." else . end;
+    .userStories[] | select(unpassed and (evidenced | not))
+    | "   ✗ \(.id) — \(.title // "(untitled)")\n"
+      + ( [ (.acceptanceCriteria // [])[] | "       claimed: \"" + (tostring | clip) + "\"" ]
+          | if length == 0 then ["       (no acceptance criteria recorded)"] else . end
+          | join("\n") )
+  ' "$prd" 2>/dev/null
+  t="$(mktemp)"
+  jq '
+    def evidenced: (((.notes // "") | tostring) | test("\\S"));
+    .userStories |= map(if (.passes != true) and evidenced then .passes = true else . end)
+  ' "$prd" > "$t" 2>/dev/null && mv "$t" "$prd" || rm -f "$t"
+}
+
+# Fail the tasklist on evidence_gate's report: status, event, and the report itself.
+# NOT the INCOMPLETE arm, which is where these stories would otherwise land (they are
+# still false): that failure means the iteration budget ran out and an operator fixes
+# it by raising `iters`, while this one is fixed by reading what was claimed. So the
+# report is printed verbatim — the operator needs WHAT the story claimed, not a count
+# that did not match. $1 = the report. $name/$branch/$live/$total/$remaining/$STATE
+# are run_worker's, by dynamic scope.
+unverified_stop() {
+  local n; n="$(_int "$(printf '%s\n' "$1" | grep -c '✗' 2>/dev/null || true)")"
+  live_set "$live" phase=unverified
+  event_emit tasklist.unverified name="$name" state=failed \
+    detail="$n stor$([ "$n" = 1 ] && echo y || echo ies) reported COMPLETE with no evidence in notes"
+  echo "UNVERIFIED $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
+  echo "!! $name UNVERIFIED — the agent reported COMPLETE, but $n stor$([ "$n" = 1 ] && echo y was || echo ies were) left unmarked with an EMPTY notes:"
+  printf '%s\n' "$1"
+  echo "   Not merging. A story chief passes on the agent's behalf must record in 'notes' HOW it met these — branch $branch is kept in its worktree."
 }
 
 # The passes-state to seed the runtime prd.json from (and to count remaining
@@ -1779,6 +1843,13 @@ run_worker() {
     mkdir -p "$wtstate"
     prd_state_source > "$wtstate/prd.json" 2>/dev/null; [ -s "$wtstate/prd.json" ] || cp "$SRC/$name.json" "$wtstate/prd.json"
     echo "$branch" > "$wtstate/.last-branch"
+    # SCOPE GATE (engine/criteria.sh): a criterion naming another repo cannot be met
+    # from this worktree, so it is caught HERE — before the first agent turn, rather
+    # than after a run's worth of them ends in a story that reports green because
+    # nothing ever read it. Undeclared cross-repo work is what produced
+    # cuneiform:346/US-3 and 347/US-4; declaring it (`"crossRepo": […]`) clears this.
+    local outside; outside="$(criteria_scope_report "$wtstate/prd.json" "$wt")"
+    if [ -n "$outside" ]; then criteria_scope_stop "$outside"; return 0; fi
     plan_sync "$SNAP/$name.plans" "$wtstate/plans"          # plans a prior run already paid for
     { echo "# Chief Progress — $name"; echo "Started: $(date)"; echo "---"; } > "$wtstate/progress.txt"
     # If the last run's rebased branch failed the verify gate, surface those errors
@@ -1875,12 +1946,15 @@ run_worker() {
     # in the merge phase, so a branch that ends INCOMPLETE or conflicts is audited
     # too — those are the runs where a mis-tagged pair costs the most.
     audit_record_files "$name" "$branch"
-    # Trust an explicit COMPLETE from an agent that DID commit real work: mark any
-    # stories it left stale-false as passed so the branch proceeds to the verify
-    # gate (verify — not the pass-flags — is the real merge bar).
+    # Trust an explicit COMPLETE from an agent that DID commit real work: mark the
+    # stories it left stale-false as passed so the branch proceeds to the verify gate
+    # (verify — not the pass-flags — is the real merge bar). Not unconditionally —
+    # evidence_gate promotes only the ones whose `notes` say how, and reports the rest.
+    local unevidenced="" unmeasured=""
     if [ "$agent_rc" = "0" ] && [ "$skip_agent" != "1" ] && [ -n "$has_work" ]; then
-      local t; t="$(mktemp)"; jq '.userStories |= map(.passes=true)' "$wtstate/prd.json" > "$t" 2>/dev/null && mv "$t" "$wtstate/prd.json" || rm -f "$t"
+      unevidenced="$(evidence_gate "$wtstate/prd.json")"
     fi
+    unmeasured="$(measure_gate "$wtstate/prd.json")"   # EVERY path to a merge — engine/measure.sh
     local remaining total
     remaining="$(jq '[.userStories[]|select(.passes==false)]|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
     total="$(jq '.userStories|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
@@ -1959,6 +2033,11 @@ run_worker() {
       echo "EMPTY-NO-WORK 0/$total" > "$STATE/$name.status"
       echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"; return 0
     fi
+    # EVIDENCE + BAR GUARDS: a story the COMPLETE path wanted promoted that says
+    # nothing about how it was done, and one claiming a bar with no value measured
+    # against it. Both ordered BEFORE the INCOMPLETE arm — see unverified_stop.
+    [ -n "$unevidenced" ] && { unverified_stop "$unevidenced"; return 0; }
+    [ -n "$unmeasured" ] && { unmeasured_stop "$unmeasured"; return 0; }
     if [ "$remaining" != "0" ]; then
       live_set "$live" phase=incomplete
       event_emit tasklist.incomplete name="$name" state=failed detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out"

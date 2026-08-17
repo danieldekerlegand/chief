@@ -47,7 +47,7 @@ pay for what you changed. A tasklist may override it with its own `"verify":[...
 | Shell engine (`bin/chief`, `engine/*.sh`, `install.sh`, `test/*.sh`) | `bash -n` clean + `shellcheck -S error` clean; behavioral core `test/{smoke,ratelimit,noworkguard}.sh` green |
 | Engine version discipline | editing `bin/`/`engine/`/`install.sh` **must** bump `VERSION` (`test/version-bump.sh`) |
 | Docs vs engine (`README.md`, `VERSION`, `bin/chief`) | README's bold `**vX.Y.Z**` == `VERSION` and its command table covers every `bin/chief` subcommand (`test/doc-sync.sh`) |
-| Tasklists (`tasks/chief/*.json`) | valid JSON (`jq -e .`); `branchName == chief/NN-slug`; `mergedToMain:false` until merged |
+| Tasklists (`tasks/chief/*.json`) | valid JSON (`jq -e .`); `branchName == chief/NN-slug`; `mergedToMain:false` until merged; no acceptance criterion naming another repo unless `crossRepo` declares it (`chief lint`) |
 
 Notes: the behavioral tests install chief from **`git rev-parse HEAD`**, not from your working
 tree — an uncommitted `engine/` edit is invisible to them. Commit first, then run the test, then
@@ -69,7 +69,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · logs · models · reap · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · logs · models · reap · pause · resume · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
@@ -79,6 +79,14 @@ engine/
                      #   in one place — container-safe when $HOME is unset/read-only
   gitenv.sh          #   the git a CONTAINER hands us: safe.directory for a repo owned by another
                      #   uid ($CHIEF_GIT_SAFE_DIRECTORY), a committer identity when git can't find one
+  criteria.sh        #   the SCOPE rule on acceptance criteria: a criterion naming ANOTHER repo
+                     #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
+                     #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
+                     #   UNSATISFIABLE before the first agent turn unless "crossRepo" declares it
+  measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
+                     #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
+                     #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
+                     #   silently ignored. Chief requires the measurement; it never judges it
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to

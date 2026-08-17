@@ -38,6 +38,14 @@ work run to completion by a chain of agent iterations.
                                          //   so a multi-repo project doesn't need one
                                          //   hook dispatching off cwd. Omit to use
                                          //   the project hook.
+  "crossRepo": ["argos"],                // repos this tasklist's ACCEPTANCE CRITERIA may
+                                         //   name. Omit it and a criterion referencing
+                                         //   another repo (`argos:82`, `argos/tasks/…`,
+                                         //   `../argos/…`) fails the tasklist as
+                                         //   UNSATISFIABLE before the first agent turn —
+                                         //   a worktree cannot do work that lives
+                                         //   elsewhere. Declaring it is the explicit,
+                                         //   reviewable hatch for real coordination.
   "parked": false,                       // true = skipped by auto-discovery
   "review": "none",                      // "plan" = a HUMAN approves the agent's plan
                                          //   before it writes any code (one extra turn
@@ -54,7 +62,17 @@ work run to completion by a chain of agent iterations.
         "Another one."
       ],
       "passes": false,                   // flipped true when the story is done
-      "notes": ""                        // agent scratch space
+      "notes": ""                        // agent scratch space — AND the story's
+                                         //   evidence: a story chief passes on the
+                                         //   agent's behalf must say HOW here, and one
+                                         //   whose criteria state a measurable bar
+                                         //   ("green", "exit 0", "77 failed") must
+                                         //   record the value it OBSERVED. Neither and
+                                         //   the run stops UNVERIFIED
+      // "unverified": true              // written BY chief, never by hand: the story
+                                         //   claimed a bar chief cannot evaluate and
+                                         //   recorded no observation, so it is neither
+                                         //   passing nor silently ignored
     }
   ]
 }
@@ -65,6 +83,16 @@ Notes:
   build on earlier ones. Parallelism is *across* tasklists, never within one.
 - **Acceptance criteria are the contract.** Write them concrete and checkable; the
   agent implements a story until they hold and won't mark it done otherwise.
+- **A criterion that states a bar must be measured.** One containing a checkable
+  numeric or state bar makes the story owe an observed value in its `notes`; without
+  it the story is marked `unverified` rather than `passes` and the branch stops. Chief
+  does not judge whether the observation MEETS the bar — see
+  [verify-hook.md](verify-hook.md) for which layer checks what.
+- **A criterion must be satisfiable from this tasklist's worktree.** One that names
+  another repo is stopped before the run starts (`UNSATISFIABLE`) unless the tasklist
+  declares `crossRepo`; `chief lint` reports the same finding while it is still a text
+  edit, and `chief gen` warns. See
+  [drivers-and-safety.md](../explanation/drivers-and-safety.md).
 - When a tasklist completes and merges, chief writes
   `tasks/chief/completed/<name>.json` (all `passes:true` + `mergedToMain: <sha>`)
   and retires the source file — so a re-run skips it.
