@@ -126,6 +126,19 @@ expect_eta 16 18 "devin throughput window (16 min)" \
 expect_eta 1 2  "retry in 30 seconds"   'Rate limit exceeded. retry in 30 seconds'
 expect_eta 5 7  "try again in 5 min"    'Too many requests, try again in 5 min'
 expect_eta 60 62 "reset in 1 hour"      'Your limit will reset in 1 hour.'
+# A clock time later TODAY must resolve on whatever date(1) this host ships —
+# GNU (-d) or BSD/macOS (-j -f). This is the STANDARD Claude limit phrasing, and
+# on a Mac the GNU-only call failed silently, so it slept the 60min fallback
+# instead of the real window. Generated relative to now so the fixture can never
+# go stale, and skipped near midnight where "later today" stops being true.
+if [ "$(date +%H)" -lt 22 ]; then
+  clk="$(date -v+90M '+%l:%M%p' 2>/dev/null || date -d '+90 minutes' '+%l:%M%p')"
+  clk="$(printf '%s' "$clk" | tr -d ' ')"
+  expect_eta 89 92 "clock time later today ($clk)" \
+    "Claude usage limit reached. Your limit will reset at $clk."
+else
+  echo "   -- skipped: within 2h of midnight, 'later today' is not assertable"
+fi
 # The fallback must still be the fallback: a limit with NO stated window, and a
 # duration that is just prose, both sleep RATE_LIMIT_WAIT rather than guess.
 expect_eta 59 61 "no window stated → fallback" 'Claude AI usage limit reached.'

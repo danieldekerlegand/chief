@@ -496,6 +496,29 @@ _beat_stop() {
 }
 trap '_beat_stop' EXIT
 
+# A "…3pm"-style clock token -> today's epoch, on WHATEVER date(1) the host has.
+# GNU takes -d; BSD/macOS rejects it outright and needs -j -f with an explicit
+# format. Trying only the GNU form meant that on a Mac this whole arm silently
+# produced nothing, so "your limit will reset at 3pm" — the standard Claude
+# phrasing — fell through to the RATE_LIMIT_WAIT fallback and slept an hour no
+# matter how near the window actually was. Empty when the token is unusable;
+# the caller decides what an unparseable time means.
+_clock_to_epoch() {
+  local raw="$1" hh mm ap today e=""
+  ap=$(printf '%s' "$raw" | grep -oiE '(am|pm)' | head -1 | tr '[:lower:]' '[:upper:]')
+  hh=$(printf '%s' "$raw" | grep -oE '^[0-9]{1,2}' | head -1)
+  mm=$(printf '%s' "$raw" | grep -oE ':[0-9]{2}' | head -1); mm="${mm#:}"
+  [ -n "$hh" ] && [ -n "$ap" ] || return 0
+  [ -n "$mm" ] || mm=00
+  [ "${#hh}" = 1 ] && hh="0$hh"
+  today=$(date +%Y-%m-%d)
+  e=$(date -d "$today $hh:$mm $ap" +%s 2>/dev/null) \
+    || e=$(date -j -f '%Y-%m-%d %I:%M %p' "$today $hh:$mm $ap" +%s 2>/dev/null) \
+    || e=""
+  case "$e" in ''|*[!0-9]*) e="" ;; esac
+  printf '%s' "$e"
+}
+
 # Seconds to sleep after a limit message: prefer a parsed reset time — a unix
 # epoch near "reset", a "…3pm"-style clock time, or a RELATIVE "…in 16 minutes"
 # — else RATE_LIMIT_WAIT; +60s buffer; capped at 6h.
@@ -505,7 +528,7 @@ _seconds_until_reset() {
   if [ -z "$epoch" ]; then
     t=$(printf '%s' "$out" | grep -oiE '[0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)' | head -1)
     if [ -n "$t" ]; then
-      epoch=$(date -d "today $t" +%s 2>/dev/null || echo "")
+      epoch="$(_clock_to_epoch "$t")"
       # Only trust a clock time that's still ahead today; a past time is ambiguous
       # (stale/tomorrow) so fall back to RATE_LIMIT_WAIT rather than oversleep.
       [ -n "$epoch" ] && [ "$epoch" -le "$now" ] && epoch=""
