@@ -78,6 +78,31 @@ division.
   line in `verify.sh` is a check. Anything you are unwilling to write as a check is,
   by construction, left to a human — which is fine, as long as the tasklist knows it.
 
+### What the engine layer costs, and what it was proven against
+
+These gates run on **every story of every tasklist**, so the cost is part of the
+contract — a slow check gets switched off, and a switched-off gate checks nothing.
+
+| | Cost | When |
+| --- | --- | --- |
+| Scope gate (`criteria_scope_report`) | ~31 ms per tasklist (one `jq` pass + one `ls`) | Once per run, **before** the first agent turn |
+| Bar gate (`measure_gate`) | ~24 ms per tasklist (one `jq` report + one `jq` rewrite) | Once per run, on the COMPLETE path |
+| Evidence gate (`evidence_gate`) | one `jq` pass, same order | Once per run, only where an agent ran |
+
+Measured over this repo's largest tasklist (12 KB, 4 stories, 13 criteria), 5 passes
+each. **Nothing runs inside the agent loop** — the whole engine layer is ~55 ms per
+tasklist per run, against runs measured in minutes.
+
+`test/five-cases.sh` is the proving run. It replays, as fixtures, the recorded shape
+of the five stories that reported green against criteria they had not met
+(2026-08-16/17) and asserts each now fails — two of them before an agent turn is
+spent — and, in the same run, replays three tasklists that were genuinely green and
+asserts they still merge. One of the three is the honest cost: a tasklist whose
+criteria say *"reports zero errors"* and whose filed record says nothing at all is
+stopped, because from the record it is indistinguishable from the one that claimed
+GREEN and delivered 25 failures. The remedy is one line of `notes`, and the fixture
+proves it.
+
 ## The code-quality ratchet (`chief quality`)
 
 Everything above is a **test oracle**: it answers *did the gates exit 0*. That is a
