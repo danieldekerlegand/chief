@@ -34,6 +34,13 @@ CHIEF="$BIN/chief"
 
 # ── a SIBLING checkout next to the project — the `argos/tasks/…` half of the rule ──
 mkdir -p "$WORK/argos"; git -C "$WORK/argos" init -q 2>/dev/null || fail "could not init the sibling repo"
+# `chief`, `koine`, `agora` as siblings too. `chief` is the one that matters: every
+# tasklist in every repo has branchName "chief/NN-slug", so without the own-namespace
+# carve-out the sibling rule reads a repo citing ITS OWN branches as cross-repo work.
+# That misfire produced 83 findings across 14 real repos, none of them real.
+for sib in chief koine agora cuneiform formant; do
+  mkdir -p "$WORK/$sib"; git -C "$WORK/$sib" init -q 2>/dev/null || fail "could not init sibling $sib"
+done
 
 # ── fake `claude`: records every tasklist it was ever handed ──────────────────
 mkdir -p "$WORK/fakebin"
@@ -92,6 +99,22 @@ cat > tasks/chief/sc-clean.json <<'JSON'
      "acceptanceCriteria":["`out/sc-clean.txt` exists and `docs/reference/verify-hook.md` still resolves","the hermetic suite never touches your real ~/.chief; pass/fail is reported by test/all.sh"],"passes":false,"notes":""}
   ] }
 JSON
+cat > tasks/chief/sc-ownbranch.json <<'JSON'
+{ "project":"sc","branchName":"chief/sc-ownbranch","description":"cites its own branches and lists repos in prose",
+  "iters":2,"dependsOn":[],"touches":["own"],"warmup":[],
+  "userStories":[
+    {"id":"US-1","title":"cite this repo own branches","description":"",
+     "acceptanceCriteria":["the index that `chief/33-collab-community-browser` mounts against is written on sync, per `chief/60` and the convention `chief/NN-slug`","the fabric spans koine/agora and argos/cuneiform/formant, named in prose rather than as paths"],"passes":false,"notes":""}
+  ] }
+JSON
+cat > tasks/chief/sc-colon.json <<'JSON'
+{ "project":"sc","branchName":"chief/sc-colon","description":"the colon form is a real cross-repo reference",
+  "iters":2,"dependsOn":[],"touches":["colon"],"warmup":[],
+  "userStories":[
+    {"id":"US-1","title":"depend on the chief repo tasklist","description":"",
+     "acceptanceCriteria":["the builder consumes the machinery `chief:290` produces"],"passes":false,"notes":""}
+  ] }
+JSON
 printf '#!/usr/bin/env bash\nset -eu\necho "verify: (would pass)"\nexit 0\n' > .chief/verify.sh
 chmod +x .chief/verify.sh
 git add -A && git commit -q -m "sc setup"
@@ -106,6 +129,14 @@ if "$CHIEF" lint sc-ref >"$WORK/lint-bad.log" 2>&1; then
 fi
 grep -q 'argos:82' "$WORK/lint-bad.log" || fail "chief lint never names the offending reference"
 grep -q 'crossRepo' "$WORK/lint-bad.log" || fail "chief lint never names the escape hatch"
+# The own-branch namespace and prose repo-lists are NOT cross-repo work. `chief/60` is a
+# branch in THIS repo; `koine/agora` is prose. Only the colon form crosses a repo boundary.
+"$CHIEF" lint sc-ownbranch >"$WORK/lint-own.log" 2>&1 \
+  || { cat "$WORK/lint-own.log"; fail "chief lint flagged a repo citing its OWN chief/NN branches"; }
+if "$CHIEF" lint sc-colon >"$WORK/lint-colon.log" 2>&1; then
+  cat "$WORK/lint-colon.log"; fail "chief lint passed the colon form chief:290, which IS cross-repo"
+fi
+grep -q 'chief:290' "$WORK/lint-colon.log" || fail "chief lint never names the colon-form reference"
 
 # ── authoring time: chief gen WARNS but still generates ──────────────────────
 cat > "$WORK/roadmap.json" <<'JSON'
@@ -151,8 +182,12 @@ grep -q 'crossRepo' "$LOG"   || fail "the failure never states the escape hatch"
 grep -q 'argos/tasks/chief/90-seam.json' "$REPO/.chief/state/parallel/sc-path.log" \
   || fail "the sibling-repo PATH shape was not reported by the path it named"
 
-# 4. declared coordination and ordinary local work are NOT held back
-for n in sc-declared sc-clean; do
+# 3b. the colon form still stops the run; the own-namespace one still runs
+case "$(status sc-colon)" in UNSATISFIABLE*) ;; *) fail "expected UNSATISFIABLE for sc-colon, got: '$(status sc-colon)'" ;; esac
+if grep -qx "sc-colon" "$WORK/agent-turns.txt"; then fail "an agent turn was spent on sc-colon"; fi
+
+# 4. declared coordination, ordinary local work, and own-branch citations are NOT held back
+for n in sc-declared sc-clean sc-ownbranch; do
   case "$(status $n)" in MERGED*) ;; *) fail "$n did not merge, got: '$(status $n)'" ;; esac
   [ -f "out/$n.txt" ]                      || fail "$n's work is not on main"
   [ -f "tasks/chief/completed/$n.json" ]   || fail "$n was not retired"
