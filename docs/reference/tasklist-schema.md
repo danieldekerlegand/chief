@@ -51,6 +51,14 @@ work run to completion by a chain of agent iterations.
                                          //   before it writes any code (one extra turn
                                          //   per story). "none" (default) is the
                                          //   straight-to-code loop. See plan-review.md.
+  "research": false,                     // true = spend ONE up-front turn mapping the
+                                         //   code (target files · data flow · point of
+                                         //   insertion · conventions) into
+                                         //   .chief/state/research/<name>.md, which
+                                         //   every story then reads instead of
+                                         //   re-deriving it. Produced once, reused on
+                                         //   resume, human-editable between iterations.
+                                         //   false (default) — see the note below.
 
   "userStories": [
     {
@@ -109,6 +117,22 @@ Notes:
   a one-word, reviewable diff either way. The rationale, the artifact schema, the
   reviewer contract and what happens when nobody is there:
   [plan-review.md](plan-review.md).
+- **`research` buys the map once instead of once per story.** With it on, chief spends
+  one turn before the first story writing a structured map of the code to
+  `.chief/state/research/<name>.md`, and appends that map to every story's (and every
+  plan's) prompt. Two things follow. Correctness: the stories work from one validated
+  model of the code instead of each re-deriving its own, badly. Context economy: an
+  iteration that opens with the map spends its window on the change rather than on
+  greps and file dumps. **Off by default, and the rule is a cost one** — roughly two in
+  five tasklists are one-shots (a doc fix, a version bump, a one-line guard) whose whole
+  cost is smaller than the research turn that would precede them, so turn it on where
+  several stories share one body of code, where the change lands somewhere unfamiliar,
+  or where a wrong mental model is expensive, and leave it off otherwise.
+  `$CHIEF_RESEARCH=1|0` overrides the tasklist for one run in both directions. The
+  document is **reviewable and editable**: a human can correct it between iterations and
+  the next story reads the correction, and on a tasklist that also sets `"review":
+  "plan"` the map goes to the same reviewer first — research, then plan, then code.
+  Neither field requires the other.
 - **`repo` targets a nested repo (e.g. a submodule).** The agent runs in a worktree of
   that repo, so its checks/deps must resolve there (use `warmup` to provision them, and a
   verify hook that dispatches off its cwd). All merges are serialized, so two tasklists

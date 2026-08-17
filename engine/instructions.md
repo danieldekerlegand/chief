@@ -10,6 +10,12 @@ story, so keep each iteration self-contained.
 1. **Read the runtime PRD** at `.chief/state/prd.json` — a JSON tasklist with
    `branchName` and a `userStories` array. Also skim `.chief/state/progress.txt`
    (the running log — read the `## Codebase Patterns` section first if present).
+   If a **`# Research`** section appears at the end of this prompt, that is a map of
+   this codebase produced once for this tasklist (and possibly corrected by a human
+   since). Start from it instead of rediscovering the code, and spend the context you
+   save on the change. It is a strong starting point, not scripture: if you find it
+   wrong while implementing, say so in your progress note rather than silently working
+   around it — every remaining story is reading the same map.
 2. **Be on the right branch.** Check the current branch matches the PRD's
    `branchName`; if not, check it out or create it from the base branch. (When the
    driver runs you inside a worktree, you are already on it — do nothing.)

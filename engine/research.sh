@@ -16,7 +16,7 @@
 # window with greps and file dumps; a story that opens with a validated map spends
 # its window on the change instead.
 #
-# FOUR RULES IT WILL NOT BREAK.
+# FIVE RULES IT WILL NOT BREAK.
 #   1. A MAP, NOT PROSE. The document has REQUIRED SECTIONS (research_sections) and is
 #      machine-validated against them. An essay that answers none of them is a failed
 #      research phase, not a research phase with a weak document.
@@ -27,14 +27,22 @@
 #      saying explicitly, so the prompt says it explicitly.
 #   3. BOUNDED, AND LOUD WHEN IT FAILS. The phase costs at most
 #      $CHIEF_RESEARCH_MAX_ATTEMPTS provider turns (default 2). Exhausting them is a
-#      DISTINCT, actionable state (agent.sh exits 4 -> the driver's RESEARCH-FAILED),
+#      DISTINCT, actionable state (agent.sh exits 6 -> the driver's RESEARCH-FAILED),
 #      never a silent fall-through into implementation on a map that isn't there.
 #   4. PRODUCED ONCE, REUSED THEREAFTER. A valid document at the durable path is never
 #      regenerated — not by the next story, not by a resumed run. A human may edit it,
 #      and the edit is what subsequent stories consume.
+#   5. REVIEWED WHERE PLANS ARE REVIEWED, AND BEFORE THEM. A tasklist that already
+#      asked for human plan review ("review":"plan") gets its MAP reviewed too, on
+#      the same plannotator surface and in the leverage order the hierarchy actually
+#      has: research, then plan, then code. Neither feature requires the other —
+#      research with review off never opens a reviewer, and plan review with research
+#      off is exactly what it was.
 #
 # CONSUMED BY. engine/agent.sh (dispatch + validation + promotion to the durable path)
 # and engine/driver.sh (the durable path itself, and the RESEARCH-FAILED status).
+# research_review_gate additionally uses engine/review.sh's primitives when that file
+# is present — a capability check, never a hard dependency.
 #
 # bash 3.2: no associative arrays, no mapfile, no ${var^^}, no process substitution.
 
@@ -124,7 +132,8 @@ research_enabled() {
   esac
 }
 
-# research_prompt PRD_JSON DOC_REL [MISSING] -> the research turn's prompt on stdout.
+# research_prompt PRD_JSON DOC_REL [MISSING] [FEEDBACK] -> the research turn's prompt
+# on stdout.
 #
 # DOC_REL is the document's path RELATIVE TO THE WORKTREE — the model is told to stay
 # inside its worktree, so it must never be handed the absolute durable path (agent.sh
@@ -134,8 +143,15 @@ research_enabled() {
 # previous attempt. A retry that just repeats the original instructions tends to
 # reproduce the original omission; naming the sections that came back empty is what
 # makes the second attempt worth its cost.
+#
+# FEEDBACK, when non-empty, is what a HUMAN REVIEWER wrote when they sent the previous
+# document back (research_review_gate below). Same reasoning as MISSING and more so: a
+# re-research told only that it was rejected produces the same map with different
+# adjectives, while one told "you missed the retry path in driver.sh" produces a
+# different map. It is rendered AFTER the format section so the reviewer's words are
+# the last thing read.
 research_prompt() {
-  local prd="${1:-}" doc="${2:-.chief/state/research.md}" missing="${3:-}"
+  local prd="${1:-}" doc="${2:-.chief/state/research.md}" missing="${3:-}" feedback="${4:-}"
   local name stories
   name="$(jq -r '.branchName // .project // "this tasklist"' "$prd" 2>/dev/null || echo "this tasklist")"
   stories="$(jq -r '
@@ -216,5 +232,128 @@ PROMPT_HEAD
     printf '%s\n' "$missing" | sed 's/^/    /'
     printf '\nFill them in. Keep whatever the previous attempt got right.\n'
   fi
+  if [ -n "$feedback" ]; then
+    printf '\n## A human reviewed your previous research and sent it back\n\n'
+    printf 'Re-research so that these are answered. Do not re-submit the same map with\n'
+    printf 'different wording, and keep whatever they did not object to.\n\n'
+    printf '%s\n' "$feedback"
+  fi
   return 0
+}
+
+# --- HUMAN REVIEW OF THE MAP (composes with the plan checkpoint) --------------
+#
+# research_review_markdown DOC VERDICT OUT — the document a reviewer actually reads:
+# a short header saying what approving MEANS here, the map verbatim, and every prior
+# round of their own annotations underneath.
+#
+# The map is already markdown, so unlike a plan there is nothing to render — which is
+# the point. What has to be added is the FRAME: a reviewer looking at four headings of
+# prose needs to be told that approving this commits every story in the tasklist to it,
+# and that the cheaper correction is usually an edit, not a rejection.
+research_review_markdown() {
+  local doc="$1" rev="$2" out="$3"
+  {
+    printf '# Research for %s\n\n' "${CHIEF_TASKLIST:-this tasklist}"
+    printf 'This is the map EVERY story in this tasklist will implement from, instead of\n'
+    printf 'rediscovering the codebase for itself. Approving it commits all of them to it.\n\n'
+    printf 'Annotate to send it back: your notes brief the next research turn, and no plan\n'
+    printf 'and no code is written until a map is approved. For a small correction, editing\n'
+    printf 'the document by hand is cheaper than a whole research turn — chief reuses an\n'
+    printf 'edited document verbatim.\n\n---\n\n'
+    cat "$doc"
+    if [ -s "$rev" ] && command -v jq >/dev/null 2>&1; then
+      jq -r '[(.rounds // [])[] | select(((.feedback // "") | length) > 0)] | to_entries[]
+             | "\n## Previous round " + ((.key + 1) | tostring) + " — " + .value.decision
+               + "\n\n" + .value.feedback + "\n"' "$rev" 2>/dev/null || true
+    fi
+  } > "$out" 2>/dev/null
+}
+
+# research_review_gate DOC VERDICT -> what the research phase must do next.
+#
+#   0  APPROVED, or REVIEW DOES NOT APPLY — proceed to the stories.
+#   1  RE-RESEARCH — the reviewer sent the map back; the annotations are recorded and
+#      the document is gone, so the phase's normal "is there a valid document?" check
+#      re-derives "research turn" by itself. Bounded by $CHIEF_REVIEW_MAX_ROUNDS.
+#   2  PARK — no approval is obtainable here (agent.sh exits 5 -> AWAITING-REVIEW).
+#
+# NEITHER FEATURE IS A HARD DEPENDENCY OF THE OTHER, and this function is where that
+# is enforced. It returns 0 immediately unless the tasklist ALREADY opted into human
+# plan review, so:
+#   research on, review off   -> no reviewer is ever opened; the phase is unchanged
+#   research off, review plan -> this is never called; plan review is unchanged
+#   both on                   -> the map is reviewed FIRST, on the same surface, and
+#                                an approved map is what the plan turns are given
+# An install with no engine/review.sh cannot approve anything, which is a park for the
+# same reason it is one for a plan: an unreachable reviewer is not an approval. Every
+# other return is the plan gate's, deliberately — one reviewer contract, not two.
+#
+# The VERDICT lives beside the DURABLE document (agent.sh passes it), so an approval
+# given once survives the rebuilt worktree and is never asked for twice. It is bound
+# to the map's bytes by checksum, so a re-researched map cannot inherit the approval
+# of the one it replaced.
+research_review_gate() {
+  local doc="$1" rev="$2" md result why dec fb rounds pid max
+  case "${REVIEW_MODE:-none}" in plan) ;; *) return 0 ;; esac
+  if ! command -v review_ask >/dev/null 2>&1; then
+    echo "Research review: this install has no engine/review.sh — nothing here can approve the map."
+    return 2
+  fi
+  max="${CHIEF_REVIEW_MAX_ROUNDS:-3}"
+  pid="$(review_plan_id "$doc")"
+  if review_approved "$rev" "$doc"; then
+    echo "Research review: this map was already APPROVED ($rev) — not re-asking."
+    return 0
+  fi
+  # Absence is checked before anything is rendered or spawned, and records nothing:
+  # a run that keeps finding no reviewer must not grow an audit trail of its absence.
+  why="$(review_unavailable_reason)"
+  if [ -n "$why" ]; then
+    echo "Research review: no reviewer for the map — $why"
+    return 2
+  fi
+  rounds="$(review_rounds "$rev")"
+  md="${doc%.md}.review.md"
+  result="${doc%.md}.verdict.raw.json"
+  research_review_markdown "$doc" "$rev" "$md"
+  echo "Research review: handing $md to '$CHIEF_REVIEWER' — round $(( rounds + 1 ))/$max, waiting up to ${CHIEF_REVIEW_TIMEOUT}s."
+  dec="$(review_ask "$md" "$result")" || dec=""
+  fb="$(review_verdict_feedback "$result")"
+  case "$dec" in
+    approved)
+      review_record "$rev" "${CHIEF_TASKLIST:-research}" "$pid" approved "$fb"
+      echo "Research review: APPROVED${fb:+ — \"$fb\"}. Every story implements from this map."
+      return 0
+      ;;
+    annotated|block|deny|denied|rejected)
+      review_record "$rev" "${CHIEF_TASKLIST:-research}" "$pid" annotated "$fb"
+      rm -f "$doc" 2>/dev/null || true
+      rounds="$(review_rounds "$rev")"
+      if [ "$rounds" -ge "$max" ]; then
+        echo "Research review: sent back again, and the retry budget is spent ($rounds/$max rounds)."
+        echo "Research review: parking rather than buying another research turn on a map the reviewer keeps rejecting — edit the document by hand, or fix the tasklist text."
+        return 2
+      fi
+      echo "Research review: SENT BACK with annotations (round $rounds/$max) — re-researching with them in context."
+      return 1
+      ;;
+    *)
+      review_record "$rev" "${CHIEF_TASKLIST:-research}" "$pid" "${dec:-no-verdict}" "$fb"
+      echo "Research review: no approval — the reviewer returned '${dec:-nothing within ${CHIEF_REVIEW_TIMEOUT}s}'. The map is kept; a re-run asks again."
+      return 2
+      ;;
+  esac
+}
+
+# research_review_feedback VERDICT -> the annotations to brief the next research turn
+# with, as markdown. Empty when there are none. Mirrors review_feedback() for plans;
+# separate only because a research verdict is keyed by its own file, not derived from
+# a plan artifact's name.
+research_review_feedback() {
+  [ -n "${1:-}" ] && [ -s "$1" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r '[(.rounds // [])[] | select(.decision == "annotated" and ((.feedback // "") | length) > 0)]
+         | to_entries[]
+         | "### Round " + ((.key + 1) | tostring) + "\n\n" + .value.feedback' "$1" 2>/dev/null
 }

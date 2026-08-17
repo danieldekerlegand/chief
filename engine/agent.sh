@@ -164,11 +164,39 @@ LAST_BRANCH_FILE="$STATE_DIR/.last-branch"
 # and the scheduler agree on the ETA instead of parsing the message twice.
 LIMIT_RETRY_FILE="$STATE_DIR/.limit-retry-at"
 rm -f "$LIMIT_RETRY_FILE"
+# THE RESEARCH DOCUMENT, in its two locations — declared HERE rather than beside the
+# RESEARCH PHASE below because _compose_prompt (next) reads it, and every story turn
+# is composed through that one function.
+#   RESEARCH_DOC    the copy inside the WORKTREE. What the research turn writes and
+#                   what validation reads. Disposable: the driver deletes and rebuilds
+#                   the worktree on every run.
+#   RESEARCH_STORE  the DURABLE path the driver hands down ($CHIEF_RESEARCH_FILE,
+#                   .chief/state/research/<name>.md in the project). Survives the
+#                   worktree, survives process death — and is the file A HUMAN OPENS
+#                   AND EDITS between iterations. The store is the source of truth:
+#                   _research_refresh copies it DOWN at the top of every iteration, so
+#                   a correction made by hand is what the next story reads. That is
+#                   the leverage the whole phase is for — correcting the map has to be
+#                   cheaper than correcting the code it would otherwise produce.
+RESEARCH_DOC="$STATE_DIR/research.md"
+RESEARCH_STORE="${CHIEF_RESEARCH_FILE:-}"
 # _compose_prompt INSTRUCTIONS DEST — the prompt one turn is handed: the engine's
 # loop instructions followed by the project's own context. A turn picks its
 # INSTRUCTIONS (implement, or the PLAN turn below) and everything downstream of that
 # choice must stay identical — a plan written against different project conventions
 # than the code it becomes is worse than no plan at all.
+#
+# The RESEARCH DOCUMENT goes in last, when there is one. Last on purpose: it is the
+# most specific thing in the prompt — engine loop, then project conventions, then the
+# map of the code THIS tasklist is about to change. Injected here rather than at each
+# call site so the implement turn and the PLAN turn cannot end up with different maps;
+# a plan reasoned from a map the implementation never saw is the same class of bug as
+# a plan written against different project conventions.
+#
+# The guard is deliberately a capability check, not a flag: no research.sh in this
+# install (or no valid document yet, which is the case for the very first compose
+# above the research phase) simply means no research section, and the prompt is
+# byte-for-byte what it has always been.
 _compose_prompt() {
   local src="$1" dest="$2" ctx="${CHIEF_AGENT_CONTEXT:-}"
   {
@@ -177,7 +205,44 @@ _compose_prompt() {
       printf '\n\n---\n\n# Project-specific instructions (%s)\n\n' "$ctx"
       cat "$CHIEF_PROJECT/$ctx"
     fi
+    if command -v research_validate >/dev/null 2>&1 && research_validate "$RESEARCH_DOC"; then
+      printf '\n\n---\n\n# Research — the validated map of this codebase for THIS tasklist\n\n'
+      printf 'This was produced ONCE, up front, by a research turn that read the code (and\n'
+      printf 'may since have been corrected by a human). It is here so you do NOT have to\n'
+      printf 'rediscover the codebase: start from this map instead of re-deriving it, and\n'
+      printf 'spend your context on the change.\n\n'
+      printf 'Trust it as a starting point, not as scripture. If you find it WRONG while\n'
+      printf 'implementing, say so in your progress note — a wrong map costs every\n'
+      printf 'remaining story, and it is corrected by editing `%s`\n' \
+        "${CHIEF_STATE_DIR:-.chief/state}/research.md"
+      printf 'in the project (a human does this between iterations; your edit inside the\n'
+      printf 'worktree does not persist). Do not rewrite it as part of a story.\n\n'
+      printf -- '---\n\n'
+      cat "$RESEARCH_DOC"
+    fi
   } > "$dest"
+}
+
+# _research_refresh — re-seed the worktree's research document FROM THE DURABLE STORE
+# and rebuild the implement prompt around it.
+#
+# Called at the top of every iteration, and that timing is the whole point of AC-2: a
+# human who opens $RESEARCH_STORE between iterations and fixes the map has their
+# correction picked up by the NEXT story, with no re-run and no research turn. Compose
+# once at startup and the tasklist would be stuck with the first map it drew.
+#
+# The plan turn inherits it for free — _plan_prompt composes through _compose_prompt
+# later in the same iteration, so plan and implement always reason from one map.
+# A HARD no-op when research is off, and that guard is the point: $CHIEF_RESEARCH=0
+# has to mean "no research this run" even when a document from a previous run is still
+# sitting in the store. Off is off — otherwise the override that exists to skip the
+# phase would still be paying its context cost.
+_research_refresh() {
+  [ "${RESEARCH_ON:-0}" = "1" ] || return 0
+  if [ -n "$RESEARCH_STORE" ] && [ -f "$RESEARCH_STORE" ]; then
+    cp "$RESEARCH_STORE" "$RESEARCH_DOC" 2>/dev/null || true
+  fi
+  _compose_prompt "$ENGINE/instructions.md" "$PROMPT_FILE"
 }
 PROMPT_FILE="$STATE_DIR/.prompt.md"
 _compose_prompt "$ENGINE/instructions.md" "$PROMPT_FILE"
@@ -750,8 +815,6 @@ i=0; stall=0; waits=0
 #
 # That same file is the human-edit surface: a hand-corrected document validates,
 # so it is reused verbatim and never regenerated.
-RESEARCH_DOC="$STATE_DIR/research.md"
-RESEARCH_STORE="${CHIEF_RESEARCH_FILE:-}"
 # THE BUDGET (acceptance: the phase is bounded). At most this many PROVIDER TURNS,
 # total, for the whole tasklist. Two is deliberate: one honest attempt plus one retry
 # that is TOLD which sections came back empty. A limit-blocked turn is not charged
@@ -774,54 +837,89 @@ else
   }
 fi
 
+# RESEARCH_ON is what every LATER consumer keys off (_research_refresh, and through
+# it the map injected into each turn's prompt). Asked exactly once, here: the answer
+# depends on $CHIEF_RESEARCH and the tasklist, neither of which changes mid-run, and
+# re-asking it per iteration is how "research off" turns into "research off except in
+# the one place that forgot to check".
+RESEARCH_ON=0
 if research_enabled "$PRD_FILE"; then
-  # REUSE BEFORE REGENERATE. A valid persisted document (from a previous run, or from
-  # a human's hand) short-circuits the whole phase.
-  if [ -n "$RESEARCH_STORE" ] && [ -f "$RESEARCH_STORE" ]; then
-    if research_validate "$RESEARCH_STORE"; then
-      cp "$RESEARCH_STORE" "$RESEARCH_DOC" 2>/dev/null || true
-      echo "Research: reusing the persisted document ($RESEARCH_STORE) — not re-running research."
-      event_emit tasklist.research name="${CHIEF_TASKLIST:-}" state=running \
-        detail="reused the persisted research document ($RESEARCH_STORE)"
-    else
-      echo "Research: the persisted document is incomplete (missing: $(research_missing "$RESEARCH_STORE" | tr '\n' ' ')) — regenerating." >&2
-    fi
-  fi
+  RESEARCH_ON=1
+  # THE VERDICT FOR THE MAP lives beside the DURABLE document, never in the worktree:
+  # an approval a human already gave has to survive the worktree the driver rebuilds
+  # on every run, or the checkpoint asks for it again and the guarantee is worthless.
+  # Falls back to the worktree only on a standalone run that has no durable store.
+  if [ -n "$RESEARCH_STORE" ]; then RESEARCH_VERDICT="${RESEARCH_STORE%.md}.review.json"
+  else                              RESEARCH_VERDICT="${RESEARCH_DOC%.md}.review.json"; fi
+  RESEARCH_FEEDBACK=""
 
-  if ! research_validate "$RESEARCH_DOC"; then
-    ra=0
-    while [ "$ra" -lt "$RESEARCH_MAX_ATTEMPTS" ]; do
-      ra=$(( ra + 1 ))
-      echo ""
-      echo "==============================================================="
-      echo "  Chief RESEARCH PHASE ($TOOL) — attempt $ra/$RESEARCH_MAX_ATTEMPTS"
-      echo "==============================================================="
-      live_set "$LIVE" phase=research iter=0 story= stall=0 waits="$waits" retry_at=0
-      # The model is handed the WORKTREE-RELATIVE path: it is instructed to stay
-      # inside its worktree, and $RESEARCH_STORE points outside it.
-      research_prompt "$PRD_FILE" "${CHIEF_STATE_DIR:-.chief/state}/research.md" \
-        "$(research_missing "$RESEARCH_DOC")" > "$RESEARCH_PROMPT_FILE"
-      TOOL_RC=0
-      _beat_start
-      OUTPUT=$(_run_provider < "$RESEARCH_PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
-      _beat_stop
-      # A research turn is still a provider turn: it costs quota and belongs in the
-      # spend ledger like any other. Reported as iteration 0 — the phase runs before
-      # the story loop's counter starts.
-      _emit_turn_event "research/$ra"
-      if _is_rate_limit "$OUTPUT" "$TOOL_RC"; then
-        if _rate_limit_wait "$OUTPUT"; then
-          ra=$(( ra - 1 ))   # a blocked turn never reached the model — not charged
-          continue
-        fi
-        exit 2
+  # THE PHASE, as one loop: produce (or reuse) a valid map, then put it in front of a
+  # human IF this tasklist asked for review — and if they send it back, do it again.
+  #
+  # TWO BUDGETS, DELIBERATELY SEPARATE. $RESEARCH_MAX_ATTEMPTS bounds the turns spent
+  # getting a MACHINE-VALID document (sections present and non-empty) and is reset for
+  # each review round; $CHIEF_REVIEW_MAX_ROUNDS bounds how many times a HUMAN may send
+  # a valid one back. They answer different questions — "can the model produce the
+  # shape?" and "is this map right?" — and sharing one counter would make a reviewer's
+  # first rejection eat the retry that exists for a truncated document. The phase is
+  # still bounded: at most attempts x rounds turns, both documented knobs.
+  while :; do
+    # REUSE BEFORE REGENERATE. A valid persisted document (from a previous run, or from
+    # a human's hand) short-circuits the whole phase.
+    if [ -n "$RESEARCH_STORE" ] && [ -f "$RESEARCH_STORE" ]; then
+      if research_validate "$RESEARCH_STORE"; then
+        cp "$RESEARCH_STORE" "$RESEARCH_DOC" 2>/dev/null || true
+        echo "Research: reusing the persisted document ($RESEARCH_STORE) — not re-running research."
+        event_emit tasklist.research name="${CHIEF_TASKLIST:-}" state=running \
+          detail="reused the persisted research document ($RESEARCH_STORE)"
+      else
+        echo "Research: the persisted document is incomplete (missing: $(research_missing "$RESEARCH_STORE" | tr '\n' ' ')) — regenerating." >&2
       fi
-      research_validate "$RESEARCH_DOC" && break
-      echo "Research attempt $ra produced no usable document (missing: $(research_missing "$RESEARCH_DOC" | tr '\n' ' '))."
-    done
-  fi
+    fi
 
-  if research_validate "$RESEARCH_DOC"; then
+    if ! research_validate "$RESEARCH_DOC"; then
+      ra=0
+      while [ "$ra" -lt "$RESEARCH_MAX_ATTEMPTS" ]; do
+        ra=$(( ra + 1 ))
+        echo ""
+        echo "==============================================================="
+        echo "  Chief RESEARCH PHASE ($TOOL) — attempt $ra/$RESEARCH_MAX_ATTEMPTS"
+        echo "==============================================================="
+        live_set "$LIVE" phase=research iter=0 story= stall=0 waits="$waits" retry_at=0
+        # The model is handed the WORKTREE-RELATIVE path: it is instructed to stay
+        # inside its worktree, and $RESEARCH_STORE points outside it.
+        research_prompt "$PRD_FILE" "${CHIEF_STATE_DIR:-.chief/state}/research.md" \
+          "$(research_missing "$RESEARCH_DOC")" "$RESEARCH_FEEDBACK" > "$RESEARCH_PROMPT_FILE"
+        TOOL_RC=0
+        _beat_start
+        OUTPUT=$(_run_provider < "$RESEARCH_PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
+        _beat_stop
+        # A research turn is still a provider turn: it costs quota and belongs in the
+        # spend ledger like any other. Reported as iteration 0 — the phase runs before
+        # the story loop's counter starts.
+        _emit_turn_event "research/$ra"
+        if _is_rate_limit "$OUTPUT" "$TOOL_RC"; then
+          if _rate_limit_wait "$OUTPUT"; then
+            ra=$(( ra - 1 ))   # a blocked turn never reached the model — not charged
+            continue
+          fi
+          exit 2
+        fi
+        research_validate "$RESEARCH_DOC" && break
+        echo "Research attempt $ra produced no usable document (missing: $(research_missing "$RESEARCH_DOC" | tr '\n' ' '))."
+      done
+    fi
+
+    if ! research_validate "$RESEARCH_DOC"; then
+      # DISTINCT, ACTIONABLE FAILURE — never a fall-through into implementation.
+      echo ""
+      echo "Chief could not produce a valid research document in $RESEARCH_MAX_ATTEMPTS attempt(s). Stopping."
+      echo "Missing required section(s): $(research_missing "$RESEARCH_DOC" | tr '\n' ' ')"
+      echo "Exit 6 = RESEARCH FAILED — nothing was implemented. Write or repair${RESEARCH_STORE:+ $RESEARCH_STORE}, raise CHIEF_RESEARCH_MAX_ATTEMPTS, or set CHIEF_RESEARCH=0 to skip the phase."
+      live_set "$LIVE" phase=research-failed iter=0 story= passing="$(_passes)" total="$(_total)"
+      exit 6
+    fi
+
     # PROMOTE IMMEDIATELY (see the persistence note above) — this is what "survives
     # process death" means in practice. A pre-existing store is left alone: it is
     # either the document we just copied down, or a human's edit, and neither wants
@@ -839,15 +937,40 @@ if research_enabled "$PRD_FILE"; then
         echo "WARNING: research document could not be persisted to $RESEARCH_STORE — this run uses it, a resumed run would regenerate it" >&2
       fi
     fi
-  else
-    # DISTINCT, ACTIONABLE FAILURE — never a fall-through into implementation.
-    echo ""
-    echo "Chief could not produce a valid research document in $RESEARCH_MAX_ATTEMPTS attempt(s). Stopping."
-    echo "Missing required section(s): $(research_missing "$RESEARCH_DOC" | tr '\n' ' ')"
-    echo "Exit 6 = RESEARCH FAILED — nothing was implemented. Write or repair${RESEARCH_STORE:+ $RESEARCH_STORE}, raise CHIEF_RESEARCH_MAX_ATTEMPTS, or set CHIEF_RESEARCH=0 to skip the phase."
-    live_set "$LIVE" phase=research-failed iter=0 story= passing="$(_passes)" total="$(_total)"
-    exit 6
-  fi
+
+    # HUMAN REVIEW OF THE MAP — a no-op returning 0 unless this tasklist already
+    # opted into plan review, which is what keeps the two features independent.
+    # It runs HERE, before the story loop, so it is structurally impossible for a
+    # plan turn to be reviewed before the map it was reasoned from.
+    RESEARCH_RC=0
+    live_set "$LIVE" phase=review-wait iter=0 story= stall=0 waits="$waits" retry_at=0
+    research_review_gate "$RESEARCH_DOC" "$RESEARCH_VERDICT" || RESEARCH_RC=$?
+    [ "$RESEARCH_RC" = "0" ] && break
+    if [ "$RESEARCH_RC" = "2" ]; then
+      # The plan checkpoint's park, one rung further up the leverage hierarchy. Not a
+      # failure: the map, the annotations and the branch are all kept, and a re-run
+      # reads the verdict off disk rather than asking for it again.
+      echo ""
+      echo "Chief is stopping: this tasklist's research map has no human approval — and none can be obtained here."
+      echo "The map and every annotation are kept${RESEARCH_STORE:+ ($RESEARCH_STORE)}; nothing was implemented."
+      echo "Exit 5 = AWAITING-REVIEW — parked for a person, NOT a failed tasklist. Approve the map (or edit it by hand), then re-run."
+      live_set "$LIVE" phase=awaiting-review iter=0 story= passing="$(_passes)" total="$(_total)"
+      event_emit tasklist.awaiting-review name="${CHIEF_TASKLIST:-}" state=awaiting-review \
+        detail="the research map is unapproved and no reviewer could be reached"
+      exit 5
+    fi
+    # SENT BACK. Drop the map from BOTH locations — the gate removed the worktree copy,
+    # and leaving the durable one would make the reuse branch at the top of this loop
+    # hand the next round the very document the reviewer just rejected. Their words
+    # brief the re-research; the attempts budget starts over for it (see TWO BUDGETS).
+    rm -f "$RESEARCH_DOC" 2>/dev/null || true
+    [ -n "$RESEARCH_STORE" ] && { rm -f "$RESEARCH_STORE" 2>/dev/null || true; }
+    RESEARCH_FEEDBACK="$(research_review_feedback "$RESEARCH_VERDICT")"
+  done
+
+  # The map is valid, banked and (where asked for) approved. Fold it into the prompt
+  # every turn from here on is composed from.
+  _research_refresh
 fi
 
 prev_pass=$(_passes); prev_head=$(_head)
@@ -867,6 +990,13 @@ while :; do
     exit 3
   fi
   i=$((i+1))
+  # THE HUMAN-CORRECTION WINDOW. Re-read the durable research document and rebuild
+  # this turn's prompt around it, EVERY iteration. A person who opened the map
+  # between stories and fixed it has their correction in the very next story's
+  # context, with no re-run and no research turn spent — which is the leverage the
+  # phase exists for: a map corrected here is a map that never becomes wrong code.
+  # A no-op when research is off.
+  _research_refresh
   # TURN MODE — what this iteration is FOR. Decided here, at the top, from state on
   # disk only (the PRD's review field + whether this story's plan artifact already
   # exists and parses), so it survives a restart: a resumed run re-derives the same

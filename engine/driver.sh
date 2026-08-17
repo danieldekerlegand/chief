@@ -2048,13 +2048,9 @@ run_worker() {
         "!! $name PARKED AWAITING REVIEW — its plan needs a human (docs/plan-review.md); branch $branch, its worktree and the plan are kept, and re-running resumes from an approval already given"
       return 0
     fi
-    # RESEARCH FAILURE — the up-front phase (engine/research.sh) burned its bounded
-    # attempts without a document carrying every required section. It belongs in this
-    # block for the sharpest version of the reason above: research runs before the
-    # FIRST story, so nothing was ever implemented, and EMPTY-NO-WORK ("it claimed
-    # COMPLETE and built nothing") would blame the agent for a map that was never
-    # drawn. The document is reused verbatim, never regenerated, so writing or
-    # repairing it by hand at the durable path is the fix — which is what we say.
+    # RESEARCH FAILURE — the sharpest case of the reason above: the phase runs before
+    # the FIRST story, so nothing was ever implemented. The map is reused verbatim and
+    # never regenerated, so writing it by hand is the fix — which is what we say.
     if [ "$agent_rc" = "$AGENT_RC_RESEARCH" ]; then
       worker_park research-failed "the research phase produced no valid document — branch + worktree kept" \
         "!! $name RESEARCH FAILED — nothing was implemented. Write or repair $RESEARCH_REL/$name.md by hand (it is reused as-is), or re-run with CHIEF_RESEARCH=0 to skip the phase"
