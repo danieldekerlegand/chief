@@ -126,7 +126,13 @@ VERSION              # engine version — bump on any engine/bin/install change
   (`CHIEF_PAUSE_FILE`, `CHIEF_RESEARCH_FILE`), and `agent.sh` seeds FROM it and promotes back TO it the
   moment the artifact is valid — not at the end of the loop, or a mid-run death loses it. Relatedly, a
   new `agent.sh` exit code needs its `run_worker` arm placed **above** the EMPTY-NO-WORK guard whenever
-  that stop can legitimately leave zero commits (as 2, 3, 4, 5 and 6 all can).
+  that stop can legitimately leave zero commits (as 2, 3, 4, 5 and 6 all can). Exit codes are a
+  **contended namespace** across parallel tasklists — grep `AGENT_RC_` in `driver.sh` *and* agent.sh's
+  exit-code header before claiming one, and expect to renumber after a rebase.
+- **A `docs/…​.md` path in a shell comment is a link the merge gate checks.**
+  `scripts/check-doc-links.mjs` scans every *tracked* file (its `BARE_DOC` regex, not just `.md`) and
+  `.chief/verify.sh` runs it as a ratchet, so pointing at a doc a later story will write is a new dead
+  link that blocks the merge. Reference the module, not the doc that doesn't exist yet.
 - **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
   "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
   locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when
