@@ -35,7 +35,8 @@
         "A guard makes it impossible to reintroduce: a sweep running with a `$CHIEF_RUNS` that is not the default refuses a host-wide (empty-prefix) invocation outright. A test that means to sweep everything is not a test, it is an incident.",
         "The tests still assert what they were written to assert — the two halves of the original bug reapscope.sh documents — so this is a scoping fix and not a coverage reduction."
       ],
-      "notes": null
+      "notes": null,
+      "passes": true
     },
     {
       "id": "US-3",
