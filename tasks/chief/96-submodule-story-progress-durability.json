@@ -4,24 +4,26 @@
   "branchName": "chief/96-submodule-story-progress-durability",
   "parked": false,
   "dependsOn": [],
-  "touches": ["engine"],
+  "touches": [
+    "engine"
+  ],
   "iters": 6,
   "warmup": [
     "grep -n 'passes' engine/driver.sh | head -20",
     "grep -rn 'repo\"\\|submodule' engine/driver.sh | head -15",
     "../insimul/.chief/verify.sh"
   ],
-  "description": "**A submodule tasklist loses its story progress when a run restarts, even though its code survives.** Observed 2026-08-13 in insimul: `164-asset-libraries-and-suggestion` had reached **2/3** — US-1 and US-2 committed to `babylon/packages/core` as `feat:` commits — and after a run restart chief reported it at **0/3**.\n\n**Root cause is the split.** For a submodule tasklist the TASKLIST lives in the parent (`insimul/tasks/chief/164-*.json`) while the WORK BRANCH lives in the submodule (`babylon/packages/core`). The parent has no `chief/*` branches at all, and every parent commit touching `tasks/chief/` is a terminal `complete @sha — bump <sub> + record + retire`. There is no per-story marker in between, so an interrupted submodule tasklist has nowhere to have recorded 2/3.\n\n**The cost is re-verification, and the risk is worse than the cost.** An agent resuming at 0/3 checks out a branch where US-1 and US-2 code already exists. Best case it recognises the work and moves on, wasting iterations; worst case it **implements the story again**, leaving two implementations of one story on one branch — which is a genuinely messy state to unpick and exactly what the operator was warned to watch for.\n\nThis is not insimul-specific: it applies to any repo whose tasklists carry a `repo:` field pointing at a submodule, which is a first-class chief feature (`insimul/.chief/verify.sh` is explicitly *submodule-aware* and dispatches on it).",
+  "description": "**A submodule tasklist loses its story progress when a run restarts, even though its code survives.** Observed 2026-08-13 in insimul: `164-asset-libraries-and-suggestion` had reached **2/3** \u2014 US-1 and US-2 committed to `babylon/packages/core` as `feat:` commits \u2014 and after a run restart chief reported it at **0/3**.\n\n**Root cause is the split.** For a submodule tasklist the TASKLIST lives in the parent (`insimul/tasks/chief/164-*.json`) while the WORK BRANCH lives in the submodule (`babylon/packages/core`). The parent has no `chief/*` branches at all, and every parent commit touching `tasks/chief/` is a terminal `complete @sha \u2014 bump <sub> + record + retire`. There is no per-story marker in between, so an interrupted submodule tasklist has nowhere to have recorded 2/3.\n\n**The cost is re-verification, and the risk is worse than the cost.** An agent resuming at 0/3 checks out a branch where US-1 and US-2 code already exists. Best case it recognises the work and moves on, wasting iterations; worst case it **implements the story again**, leaving two implementations of one story on one branch \u2014 which is a genuinely messy state to unpick and exactly what the operator was warned to watch for.\n\nThis is not insimul-specific: it applies to any repo whose tasklists carry a `repo:` field pointing at a submodule, which is a first-class chief feature (`insimul/.chief/verify.sh` is explicitly *submodule-aware* and dispatches on it).",
   "userStories": [
     {
       "id": "US-1",
       "title": "Per-story progress survives a restart for a submodule tasklist",
       "description": "Whatever the mechanism, the invariant is that resuming reports the progress the branch actually contains.",
       "acceptanceCriteria": [
-        "After a run is killed mid-tasklist and restarted, a submodule tasklist reports the SAME story count it had reached — asserted end-to-end against a fixture repo with a submodule, not by unit-testing the writer.",
+        "After a run is killed mid-tasklist and restarted, a submodule tasklist reports the SAME story count it had reached \u2014 asserted end-to-end against a fixture repo with a submodule, not by unit-testing the writer.",
         "The mechanism is chosen and its trade-off recorded: a marker commit on the submodule branch, a parent-side branch, or state under `$STATE/`. Ephemeral state is acceptable ONLY if it survives a driver restart, which is the failure being fixed.",
-        "It does not change the terminal record: the parent still gets one `complete @sha — bump <sub> + record + retire` commit, so `completed/` history keeps its current shape and nothing downstream that reads it moves.",
-        "A NON-submodule tasklist's behaviour is byte-identical — asserted, since this is a fix to a special case and must not perturb the common one."
+        "It does not change the terminal record: the parent still gets one `complete @sha \u2014 bump <sub> + record + retire` commit, so `completed/` history keeps its current shape and nothing downstream that reads it moves.",
+        "A NON-submodule tasklist's behaviour is byte-identical \u2014 asserted, since this is a fix to a special case and must not perturb the common one."
       ],
       "passes": false,
       "notes": ""
@@ -31,12 +33,15 @@
       "title": "A resumed agent is told what is already done",
       "description": "Even with progress restored, an agent resuming onto a branch carrying prior work should be told so explicitly rather than inferring it from the diff.",
       "acceptanceCriteria": [
-        "On resume, the agent's context names which stories are already complete AND that their work is present on the checked-out branch — so 'already implemented' is a stated fact rather than something it must discover.",
+        "On resume, the agent's context names which stories are already complete AND that their work is present on the checked-out branch \u2014 so 'already implemented' is a stated fact rather than something it must discover.",
         "The guard against the worst case is explicit: the prompt states that re-implementing a completed story is a defect, since two implementations of one story on one branch is harder to unpick than an unfinished one.",
         "Demonstrated on the real case: a fixture reproducing `insimul:164`'s shape (2 of 3 stories committed in a submodule, run restarted) resumes at story 3."
       ],
       "passes": false,
       "notes": ""
     }
+  ],
+  "crossRepo": [
+    "insimul"
   ]
 }
