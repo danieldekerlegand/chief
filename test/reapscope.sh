@@ -134,6 +134,21 @@ spared "$foreign_drv" "$out" || fail "the unresolvable driver (pid $foreign_drv)
 $out"
 case "$out" in *"${RS}alpha · tl-a"*) ;; *) fail "the report does not name the run an orphan belonged to (repo · tasklist):
 $out" ;; esac
+# ATTRIBUTION, per pid and BEFORE any signal: the repo and the run id the sweep
+# believes each process belongs to. A key tag alone names what matched, not what is
+# about to be killed — three runs were destroyed unnamed on 2026-08-17.
+grep -qE "repo .*· run ${RS}alpha-111-1700-4242" <<<"$out" \
+  || fail "the report does not attribute the argv-marked orphan to a repo AND a run id:
+$out"
+grep -qE "repo .*· tasklist tl-a · run " <<<"$out" \
+  || fail "the report does not attribute the cwd-marked orphan to a repo/tasklist and say what run id it could resolve:
+$out"
+# …and the EVIDENCE, which is what separates a clean sweep from a blind one.
+case "$out" in *"ORPHAN — "*) ;; *) fail "the report does not say WHY each process was judged dead:
+$out" ;; esac
+grep -qE "pid $foreign_drv +unresolvable · LEFT ALONE" <<<"$out" \
+  || fail "an unresolvable process is not distinguished from a confirmed orphan in the output:
+$out"
 case "$out" in *"dry run"*)      ;; *) fail "-n did not say it was a dry run:
 $out" ;; esac
 alive "$orphan_cwd" || fail "-n signalled the orphan — a dry run must not touch anything"
@@ -170,6 +185,17 @@ alive "$foreign_drv" || fail "a driver belonging to ANOTHER install was KILLED b
 $out"
 case "$out" in *TERM*|*KILL*) ;; *) fail "the reap did not report how it signalled:
 $out" ;; esac
+# The REAL sweep names what it is about to kill, not just what it killed — the same
+# attribution the dry run prints, ahead of the TERM line rather than after it.
+case "$out" in *"About to reap"*) ;; *) fail "the real reap did not announce what it was about to kill:
+$out" ;; esac
+grep -qE "repo .*· run ${RS}alpha-111-1700-4242" <<<"$out" \
+  || fail "the real reap killed a process without naming the run and repo it believed it belonged to:
+$out"
+[ "$(grep -n 'About to reap' <<<"$out" | head -1 | cut -d: -f1)" \
+  -lt "$(grep -n 'reaping .*(TERM)' <<<"$out" | head -1 | cut -d: -f1)" ] \
+  || fail "the report came AFTER the signal — 'before it does it' is the whole story:
+$out"
 
 # ── 4. a clean host reports clean ─────────────────────────────────────────────
 kill -9 "$locked_drv" 2>/dev/null || true

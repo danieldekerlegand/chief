@@ -366,13 +366,91 @@ to re-run the stranded repo is exactly how an orphan spends for hours unwatched,
 demand from anywhere:
 
 ```
-chief reap -n     # report what would be reaped: repo, tasklist, pid, command
+chief reap -n     # report what would be reaped: repo, tasklist, run id, pid, command
 chief reap        # stop it: TERM, then KILL after --grace N seconds (default 5)
+chief reap -s chief-2915283-      # only that repo's runs
 ```
 
-Both paths are loud: every pid is named, with what it was and why it was matched,
-before a signal is sent. A silent `kill -9` sweep is indistinguishable from a crash
-to whoever is watching.
+**`chief reap` is HOST-WIDE unless you scope it.** It is not "reap this repo": process
+discovery is `pgrep -u <you> -f -- --chief-run=`, every chief process *this user owns*
+on the whole box, whichever repo you were standing in when you typed it. That is the
+useful behaviour — an orphan in a repo you have not opened in a week is exactly the one
+spending quota unwatched — but it is a surprising thing to discover by losing work in a
+sibling repo. `--scope <repo>-<cksum>-` narrows it to one repo's runs; that is the form
+the driver's own startup sweep uses. A host-wide sweep out of a `$CHIEF_RUNS` that is
+not this host's own is refused outright (below).
+
+**Both paths name every process before signalling it.** A silent `kill -9` sweep is
+indistinguishable from a crash to whoever is watching, so each pid is printed with the
+key that matched it, the run and repo it is attributed to, and the evidence that the
+run is dead — and only then is it reaped:
+
+```
+chief reap: 2 orphaned process(es) — chief work with no live, registered run. About to reap each of these:
+       keys: [cwd] cwd inside a chief worktree · [argv] --chief-run= marker · [env] inherited $CHIEF_RUN_ID · [tree] descendant of a match
+       · pid 40987   [argv] chief engine process · run chief-2915283-1753996812-40321
+         ↳ repo /Users/you/Development/chief · run chief-2915283-1753996812-40321
+         ↳ ORPHAN — a run file in /Users/you/.chief/runs claims this run, and its driver (pid 40321) is gone
+         bash /Users/you/.chief/src/engine/agent.sh --chief-run=chief-2915283-1753996812-40321
+       · pid 41002   [tree] child of pid 40987
+         ↳ repo /Users/you/Development/chief · run chief-2915283-1753996812-40321
+         ↳ ORPHAN — a run file in /Users/you/.chief/runs claims this run, and its driver (pid 40321) is gone
+         claude --dangerously-skip-permissions --print
+```
+
+A child is reported under its **parent's** run and repo, not as a bare "child of pid N":
+it is being reaped for the parent's reasons, and a line nobody can place is a line
+nobody can object to in time.
+
+**"Left alone" is a separate block, and reading it matters.** A process wearing a
+well-formed `--chief-run=` marker whose run *this install cannot account for* — no run
+file in this `$CHIEF_RUNS`, no repo in this `$CHIEF_REPOS`, no worktree under this
+prefix — is reported and **not** touched:
+
+```
+  ↷ left alone — chief processes whose run this install cannot resolve. …
+       · pid 55110   unresolvable · LEFT ALONE · run vita-4471902-1755449051-55110
+         ↳ no run file in /tmp/tmp.XYZ/runs, no repo in /tmp/tmp.XYZ/repos, no worktree under /tmp/tmp.XYZ/worktrees —
+           this install cannot account for that run, which is not the same as it being dead
+```
+
+An empty orphan list means a clean host. A *populated* left-alone list means a **blind
+sweep** — the registry being consulted is not the one those runs registered into, so
+their absence from it says nothing at all (see below). Telling those two apart from the
+output is the whole point of printing it.
+
+### An unreadable registry is not evidence of orphanhood
+
+The two halves of a sweep have different reach, and that asymmetry is a live hazard.
+Discovery is host-wide by construction. The registry those processes are *judged*
+against is whatever `$CHIEF_RUNS` the caller is pointed at. Point the second somewhere
+private — a hermetic test's temp prefix, a container's, a second install's — and the
+first still sees everything, so the sweep ends up ruling on runs its registry was never
+going to know about. On 2026-08-17 that shape killed live runs in three sibling repos.
+
+Two rules close it:
+
+- **Absence is only evidence when you are looking in the right place.** A run-marked
+  process may be reaped only when this install can *account for* the run its marker
+  names — a run file in this `$CHIEF_RUNS` claims the id, **or** the id's cksum names a
+  repo in this `$CHIEF_REPOS`, **or** it names a worktree dir under this prefix. None of
+  the three: reported as `LEFT ALONE`, never signalled. Reaping is irreversible and
+  leaving an orphan is not, so the asymmetry decides it — the next sweep, run from the
+  right prefix, gets it. This applies to the argv key *and* the inherited-`$CHIEF_RUN_ID`
+  key, which is what makes macOS and Linux agree: under SIP the environment key is inert,
+  so argv is the fallback there, and a fallback must never be more aggressive than the
+  primary it stands in for.
+- **A host-wide sweep out of a foreign registry is refused before it scans anything.**
+  An empty run-id prefix read against a `$CHIEF_RUNS` that is not this host's own exits
+  non-zero with a diagnosis. Scope it (`--scope <repo>-<cksum>-`), or point `$CHIEF_RUNS`
+  at the registry those runs actually wrote to. A *scoped* sweep is always allowed from
+  any registry: `--chief-run=<repo>-<cksum>-` cannot match a run the caller did not mint,
+  so the reach of the two halves agrees again.
+
+`test/reapscope.sh` and `test/reapenv.sh` pin both rules; `test/bystander.sh` stands up a
+run belonging to another install — its own driver argv, its own `$CHIEF_RUNS`, its own
+worktree root — and runs the whole behavioural block over it, asserting after every test
+that the bystander is still alive.
 
 ## The registry tells the truth in both directions
 
