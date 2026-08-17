@@ -89,6 +89,9 @@ jobs:
       - name: No-work guard (false-complete must not merge/retire)
         run: bash test/noworkguard.sh
 
+      - name: Evidence gate (a force-passed story with empty notes must not merge)
+        run: bash test/evidence-gate.sh
+
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 

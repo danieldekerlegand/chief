@@ -79,7 +79,7 @@ bad merge**. There is no AI auto-conflict-resolution: conflicts stop the tasklis
 Over-tagging `touches` only costs parallelism; under-tagging only costs a rebase —
 and the run summary now names the pair that under-tagged (see the audit above).
 
-Two more guards back this up:
+Three more guards back this up:
 
 - **No-work guard (`EMPTY-NO-WORK`).** Pass-flags in JSON can lie: an agent might
   emit `<promise>COMPLETE</promise>` and mark every story `passes:true` while
@@ -87,6 +87,15 @@ Two more guards back this up:
   checks the branch actually diverges from base (`git diff BASE...branch`). An empty
   branch is **never** merged (a `--no-ff` merge would otherwise forge an empty merge
   commit) or retired — it's marked `EMPTY-NO-WORK` and its dependents stay blocked.
+- **Evidence gate (`UNVERIFIED`).** A `COMPLETE` from an agent that committed real
+  work promotes the stories it left `passes:false` — verify, not the pass-flags, is
+  the merge bar. That promotion is what lets a story report green against a
+  criterion nothing ever read, so it is **conditional**: chief promotes a
+  stale-false story only if it carries evidence in `notes`. One that says nothing
+  about how it was done is left false and the branch is marked `UNVERIFIED` — not
+  merged, not retired — with the story and the criteria it claimed quoted in the
+  run log. Stories the agent marked passing **itself** are never subject to this:
+  the gate stops silent promotion, it does not tax honest self-reporting.
 - **Persisted verify failures re-engage the agent.** A branch that completes all
   stories but fails the post-rebase verify would otherwise loop forever
   (skip-agent → re-verify → fail). Instead the verify output is saved to
@@ -161,7 +170,7 @@ Two more guards back this up:
   no-op into a non-zero exit — the field case this whole path comes from.
 
 Terminal per-tasklist statuses: `MERGED @<sha>`, `COMPLETE-UNMERGED`, `INCOMPLETE`,
-`EMPTY-NO-WORK`, `WORKTREE-FAILED`, `CHECKOUT-FAILED`, `REBASE-CONFLICT`,
+`EMPTY-NO-WORK`, `UNVERIFIED`, `WORKTREE-FAILED`, `CHECKOUT-FAILED`, `REBASE-CONFLICT`,
 `REBASE-REFUSED`, `VERIFY-FAILED`, `MERGE-CONFLICT`.
 
 ## Interruptions & resume

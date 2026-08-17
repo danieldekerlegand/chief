@@ -104,7 +104,7 @@ machine.
 | `3` | `no-work` | **nothing ran**: no runnable tasklist (all complete or parked), or every scheduled tasklist was blocked on a dependency |
 | `4` | `verify-failed` | ≥1 tasklist ended `VERIFY-FAILED` — its branch is kept for re-engagement |
 | `5` | `conflict` | ≥1 tasklist ended `REBASE-CONFLICT` or `MERGE-CONFLICT` — a human owns it (chief never auto-resolves) |
-| `6` | `failed` | ≥1 tasklist failed for another reason: `INCOMPLETE`, `EMPTY-NO-WORK` (the false-complete guard), `REBASE-REFUSED`, `BAD-REPO`, `WORKTREE-FAILED` |
+| `6` | `failed` | ≥1 tasklist failed for another reason: `INCOMPLETE`, `EMPTY-NO-WORK` (the false-complete guard), `UNVERIFIED` (the evidence gate), `REBASE-REFUSED`, `BAD-REPO`, `WORKTREE-FAILED` |
 | `7` | `paused` | work was **withheld, not broken**: an operator pause (`chief pause`), a Claude usage-limit window, and/or a tasklist parked `AWAITING-REVIEW` (a plan nobody has approved — [plan-review.md](plan-review.md)). Branches and worktrees are kept; re-run to resume |
 | `129` `130` `143` | — | the run was signalled (`SIGHUP` / `SIGINT` / `SIGTERM`); unchanged from an interactive run |
 

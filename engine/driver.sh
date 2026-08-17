@@ -515,6 +515,45 @@ branch_has_real_work() {
     -- . ":(exclude)$TASKS_REL/$2.json" 2>/dev/null | head -1
 }
 
+# EVIDENCE GATE — a story CHIEF promotes must say how it was done.
+#
+# The COMPLETE path trusts an agent that committed real work and marks every story
+# it left stale-false as passed (verify, not the pass-flags, is the merge bar). That
+# trust is what lets a story report green against a criterion nobody read: a silent
+# promotion is indistinguishable from finished work in the record. The cheapest
+# signal separating them is already in the data — a story that did its work has
+# something to say about HOW, and force-passed stories carry an EMPTY `notes`.
+#
+# So the promotion becomes conditional, and ONLY on the stories chief promotes
+# itself. A story the agent explicitly marked passing is left alone: the point is to
+# stop silent promotion, not to add ceremony to work that reported itself honestly.
+# A stale-false story WITH evidence in `notes` is promoted as before; one WITHOUT is
+# left false and reported here, so the branch fails instead of merging.
+#
+# $1 = the runtime prd.json. Promotes in place, and prints one block per unevidenced
+# story — its id, title and the criteria it would have claimed — on stdout. Empty
+# output means every promotion carried evidence and the branch may proceed.
+evidence_gate() {
+  local prd="$1" t
+  # The report first: it must describe the stories as the agent left them, before
+  # the promotion below rewrites any pass-flag.
+  jq -r '
+    def unpassed: (.passes != true);
+    def evidenced: (((.notes // "") | tostring) | test("\\S"));
+    def clip: if (. | length) > 200 then .[0:197] + "..." else . end;
+    .userStories[] | select(unpassed and (evidenced | not))
+    | "   ✗ \(.id) — \(.title // "(untitled)")\n"
+      + ( [ (.acceptanceCriteria // [])[] | "       claimed: \"" + (tostring | clip) + "\"" ]
+          | if length == 0 then ["       (no acceptance criteria recorded)"] else . end
+          | join("\n") )
+  ' "$prd" 2>/dev/null
+  t="$(mktemp)"
+  jq '
+    def evidenced: (((.notes // "") | tostring) | test("\\S"));
+    .userStories |= map(if (.passes != true) and evidenced then .passes = true else . end)
+  ' "$prd" > "$t" 2>/dev/null && mv "$t" "$prd" || rm -f "$t"
+}
+
 # The passes-state to seed the runtime prd.json from (and to count remaining
 # stories on a resume). For a project tasklist it's the branch's committed tasklist
 # (survives across resumes in-repo). A submodule branch carries no tasklist JSON, so
@@ -1875,11 +1914,15 @@ run_worker() {
     # in the merge phase, so a branch that ends INCOMPLETE or conflicts is audited
     # too — those are the runs where a mis-tagged pair costs the most.
     audit_record_files "$name" "$branch"
-    # Trust an explicit COMPLETE from an agent that DID commit real work: mark any
+    # Trust an explicit COMPLETE from an agent that DID commit real work: mark the
     # stories it left stale-false as passed so the branch proceeds to the verify
-    # gate (verify — not the pass-flags — is the real merge bar).
+    # gate (verify — not the pass-flags — is the real merge bar). The trust is not
+    # unconditional: evidence_gate promotes only the stale-false stories that say in
+    # `notes` how they were done, and reports the silent ones for the UNVERIFIED arm
+    # below. Stories the agent marked passing itself are never touched here.
+    local unevidenced=""
     if [ "$agent_rc" = "0" ] && [ "$skip_agent" != "1" ] && [ -n "$has_work" ]; then
-      local t; t="$(mktemp)"; jq '.userStories |= map(.passes=true)' "$wtstate/prd.json" > "$t" 2>/dev/null && mv "$t" "$wtstate/prd.json" || rm -f "$t"
+      unevidenced="$(evidence_gate "$wtstate/prd.json")"
     fi
     local remaining total
     remaining="$(jq '[.userStories[]|select(.passes==false)]|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
@@ -1958,6 +2001,23 @@ run_worker() {
       event_emit tasklist.no-work name="$name" state=failed detail="false-complete guard: no commits vs $work_base"
       echo "EMPTY-NO-WORK 0/$total" > "$STATE/$name.status"
       echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"; return 0
+    fi
+    # EVIDENCE GUARD: the COMPLETE path wanted to promote a story that says nothing
+    # about how it was done. Ordered BEFORE the INCOMPLETE arm because those stories
+    # are still false and would otherwise be reported as "the budget ran out" — a
+    # different failure, and one an operator fixes by raising `iters` rather than by
+    # reading what was claimed. The message quotes the criteria for that reason: what
+    # matters is WHAT the story claimed, not that a count did not match.
+    if [ -n "$unevidenced" ]; then
+      local n_unev; n_unev="$(_int "$(printf '%s\n' "$unevidenced" | grep -c '✗' 2>/dev/null || true)")"
+      live_set "$live" phase=unverified
+      event_emit tasklist.unverified name="$name" state=failed \
+        detail="$n_unev stor$([ "$n_unev" = 1 ] && echo y || echo ies) reported COMPLETE with no evidence in notes"
+      echo "UNVERIFIED $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
+      echo "!! $name UNVERIFIED — the agent reported COMPLETE, but $n_unev stor$([ "$n_unev" = 1 ] && echo y was || echo ies were) left unmarked with an EMPTY notes:"
+      printf '%s\n' "$unevidenced"
+      echo "   Not merging. A story chief passes on the agent's behalf must record in 'notes' HOW it met these — branch $branch is kept in its worktree."
+      return 0
     fi
     if [ "$remaining" != "0" ]; then
       live_set "$live" phase=incomplete

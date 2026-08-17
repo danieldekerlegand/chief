@@ -273,15 +273,17 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 Offline, deterministic tests drive the real runtime with a scripted fake agent
 (no network, no real AI). CI (`.github/workflows/ci.yml`) runs shellcheck +
 `bash -n` + the suite on **Ubuntu and macOS** — macOS's default bash 3.2 is the
-compatibility floor. The four core tests:
+compatibility floor. The core tests:
 
 - `test/smoke.sh` — install → init → agent loop → verify → merge → retire.
 - `test/ratelimit.sh` — token/usage-limit pause+resume survives the parallel driver.
 - `test/monitor.sh` — the run registry + `chief ps` reflect a live run, then clean up.
 - `test/noworkguard.sh` — a false-complete (COMPLETE + zero commits) is caught as
   `EMPTY-NO-WORK`, never merged or retired.
+- `test/evidence-gate.sh` — a story chief force-passes with an empty `notes` is
+  caught as `UNVERIFIED`; honest and self-reported work still merges.
 
-Beyond the core four, `test/` holds focused tests for pause/resume, liveliness,
+Beyond the core set, `test/` holds focused tests for pause/resume, liveliness,
 reaping, providers, submodule handling, retry-on-failure, and more.
 
 ```sh
@@ -296,7 +298,7 @@ tree at once.
 
 ## Status
 
-**v0.8.27** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.28** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the
