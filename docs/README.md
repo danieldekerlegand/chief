@@ -42,3 +42,4 @@ The map. Structured per the ecosystem
 *immutable; superseded by a successor, never edited in place*
 
 - [Decision: chief stays CLI-only — the desktop GUI is chief-cloud's](decisions/desktop-gui-decision.md)
+- [Decision: chief builds the overlap-zone registry; it does not bind a conflict predictor](decisions/conflict-predictor-adoption-decision.md)
