@@ -1,0 +1,60 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/98-unverified-criteria-must-not-pass",
+  "description": "🔴 **A story is marked passing when the agent says COMPLETE and any commit exists — its acceptance criteria are never read. Five stories in ONE DAY (2026-08-16/17) reported green against criteria that were not met.**\n\n`driver.sh` is explicit about it:\n\n```bash\n# Trust an explicit COMPLETE from an agent that DID commit real work: mark any\n# stories it left stale-false as passed so the branch proceeds to the verify\n# gate (verify — not the pass-flags — is the real merge bar).\nif [ \"$agent_rc\" = \"0\" ] && [ -n \"$has_work\" ]; then\n  jq '.userStories |= map(.passes=true)'\nfi\n```\n\n`gen.sh` validates that `acceptanceCriteria` is a non-empty array of strings **at authoring time** and nothing reads it again.\n\n**The five, all with well-written, falsifiable criteria:**\n\n| story | criterion | what happened |\n|---|---|---|\n| `cuneiform:346`/US-3 | file `argos:82` to `completed/` | still active |\n| `cuneiform:347`/US-1 | an export declaring no extensions renders BYTE-IDENTICALLY | it did not render at all |\n| `cuneiform:347`/US-4 | unpark `argos:90`, answer the separability question | neither done |\n| `cuneiform:348`/US-2 | reach GREEN acceptance, baseline 77 failed | reached 25 failed |\n| `insimul:164` | — | restarted at 0/3 with work committed |\n\n**The cheapest available signal is already in the data: 9 of 10 passing stories across `346`/`347`/`348` have EMPTY `notes`.** A story that did its work has something to say about how; one that was force-passed has nothing.\n\n**Two structural causes, and they need different answers.** First, criteria naming a path OUTSIDE the worktree cannot be satisfied there — `346`/US-3 and `347`/US-4 both asked a cuneiform worktree to edit `argos/tasks/`, which `cuneiform:313`'s US-FOLD had already identified as a boundary. Second, criteria stating a MEASURABLE BAR (\"the baseline to beat is 77 failed\") were reported met without the measurement being taken.\n\n**Do not simply invert the force-pass.** The design reasoning — verify is the real merge bar — is sound, and an agent that genuinely finished should not be blocked by a stale flag. The goal is that a story cannot claim a *specific, checkable* thing and pass without it, not that chief becomes a second test runner.",
+  "dependsOn": [],
+  "touches": [
+    "engine",
+    "docs"
+  ],
+  "iters": 7,
+  "warmup": [
+    "sed -n '1793,1825p' engine/driver.sh",
+    "grep -n 'acceptanceCriteria' engine/gen.sh",
+    "python3 -c \"import json;d=json.load(open('../cuneiform/tasks/chief/completed/347-mcp-a2a-extension-seam.json'));[print(s['id'],repr(s.get('notes'))[:80]) for s in d['userStories']]\"",
+    "cat docs/reference/verify-hook.md"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A passing story must say how — empty evidence is not a pass",
+      "acceptanceCriteria": [
+        "A story force-passed by the COMPLETE path must carry evidence in `notes`; an empty `notes` on a story the agent did not itself mark passing FAILS the run rather than merging. 9 of 10 passing stories across the three tasklists reviewed had empty notes, so this alone would have caught all five cases.",
+        "The requirement is on stories chief force-passes, NOT on stories an agent explicitly marked passing with its own reasoning — the point is to stop silent promotion, not to add ceremony to work that reported itself honestly.",
+        "The failure message names the story and quotes the criterion, so an operator sees WHAT was claimed rather than that a count did not match."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "A criterion naming a path outside the worktree fails, loudly and early",
+      "acceptanceCriteria": [
+        "An acceptance criterion referencing a path outside the run's worktree — a sibling repo like `argos/tasks/…`, or `../<repo>/` — is detected and FAILS the story, because it cannot be satisfied from where the run executes. Both `346`/US-3 and `347`/US-4 were structurally unsatisfiable and passed.",
+        "It is detected at AUTHORING time too: `chief gen` and a tasklist lint warn when a criterion names a cross-repo path, so the problem is caught when it is cheap rather than after a merge.",
+        "The escape hatch is explicit, not implicit — a tasklist that genuinely coordinates across repos can declare that, and the declaration is visible in the record. Silently allowing it is what produced these five."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "Measurable bars are measured",
+      "acceptanceCriteria": [
+        "A criterion stating a checkable numeric or state bar — \"reaches GREEN\", \"the baseline to beat is 77 failed\", \"exit 0\" — requires the run to record the observed value beside the claim. `cuneiform:348` claimed a bar of 77-failures-to-green and delivered 25 failures while reporting 3/3.",
+        "Where chief cannot evaluate the bar, the story is marked `unverified` rather than `passes` — an honest third state, matching the rule the scoring metrics already use for claims that cannot be checked.",
+        "`docs/reference/verify-hook.md` records the division plainly: what chief enforces, what `.chief/verify.sh` enforces, and what remains a human's job. Chief's own comment says verify is the real merge bar; that is defensible, and it needs to be written where a tasklist author will read it."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-4",
+      "title": "Proven against the five that failed",
+      "acceptanceCriteria": [
+        "Replaying the recorded shape of each of the five cases produces a FAILURE rather than a pass — as fixtures, not by re-running the original tasklists.",
+        "A story that genuinely met its criteria still passes: a regression suite over recent GREEN tasklists (`344`, `349`, `pinakes:104`) shows no new false negatives. A gate that fails honest work would be abandoned inside a week, which is the failure mode every gate added here has had to avoid.",
+        "The added cost is stated in the PR. This runs on every story of every tasklist, and a slow check gets disabled."
+      ],
+      "notes": null
+    }
+  ]
+}
