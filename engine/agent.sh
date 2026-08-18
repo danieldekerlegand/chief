@@ -191,6 +191,20 @@ rm -f "$LIMIT_RETRY_FILE"
 #                   cheaper than correcting the code it would otherwise produce.
 RESEARCH_DOC="$STATE_DIR/research.md"
 RESEARCH_STORE="${CHIEF_RESEARCH_FILE:-}"
+# THE DURABLE PASS-STATE STORE — same split as RESEARCH_DOC/RESEARCH_STORE, and for
+# the same reason: $PRD_FILE lives in a worktree the driver rm -rf's at the top of
+# every run, so anything recorded ONLY there is lost the moment a run is killed.
+# $CHIEF_PRD_SNAPSHOT is the driver's absolute path under the project's state root
+# (.chief/state/snapshots/<name>.json), and it is the ONLY per-story record a
+# SUBMODULE tasklist has — its work branch is in the submodule while its tasklist is
+# in the parent, so no commit on either side says "2 of 3 done" (see prd_state_source
+# in driver.sh for the full argument and the alternatives that were rejected).
+#
+# Promote-only from here. The driver SEEDS $PRD_FILE itself before this process
+# starts, so reading the store back would be a second, competing seed path; writing
+# it at every iteration boundary is the entire fix. Unset (a standalone agent.sh run,
+# or an older driver) simply means no store, and nothing below changes.
+PRD_STORE="${CHIEF_PRD_SNAPSHOT:-}"
 # THE BOUNDARY DEMOTION NOTICE — what `_measure_boundary` (below) demoted, in the
 # words `engine/measure.sh` already prints at merge, held on disk so the NEXT turn's
 # prompt can carry it.
@@ -428,6 +442,28 @@ _story()  { jq -r '[.userStories[]? | select(.passes==false)][0].id // empty' "$
 # count each iteration; reading the ids alongside it is what lets the event stream
 # name WHICH story passed instead of just that one more did.
 _passed_ids() { jq -r '[.userStories[]? | select(.passes==true) | .id] | join(" ")' "$PRD_FILE" 2>/dev/null || echo ""; }
+
+# _prd_promote — bank the runtime pass-state to the DURABLE store ($PRD_STORE).
+#
+# Called at the ITERATION BOUNDARY, never mid-turn: the boundary is the one moment
+# the runtime prd.json is quiescent AND has already been held to the BAR rule
+# (_measure_boundary runs first, so a story demoted there is never banked as passed).
+# That timing is what makes the banked state equal to what the driver would have
+# written had the run ended cleanly at this point — the promotion is EARLIER, not
+# DIFFERENT, and the driver still writes the same file after the loop on every exit
+# path. The only case it changes is the one it exists for: a run that never reaches
+# that write because it was killed.
+#
+# Never fatal. Losing a run over a bookkeeping copy is not a trade worth making —
+# the branch's commits are the ground truth, exactly as before.
+_prd_promote() {
+  [ -n "$PRD_STORE" ] || return 0
+  [ -s "$PRD_FILE" ] || return 0
+  jq -e . "$PRD_FILE" >/dev/null 2>&1 || return 0   # never bank a half-written edit
+  mkdir -p "$(dirname "$PRD_STORE")" 2>/dev/null || true
+  cp "$PRD_FILE" "$PRD_STORE" 2>/dev/null || true
+  return 0
+}
 
 # --- PLAN PHASE (docs/plan-review.md) -----------------------------------------
 # OPT-IN, and off by default. A tasklist that sets "review":"plan" gets one extra
@@ -747,14 +783,29 @@ LIVE_BEAT_SECONDS="${LIVE_BEAT_SECONDS:-15}"
 # useless (it would flag exactly the runs that are working hardest). Bump it from a
 # forked child for the duration of the turn, and promote the phase to 'writing' the
 # moment a commit lands — the one file-level signal observable from out here.
+# The heartbeat also BANKS the pass-state mid-turn (_prd_promote above). The
+# boundary promotion covers everything between turns, but not the turn itself — and
+# the turn is where the story is actually finished, so a kill there would still lose
+# the very story just committed and resume one short. That off-by-one is not cosmetic:
+# it is exactly the case where an agent re-implements a story whose code is already
+# on the branch.
+#
+# Gated on HEAD HAVING MOVED since this turn started, and sticky once it has. Only a
+# commit proves the branch really carries the work a pass-flag claims; a flag flipped
+# by a turn that then died before committing is precisely the over-claim that would
+# make a resume SKIP a story with no code behind it. HEAD moving is the cheapest
+# honest proxy for "there is something to resume onto", and it is a value this loop
+# already computes. Sticky because the flip may follow the commit by a tick, and a
+# tick that sees no further HEAD movement must not un-bank it.
 _beat_start() {
   [ -n "$LIVE" ] || return 0
-  ( last="$(_head)"
+  ( last="$(_head)"; moved=""
     while :; do
       sleep "$LIVE_BEAT_SECONDS"
       now_h="$(_head)"
-      if [ "$now_h" != "$last" ]; then live_set "$LIVE" phase=writing; last="$now_h"
+      if [ "$now_h" != "$last" ]; then live_set "$LIVE" phase=writing; last="$now_h"; moved=1
       else live_set "$LIVE"; fi
+      [ -n "$moved" ] && _prd_promote
     done ) 2>/dev/null &
   BEAT_PID=$!
   return 0
@@ -1375,6 +1426,12 @@ while :; do
   # record built from them — are the ones that survived the check, and so a story
   # demoted here is genuinely missing progress rather than progress already banked.
   _measure_boundary "$i"
+
+  # BANK THE PASS-STATE (see _prd_promote above). Immediately after the BAR rule and
+  # before anything that can block for a long time — the boundary hook rebases behind
+  # a merge lock, and the stall/budget arms below can exit — so a kill anywhere past
+  # this point still resumes at the count this iteration reached.
+  _prd_promote
 
   # Progress check: did a story pass, or a new commit land?
   now_pass=$(_passes); now_head=$(_head)

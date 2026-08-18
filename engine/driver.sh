@@ -672,6 +672,36 @@ unverified_stop() {
 # (survives across resumes in-repo). A submodule branch carries no tasklist JSON, so
 # fall back to the last snapshot, then the pristine template. $name/$branch/$sub/
 # $work_repo/$TASKS_REL/$SNAP/$SRC are visible by dynamic scope.
+#
+# WHY THE SUBMODULE ARM IS THE ONE THAT NEEDED FIXING (tasklist 96). A project
+# tasklist records every story as it lands: the agent commits the tracked tasklist
+# with its pass-flag flipped, so the branch itself carries 2-of-3 and a run killed
+# mid-tasklist resumes at exactly that. A submodule branch cannot — the tasklist
+# lives in the PARENT and the work branch lives in the submodule, and the parent
+# gets ONE commit for the whole tasklist (the terminal `complete @sha — bump <sub>
+# + record + retire`). There is no per-story marker in between, so the snapshot IS
+# the record, and it used to be written only at the END of a worker. A run killed
+# mid-tasklist therefore resumed at 0-of-3 onto a branch already carrying the code
+# for two of them — wasting iterations at best, and at worst re-implementing a
+# story, which leaves TWO implementations of one story on one branch.
+#
+# THE MECHANISM CHOSEN, and its trade-off. The snapshot is promoted at every
+# ITERATION BOUNDARY instead of once at the end (agent.sh's $CHIEF_PRD_SNAPSHOT,
+# handed down below — the same "driver owns the durable path, agent promotes to it
+# the moment the artifact is valid" shape as $CHIEF_RESEARCH_FILE). It lives under
+# $STATE_ROOT, NOT in the worktree run_worker rm -rf's, so it survives both a
+# rebuilt worktree and a driver restart — which is the failure being fixed.
+#   · vs. a MARKER COMMIT on the submodule branch: that branch is merged verbatim
+#     into the submodule's own history, so per-story bookkeeping commits would be
+#     chief litter in a consumer's repo forever.
+#   · vs. a PARENT-SIDE BRANCH: the parent deliberately has no chief/* branches at
+#     all, and inventing one changes the terminal record's shape — the very thing
+#     downstream readers of completed/ depend on not moving.
+#   · the COST accepted: the snapshot is host state, not git. Deleting
+#     .chief/state/ still loses the per-story record (RESET=1's behaviour, on
+#     purpose), and the branch's commits remain the ground truth either way.
+# Nothing here changes a PROJECT tasklist: this arm is not reached for one, so its
+# resume still reads the committed tasklist and a fresher snapshot is inert.
 prd_state_source() {
   if [ -z "${sub:-}" ]; then
     git -C "${work_repo:-$REPO}" show "$branch:$TASKS_REL/$name.json" 2>/dev/null
@@ -2375,6 +2405,7 @@ run_worker() {
           CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" CHIEF_VERBOSE="${CHIEF_VERBOSE:-}" \
           CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" CHIEF_ACCOUNT_LABEL="$ACCOUNT_LABEL" \
           CHIEF_RESEARCH="${CHIEF_RESEARCH:-}" CHIEF_RESEARCH_FILE="$RESEARCH_DIR/$name.md" \
+          CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a
