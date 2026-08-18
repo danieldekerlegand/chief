@@ -387,6 +387,7 @@ AGENT_RC_PAUSED=3
 AGENT_RC_PLAN=4
 AGENT_RC_REVIEW=5
 AGENT_RC_RESEARCH=6
+AGENT_RC_UNVERIFIED=7
 # Driver-level usage-limit self-heal (see SCHEDULER STATES above). Deliberately a
 # separate family from agent.sh's RATE_LIMIT_* per-worker knobs: those govern how
 # long ONE agent loop sleeps mid-story, these govern how many times the SCHEDULER
@@ -2049,7 +2050,8 @@ run_worker() {
     # commits and calling that EMPTY-NO-WORK would fail a tasklist for doing as it was
     # told: an operator pause armed at an iteration boundary, a plan that would not
     # form, a plan nobody has approved, and a research phase that could not draw the
-    # map. All four keep branch AND worktree (we return before the merge phase, the
+    # map. ($AGENT_RC_UNVERIFIED, below them, sits above the same guards for the
+    # mirror-image reason — see its own note.) All four keep branch AND worktree (we return before the merge phase, the
     # only thing that removes one), so the RESUME path picks them up from their
     # committed passes state with nothing rebuilt.
     #
@@ -2086,6 +2088,17 @@ run_worker() {
     if [ "$agent_rc" = "$AGENT_RC_RESEARCH" ]; then
       worker_park research-failed "the research phase produced no valid document — branch + worktree kept" \
         "!! $name RESEARCH FAILED — nothing was implemented. Write or repair $RESEARCH_REL/$name.md by hand (it is reused as-is), or re-run with CHIEF_RESEARCH=0 to skip the phase"
+      return 0
+    fi
+    # UNVERIFIED IN-RUN — agent.sh stopped ITSELF at an iteration boundary, having
+    # demoted the same story MEASURE_DEMOTE_LIMIT times running (its _measure_boundary).
+    # Above the no-work guard for the mirror of the parks' reason: the stop can leave
+    # zero commits and can equally leave a branch full of them, and neither is
+    # EMPTY-NO-WORK. Why the report comes off disk rather than from `unmeasured` above:
+    # see unmeasured_stop's header in engine/measure.sh.
+    if [ "$agent_rc" = "$AGENT_RC_UNVERIFIED" ]; then
+      echo "!! $name stopped MID-RUN on the bar rule — the same story was demoted at consecutive iteration boundaries with no observed value ever recorded; the rest of the loop was not spent re-marking it"
+      unmeasured_stop "$(cat "$wtstate/.demoted.md" 2>/dev/null || echo '   ✗ (the boundary report was not kept)')"
       return 0
     fi
     # NO-WORK GUARD: an all-"pass" branch with zero diff vs base never did the work.
