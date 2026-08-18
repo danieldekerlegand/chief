@@ -128,6 +128,9 @@ jobs:
       - name: Merge policy layer (a review zone / oversized story holds a GREEN branch for one durable approval)
         run: bash test/overlap-zones.sh
 
+      - name: Merge queue (batch tip verified ONCE; red tip bisected; ratchet attributed; absent, the floor verifies N times)
+        run: bash test/merge-batch.sh
+
       - name: Roadmap -> tasklists generator (contract enforced, conventions correct)
         run: bash test/gen.sh
 

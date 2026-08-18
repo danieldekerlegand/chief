@@ -29,3 +29,20 @@ CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode | amp
 #                                # zone · off = do not measure at all
 # CHIEF_DIFF_BUDGET_LINES=400    # changed lines (added+deleted) per story; 0 disables
 # CHIEF_DIFF_BUDGET_FILES=20     # changed files per story;                 0 disables
+# --- the OPT-IN batch MERGE QUEUE (docs/explanation/drivers-and-safety.md) ----------
+# OFF by default, and off is the serialized floor: rebase -> re-verify -> --no-ff, one
+# tasklist at a time, which is chief's correctness guarantee. Set N > 1 to batch up to
+# N merge-ready branches, stack them on the base and verify the batch TIP ONCE instead
+# of paying the verify gate once per branch. Merges stay --no-ff, one commit per
+# tasklist, serialized against the base; only the VERIFICATION is amortized. Needs
+# `chief run -p N` with N > 1 to have anything to batch. `chief run --merge-batch[=N]`
+# sets it for one run and beats this file.
+# A RED batch tip names no culprit, so chief BISECTS it — binary-searching the stacked
+# prefixes, then confirming the branch it lands on by re-verifying that branch ALONE.
+# If the two observations disagree (a flaky gate, or a failure that is joint rather
+# than any one branch's) the bisect is abandoned and the whole batch takes the floor.
+# Bisect is only sound on a gate that is a deterministic function of the tree; set 0 if
+# yours is not.
+# CHIEF_MERGE_BATCH=1            # 1 = off (the floor) · N = max branches per batch
+# CHIEF_MERGE_BATCH_WAIT=120     # seconds a batch leader waits for peers; 0 = never wait
+# CHIEF_MERGE_BATCH_BISECT=2     # max branches ONE red batch may isolate; 0 = never bisect

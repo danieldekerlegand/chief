@@ -92,6 +92,17 @@ engine/
                      #   Runs ONCE per tasklist before the first story (opt-in: "research":true /
                      #   CHIEF_RESEARCH=1); the document is persisted, human-editable and reused, never
                      #   regenerated. agent.sh dispatches it; a failure is exit 6 -> RESEARCH-FAILED
+  mergequeue.sh      #   the OPT-IN batch merge queue: stack N merge-ready branches on the base and
+                     #   verify the batch TIP ONCE instead of paying the gate N times. OFF by default
+                     #   (`chief run --merge-batch[=N]` / CHIEF_MERGE_BATCH) — the serialized
+                     #   rebase -> re-verify -> --no-ff floor stays the correctness guarantee, and a
+                     #   batch of one IS that floor. A red tip names no culprit, so it is BISECTED
+                     #   (binary search over the stacked prefixes -> confirm the suspect ALONE on the
+                     #   base -> blame it VERIFY-FAILED, merge the proven-green prefix, re-form a
+                     #   batch from the survivors). A confirming run that DISAGREES with the bisect —
+                     #   flaky gate, or a joint failure — abandons it: every branch is restored to
+                     #   the sha its worker finished on and re-run serially. Bisect assumes the gate
+                     #   is a deterministic function of the tree; CHIEF_MERGE_BATCH_BISECT=0 opts out
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
