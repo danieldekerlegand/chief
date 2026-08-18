@@ -215,6 +215,13 @@ them back on the way out — including after a crash or a `kill -9`, which the n
 nothing else, and a replay that can't apply cleanly **drops nothing**: the stash
 entry stays and the run output names the `git stash apply <sha>` that recovers it.
 
+**Submodules are handled, not ignored.** Git leaves a submodule's working tree where
+it was when a ref moves, so a branch that bumps a **gitlink** makes the checkout read
+as modified — which used to refuse the merge of the very branch whose job was the
+bump. Chief now syncs the stale submodules (`git submodule update`) after each
+checkout in the merge path, and at startup. Uncommitted work *inside* a submodule is
+untouched and still blocks, since only you can commit or stash it.
+
 What `chief run` still checks at **startup** — a clean tree, on the base branch — is
 about the *agent*, not the merge: every worktree forks from the base branch's tip, so
 work you haven't committed is invisible to every tasklist in the run, and the agent
@@ -326,7 +333,7 @@ tree at once.
 
 ## Status
 
-**v0.8.52** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.53** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

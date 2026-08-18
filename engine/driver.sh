@@ -816,6 +816,111 @@ wt_busy() {
     exit 1 )
 }
 
+# ---------------------------------------------------------------------------
+# ` M <submodule>` IS NOT UNCOMMITTED WORK — it is a stale working tree
+# ---------------------------------------------------------------------------
+# `git status --porcelain -uno` answers "is this tree dirty", and in a repo with
+# submodules that one answer conflates two unrelated conditions. Git does NOT update a
+# submodule's working tree on checkout, so the instant a branch whose GITLINK differs
+# from the current one is checked out, status reports ` M <sub>`. Nothing is dirty
+# there: the tree is STALE, and no commit and no stash can clear it (`git stash` has
+# nothing in the superproject to save). If that branch's whole PURPOSE is to advance
+# the pin, the change it exists to make is the thing that blocks it — on every run,
+# forever. Measured in chief-cloud on 2026-08-17 (76-runner-0-8-alignment, a one-line
+# pin bump): clean on main, ` M chief` the moment the branch is checked out, clean
+# again after `git submodule update --init`. It read REBASE-REFUSED three consecutive
+# runs, blocked the tasklist behind it, and was hand-merged in the end.
+#
+# So: classify the dirt and make the tree HONEST, rather than loosening the check.
+# `--ignore-submodules=dirty` is the wrong tool and would not even work here — it hides
+# changes INSIDE a submodule's working tree (the case that MUST keep blocking) and it
+# does not hide a gitlink mismatch (the case that must not).
+#
+# dirt_classify REPO — one `<class> <path>` line per uncommitted TRACKED entry:
+#   gitlink   a submodule whose working tree sits at a different commit than the ref
+#             pins, carrying no work of its own — `git submodule update` is the only fix
+#   subdirty  a submodule with uncommitted work INSIDE it — a real block, and the
+#             superproject cannot commit or stash it either
+#   file      ordinary uncommitted tracked work in this repo
+# Empty output means the tree is clean. Untracked files are out of scope throughout
+# (they never block a checkout, a rebase or a merge).
+dirt_classify() {
+  local repo="$1" dirty subs line p
+  dirty="$(git -C "$repo" -c core.quotePath=false status --porcelain --untracked-files=no 2>/dev/null)"
+  [ -n "$dirty" ] || return 0
+  # The gitlink paths, in ONE git call and only when there could be any: a repo with a
+  # thousand modified files must not pay a `git ls-files` per file to be told what a
+  # repo with no `.gitmodules` cannot have.
+  subs=""
+  [ -f "$repo/.gitmodules" ] && subs="$(git -C "$repo" -c core.quotePath=false ls-files --stage 2>/dev/null \
+    | LC_ALL=C awk '$1=="160000"{i=index($0,"\t"); print substr($0,i+1)}')"
+  printf '%s\n' "$dirty" | while IFS= read -r line; do
+    p="${line#???}"          # XY + space
+    p="${p##* -> }"          # a rename names the destination
+    # Membership without a subprocess per path (bash 3.2 has no associative arrays):
+    # a path exotic enough that git still quotes it will not match, and falls to
+    # `file` — which blocks, the safe direction.
+    case "
+$subs
+" in
+      *"
+$p
+"*)
+        # `-e $repo/$p/.git` first: for a submodule that is not checked out at all, a
+        # `git -C` into it walks UP and reports the SUPERPROJECT's status — which is
+        # never empty here, so every uninitialized one would misread as dirty inside.
+        if [ -e "$repo/$p/.git" ] && [ -n "$(git -C "$repo/$p" status --porcelain --untracked-files=no 2>/dev/null)" ]
+        then echo "subdirty $p"; else echo "gitlink $p"; fi ;;
+      *) echo "file $p" ;;
+    esac
+  done
+}
+
+# dirt_paths CLASSIFIED CLASS — the paths of one class from a dirt_classify block, on
+# one line, at most three of them (a refusal cause is a sentence, not an inventory).
+dirt_paths() {
+  printf '%s\n' "$1" | LC_ALL=C awk -v c="$2" '$1==c{sub(/^[^ ]+ /,""); n++; if (n<=3) p=(p?p", ":"")$0}
+    END{ if (n>3) p=p", +"(n-3)" more"; if (n) print p }'
+}
+
+# submodules_sync REPO [LABEL] — make the submodule working trees honestly match the
+# gitlinks of whatever is checked out RIGHT NOW. A no-op (one `git status`) for the
+# overwhelmingly common case of a repo with no submodules, or none of them stale.
+#
+# SCOPED to the stale paths on purpose, rather than a bare `git submodule update --init
+# --recursive`. run_worker already declines to init a project worktree's submodules for
+# the same reason (a meta-repo's submodules are the sibling projects, and checking out
+# gigabytes nobody asked for is not chief's call) — the operator's own checkout deserves
+# at least that restraint. A submodule carrying work of its own is deliberately NOT
+# synced: `git submodule update` does not always refuse to check out over local changes
+# (it only refuses when the checkout would overwrite them), and chief must never be the
+# reason a human's edit moved. It stays `subdirty`, and it goes on blocking the merge.
+submodules_sync() {
+  local repo="$1" label="${2:-chief}" paths
+  paths="$(dirt_classify "$repo" | LC_ALL=C awk '$1=="gitlink"{sub(/^[^ ]+ /,"");print}')"
+  [ -n "$paths" ] || return 0
+  # shellcheck disable=SC2086  # one pathspec per line, deliberately split
+  if git -C "$repo" submodule update --init --recursive -- $paths >/dev/null 2>&1; then
+    echo ">> $label: synced submodule working tree(s) to the checked-out gitlink: $(printf '%s' "$paths" | tr '\n' ' ')"
+  else
+    echo "!! $label: could NOT sync submodule(s) to the checked-out gitlink: $(printf '%s' "$paths" | tr '\n' ' ')"
+    echo "!! $label: the repo will read as dirty and the merge will refuse — run \`git -C $repo submodule update --init --recursive\` by hand"
+  fi
+  return 0
+}
+
+# work_checkout REPO REF [LABEL] — the ONLY way the merge path checks the work repo out
+# onto anything. Checkout, then sync: git leaves submodule working trees behind on every
+# ref move, and the very next thing every caller does is ask whether the tree is clean.
+# Returns the checkout's own status (git's chatter is suppressed exactly as it was at
+# each call site; the sync's is not — a submodule that moved under the operator says so).
+work_checkout() {
+  local repo="$1" ref="$2" label="${3:-chief}" rc=0
+  git -C "$repo" checkout "$ref" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 0 ] && submodules_sync "$repo" "$label"
+  return "$rc"
+}
+
 # Why would `git rebase` REFUSE to even start? A non-zero rebase exit is NOT by
 # itself a content collision: git also declines outright when the tree carries
 # uncommitted tracked changes, when a previous rebase/merge/cherry-pick was left in
@@ -842,8 +947,18 @@ rebase_refusal_cause() {
       [ -e "$(git rev-parse --git-path "$d" 2>/dev/null)" ] || continue
       echo "a previous merge/cherry-pick/revert was left in progress ($d) — finish or abort it"; exit 0
     done
-    [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] \
-      && { echo "the work repo has uncommitted tracked changes — commit or stash them"; exit 0; }
+    # Uncommitted tracked work — but WHICH kind. A stale submodule gitlink is reported
+    # by `git status` in the same shape as an operator's half-finished edit, and "commit
+    # or stash them" is advice that cannot be followed for it (see dirt_classify). Name
+    # the classes separately, or the report sends a human after the wrong fix.
+    cls="$(dirt_classify .)"
+    [ -n "$cls" ] || exit 0
+    gl="$(dirt_paths "$cls" gitlink)"; sd="$(dirt_paths "$cls" subdirty)"; fl="$(dirt_paths "$cls" file)"
+    msg=""
+    [ -n "$gl" ] && msg="submodule working tree(s) at a different commit than the ref pins ($gl) — this is NOT uncommitted work and neither a commit nor a stash clears it: \`git submodule update --init --recursive\`"
+    [ -n "$sd" ] && msg="${msg:+$msg; also }uncommitted work INSIDE submodule(s) ($sd) — commit or stash it in the submodule itself"
+    [ -n "$fl" ] && msg="${msg:+$msg; also }uncommitted tracked changes ($fl) — commit or stash them"
+    echo "the work repo has $msg"
     exit 0 )
 }
 
@@ -902,11 +1017,16 @@ CHIEF_STASH_TAG="chief: parked operator work for the merge of"
 # bigger surprise than the problem it would solve. Stdout is the sha and only the sha;
 # the caller logs.
 merge_stash_push() {
-  local repo="$1" name="$2" sha
+  local repo="$1" name="$2" sha before
   [ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ] || return 0
+  # What refs/stash pointed at BEFORE, because a dirty tree does not guarantee a new
+  # entry: `git stash push` saves nothing for a submodule that is merely dirty INSIDE
+  # (there is no superproject change to record) and still exits 0. Reading refs/stash
+  # blind would then hand back the operator's OWN, older stash entry — and drop it.
+  before="$(git -C "$repo" rev-parse --verify --quiet refs/stash 2>/dev/null || echo)"
   git -C "$repo" stash push --quiet --message "$CHIEF_STASH_TAG ${name:-a tasklist}" >/dev/null 2>&1 || return 0
   sha="$(git -C "$repo" rev-parse --verify --quiet refs/stash 2>/dev/null || echo)"
-  [ -n "$sha" ] && printf '%s' "$sha"
+  [ -n "$sha" ] && [ "$sha" != "$before" ] && printf '%s' "$sha"
   return 0
 }
 
@@ -943,6 +1063,28 @@ merge_stash_pop() {
   echo "     git -C $repo stash list        # '$CHIEF_STASH_TAG ${name:-a tasklist}'"
   echo "     git -C $repo stash apply $sha"
   return 1
+}
+
+# merge_critical_enter REPO NAME BASE — everything that has to happen, in order, at the
+# top of a merge critical section, for the serialized floor and the batch queue alike.
+# Sets $MERGE_STASH (the parked sha, empty when there was nothing to park) rather than
+# echoing it: the sync and the park both have things to say to the operator's log, and a
+# command substitution would swallow them.
+#
+#   mark   — first, so a kill in the next microsecond still names the repo and the base
+#   sync   — HONEST TREE BEFORE PARKING: a submodule left stale by an earlier merge is
+#            not the operator's work and must not land in their stash, which would carry
+#            the gitlink off and still leave the tree reading dirty (see dirt_classify)
+#   park   — the operator's uncommitted work. A clean work repo is no longer a
+#            precondition of merging: it is a state the merge phase CREATES and undoes
+#   mark   — again, now with the sha, which is what lets teardown and the next run's
+#            preflight sweep give the work back when this section's own trap never ran
+merge_critical_enter() {
+  local repo="$1" name="$2" base="$3" label="${4:-$2}"
+  merge_critical_mark "$repo" "$name" "$base"
+  submodules_sync "$repo" "$label"
+  MERGE_STASH="$(merge_stash_push "$repo" "$name")"
+  merge_critical_mark "$repo" "$name" "$base" "$MERGE_STASH" "$label"
 }
 
 # merge_critical_mark REPO NAME BASE [STASH_SHA] [LABEL] — (re)write the marker that
@@ -1923,6 +2065,10 @@ if [ "$FORCE" != "1" ]; then
          exit "$(hl_rc "$HL_RC_CONFIG" 1)" ;;
     esac
   fi
+  # A submodule whose working tree an earlier merge left behind reads exactly like
+  # uncommitted work here, and neither a commit nor a stash nor FORCE=1-then-fix can
+  # clear it — so make the tree honest before judging it (dirt_classify above).
+  submodules_sync "$REPO" >&2
   if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
     echo "ERROR: uncommitted tracked changes on '$BASE_BRANCH' — commit or stash them (or FORCE=1)." >&2
     echo "       This guards what the AGENT forks from, not the merge: every worktree is created" >&2
@@ -1932,7 +2078,10 @@ if [ "$FORCE" != "1" ]; then
     echo "       critical section and gives them back, so editing this repo DURING a run is fine." >&2
     echo "       FORCE=1 is the right call when the uncommitted work is somewhere no tasklist" >&2
     echo "       in this run will look." >&2
-    git -C "$REPO" status --short | head; exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+    git -C "$REPO" status --short | head
+    dirt_classify "$REPO" | grep -q '^subdirty ' && \
+      echo "       A ' M <submodule>' line above is uncommitted work INSIDE that submodule — commit or stash it THERE; the superproject cannot." >&2
+    exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
 fi
 
@@ -2368,15 +2517,13 @@ run_worker() {
       # under `set -u` the trap must be able to read it even if the subshell dies
       # before the push assigns it.
       local mstash=""
-      trap 'git -C "$work_repo" checkout "$work_base" >/dev/null 2>&1 || true; merge_stash_pop "$work_repo" "$mstash" "$name" || echo "$work_repo|$mstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
-      merge_critical_mark "$work_repo" "$name" "$work_base"
-      # PARK the operator's uncommitted tracked work. A clean work repo is no longer a
-      # precondition of merging: it is a state the merge phase CREATES and undoes.
-      mstash="$(merge_stash_push "$work_repo" "$name")"
-      merge_critical_mark "$work_repo" "$name" "$work_base" "$mstash"
+      trap 'work_checkout "$work_repo" "$work_base" "$name" || true; merge_stash_pop "$work_repo" "$mstash" "$name" || echo "$work_repo|$mstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
+      merge_critical_enter "$work_repo" "$name" "$work_base"; mstash="$MERGE_STASH"
       # Free the branch from its worktree so the work repo can check it out.
       wt_git remove --force "$wt" 2>/dev/null || true
-      git -C "$work_repo" checkout "$branch" >/dev/null 2>&1 || { live_set "$live" phase=checkout-failed
+      # work_checkout, never a bare `git checkout` — a gitlink the ref moves and the
+      # working tree does not is not uncommitted work (see its header).
+      work_checkout "$work_repo" "$branch" "$name" || { live_set "$live" phase=checkout-failed
           event_emit tasklist.checkout-failed name="$name" state=failed detail="git checkout $branch failed in $work_repo"
           echo "CHECKOUT-FAILED" > "$STATE/$name.status"; exit 0; }
       # The fork point, read BEFORE the rebase rewrites the branch onto base — it is
@@ -2444,6 +2591,7 @@ run_worker() {
         echo "!! $name: git REFUSED to rebase $branch onto $work_base${sub:+ in $sub} — this is NOT a content conflict (no conflicted paths): $refusal"
         echo "!! $name: nothing was merged and $branch is untouched — the cause and the command that clears it: $rpt"; exit 0
       fi
+      submodules_sync "$work_repo" "$name"   # the replay may have moved a gitlink too
       # Re-verify the REBASED branch against the latest base, IN the work repo. On
       # failure, PERSIST the output to snapshots/<name>.verify-failed.log so the NEXT
       # run re-engages the agent (instead of skip-agent → re-verify → fail forever).
@@ -2471,7 +2619,7 @@ run_worker() {
         exit 0
       fi
       live_set "$live" phase=merging
-      git -C "$work_repo" checkout "$work_base" >/dev/null 2>&1
+      work_checkout "$work_repo" "$work_base" "$name"
       if git -C "$work_repo" merge --no-ff "$branch" -m "Merge $branch (chief, auto-verified)"; then
         sha="$(git -C "$work_repo" rev-parse --short HEAD)"
         # finalize writes the completed record + retires the tasklist in the PROJECT,

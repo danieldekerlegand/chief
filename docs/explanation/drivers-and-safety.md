@@ -161,7 +161,9 @@ Four more guards back this up:
 - **Refusal is not conflict (`REBASE-REFUSED`).** A non-zero `git rebase` is only a
   *content* collision when git leaves **≥1 unmerged path** behind. Git also refuses
   outright — a work repo with uncommitted tracked changes (no longer reachable here:
-  they are parked for the critical section, see below), a leftover
+  they are parked for the critical section, see below), a stale **submodule
+  gitlink** (also no longer reachable: the merge phase syncs the submodule working
+  trees to the ref it just checked out, see below), a leftover
   `rebase-merge`/`rebase-apply`/`MERGE_HEAD`/`CHERRY_PICK_HEAD` state, a repo it will
   not operate on (dubious ownership) — and those leave **zero** conflicted paths. The
   merge phase pre-flights those causes before rebasing and, on a failure, lets the
@@ -194,6 +196,20 @@ Four more guards back this up:
   run, for the SIGKILL where neither ran. A replay that cannot apply cleanly **drops
   nothing**: the entry stays and the run summary names the `git stash apply <sha>`
   that recovers it.
+
+- **` M <submodule>` is a stale working tree, not uncommitted work.** Git does not move
+  a submodule's working tree when a ref moves, so the moment a branch whose **gitlink**
+  differs is checked out, `git status` reports the submodule as modified — and no
+  commit and no stash can clear it (there is nothing in the superproject to save). A
+  branch whose whole purpose is to advance the pin was therefore blocked by the change
+  it exists to make, on every run, forever. So chief **classifies** the dirt instead of
+  loosening the check: every checkout of the work repo in the merge path is followed by
+  a `git submodule update --init --recursive`, scoped to the submodules that are
+  actually stale, and the startup gate does the same before judging the tree. The
+  suppression flag `--ignore-submodules=dirty` is deliberately *not* used — it hides
+  work **inside** a submodule (which must keep blocking) and does not hide a gitlink
+  mismatch (which must not). A submodule carrying uncommitted work of its own is never
+  synced and still refuses the merge, naming itself and the fix.
 
 - **The startup gate protects the AGENT, not the merge.** `chief run` still refuses to
   start on a dirty tree, or off the base branch, and `FORCE=1` still skips that. What

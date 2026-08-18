@@ -75,9 +75,13 @@ command -v git >/dev/null || fail "git is required"
 # Lifted from the engine itself, so the assertions cannot drift from the shipped
 # function. It is self-contained (a subshell `cd` + git), which is what makes this
 # possible at all.
-eval "$(awk '/^rebase_refusal_cause\(\) \{/,/^}/' "$ROOT/engine/driver.sh")"
-[ "$(type -t rebase_refusal_cause)" = function ] \
-  || fail "could not lift rebase_refusal_cause() out of engine/driver.sh — did it get renamed?"
+# Its two helpers come with it: the cause now CLASSIFIES the dirt (a stale submodule
+# gitlink is not uncommitted work and takes different advice — see dirt_classify).
+eval "$(LC_ALL=C awk '/^(dirt_classify|dirt_paths|rebase_refusal_cause)\(\) \{/,/^}/' "$ROOT/engine/driver.sh")"
+for _f in dirt_classify dirt_paths rebase_refusal_cause; do
+  [ "$(type -t "$_f")" = function ] \
+    || fail "could not lift $_f() out of engine/driver.sh — did it get renamed?"
+done
 
 U="$WORK/unit"; mkdir -p "$U"; ( cd "$U"
   git init -q -b main 2>/dev/null || { git init -q && git checkout -q -b main; }
