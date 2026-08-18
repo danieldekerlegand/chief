@@ -95,6 +95,9 @@ jobs:
       - name: Evidence gate (a force-passed story with empty notes must not merge)
         run: bash test/evidence-gate.sh
 
+      - name: Bar rule at the iteration boundary (an unmeasured story is demoted before the next turn)
+        run: bash test/boundary-demotion.sh
+
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 

@@ -4,7 +4,12 @@
   "branchName": "chief/100-evidence-checked-at-the-iteration-boundary",
   "description": "🔴 **The evidence rule is enforced at the one moment the agent can no longer act on it.** `measure_gate` runs at `driver.sh:2011` — commented \"EVERY path to a merge\" — and nowhere else. So an agent marks a story `passes: true` with empty `notes`, keeps going, finishes every story, and only when the run reaches MERGE is anything said. By then the agent is gone, the run is over, and a human has to open the branch, re-run the gate and type the number in.\n\n**Measured 2026-08-17: this happened FOUR times in one day, across THREE repos.** cuneiform `352` (4 stories, all `passes: true`, all `notes` empty — US-3 flagged), chief-cloud `143` (2 stories, both empty), chief-cloud `80` (3 stories, all empty), insimul `261` (notes present but holding design reasoning, not a measurement — the guard's own words: \"no observed value in it\"). Every one had to be rescued by hand. Not one was a defect in the WORK: `143` was 936 insertions and 443 tests passing, `352` was a clean catalog fold, `80` merged untouched once its numbers were recorded.\n\n**The instruction is not the problem and must not be 'fixed' again.** `engine/instructions.md:39` is step 8 — *\"Record what you OBSERVED in that story's `notes` field, in the same edit\"* — with two worked examples and an explicit warning that chief will demote the story. `_compose_prompt` puts it in the prompt on EVERY turn (`agent.sh:245,248`). All four runs above started after that shipped (instruction 17:42, installed 17:52; runs 17:57, 18:39, 18:42). Agents receive it every turn and do not comply. Telling them harder is the fix that has already been tried.\n\n**What has not been tried is telling them AT THE RIGHT TIME.** `measure.sh:38` says the check \"only ever demotes, which makes it safe to run everywhere and useless if it does not\" — the author already established it is safe anywhere. And `CHIEF_ITER_HOOK` (`agent.sh:1181`) is an existing seam that runs between iterations, already used for base re-integration. The pieces are on the shelf; nothing wired them together.\n\nDemote at the boundary and the agent finds US-1 back at `passes: false` on its next turn, WHILE it still has the command output in context and can paste the number in one edit. Demote at merge and it costs a whole run plus an operator.",
   "dependsOn": [],
-  "touches": ["engine/driver.sh", "engine/agent.sh", "engine/measure.sh", "test/"],
+  "touches": [
+    "engine/driver.sh",
+    "engine/agent.sh",
+    "engine/measure.sh",
+    "test/"
+  ],
   "iters": 8,
   "warmup": [
     "grep -n 'measure_gate' engine/driver.sh",
@@ -21,7 +26,8 @@
         "The merge-time check at `driver.sh:2011` STAYS. It is the floor and the boundary check is not a replacement for it; a run whose last iteration marks a story is still caught.",
         "A behavioural test in `test/` drives an agent that marks a story with empty `notes`, and asserts the story reads `passes: false` at the START of the next iteration — not merely that the run eventually fails."
       ],
-      "notes": ""
+      "notes": "test/boundary-demotion.sh: PASS (new); the negative control — the same test against the pre-change engine — FAILS with \"turn 2 inherited US-1 as true\", so it discriminates. Suite run: measured-bars, evidence-gate, five-cases, smoke, noworkguard, version-bump, doc-sync, plan-review, research, pause, ratelimit, events = 12 passed, 0 failed. bash -n clean on bin/chief + engine/*.sh + test/*.sh; quality ratchet OK (no tracked metric regressed); doc-links 4 dead vs 4 on main (no regression).",
+      "passes": true
     },
     {
       "id": "US-2",
@@ -31,7 +37,8 @@
         "The message names the story id and the bar. Do not make it generic advice; the agent already receives generic advice every turn in `instructions.md` step 8 and it demonstrably does not land.",
         "A test asserts the demotion reason reaches the prompt file the provider is invoked with, not just the log."
       ],
-      "notes": ""
+      "notes": "",
+      "passes": false
     },
     {
       "id": "US-3",
@@ -41,7 +48,8 @@
         "A story demoted twice in a row for the same reason does NOT loop indefinitely — it is either escalated or the run stops with the demotion named. An agent that cannot produce a number for a bar will otherwise burn its whole budget rediscovering that.",
         "A test drives the re-mark path and asserts both: the good case advances, and the pathological case terminates rather than spinning."
       ],
-      "notes": ""
+      "notes": "",
+      "passes": false
     }
   ]
 }

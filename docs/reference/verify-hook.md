@@ -86,12 +86,20 @@ contract — a slow check gets switched off, and a switched-off gate checks noth
 | | Cost | When |
 | --- | --- | --- |
 | Scope gate (`criteria_scope_report`) | ~31 ms per tasklist (one `jq` pass + one `ls`) | Once per run, **before** the first agent turn |
-| Bar gate (`measure_gate`) | ~24 ms per tasklist (one `jq` report + one `jq` rewrite) | Once per run, on the COMPLETE path |
+| Bar gate (`measure_gate`) | ~24 ms per tasklist (one `jq` report + one `jq` rewrite) | At every **iteration boundary** (never inside a turn), and again on every path to a merge |
 | Evidence gate (`evidence_gate`) | one `jq` pass, same order | Once per run, only where an agent ran |
 
 Measured over this repo's largest tasklist (12 KB, 4 stories, 13 criteria), 5 passes
-each. **Nothing runs inside the agent loop** — the whole engine layer is ~55 ms per
-tasklist per run, against runs measured in minutes.
+each. **Nothing runs inside a turn** — the whole engine layer is ~55 ms per tasklist
+per run, plus one bar-gate pass per iteration, against runs measured in minutes.
+
+The bar gate runs twice over for a reason. At the **merge** it is the floor: it catches
+everything, including a story the last turn marked — and it catches it at the one
+moment nothing can be done about it, because the agent is gone. At the **iteration
+boundary** it is the same predicate said early: the story is back at `passes:false`
+before the next turn begins, while the agent still has the command output in its
+context and can record the value in one edit. It only ever *demotes*, which is what
+makes running it in both places safe.
 
 `test/five-cases.sh` is the proving run. It replays, as fixtures, the recorded shape
 of the five stories that reported green against criteria they had not met

@@ -460,6 +460,17 @@ if [ -f "$_AGENT_DIR/events.sh" ]; then
 else
   event_emit() { return 0; }
 fi
+# The BAR RULE (engine/measure.sh), sourced on the same terms as the two above — a
+# missing file degrades to a no-op rather than taking the loop down with it. It is the
+# SAME function engine/driver.sh runs at the merge phase; sourcing it here is what
+# makes the boundary check and the merge floor one rule with two moments, instead of
+# two implementations that can drift.
+if [ -f "$_AGENT_DIR/measure.sh" ]; then
+  # shellcheck source=engine/measure.sh
+  . "$_AGENT_DIR/measure.sh"
+else
+  measure_gate() { return 0; }
+fi
 # The HUMAN-APPROVAL half of the plan checkpoint (engine/review.sh), on the same
 # terms again — with one difference that matters: its absent-file fallback is not a
 # no-op. A plan-review tasklist running on an install that has no review.sh has no
@@ -486,6 +497,41 @@ _emit_story_events() {
       detail="iteration ${1:-?} — $(_passes)/$(_total) passing"
   done
   PASSED_IDS="$now"
+  return 0
+}
+# _measure_boundary ITER — hold the turn that just returned to the BAR rule HERE, at
+# the iteration boundary, where the agent can still act on it.
+#
+# WHY HERE AND NOT ONLY AT THE MERGE. engine/measure.sh is the same predicate the
+# driver runs on every path to a merge, and that placement is the FLOOR: it catches
+# everything, and it catches it at the one moment nothing can be done about it — the
+# agent is gone, the run is over, and a human has to open the branch, re-run whatever
+# produced the number and type it in. Measured 2026-08-17: four runs across three
+# repos, and not one of them was a defect in the WORK; every one was missing only the
+# value that proves it. Run the same predicate BETWEEN iterations and the offending
+# story is back at `passes:false` on the very next turn, while the agent still has the
+# command output in its context and can paste the number in with one edit.
+#
+# Safe to run here for the reason measure.sh's own header gives: it ONLY EVER DEMOTES.
+# It cannot pass a story that would not otherwise pass, so on an honest run — one that
+# wrote down the number it took — it costs a jq pass and changes nothing.
+#
+# NOT REACHED ON THE COMPLETE TURN: the loop exits above this point, so a story marked
+# by the last turn is still the merge floor's business, exactly as before. This is the
+# EARLIER of two moments for one rule, never a replacement for the later one.
+_measure_boundary() {
+  local report
+  command -v measure_gate >/dev/null 2>&1 || return 0
+  report="$(measure_gate "$PRD_FILE" 2>/dev/null || true)"
+  [ -n "$report" ] || return 0
+  echo ""
+  echo "!! Iteration ${1:-?}: demoted back to passes:false — a story claims a measurable bar and recorded no observed value:"
+  printf '%s\n' "$report"
+  echo "   Chief cannot evaluate the bar, so it will not record it as met. Put the value you OBSERVED in that story's 'notes', then mark it again."
+  # It is not a passing story any more, so the event stream's set difference must stop
+  # remembering it as one — otherwise the re-mark that lands it properly, with its
+  # number, would emit no `story.passed` at all.
+  PASSED_IDS=" $(_passed_ids) "
   return 0
 }
 # --- USAGE / COST OBSERVATION (the event stream's `usage` block) ---------------
@@ -1159,6 +1205,12 @@ while :; do
       state=failed detail="the plan turn wrote no well-formed artifact at $TURN_PLAN"
     exit 4
   fi
+
+  # THE EVIDENCE RULE, AT THE BOUNDARY (_measure_boundary above). Runs BEFORE the
+  # progress accounting so the numbers this iteration reports — and the liveliness
+  # record built from them — are the ones that survived the check, and so a story
+  # demoted here is genuinely missing progress rather than progress already banked.
+  _measure_boundary "$i"
 
   # Progress check: did a story pass, or a new commit land?
   now_pass=$(_passes); now_head=$(_head)
