@@ -887,13 +887,9 @@ mq_worker_merge() {
         # dirty at merge time, nor a new way for that work to go missing.
         local qstash=""
         trap 'git -C "$repo" checkout "$base" >/dev/null 2>&1 || true; merge_stash_pop "$repo" "$qstash" "$name" || echo "$repo|$qstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
-        { echo "name=$name"; echo "repo=$repo"; echo "base=$base"; } > "$STATE/$name.critical" 2>/dev/null || true
+        merge_critical_mark "$repo" "$name" "$base"
         qstash="$(merge_stash_push "$repo" "$name")"
-        if [ -n "$qstash" ]; then
-          { echo "name=$name"; echo "repo=$repo"; echo "base=$base"; echo "stash=$qstash"; } > "$STATE/$name.critical" 2>/dev/null || true
-          rm -f "$STATE/$name.stash" 2>/dev/null || true
-          echo ">> batch: the work repo had uncommitted tracked changes — PARKED in the stash @$(printf '%s' "$qstash" | cut -c1-7) for this batch, and restored on the way out"
-        fi
+        merge_critical_mark "$repo" "$name" "$base" "$qstash" batch
         mq_lead "$name" "$repo" "$base"
       )
       rmdir "$MERGE_LOCK" 2>/dev/null || true

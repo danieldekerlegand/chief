@@ -123,7 +123,8 @@
 #   AUTO_MERGE_MAIN=1     verify+merge each completed branch (default 1)
 #   NO_VERIFY=0           skip the pre-merge verification gate (not advised)
 #   STRICT_VERIFY=0       fail on any verify failure incl. ones pre-existing on main
-#   DRY_RUN=0             print the schedule and exit without git/agents. NEW.
+#   DRY_RUN=0             print the schedule and exit without git/agents. Honoured when set
+#                         in the environment of `chief run` too, not only via -n/--dry-run.
 #   POLL_SECONDS=5        how often the scheduler checks for finished workers. NEW.
 #   FORCE=0               skip the STARTUP precondition (on-base + clean tree). That gate
 #                         protects the AGENT's fork point, not the merge — the merge phase
@@ -263,7 +264,13 @@ MERGE_BATCH_WAIT="${CHIEF_MERGE_BATCH_WAIT:-${MERGE_BATCH_WAIT:-120}}"
 # flaky, since bisect is only sound on a deterministic one.
 MERGE_BATCH_BISECT="${CHIEF_MERGE_BATCH_BISECT:-${MERGE_BATCH_BISECT:-2}}"
 STRICT_VERIFY="${STRICT_VERIFY:-0}"
-DRY_RUN="${DRY_RUN:-0}"
+# DRY_RUN — accepted from the environment as well as from `chief run -n` (the CLI
+# forwards the flag and otherwise leaves an inherited value ALONE). Normalized to
+# 1/0 here, on the CHIEF_HEADLESS precedent below: the single test downstream is
+# `= "1"`, so an unrecognized truthy spelling (DRY_RUN=true) would silently mean
+# "not a dry run" — and this is the one toggle whose failure mode is launching real
+# agents at a repo when someone asked for a simulation.
+case "${DRY_RUN:-0}" in 1|true|yes|on) DRY_RUN=1 ;; *) DRY_RUN=0 ;; esac
 POLL_SECONDS="${POLL_SECONDS:-5}"
 FORCE="${FORCE:-0}"
 # HEADLESS — programmatic invocation (docs/guides/headless-invocation.md). Set by
@@ -936,6 +943,26 @@ merge_stash_pop() {
   echo "     git -C $repo stash list        # '$CHIEF_STASH_TAG ${name:-a tasklist}'"
   echo "     git -C $repo stash apply $sha"
   return 1
+}
+
+# merge_critical_mark REPO NAME BASE [STASH_SHA] [LABEL] — (re)write the marker that
+# says "this repo is mid-merge", and announce a park. Called TWICE around
+# merge_stash_push: once before it (so a kill in that window still names the repo and
+# the base to restore) and once after with the sha, which is what lets teardown — and
+# the next run's preflight sweep — give the operator's work back when neither the
+# subshell's trap nor the signal handler ever ran.
+#
+# It lives here rather than inline because the serialized merge phase and the batch
+# merge queue enter that section identically: a batch must not invent a second way for
+# the work repo to be dirty, or a second set of files to restore it from.
+merge_critical_mark() {
+  local repo="$1" name="$2" base="$3" sha="${4:-}" label="${5:-$2}"
+  { echo "name=$name"; echo "repo=$repo"; echo "base=$base"
+    [ -n "$sha" ] && echo "stash=$sha"
+  } > "$STATE/$name.critical" 2>/dev/null || true
+  [ -n "$sha" ] || return 0
+  rm -f "$STATE/$name.stash" 2>/dev/null || true      # a prior run's unreplayable entry
+  echo ">> $label: the work repo had uncommitted tracked changes — PARKED in the stash @$(printf '%s' "$sha" | cut -c1-7) for the merge, and restored on the way out (they are not lost if this run dies: git stash list)"
 }
 
 # ITERATION-BOUNDARY integration — the throttled wrapper around integrate_base().
@@ -2342,18 +2369,11 @@ run_worker() {
       # before the push assigns it.
       local mstash=""
       trap 'git -C "$work_repo" checkout "$work_base" >/dev/null 2>&1 || true; merge_stash_pop "$work_repo" "$mstash" "$name" || echo "$work_repo|$mstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
-      { echo "name=$name"; echo "repo=$work_repo"; echo "base=$work_base"; } > "$STATE/$name.critical" 2>/dev/null || true
+      merge_critical_mark "$work_repo" "$name" "$work_base"
       # PARK the operator's uncommitted tracked work. A clean work repo is no longer a
-      # precondition of merging: it is a state the merge phase CREATES, for the length
-      # of the critical section, and undoes on the way out. The sha goes into the
-      # marker so teardown (and the next run's preflight) can restore it if this
-      # subshell is killed before its trap runs.
+      # precondition of merging: it is a state the merge phase CREATES and undoes.
       mstash="$(merge_stash_push "$work_repo" "$name")"
-      if [ -n "$mstash" ]; then
-        { echo "name=$name"; echo "repo=$work_repo"; echo "base=$work_base"; echo "stash=$mstash"; } > "$STATE/$name.critical" 2>/dev/null || true
-        rm -f "$STATE/$name.stash" 2>/dev/null || true
-        echo ">> $name: the work repo had uncommitted tracked changes — PARKED in the stash @$(printf '%s' "$mstash" | cut -c1-7) for the merge, and restored on the way out (they are not lost if this run dies: git stash list)"
-      fi
+      merge_critical_mark "$work_repo" "$name" "$work_base" "$mstash"
       # Free the branch from its worktree so the work repo can check it out.
       wt_git remove --force "$wt" 2>/dev/null || true
       git -C "$work_repo" checkout "$branch" >/dev/null 2>&1 || { live_set "$live" phase=checkout-failed

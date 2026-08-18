@@ -22,16 +22,17 @@ wins when both are present.
 
 There is **no second command and no separate code path** — `--headless` is a flag on
 the run you already know, and every flag and environment variable a normal run
-accepts works unchanged next to it:
+accepts works unchanged next to it (the provider/model row names where each input is
+read from — see the note in it):
 
 | in | via |
 |---|---|
-| concurrency | `-p N` / `--parallel N` |
+| concurrency | `-p N` / `--parallel N`, or `PARALLEL=N` in the environment (the flag wins) |
 | don't merge into the base | `--no-merge` (or `AUTO_MERGE_MAIN=0`) |
-| provider / model | `--provider`, `--model`, or `CHIEF_PROVIDER` / `CHIEF_MODEL` |
+| provider / model | `--provider`, `--model` — or `CHIEF_PROVIDER` / `CHIEF_MODEL` **in `.chief/config`**, which is sourced over the ambient environment (chief exports both names to every child it spawns, so an inherited one is not read as a request) |
 | which repo | `CHIEF_PROJECT` (or cwd inside the project) |
 | which tasklists | trailing `names…` (default: everything runnable) |
-| schedule only, run nothing | `-n` / `--dry-run` |
+| schedule only, run nothing | `-n` / `--dry-run`, or `DRY_RUN=1` in the environment (the flag wins; an unset flag never overrides it with a real run) |
 
 ## What "headless" guarantees
 
