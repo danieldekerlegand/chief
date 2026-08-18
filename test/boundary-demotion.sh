@@ -19,6 +19,18 @@
 #            The merge-time gate (engine/driver.sh) must still catch it -> UNVERIFIED.
 #            That is the floor: the boundary check is an earlier moment for one rule,
 #            never a replacement for it.
+#   bd-remark THE GOOD CASE, isolated. Turn 1 marks with no value (and commits); turn 2
+#            records the value and touches NOTHING ELSE — no commit, no file — so the
+#            ONLY thing that can make iteration 2 read as progress is the pass count
+#            rising above what the demotion left behind. If the boundary re-baselined
+#            before demoting instead of after, the honest repair would land as a STALL
+#            and the agent would be punished for doing exactly what it was asked.
+#   bd-spin  THE PATHOLOGICAL CASE. Marks US-1 with no value on EVERY turn and never
+#            completes — and commits each time, so HEAD moves and the stall counter
+#            reads progress forever. This is the loop the boundary check would create
+#            if nothing bounded it: on the pre-change engine it runs to HARD_MAX (20)
+#            turns. Two consecutive demotions for the same story must end the run with
+#            the demotion named -> UNVERIFIED, in exactly 2 turns.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,10 +67,13 @@ cp "$P" "$W/prompt-$name-$turn"                  # kept outside the worktree, li
 # WHAT THIS TURN INHERITS, read before anything is touched: the pass-flag the previous
 # turn left behind, as the runtime PRD reports it at the top of THIS turn.
 jq -r '[.userStories[]|select(.id=="US-1")|.passes][0]' "$PRD" > "$W/seen-$name-$turn"
-mark() {  # mark US-1 passing with the notes given
+mark_only() {  # mark US-1 passing with the notes given, in the RUNTIME PRD and nowhere else
   local t; t="$(mktemp)"
   jq --arg n "$1" '.userStories |= map(if .id=="US-1" then .passes=true | .notes=$n else . end)' \
     "$PRD" > "$t" && mv "$t" "$PRD"
+}
+mark() {  # …and do a real turn's worth of work around it: tracked tasklist + a commit
+  mark_only "$1"
   cp "$PRD" "tasks/chief/$name.json"
   mkdir -p out; printf 'impl %s turn %s\n' "$name" "$turn" > "out/$name.txt"
   git add -A >/dev/null 2>&1 || true
@@ -66,6 +81,25 @@ mark() {  # mark US-1 passing with the notes given
 }
 if [ "$name" = "bd-last" ]; then
   mark "Reworked the exporter seam."            # no observed value, and completes at once
+  echo "<promise>COMPLETE</promise>"; exit 0
+fi
+if [ "$name" = "bd-spin" ]; then
+  # Never records a value, never completes, commits every turn: the loop that HEAD-based
+  # progress accounting cannot see. Only the repeat bound can stop this.
+  mark "Reworked the exporter seam."
+  echo "story marked; not done yet"; exit 0
+fi
+if [ "$name" = "bd-remark" ]; then
+  if [ "$turn" = 1 ]; then
+    mark "Reworked the exporter seam."          # no observed value -> demoted at the boundary
+    echo "story marked; not done yet"; exit 0
+  fi
+  if [ "$turn" = 2 ]; then
+    # THE REPAIR, AND NOTHING ELSE. No commit and no tracked file: if iteration 2 reads
+    # as progress it can only be because the pass count rose past the demotion.
+    mark_only "Re-ran the suite: 0 failed, down from the 77 baseline."
+    echo "value recorded; not done yet"; exit 0
+  fi
   echo "<promise>COMPLETE</promise>"; exit 0
 fi
 if [ "$turn" = 1 ]; then
@@ -89,7 +123,7 @@ stories='[
     {"id":"US-1","title":"reach GREEN acceptance","description":"",
      "acceptanceCriteria":["the suite reaches GREEN acceptance; the baseline to beat is 77 failed"],"passes":false,"notes":""}
   ]'
-for n in bd-fix bd-last; do
+for n in bd-fix bd-last bd-remark bd-spin; do
   jq -n --arg n "$n" --argjson s "$stories" \
     '{project:"bd",branchName:("chief/"+$n),description:"the bar rule at the boundary",iters:4,
       dependsOn:[],touches:[$n],warmup:[],userStories:$s}' > "tasks/chief/$n.json"
@@ -159,4 +193,39 @@ case "$(status bd-last)" in UNVERIFIED*) ;; *) fail "the merge-time gate no long
 [ "$(jq -r '.userStories[]|select(.id=="US-1")|.unverified' "$REPO/.chief/state/snapshots/bd-last.json")" = "true" ] \
   || fail "the last-turn marking was not marked unverified"
 
-echo "BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, the next turn's PROMPT names it and quotes its bar, and the merge floor still catches a last-turn marking"
+# ── 6. THE GOOD CASE: the repair the demotion asked for counts as PROGRESS ────
+# bd-remark's turn 2 records the value and does nothing else — no commit, no file. So
+# "iteration 2 made progress" can only be true if the boundary re-baselined the pass
+# count AFTER demoting, leaving the honest re-mark to raise it. Get that order wrong and
+# an agent that does exactly what it was told is charged a stall for it.
+LOGR="$REPO/.chief/state/parallel/bd-remark.log"
+[ -f "$LOGR" ] || fail "no worker log at $LOGR"
+[ "$(cat "$WORK/seen-bd-remark-2" 2>/dev/null || echo MISSING)" = 'false' ] \
+  || fail "bd-remark's turn 2 did not start from the demotion — the fixture is not exercising the re-mark path"
+! grep -q 'Iteration 2: no progress' "$LOGR" \
+  || fail "the evidenced re-mark was counted as a STALL — the demotion must re-baseline the pass count it left behind"
+grep -q 'Iteration 2: progress' "$LOGR" \
+  || fail "the evidenced re-mark was not counted as progress"
+[ -f "$WORK/seen-bd-remark-3" ] || fail "bd-remark never reached a third turn — the run did not advance past the re-mark"
+case "$(status bd-remark)" in MERGED*) ;; *) fail "the re-marked branch did not merge, got: '$(status bd-remark)'" ;; esac
+
+# ── 7. THE PATHOLOGICAL CASE: it terminates, naming the demotion, instead of spinning ──
+# bd-spin re-marks US-1 with no value on every turn AND commits every turn, so HEAD keeps
+# moving and the stall counter never fires. Unbounded, this is the loop the boundary check
+# itself creates: on the pre-change engine it runs to HARD_MAX (20 turns for iters:4).
+LOGS="$REPO/.chief/state/parallel/bd-spin.log"
+[ -f "$LOGS" ] || fail "no worker log at $LOGS"
+spun="$(cat "$WORK/turns-bd-spin" 2>/dev/null || echo 0)"
+[ "$spun" = "2" ] \
+  || fail "bd-spin spent $spun turns re-marking one story — two consecutive demotions for the same story must end the run (expected 2)"
+case "$(status bd-spin)" in UNVERIFIED*) ;; *) fail "the spinning branch did not stop as UNVERIFIED, got: '$(status bd-spin)'" ;; esac
+grep -q 'consecutive iteration boundaries' "$LOGS" || fail "the stop never says WHY it stopped"
+grep -q '✗ US-1 — reach GREEN acceptance' "$LOGS" || fail "the stop does not name the story and bar it stopped on"
+grep -q 'stopped MID-RUN on the bar rule' "$LOGS" || fail "the driver does not report the in-run stop"
+[ ! -f out/bd-spin.txt ]                    || fail "the spinning branch was merged to main"
+[ ! -f tasks/chief/completed/bd-spin.json ] || fail "the spinning tasklist was retired"
+# …and it is a STOP, not a fall-through: nothing may have been left marked as passing.
+[ "$(jq -r '[.userStories[]|select(.passes==true)]|length' "$REPO/.chief/state/snapshots/bd-spin.json")" = "0" ] \
+  || fail "the story chief stopped on is still marked passing"
+
+echo "BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, the next turn's PROMPT names it and quotes its bar, an evidenced re-mark counts as progress, a story demoted twice running ends the run instead of spinning, and the merge floor still catches a last-turn marking"

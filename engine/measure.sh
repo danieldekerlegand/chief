@@ -117,6 +117,13 @@ measure_gate() {
 # unevidenced story needs a note saying how, an unmeasured one needs the number.
 # $1 = the report. $name/$branch/$live/$total/$remaining/$STATE are run_worker's, by
 # dynamic scope — the same convention unverified_stop and criteria_scope_stop use.
+#
+# TWO CALLERS, ONE VERDICT. The merge floor passes measure_gate's own return value. The
+# IN-RUN stop ($AGENT_RC_UNVERIFIED — agent.sh gave up re-telling one story to record
+# its value) passes the report the ITERATION BOUNDARY banked to disk, because by then
+# measure_gate returns nothing to pass: the boundary has already put the story back to
+# passes:false, and this gate only ever reports PASSING stories. Same status, same
+# words, same fix — said hours earlier, which is the whole point of the earlier check.
 unmeasured_stop() {
   local n; n="$(_int "$(printf '%s\n' "$1" | grep -c '✗' 2>/dev/null || true)")"
   live_set "$live" phase=unverified

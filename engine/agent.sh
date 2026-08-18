@@ -45,6 +45,17 @@
 #      BEFORE them: the phase order is research -> plan -> implement, and the two
 #      phases compose without either requiring the other (see RESEARCH PHASE below
 #      and engine/research.sh).
+#   7  UNVERIFIED IN-RUN — the SAME story was demoted at the ITERATION BOUNDARY
+#      (engine/measure.sh via _measure_boundary below) for MEASURE_DEMOTE_LIMIT
+#      consecutive iterations: it claims a measurable bar, the boundary named it
+#      and quoted that bar in the turn's own prompt, and the turn re-marked it
+#      with the value still absent. Stopping is the point — chief cannot produce
+#      that number, so every further turn is the loop re-marking one story.
+#      Distinct from 1 because it is NOT a stall: commits may well be landing.
+#      Distinct from 2/3/4/5/6 because the branch is NOT untouched — it may carry
+#      real work, and it is kept, along with its worktree. The driver reports the
+#      same UNVERIFIED status, in the same words, that the merge floor would have
+#      reported hours later; re-running resumes once the value is in `notes`.
 # A usage limit is detected BEFORE the progress/stall accounting (see
 # _is_rate_limit below), so a limit-blocked turn can never be misread as a
 # no-progress iteration that trips STALL_LIMIT and exits 1.
@@ -196,6 +207,12 @@ RESEARCH_STORE="${CHIEF_RESEARCH_FILE:-}"
 # process on an in-place run, and last run's demotion is not this run's news.
 DEMOTION_FILE="$STATE_DIR/.demoted.md"
 rm -f "$DEMOTION_FILE"
+# The repeat accounting behind MEASURE_DEMOTE_LIMIT (above). In-process only, and
+# deliberately so: a resumed run starts from `rm -f "$DEMOTION_FILE"` with no notice
+# outstanding, so it must also start with no repeat held against the agent it has not
+# yet spoken to. DEMOTE_KEY is the REASON — the sorted ids the last boundary demoted.
+DEMOTE_KEY=""
+DEMOTE_REPEATS=0
 # _compose_prompt INSTRUCTIONS DEST — the prompt one turn is handed: the engine's
 # loop instructions followed by the project's own context. A turn picks its
 # INSTRUCTIONS (implement, or the PLAN turn below) and everything downstream of that
@@ -345,6 +362,17 @@ fi
 # the budget AND stalled (no progress) for STALL_LIMIT consecutive iterations,
 # or reaches the HARD_MAX safety ceiling.
 STALL_LIMIT="${STALL_LIMIT:-2}"
+# THE SAME IDEA FOR THE BAR CHECK AT THE BOUNDARY. STALL_LIMIT bounds a loop that
+# is achieving NOTHING; MEASURE_DEMOTE_LIMIT bounds a loop that is achieving the
+# SAME THING over and over — a story demoted for an unrecorded measurement, then
+# re-marked with the measurement still missing. Stall accounting cannot see that
+# one: the turn commits, HEAD moves, and the loop reads it as progress every time,
+# so it runs to HARD_MAX rediscovering the same demotion.
+# Counted CONSECUTIVELY and PER REASON (the set of story ids the boundary demoted),
+# so an agent that records the value for one story and then trips over the next is
+# never counted as repeating itself. 2 = one demotion, one turn told about it by
+# name and by bar, and then stop — a third turn has nothing new to learn.
+MEASURE_DEMOTE_LIMIT="${MEASURE_DEMOTE_LIMIT:-2}"
 HARD_MAX="${HARD_MAX:-$(( MAX_ITERATIONS*3 > 20 ? MAX_ITERATIONS*3 : 20 ))}"
 
 # On a Claude session/usage limit, sleep until it resets and RESUME the same
@@ -572,8 +600,14 @@ _emit_story_events() {
 # naming the story and quoting the bar in measure.sh's own words. Not generic advice:
 # instructions.md step 8 is the generic advice, every turn already gets it, and the
 # runs this exists for got it too.
+#
+# AND IT IS BOUNDED. Telling the agent buys nothing if it can be told forever: an agent
+# that re-marks the story without the value, turn after turn, commits every time, so
+# HEAD moves, the stall counter reads progress, and the loop runs to HARD_MAX on one
+# story. MEASURE_DEMOTE_LIMIT consecutive demotions FOR THE SAME STORIES ends the run
+# instead (_demote_escalate below) — with the demotion named, and the branch kept.
 _measure_boundary() {
-  local report
+  local report key
   command -v measure_gate >/dev/null 2>&1 || return 0
   report="$(measure_gate "$PRD_FILE" 2>/dev/null || true)"
   if [ -z "$report" ]; then
@@ -581,6 +615,7 @@ _measure_boundary() {
     # so drop the notice and rebuild the prompt without it. Cleared HERE rather than
     # "after one turn" so the notice always describes the state the check last found:
     # the turn that records its number stops being nagged the moment it does.
+    DEMOTE_KEY=""; DEMOTE_REPEATS=0
     if [ -s "$DEMOTION_FILE" ]; then
       rm -f "$DEMOTION_FILE"
       _compose_prompt "$ENGINE/instructions.md" "$PROMPT_FILE"
@@ -600,9 +635,54 @@ _measure_boundary() {
   _compose_prompt "$ENGINE/instructions.md" "$PROMPT_FILE"
   # It is not a passing story any more, so the event stream's set difference must stop
   # remembering it as one — otherwise the re-mark that lands it properly, with its
-  # number, would emit no `story.passed` at all.
+  # number, would emit no `story.passed` at all. Re-baselining here is also what makes
+  # the honest repair count as PROGRESS: the loop's `prev_pass` is taken from the count
+  # this check LEFT BEHIND (it runs above the progress accounting), so the next turn's
+  # evidenced re-mark raises the count above it and resets `stall` — a story fixed the
+  # way it was asked to be fixed is never charged as a no-progress iteration.
   PASSED_IDS=" $(_passed_ids) "
+  # THE REASON, as ids rather than prose: measure_gate has just left `unverified:true`
+  # on exactly the stories it demoted THIS time (it clears the flag off everything
+  # else), so the PRD itself carries the key — no re-parsing of the report's text, and
+  # no false "same reason" when the agent merely reworded a valueless note.
+  key="$(jq -r '[.userStories[]?|select(.unverified==true)|.id]|sort|join(",")' "$PRD_FILE" 2>/dev/null || echo)"
+  if [ -n "$key" ] && [ "$key" = "$DEMOTE_KEY" ]; then
+    DEMOTE_REPEATS=$((DEMOTE_REPEATS+1))
+  else
+    DEMOTE_KEY="$key"; DEMOTE_REPEATS=1
+  fi
+  if [ "$DEMOTE_REPEATS" -ge "$MEASURE_DEMOTE_LIMIT" ]; then
+    _demote_escalate "${1:-?}" "$report"
+  fi
   return 0
+}
+# _demote_escalate ITER REPORT — stop the loop on a demotion it keeps rediscovering.
+#
+# Reached only when the boundary demoted THE SAME stories MEASURE_DEMOTE_LIMIT times
+# running, having named them and quoted their bars in the prompt each time. At that
+# point the one thing chief knows is that more turns will not help: it cannot run the
+# suite, it cannot evaluate the bar, and the agent has now twice declined to write down
+# a value it either has or never took. Spending the rest of the budget on that is the
+# failure this exists to prevent, and it is worse than the merge-time report it replaces
+# — that one at least cost only the merge.
+#
+# NOT A STALL (exit 1). Commits may be landing on every one of these turns; that is
+# precisely why the stall counter cannot see this loop. Exit 7 keeps the branch, the
+# worktree and the commits, and the driver reports it in the merge floor's own words.
+_demote_escalate() {
+  echo ""
+  echo "Chief is stopping: the same story was demoted at $DEMOTE_REPEATS consecutive iteration boundaries (limit $MEASURE_DEMOTE_LIMIT) with the value still unrecorded, and the loop will not be spent re-marking it:"
+  printf '%s\n' "$2"
+  echo "Chief cannot produce that number — it does not know what the bar means in this repo and will not record a claim it cannot check. Put the value you OBSERVED in that story's 'notes' and re-run; every commit made so far is kept on the branch."
+  echo "Exit 7 = UNVERIFIED in-run — NOT a stall and NOT a failed branch."
+  live_set "$LIVE" phase=unverified iter="$1" story="$(_story)" \
+    passing="$(_passes)" total="$(_total)" stall="${stall:-0}"
+  # STORY scope here; the driver emits the TASKLIST-scope terminal when it sees exit 7
+  # — the same split story.plan-invalid uses, so a consumer counting tasklist outcomes
+  # never double-counts.
+  event_emit story.unverified name="${CHIEF_TASKLIST:-}" story="$DEMOTE_KEY" state=failed \
+    detail="demoted at $DEMOTE_REPEATS consecutive iteration boundaries — a claimed bar with no observed value"
+  exit 7
 }
 # --- USAGE / COST OBSERVATION (the event stream's `usage` block) ---------------
 # OBSERVATION ONLY. Chief never asks a provider what a turn cost — it reads what the
