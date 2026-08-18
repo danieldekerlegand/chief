@@ -106,6 +106,16 @@ engine/
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
+  sweep.sh           #   the DISK half of reaping: what chief CAUSED TO BE BUILT inside a worktree
+                     #   goes with the worktree. A TABLE of toolchain artifact dirs (target/ ·
+                     #   node_modules/ · .venv/ · build/) — adding a toolchain is a row. Runs
+                     #   immediately before every worktree removal, because removal is best-effort
+                     #   at every site and a removal that loses is how a finished run strands
+                     #   gigabytes. `chief_sweep_candidate ROOT WT PATH` is a PURE function of
+                     #   three paths and the whole safety argument: a shared CARGO_TARGET_DIR, a
+                     #   symlink, a sibling worktree, a `..` escape are all REFUSED with a stated
+                     #   reason, never followed. Bytes reclaimed are reported per worktree and
+                     #   totalled in the run summary. CHIEF_SWEEP=0 opts out
   reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it);
                      #   also the PID-NAMESPACE token every pid-keyed record carries, so a shared prefix
                      #   across containers is never read as "that pid is dead"

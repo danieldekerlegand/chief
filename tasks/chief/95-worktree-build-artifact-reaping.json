@@ -4,33 +4,35 @@
   "branchName": "chief/95-worktree-build-artifact-reaping",
   "parked": false,
   "dependsOn": [],
-  "touches": ["engine"],
+  "touches": [
+    "engine"
+  ],
   "iters": 5,
   "warmup": [
     "grep -n 'worktree add\\|worktree remove\\|worktree prune' engine/*.sh",
     "grep -n 'reap' engine/reap.sh | head -20"
   ],
-  "description": "A worktree is removed; its BUILD DIRECTORY is not. Measured 2026-08-13 in cuneiform: the main checkout's `core/engine/target` had reached **61 GB across 729,816 files**, and a *warm* `cargo test --no-run` — compiling nothing — exceeded two minutes because cargo stats that tree on every invocation. A single parallel worktree adds another ~7 GB of its own. Nothing collects any of it.\n\nThe engine already has the right instinct elsewhere: `chief reap` exists for orphaned agent trees, and `77-reap-by-inherited-run-marker` closed the process half. This is the DISK half, and it is the same shape — chief creates a resource per run and has no matching teardown.\n\n**Do not make this Rust-specific.** The pattern is general: a per-worktree build directory that the language toolchain owns and chief created the conditions for — `target/` (cargo), `node_modules/` (npm/bun), `.venv/` (uv), `build/`. The rule is *what chief created with the worktree goes with the worktree*; what the OPERATOR put there does not.\n\n**The hazard to design around:** a shared `CARGO_TARGET_DIR` (which cuneiform may adopt) means the build directory is NOT inside the worktree, so a naive `rm -rf $worktree/**/target` either misses it or — far worse — deletes a cache other live runs are using. Detect the shared case and refuse rather than guess.",
+  "description": "A worktree is removed; its BUILD DIRECTORY is not. Measured 2026-08-13 in cuneiform: the main checkout's `core/engine/target` had reached **61 GB across 729,816 files**, and a *warm* `cargo test --no-run` \u2014 compiling nothing \u2014 exceeded two minutes because cargo stats that tree on every invocation. A single parallel worktree adds another ~7 GB of its own. Nothing collects any of it.\n\nThe engine already has the right instinct elsewhere: `chief reap` exists for orphaned agent trees, and `77-reap-by-inherited-run-marker` closed the process half. This is the DISK half, and it is the same shape \u2014 chief creates a resource per run and has no matching teardown.\n\n**Do not make this Rust-specific.** The pattern is general: a per-worktree build directory that the language toolchain owns and chief created the conditions for \u2014 `target/` (cargo), `node_modules/` (npm/bun), `.venv/` (uv), `build/`. The rule is *what chief created with the worktree goes with the worktree*; what the OPERATOR put there does not.\n\n**The hazard to design around:** a shared `CARGO_TARGET_DIR` (which cuneiform may adopt) means the build directory is NOT inside the worktree, so a naive `rm -rf $worktree/**/target` either misses it or \u2014 far worse \u2014 deletes a cache other live runs are using. Detect the shared case and refuse rather than guess.",
   "userStories": [
     {
       "id": "US-1",
       "title": "Removing a worktree removes what chief caused to be built in it",
       "description": "Teardown symmetry: chief created the worktree, so chief collects what accumulated inside it.",
       "acceptanceCriteria": [
-        "Worktree removal also removes build directories INSIDE that worktree, from a table of known toolchain artifacts (`target/`, `node_modules/`, `.venv/`, `build/`) — a table, so adding a toolchain is a row rather than a new branch.",
-        "It removes only what is inside the worktree being removed. A path that resolves outside it — a shared `CARGO_TARGET_DIR`, a symlink — is REFUSED with the reason stated, never followed. Asserted over adversarial paths in a pure candidate function, the `sweep_candidate` posture cuneiform's cross-system harness already uses.",
+        "Worktree removal also removes build directories INSIDE that worktree, from a table of known toolchain artifacts (`target/`, `node_modules/`, `.venv/`, `build/`) \u2014 a table, so adding a toolchain is a row rather than a new branch.",
+        "It removes only what is inside the worktree being removed. A path that resolves outside it \u2014 a shared `CARGO_TARGET_DIR`, a symlink \u2014 is REFUSED with the reason stated, never followed. Asserted over adversarial paths in a pure candidate function, the `sweep_candidate` posture cuneiform's cross-system harness already uses.",
         "Reclaimed bytes are reported, so the operator sees what the run cost in disk as well as in tokens.",
         "A worktree chief did NOT create is never touched."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "engine/sweep.sh + test/sweep.sh: sweep 30 passed, 0 failed. Table-driven (target/node_modules/.venv/build); chief_sweep_candidate is a pure 3-path function refusing outside-worktree / symlink / not-a-chief-worktree / worktree-is-a-symlink / unknown-artifact with the reason stated. Adversarial cases green: shared CARGO_TARGET_DIR by absolute path, a symlinked build/ into it, a `..` escape, a sibling worktree, the repo-123 vs repo-123-evil prefix near-miss \u2014 the shared cache blob survived the live sweep. Bytes reported per worktree and totalled in the run summary. bash -n clean over bin/chief engine/*.sh install.sh test/*.sh; doc-sync PASS (README v0.8.58 == VERSION)."
     },
     {
       "id": "US-2",
       "title": "`chief reap` collects the artifacts of runs that already ended",
       "description": "US-1 fixes the future; the fleet already carries the debt. Two empty worktrees plus a 1.4 GB one were found sitting behind finished runs in a single repo.",
       "acceptanceCriteria": [
-        "`chief reap` gains a disk pass covering build directories under worktrees with NO live registered run — the same liveness rule the process reaper already applies, so it can never touch a running build.",
+        "`chief reap` gains a disk pass covering build directories under worktrees with NO live registered run \u2014 the same liveness rule the process reaper already applies, so it can never touch a running build.",
         "`-n` reports bytes-by-path without signalling, matching the existing dry-run contract.",
         "It is bounded by age as well as liveness, so a worktree between iterations of a live run is never collected.",
         "Mutation-checked: a live run's target directory must survive a reap, and a stale one must not. Recorded in the notes."

@@ -244,6 +244,7 @@ CHIEF_REPOS="$(chief_repos_dir)"
 BASE_BRANCH="${CHIEF_BASE_BRANCH:-main}"
 VERIFY_HOOK=""; [ -n "${CHIEF_VERIFY:-}" ] && VERIFY_HOOK="$REPO/$CHIEF_VERIFY"
 mkdir -p "$COMPLETED" "$SNAP" "$WT_ROOT" "$STATE" "$RESEARCH_DIR"
+rm -f "$STATE/sweep.bytes" 2>/dev/null || true   # this run's disk-reclaim tally (sweep_worktree)
 
 PROVIDER="${CHIEF_PROVIDER:-${CHIEF_TOOL:-${TOOL:-claude}}}"
 MODEL="${CHIEF_MODEL:-}"
@@ -471,6 +472,10 @@ source "$ENGINE/gitenv.sh"
 # Orphan identification + the bounded, reporting reap (engine/reap.sh). Shared with
 # `chief reap`, which is the same sweep on a path that does NOT need a new run.
 source "$ENGINE/reap.sh"
+# The DISK half of the same idea (engine/sweep.sh): reap.sh collects orphaned
+# PROCESSES, this collects the build directories they left behind. Shared with
+# `chief reap` for the same reason.
+source "$ENGINE/sweep.sh"
 # Per-tasklist LIVELINESS record (engine/live.sh): phase + heartbeat next to the
 # coarse <name>.state, so `chief ps` can tell a working run from a hung one.
 source "$ENGINE/live.sh"
@@ -561,6 +566,20 @@ chief_git_env_setup "$REPO" "$WT_ROOT" >&2 || exit "$(hl_rc "$HL_RC_CONFIG" 1)"
 # Small helpers (bash 3.2 — no associative arrays)
 # ---------------------------------------------------------------------------
 in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }   # is $1 a word in list $2?
+
+# TEARDOWN SYMMETRY — chief created the worktree, so chief collects what accumulated
+# inside it. Called immediately BEFORE every worktree removal, because removal here
+# is best-effort at every site (`wt_git remove --force … 2>/dev/null || true`) and a
+# removal that loses is exactly how a finished run leaves gigabytes standing. The
+# verdict on each directory is engine/sweep.sh's business, not this function's; this
+# only supplies the two paths that bound it and totals the bytes for the run summary.
+# $1 = worktree, $2 = tasklist name (the label on the report lines).
+sweep_worktree() {
+  [ -d "$1" ] || return 0
+  chief_sweep_worktree "$WT_ROOT" "$1" "$2" || true
+  [ "${CHIEF_SWEEP_BYTES:-0}" -gt 0 ] && echo "$CHIEF_SWEEP_BYTES" >> "$STATE/sweep.bytes" 2>/dev/null
+  return 0
+}
 
 # git worktree add / remove are NOT safe to run concurrently on one repo: they
 # take the same ref lock and a race yields a spurious failure. Serialize them
@@ -2195,6 +2214,7 @@ run_worker() {
     local skip_agent=0
     local integrate_note=""      # set when integrate_base left an instruction for the agent
     local wtstate="$wt/$STATE_REL"
+    sweep_worktree "$wt" "$name"                     # reclaim last run's build artifacts first
     wt_git remove --force "$wt" 2>/dev/null || true   # free a stale worktree dir (keeps the branch)
     rm -rf "$wt"
     # RESUME: if a branch from a prior (interrupted) run exists — a run stopped by
@@ -2548,7 +2568,11 @@ run_worker() {
       local mstash=""
       trap 'work_checkout "$work_repo" "$work_base" "$name" || true; merge_stash_pop "$work_repo" "$mstash" "$name" || echo "$work_repo|$mstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
       merge_critical_enter "$work_repo" "$name" "$work_base"; mstash="$MERGE_STASH"
-      # Free the branch from its worktree so the work repo can check it out.
+      # Free the branch from its worktree so the work repo can check it out. The
+      # sweep goes first: this is the last moment anyone looks at that directory, and
+      # a `git worktree remove` that fails here is what strands a 1.4 GB `target`
+      # behind a tasklist that finished cleanly.
+      sweep_worktree "$wt" "$name"
       wt_git remove --force "$wt" 2>/dev/null || true
       # work_checkout, never a bare `git checkout` — a gitlink the ref moves and the
       # working tree does not is not uncommitted work (see its header).
@@ -3160,6 +3184,11 @@ for b in $(git -C "$REPO" for-each-ref --format='%(refname:short)' refs/heads/ch
   git -C "$REPO" merge-base --is-ancestor "$b" "$BASE_BRANCH" 2>/dev/null || unmerged="$unmerged $b"
 done
 [ -n "$unmerged" ] && echo "   (unmerged branches for review:$unmerged · worktrees: $WT_ROOT)"
+# What the run cost in DISK, alongside what it cost in tokens. Silent when nothing
+# was reclaimed, so a docs-only run prints exactly what it used to.
+swept="$(awk '{t += $1} END {print t + 0}' "$STATE/sweep.bytes" 2>/dev/null || echo 0)"
+[ "${swept:-0}" -gt 0 ] && echo "   (reclaimed $(chief_sweep_human "$swept") of build artifacts from this run's worktrees)"
+rm -f "$STATE/sweep.bytes" 2>/dev/null || true
 # `touches` under-tagging: co-scheduled tasklists that turned out to edit the same
 # files. Pure reporting — nothing above changed because of it. Silent when the run
 # had no overlap (the normal case), so a clean run prints exactly what it used to.

@@ -86,6 +86,9 @@ jobs:
       - name: Inherited-$CHIEF_RUN_ID key — gated to a dead run, never a shell or a live run
         run: bash test/reapenv.sh
 
+      - name: Build-artifact sweep — refuses a shared cache, a symlink, a foreign worktree
+        run: bash test/sweep.sh
+
       - name: Bystander guard — the suite must not reap a run it did not start
         run: bash test/bystander.sh
 
