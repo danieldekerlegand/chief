@@ -65,5 +65,6 @@
       "passes": true,
       "notes": "Verify gate GREEN end to end (2026-08-17, this branch, after the US-3 commit): `.chief/verify.sh` exited 0 — \"OK (allowing merge)\". Quality ratchet ok (duplicate_blocks 0->0; function_length_max 465->478 delta +13 tol 15; function_length_mean 17.84->18.55; single_use_functions 50->51 delta +1 tol 2). bash -n clean on bin/chief + engine/*.sh + test/*.sh; shellcheck not installed locally (CI enforces). VERSION-BUMP PASS (VERSION 0.8.42 covers every engine/bin change on HEAD — US-3 touched no engine/bin file). DOC-SYNC PASS (README v0.8.42). doc-links: 4 dead vs 4 on main (no regression). Behavioural block 29/29 PASS under test/bystander.sh, including the five named in the criteria — SMOKE PASS, RATELIMIT PASS, NOWORK PASS, PAUSE PASS, TEARDOWN PASS — and the new \"bystander: [28/29] test/overlap-zones.sh -> OVERLAP-ZONES PASS\". The new test asserts all four required behaviours and was mutation-checked: flipping the fixture zone from review to serialize makes it fail with \"rz state is \\\"done\\\", want awaiting-approval\". Registered in all three gate lists (.chief/verify.sh CHIEF_BYSTANDER_TESTS, test/all.sh BASH_SUITE, .github/workflows/ci.yml). Own diff size measured by engine/budget.sh: US-3 = 7 files / 343 lines, under the 400-line / 20-file budget (branch total 21 files / 1642 lines)."
     }
-  ]
+  ],
+  "mergedToMain": "55c2e89"
 }
