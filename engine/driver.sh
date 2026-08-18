@@ -2406,6 +2406,14 @@ attempts_used() { _int "$(cat "$STATE/$1.attempts" 2>/dev/null)"; }
 # another turn to reach the same wall while burying the one signal an operator needs.
 retryable_status() {
   case "$1" in
+    # Named ABOVE the catch-all on purpose. REBASE-REFUSED would fall through to it
+    # and be denied anyway, but the deny is the whole point of the state: it is the
+    # one failure here that shares a shape with the retryable three (the work exists,
+    # the step that lands it failed) while sharing none of their cause. A retry buys a
+    # REBASE-CONFLICT a moved base; a refusal has no such property — nothing about the
+    # operator's checkout changes because chief ran the agent again. Spelling it out
+    # keeps a future edit to the allowlist from silently re-admitting it.
+    REBASE-REFUSED*) return 1 ;;
     VERIFY-FAILED*|MERGE-CONFLICT*|REBASE-CONFLICT*) return 0 ;;
     *) return 1 ;;
   esac
@@ -2619,7 +2627,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -2631,6 +2639,9 @@ for n in $NAMES; do
     awaiting-review) ran=1; inreview="$inreview $n" ;;  # it ran; a human hasn't approved its plan
     awaiting-approval) ran=1; inzone="$inzone $n" ;;   # it ran, rebased and verified green; a human hasn't approved the zone it changed
   esac
+  # Collected off the STATUS, not the scheduler state: a refusal is 'failed' like any
+  # other, and the summary block below is what separates it from one worth re-running.
+  case "$(cat "$STATE/$n.status" 2>/dev/null || echo)" in REBASE-REFUSED*) refused="$refused $n" ;; esac
 done
 echo "   (logs: $STATE/<name>.log)"
 # Retried tasklists, said once and plainly. A tasklist that failed on its LAST attempt
@@ -2644,6 +2655,24 @@ if [ -n "$retried" ]; then
       "$( [ "$(get_state "$n")" = done ] && echo "recovered" || echo "still failing; read $STATE_REL/$n.log" )"
   done
   [ "$RETRY_MAX" -le 1 ] && echo "    retry on failure is OFF (RETRY_MAX=$RETRY_MAX)."
+fi
+# A REFUSED rebase, said as its own thing. It is a failure, so without this it appears
+# in the list above as one more red line and the operator reads the ABSENCE of a retry
+# as chief giving up early — or, before it was excluded from the allowlist, as
+# "exhausted its retries (3/3)", which reads as a hard problem with the WORK. Neither is
+# what happened: the branch is intact, nothing collided, and the thing that has to
+# change is the work repo, which only a human can change. So name the precondition and
+# the fix, and say plainly that not retrying was the decision.
+if [ -n "$refused" ]; then
+  echo "   (git REFUSED to rebase — NOT a merge conflict, and NOT retried:$refused)"
+  for rn in $refused; do
+    rst="$(cat "$STATE/$rn.status" 2>/dev/null || echo)"
+    rcause="${rst#REBASE-REFUSED }"; rcause="${rcause%% (see *}"
+    printf '    · %-30s %s\n' "$rn" "$rcause"
+    printf '      %s\n' "one attempt, deliberately: re-running the agent cannot clear the work repo, so it would re-refuse identically."
+    printf '      %s\n' "clear the cause above in the work repo, then: chief run $rn"
+    [ -f "$SNAP/$rn.rebase-refused.md" ] && printf '      %s\n' "the cause and the exact command: $SNAP_REL/$rn.rebase-refused.md"
+  done
 fi
 # A usage-limit pause is not a failure and must not read like one: say plainly that
 # the branch is intact, how much of the self-heal budget it spent, and that a re-run

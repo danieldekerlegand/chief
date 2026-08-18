@@ -30,8 +30,8 @@
         "A hermetic test asserts the attempt count: a branch whose rebase is REFUSED runs its agent exactly ONCE, and a branch with a real content conflict still retries up to RETRY_MAX",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "retryable_status() denies REBASE-REFUSED explicitly (above the catch-all); the run summary gains a refusal block naming the cause, 'one attempt, deliberately', the operator's move and the .rebase-refused.md note. test/rebase-refusal.sh extended (agent-turn counter + a dependent tasklist). OBSERVED: bash test/rebase-refusal.sh rc=0 PASS — refused branch attempts=1, agent turns=1, no '↻ retrying', no 'exhausted its retries'; real conflict attempts=3/3 with the retry announced; rr-refuse-dep state=blocked with 'needs \"rr-refuse\", which FAILED in this run'. Also green: retry-on-failure rc=0, smoke rc=0, noworkguard rc=0, version-bump rc=0 (VERSION 0.8.49), doc-sync rc=0 (README v0.8.49), quality ratchet rc=0 (no metric regressed). bash -n clean; shellcheck 0.11.0 -S error clean on engine/driver.sh + test/rebase-refusal.sh (the two SC1072 hits in bin/chief and engine/quality.sh reproduce on main untouched — pre-existing, that shellcheck version misparses a backtick in a comment)."
     },
     {
       "id": "US-2",
