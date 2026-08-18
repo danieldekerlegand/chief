@@ -37,8 +37,8 @@
         "The message names the story id and the bar. Do not make it generic advice; the agent already receives generic advice every turn in `instructions.md` step 8 and it demonstrably does not land.",
         "A test asserts the demotion reason reaches the prompt file the provider is invoked with, not just the log."
       ],
-      "notes": "",
-      "passes": false
+      "notes": "test/boundary-demotion.sh PASS with the new prompt block (5 assertions); the negative control — the same test against the pre-change engine 47ebbbe — FAILS with \"turn 2's prompt never tells the agent a story was demoted\", so it discriminates. Suite: boundary-demotion, measured-bars, evidence-gate, five-cases, smoke, noworkguard, version-bump, doc-sync, plan-review, research, pause, ratelimit, events = 13 passed, 0 failed. .chief/verify.sh green (allowing merge): quality ratchet OK — function_length_max 35 -> 50, delta +15 tol 15; doc-links 6 dead references / 4 distinct targets, identical to main; VERSION 0.8.44 + doc-sync green. bash -n clean on bin/chief + engine/*.sh + test/*.sh; shellcheck not installed on this host (CI enforces).",
+      "passes": true
     },
     {
       "id": "US-3",
