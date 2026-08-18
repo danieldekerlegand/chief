@@ -31,6 +31,11 @@
 #   C. KILL   — the driver is SIGKILLed mid-critical-section, with the operator's
 #               work parked and no trap left to run. The work must still be there,
 #               and the next run must hand it back on its own.
+#   D. GATE   — the STARTUP check is the one place a dirty tree still stops a run
+#               (US-3). It stays a block, but for what it actually protects — the
+#               fork point every worktree is created from — and it has to SAY that
+#               instead of implying it protects the merge, which it never did.
+#               FORCE=1 must still start the run, and that run must still merge.
 #
 # Installs the COMMITTED state of this checkout (install.sh git-clones) — commit
 # engine changes before trusting a green run.
@@ -172,7 +177,7 @@ git commit -q --allow-empty -m init
 rm -f tasks/chief/example.json
 printf 'the operator owns this file\n' > docs.txt
 printf 'and this one\n' > staged.txt
-for n in dc-merge dc-kill; do
+for n in dc-merge dc-kill dc-force; do
   jq -n --arg b "chief/$n" \
      '{project:"dc",branchName:$b,description:"dirty-checkout fixture",iters:2,
        dependsOn:[],touches:[],warmup:[],
@@ -285,4 +290,42 @@ has "$MARK" "$(cat "$REPO/docs.txt")" \
 [ -z "$(stash_list)" ] || fail "the recovered stash entry was not dropped after a clean replay: $(stash_list)"
 case "$(status_of dc-kill)" in MERGED*) ;; *) fail "the killed tasklist did not merge on the re-run — got '$(status_of dc-kill)'" ;; esac
 
-echo "DIRTY-CHECKOUT PASS — a work repo that goes dirty mid-run still merges, the merge-time gate never sees the operator's edit, the edit comes back in both its staged and unstaged states, a conflicting replay drops nothing and names the stash, and a SIGKILL mid-merge leaves the work in git's stash for the next run to hand back"
+# ── D. THE STARTUP GATE — a block for the AGENT's sake, and it says so ───────
+# C handed the operator's parked work back, so the work repo is dirty right now —
+# exactly the state the startup check exists for.
+[ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ] \
+  || fail "fixture: section D needs a dirty work repo, and the tree is clean"
+
+CUR=dc-force
+( cd "$REPO" && PATH="$WORK/fakebin:$PATH" WT_ROOT="$WORK/wt" \
+    CHIEF_TEST_BASE_REPO="$REPO" CHIEF_TEST_MARK="$MARK" \
+    "$CHIEF" run dc-force ) >"$WORK/dc-force.log" 2>&1 && grc=0 || grc=$?
+[ "$grc" != 0 ] || fail "a dirty work repo no longer stops a run at startup — then FORCE=1 escapes nothing"
+glog="$(run_log dc-force)"
+has "uncommitted tracked changes" "$glog" || fail "the refusal does not name the condition it stopped for: $glog"
+has "AGENT forks from" "$glog" \
+  || fail "the refusal still does not say WHAT it protects — it must name the fork point, not imply it is protecting the merge"
+has "DURING a run is fine" "$glog" \
+  || fail "the refusal does not tell the operator that editing the repo mid-run is safe for the merge — that is the workflow that produced the field failures"
+has "FORCE=1" "$glog" || fail "the refusal no longer names its escape hatch"
+# And it refused BEFORE spending anything.
+git -C "$REPO" rev-parse --verify --quiet chief/dc-force >/dev/null 2>&1 \
+  && fail "the refused run created a branch — the gate is supposed to stop before any git work"
+has "dc-force" "$(git -C "$REPO" worktree list 2>/dev/null)" \
+  && fail "the refused run created a worktree"
+[ ! -f "$REPO/.chief/state/parallel/dc-force.status" ] \
+  || fail "the refused run reached the scheduler — status '$(status_of dc-force)'"
+
+# FORCE=1 still starts on that same dirty tree, and the run still merges.
+( cd "$REPO" && PATH="$WORK/fakebin:$PATH" WT_ROOT="$WORK/wt" FORCE=1 \
+    CHIEF_TEST_BASE_REPO="$REPO" CHIEF_TEST_MARK="$MARK" \
+    "$CHIEF" run dc-force ) >"$WORK/dc-force.log" 2>&1 || true
+case "$(status_of dc-force)" in
+  MERGED*) ;;
+  *) fail "FORCE=1 on a dirty tree did not merge — got '$(status_of dc-force)'" ;;
+esac
+has "$MARK" "$(cat "$REPO/docs.txt")" \
+  || fail "the operator's uncommitted work did not survive a FORCE=1 run"
+[ -z "$(stash_list)" ] || fail "the FORCE=1 run left work in the stash: $(stash_list)"
+
+echo "DIRTY-CHECKOUT PASS — a work repo that goes dirty mid-run still merges, the merge-time gate never sees the operator's edit, the edit comes back in both its staged and unstaged states, a conflicting replay drops nothing and names the stash, a SIGKILL mid-merge leaves the work in git's stash for the next run to hand back, and the startup gate blocks for the AGENT's fork point (saying so) while FORCE=1 still runs and still merges"

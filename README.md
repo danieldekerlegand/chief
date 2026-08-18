@@ -29,6 +29,7 @@ no root. State lives on the filesystem, so an interrupted run just resumes.
 - [How it fits together](#how-it-fits-together)
 - [Concurrency & the safety floor](#concurrency--the-safety-floor)
 - [Resuming interrupted runs](#resuming-interrupted-runs)
+- [Working in the repo while a run is in flight](#working-in-the-repo-while-a-run-is-in-flight)
 - [Command reference](#command-reference)
 - [Docs](#docs)
 - [Development](#development)
@@ -204,6 +205,23 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - `RESET=1 chief run` forces a fresh branch from the base, discarding partial
   progress.
 
+## Working in the repo while a run is in flight
+
+**Editing the repo during a run is safe for the merge.** The merge phase rebases,
+re-verifies and merges in your own checkout, so before it enters that critical
+section it **parks** your uncommitted tracked changes in git's own stash and gives
+them back on the way out — including after a crash or a `kill -9`, which the next
+`chief run` picks up and restores. `verify.sh` therefore measures the branch and
+nothing else, and a replay that can't apply cleanly **drops nothing**: the stash
+entry stays and the run output names the `git stash apply <sha>` that recovers it.
+
+What `chief run` still checks at **startup** — a clean tree, on the base branch — is
+about the *agent*, not the merge: every worktree forks from the base branch's tip, so
+work you haven't committed is invisible to every tasklist in the run, and the agent
+will build against a base you've already moved past. `FORCE=1 chief run` skips that
+check, which is the right call when the uncommitted work is somewhere no tasklist in
+the run will look.
+
 ## Command reference
 
 | Command | Purpose |
@@ -308,7 +326,7 @@ tree at once.
 
 ## Status
 
-**v0.8.50** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.51** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

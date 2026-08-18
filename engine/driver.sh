@@ -125,7 +125,9 @@
 #   STRICT_VERIFY=0       fail on any verify failure incl. ones pre-existing on main
 #   DRY_RUN=0             print the schedule and exit without git/agents. NEW.
 #   POLL_SECONDS=5        how often the scheduler checks for finished workers. NEW.
-#   FORCE=0               skip the clean-tree / on-main precondition
+#   FORCE=0               skip the STARTUP precondition (on-base + clean tree). That gate
+#                         protects the AGENT's fork point, not the merge — the merge phase
+#                         parks the work repo's uncommitted work itself. See the gate below.
 #   RESET=0               force a fresh branch from base, discarding a prior run's
 #                         partial progress (default: RESUME an existing branch). NEW.
 #   RATE_LIMIT_REDISPATCH_MAX=3        re-dispatches per tasklist after a usage-limit
@@ -1847,6 +1849,30 @@ chief_reap_orphans "$WT_ROOT" "$CHIEF_RUN_MARKER_REPO" \
   "a previous run on $(basename "$REPO")" "${CHIEF_REAP_GRACE:-5}" || true
 git -C "$REPO" worktree prune 2>/dev/null || true   # drop stale worktree metadata (branches kept)
 
+# THE STARTUP PRECONDITION — what it protects, and what it does NOT.
+#
+# It protects the AGENT'S FORK POINT. Every worktree is created from the base branch's
+# TIP (`wt_git add <wt> -b <branch> "$work_base"`), never from this working tree, so
+# anything uncommitted here is invisible to every tasklist in the run: the agent plans
+# and builds against a base the operator has already moved on from, and can duplicate
+# or contradict the change sitting in their editor. "On the base branch" is the same
+# property from the other side — it is where worktrees fork from, where merges land,
+# and the branch the merge phase restores to this checkout on its way out.
+#
+# It does NOT protect the MERGE, and never did: it is checked ONCE, here, and nothing
+# re-checks it, so an operator who typed one line five minutes into a run walked
+# straight past it and the merge failed anyway (the field case behind tasklist 93).
+# That gap is closed at the merge phase itself, which parks the work repo's
+# uncommitted tracked changes in git's own stash for the length of its critical
+# section and gives them back on the way out (merge_stash_push/merge_stash_pop).
+# Editing this repo DURING a run is safe for the merge.
+#
+# So it stays a BLOCK rather than a warning, but on the narrower ground: a run forked
+# from a base the operator has already moved past is work built against the wrong
+# tree, and no later step can repair that — whereas the merge-time exposure the gate
+# used to be justified by is now handled where it actually happens. FORCE=1 skips it,
+# and is the right call when the uncommitted work is somewhere no tasklist in this run
+# will look. Nothing here runs at all for a clean checkout on the base branch.
 if [ "$FORCE" != "1" ]; then
   cur="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
   # AUTO-RECOVER: a run killed mid-merge leaves the BASE working tree checked out on
@@ -1865,11 +1891,20 @@ if [ "$FORCE" != "1" ]; then
         fi
         git -C "$REPO" checkout "$BASE_BRANCH" >/dev/null 2>&1 || { echo "ERROR: could not restore '$BASE_BRANCH' from '$cur' — resolve by hand." >&2; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
         cur="$BASE_BRANCH" ;;
-      *) echo "ERROR: not on '$BASE_BRANCH' (on '$cur'). git checkout $BASE_BRANCH (or FORCE=1)." >&2; exit "$(hl_rc "$HL_RC_CONFIG" 1)" ;;
+      *) echo "ERROR: not on '$BASE_BRANCH' (on '$cur') — every worktree in this run forks from '$BASE_BRANCH' and every merge lands there, so a run started from here builds against a base you are not looking at." >&2
+         echo "       git checkout $BASE_BRANCH   (or FORCE=1 to run anyway)" >&2
+         exit "$(hl_rc "$HL_RC_CONFIG" 1)" ;;
     esac
   fi
   if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
-    echo "ERROR: uncommitted tracked changes on main — commit/stash first (or FORCE=1)." >&2
+    echo "ERROR: uncommitted tracked changes on '$BASE_BRANCH' — commit or stash them (or FORCE=1)." >&2
+    echo "       This guards what the AGENT forks from, not the merge: every worktree is created" >&2
+    echo "       from the '$BASE_BRANCH' tip, so work you have not committed is invisible to every" >&2
+    echo "       tasklist in this run — the agent builds against a base you have moved past." >&2
+    echo "       The merge is safe either way: it parks this repo's uncommitted changes for its" >&2
+    echo "       critical section and gives them back, so editing this repo DURING a run is fine." >&2
+    echo "       FORCE=1 is the right call when the uncommitted work is somewhere no tasklist" >&2
+    echo "       in this run will look." >&2
     git -C "$REPO" status --short | head; exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
 fi
