@@ -13,6 +13,14 @@
 #   PART B — THE AMORTIZATION. With `--merge-batch=N`, the same three tasklists merge
 #            — all three, `--no-ff`, one commit each, every one retired — off exactly
 #            ONE verification of the batch tip, and the run summary reports the ratio.
+#            It also asserts the policy layer stayed PER BRANCH inside the batch: the
+#            LAST member of a batch of three is stacked on the other two, so a diff
+#            budget measured from the base would charge it with all three branches.
+#   PART C — THE POLICY LAYER IS NOT WEAKENED. A branch that changed a `review`
+#            OVERLAP ZONE is excluded from batching ENTIRELY (band 91): it never
+#            appears in a batch, it takes the serialized floor, and it ends
+#            AWAITING-APPROVAL with nothing of it on the base — while its peers batch
+#            without it. A batch-tip verify is never a human's yes.
 #
 # Both halves count the SAME thing the same way: the project's verify hook increments
 # a counter outside the repo, so "how many times did the gate run" is measured rather
@@ -167,6 +175,61 @@ for n in $NAMES; do
   ( cd "$REPO_B" && git show "main:out/$n/US-1.txt" >/dev/null 2>&1 ) \
     || fail "PART B: $n's artifact never reached main"
 done
-echo "merge-batch: PART B ok — 3 merges off 1 verification"
+# THE POLICY LAYER STAYED PER BRANCH. A batch member is rebased onto its predecessors,
+# so `main...<member>` is the whole stack up to it — measured from the base, the second
+# member of the batch would be charged with two branches' diffs and the third with all
+# three. The budget is measured from the tip each member was STACKED ON instead, so
+# every record reports that branch's own two files (out/<n>/US-1.txt +
+# tasks/chief/<n>.json). Asserted for ALL THREE because the batch order is completion
+# order: whichever one happened to lead, the other two are stacked on something.
+for n in $NAMES; do
+  b="$REPO_B/.chief/state/parallel/$n.budget.json"
+  [ -s "$b" ] || fail "PART B: no diff-budget record for $n — the policy layer never ran for a batch member"
+  [ "$(jq -r '.total.files' "$b")" = 2 ] \
+    || fail "PART B: $n's diff budget counted $(jq -r '.total.files' "$b") file(s), expected its own 2 — a batch member was measured against the batch tip, not against its own branch"
+done
+echo "merge-batch: PART B ok — 3 merges off 1 verification, budget measured per branch"
+
+# ══ PART C — the policy layer: a `review` zone is NEVER a batch member ════════
+echo "merge-batch: PART C — a branch in a \`review\` overlap zone is excluded from batching"
+REPO_C="$WORK/zoned"
+make_repo "$REPO_C"
+# Band 91's registry, declaring ONE domain that needs a human: the files charlie writes.
+# alpha and bravo touch nothing in it, so they are still batchable and still batch.
+( cd "$REPO_C"
+  printf '%s\n' 'review  path:out/charlie/*   charlie writes a declared design domain' > .chief/zones.conf
+  git add -A && git commit -q -m zones )
+LOG="$WORK/c.log"
+( cd "$REPO_C" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS=1 CHIEF_MERGE_BATCH_WAIT=60 \
+    "$CHIEF" run -p 3 --merge-batch=3 ) >"$LOG" 2>&1 || true
+
+for n in alpha bravo; do
+  case "$(status "$REPO_C" "$n")" in MERGED*) ;; *) fail "PART C: $n is $(status "$REPO_C" "$n"), expected MERGED" ;; esac
+done
+# THE ASSERTION THIS PART EXISTS FOR, in three independent shapes: the zoned branch was
+# never batched, it was held by the policy layer on the floor, and nothing of it landed.
+case "$(status "$REPO_C" charlie)" in
+  AWAITING-APPROVAL*) ;;
+  *) fail "PART C: charlie is $(status "$REPO_C" charlie), expected AWAITING-APPROVAL — a review-zone branch was not held" ;;
+esac
+wlogs "$REPO_C" | grep -q 'charlie is NOT eligible for the merge queue' \
+  || fail "PART C: charlie was never excluded from the merge queue"
+if wlogs "$REPO_C" | grep -q 'leading a merge batch of 3 branch'; then
+  fail "PART C: a review-zone branch was taken into a batch"
+fi
+wlogs "$REPO_C" | grep -q 'leading a merge batch of 2 branch' \
+  || fail "PART C: alpha and bravo did not batch without charlie (see the per-tasklist logs)"
+if ( cd "$REPO_C" && git show "main:out/charlie/US-1.txt" >/dev/null 2>&1 ); then
+  fail "PART C: the review-zone branch reached main without an approval"
+fi
+[ -s "$REPO_C/.chief/state/parallel/charlie.zone-request.json" ] \
+  || fail "PART C: no approval request was written for the held branch"
+# Two gate runs for three tasklists: one batch tip covering alpha+bravo, and charlie's
+# own trip through the floor. The exclusion costs exactly the floor, and nothing more.
+[ "$(verifies "$REPO_C")" = 2 ] \
+  || fail "PART C: expected 2 verifications (1 batch tip for 2 + 1 floor for charlie), got $(verifies "$REPO_C")"
+grep -q 'merge queue: 1 batch-tip verification(s) covering 2 branch(es)' "$LOG" \
+  || fail "PART C: the summary did not report a batch of 2"
+echo "merge-batch: PART C ok — the zoned branch took the floor and was held; its peers batched without it"
 
 echo "MERGE-BATCH OK"

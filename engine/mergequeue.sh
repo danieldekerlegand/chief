@@ -35,6 +35,21 @@
 # floor. Correct, just slower. `MERGE_BATCH_BISECT=0` skips straight to that, which is
 # the honest setting for a gate known to be flaky.
 #
+# THE GATE'S OTHER AXIS IS NOT A BOOLEAN. Everything above is about a pass/fail
+# oracle. The code-quality ratchet (engine/quality.sh) is a METRIC DELTA, it is
+# cross-branch by construction, and its scope moves with every prefix — so a red tip
+# carrying one is never bisected. It is ATTRIBUTED: each member is re-measured ALONE
+# against the base over its own changed files, and blamed only if IT is out of
+# tolerance. When nobody is, the outcome has a name — RATCHET-NOT-ATTRIBUTABLE — the
+# batch is dissolved, and the floor sorts it out attributably (mq_ratchet_attribute).
+#
+# THE POLICY LAYER STAYS PER BRANCH. A branch needing a human's yes (a `review`
+# overlap zone, engine/zones.sh) is never a batch member at all — mq_batchable keeps
+# it out, so it takes the floor and is asked about there. The diff-size budget is
+# evaluated against the tip the member was STACKED ON rather than the base, so it
+# measures that branch's own stories and a batch can neither dilute an oversized diff
+# nor charge a member for a peer's zone (mq_merge_member).
+#
 # ORDERING IS DETERMINISTIC, so a batch is reproducible: members are stacked in
 # COMPLETION ORDER (the order their workers reached the merge phase), ties broken by
 # tasklist name. Both are captured in the member record's filename — a zero-padded
@@ -184,6 +199,17 @@ mq_enqueue() {   # mq_enqueue NAME BRANCH REPO BASE SUB
   : > "$(mq_dir)/$name.queued"
 }
 
+# The other half of eligibility, recorded rather than inferred. A tasklist mq_batchable
+# turned down never joins a queue, and a batch LEADER that counted it as a peer who
+# still might would sit out its whole wait budget for a branch that is at that moment
+# blocked behind the leader's own merge lock. So the worker says so, once, on its way
+# to the floor, and mq_peer_could_join stops counting it.
+mq_unbatchable() {
+  mq_init
+  : > "$(mq_dir)/$1.nobatch"
+  echo ">> $1 is NOT eligible for the merge queue (its own \`verify\` array, or a \`review\` overlap zone) — it takes the SERIALIZED FLOOR, where the policy layer asks about it exactly as it does today"
+}
+
 mq_is_queued()  { [ -f "$(mq_dir)/$1.queued" ]; }
 mq_resolved()   { [ -f "$(mq_dir)/$1.done" ]; }
 mq_resolve()    { rm -f "$(mq_dir)/$1.queued" 2>/dev/null || true; : > "$(mq_dir)/$1.done"; }
@@ -212,6 +238,7 @@ mq_peer_could_join() {
     [ "$n" = "$self" ] && continue
     [ "$(get_state "$n")" = "running" ] || continue
     mq_is_queued "$n" && continue
+    [ -f "$(mq_dir)/$n.nobatch" ] && continue     # it is on the floor, not on its way here
     return 0
   done
   return 1
@@ -308,18 +335,22 @@ mq_stack_member() {
 # stays SERIALIZED against the base — the batch amortized the VERIFY, it never makes
 # concurrent writes to the integration branch.
 mq_merge_member() {
-  local name="$1" branch="$2" repo="$3" base="$4" sub="$5" pre_mb="$6" sha rpt af
+  local name="$1" branch="$2" repo="$3" base="$4" sub="$5" pre_mb="$6" scope="${7:-}" sha rpt af
   local live; live="$(live_of "$name")"
+  [ -n "$scope" ] || scope="$base"
   git -C "$repo" checkout "$branch" >/dev/null 2>&1 || {
     mq_member_fail "$name" checkout-failed CHECKOUT-FAILED tasklist.checkout-failed \
       "git checkout $branch failed in $repo" "!! $name: could not check out $branch to merge it"
     return 1; }
-  # THE POLICY LAYER, per BRANCH and never per batch tip — which is the whole point of
-  # doing it here, with this member's branch checked out: the diff-size budget it folds
-  # in measures THIS branch's stories, so a batch can never dilute an oversized diff
-  # into an aggregate that clears the budget.
+  # THE POLICY LAYER, per BRANCH and never per batch tip. Two things make that true
+  # and both matter: this member's branch is checked out, and $scope is the tip it was
+  # STACKED ON, not the base — so `scope...HEAD` is exactly this member's own commits.
+  # Measured from the base instead, member k would be charged with the whole batch: the
+  # diff-size budget would score its peers' stories as its own (and, for a repo whose
+  # stories share ids, sum them into one oversized row), and a `review` zone one of its
+  # peers changed would hold it. Per branch means per branch on both rules.
   if ! zones_merge_gate "$name" "$branch" "$repo" "$base" "$STATE" \
-                        "$(touches_of "$name" | tr '\n' ' ')"; then
+                        "$(touches_of "$name" | tr '\n' ' ')" "$scope"; then
     mq_member_park "$name" awaiting-approval \
       "the merge policy layer (overlap zone / diff budget) — rebased + verified, held for a human" \
       "   Branch $branch is kept (rebased, green) — approve what no gate can check, then re-run:  chief approve $name && chief run"
@@ -520,6 +551,118 @@ mq_blame() {
     "!! $name verify failed — ISOLATED by the batch bisect and left exactly as a serialized failure leaves it (persisted for re-engagement)"
 }
 
+# ---------------------------------------------------------------------------
+# The QUALITY RATCHET on a batch tip — the one red tip a bisect must not touch
+# ---------------------------------------------------------------------------
+# The merge gate has two axes and they fail in different SHAPES. The test axis is a
+# boolean function of the tree, which is what makes a bisect over stacked prefixes
+# sound. The code-quality ratchet (engine/quality.sh, the band-88 gate) is not: it is
+# a METRIC DELTA, measured on a batch tip against the base over the tip's changed-file
+# scope, and it is path-dependent in two ways a test suite is not —
+#
+#   · it is CROSS-BRANCH by construction. Duplication and decomposition are relations
+#     BETWEEN files: two branches can each stay inside tolerance and still, together,
+#     put two copies of the same block in the tree. Neither one did it;
+#   · the scope MOVES with the prefix. Probing "the first k branches" re-measures a
+#     different file set against the base, so the answers a bisect would compare are
+#     not answers to the same question. Binary search over them is meaningless, not
+#     merely expensive.
+#
+# So a ratchet-carrying red tip is never bisected. It is ATTRIBUTED MECHANICALLY
+# instead: every member is restored to the sha its worker finished on and re-measured
+# ALONE against the base over its OWN changed files — exactly what the floor would
+# have measured for it — and a branch is blamed only when its individual delta exceeds
+# the tolerance. Whatever is left over is not guessed at:
+#
+#   · one or more members blamed  -> they are left VERIFY-FAILED, the floor's own arm,
+#     and the survivors re-form as a fresh batch (they have never been verified without
+#     the blamed branch, so they are re-verified, not merged blind);
+#   · NOBODY blamed              -> RATCHET-NOT-ATTRIBUTABLE, a first-class named
+#     outcome: every member is individually within tolerance and the COMBINATION is
+#     not. The batch is dissolved and its members go through the serialized floor,
+#     each measured against a base containing the ones merged before it. Whether that
+#     CATCHES a joint regression is band 88's business and not this file's: its
+#     whole-tree baseline axis does (the first branch merges, the second is blocked
+#     there, attributably — which is why a repo that batches wants a committed
+#     baseline), while its changed-file scope axis does not, because the regression
+#     lives in the relation BETWEEN two branches' files and neither branch changed
+#     the other's. A batch tip can see a class of regression a per-branch gate cannot.
+#     That is a reason to keep a baseline, not a licence to invent a culprit.
+#
+# A regression is therefore never guessed at, and never allowed through because no
+# single branch could be blamed. Both halves of that sentence are the rule.
+
+# mq_ratchet_regressed LOG — does this red gate output carry a ratchet block?
+# Matched on engine/quality.sh's own two markers (`quality:   BLOCK  <metric>` and
+# `quality: BLOCKED — …`) rather than on an exit code, because the gate that ran is
+# the repo's verify hook: chief cannot see which of its axes said no, only what it
+# printed. Unanchored on purpose — a hook that indents or prefixes its sections still
+# matches, and no other line in the engine's vocabulary reads `quality: BLOCK`.
+mq_ratchet_regressed() {
+  [ -s "${1:-}" ] || return 1
+  LC_ALL=C grep -qE 'quality:[[:space:]]+BLOCK' "$1"
+}
+
+# mq_ratchet_probe NAME BRANCH REPO WORK_BASE — the ratchet, for ONE branch, alone.
+#   0 = within tolerance   1 = this branch regresses on its own   2 = not measurable
+#
+# The branch must already be back on the sha its worker finished on (mq_restore); this
+# only checks it out and re-runs the SAME gate the batch tip tripped, restricted to
+# the one axis a batch tip cannot attribute. Not a full verify: the test axis is what
+# the bisect is for, and paying for it here would buy an answer nothing asked.
+mq_ratchet_probe() {
+  local name="$1" branch="$2" repo="$3" work_base="$4" qq out rc=0
+  qq="${ENGINE:-}/quality.sh"
+  [ -f "$qq" ] || { echo "!! batch:   no engine/quality.sh to re-measure $name with"; return 2; }
+  git -C "$repo" checkout "$work_base" >/dev/null 2>&1
+  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || return 2
+  mq_bump ratchet_probes
+  echo ">> batch: RATCHET: re-measuring $name ($branch) ALONE against $work_base over its own changed files — attribution probe #$(mq_count ratchet_probes)"
+  out="$(CHIEF_BASE_BRANCH="$work_base" bash "$qq" ratchet --root "$repo" --base "$work_base" -q 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  case "$rc" in
+    0) return 0 ;;
+    # 1 is the ratchet's own BLOCK. The output is persisted where the floor persists a
+    # verify failure, because that is where the next run's re-engagement looks for it.
+    1) printf '%s\n' "$out" > "$SNAP/$name.verify-failed.log"; return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# mq_ratchet_attribute RECS REPO WORK_BASE OUT — re-measure every member alone.
+# Writes the members it did NOT blame to OUT (the survivors, in batch order).
+#   0 = at least one branch was attributed and blamed   1 = not attributable to anyone
+mq_ratchet_attribute() {
+  local recs="$1" repo="$2" work_base="$3" out="$4"
+  local name branch sub sha rc blamed=0
+  echo "!! batch: the red tip carries a QUALITY-RATCHET block, which is a METRIC DELTA and not a boolean."
+  echo "!! batch:   A delta on a shared tip is not bisectable — the ratchet is cross-branch (duplication is a"
+  echo "!! batch:   relation BETWEEN files) and its scope moves with every prefix — so each member is"
+  echo "!! batch:   RE-MEASURED ALONE against $work_base, and blamed only if IT is out of tolerance."
+  mq_restore "$recs"
+  : > "$out"
+  while IFS="$MQ_FS" read -r name branch _ _ sub sha; do
+    [ -n "$name" ] || continue
+    rc=0
+    mq_ratchet_probe "$name" "$branch" "$repo" "$work_base" || rc=$?
+    case "$rc" in
+      1)
+        blamed=$(( blamed + 1 ))
+        mq_bump ratchet_isolated
+        mq_member_fail "$name" verify-failed "VERIFY-FAILED" tasklist.verify-failed \
+          "the code-quality ratchet regressed on $branch measured ALONE against $work_base, attributed out of a red batch tip; log: $SNAP_REL/$name.verify-failed.log" \
+          "!! $name RATCHET-ATTRIBUTED — it regresses a tracked metric on its own, so the red batch tip is its doing; left exactly as a serialized failure leaves it"
+        continue ;;
+      2) echo ">> batch:   $name could not be re-measured alone — it is NOT blamed" ;;
+    esac
+    printf '%s%s%s%s%s%s%s%s%s%s%s\n' \
+      "$name" "$MQ_FS" "$branch" "$MQ_FS" "$repo" "$MQ_FS" "$work_base" "$MQ_FS" "$sub" "$MQ_FS" "$sha" >> "$out"
+  done < "$recs"
+  [ "$blamed" -gt 0 ] || return 1
+  echo ">> batch: RATCHET: $blamed branch(es) attributed and blocked out of the batch"
+  return 0
+}
+
 # mq_restore — put every branch back exactly as its worker left it. Called at the top
 # of every batch ROUND and on every path that DISSOLVES a batch, before anything else
 # happens: a member whose branch still sits on top of a peer that may never merge is a
@@ -542,12 +685,19 @@ mq_restore() {
 }
 
 # mq_merge_all RECS REPO WORK_BASE — the floor's merge step for each member in order.
+# The members are walked in STACK order, carrying the previous member's tip sha as the
+# next one's scope base — the one piece of state the policy layer needs to stay per
+# branch (see mq_merge_member). A SHA and not the branch name: finalize_merged may
+# delete a merged branch, and the commit stays reachable from the base either way.
 mq_merge_all() {
-  local recs="$1" repo="$2" work_base="$3" name branch sub pre_mb
+  local recs="$1" repo="$2" work_base="$3" name branch sub pre_mb scope next
+  scope="$work_base"
   while IFS="$MQ_FS" read -r name branch _ _ sub _; do
     [ -n "$name" ] || continue
     pre_mb="$(git -C "$repo" merge-base "$branch" "$work_base" 2>/dev/null || echo)"
-    mq_merge_member "$name" "$branch" "$repo" "$work_base" "$sub" "$pre_mb" || true
+    next="$(git -C "$repo" rev-parse "$branch" 2>/dev/null || echo)"
+    mq_merge_member "$name" "$branch" "$repo" "$work_base" "$sub" "$pre_mb" "$scope" || true
+    [ -n "$next" ] && scope="$next"
   done < "$recs"
 }
 
@@ -641,6 +791,21 @@ mq_run_batch() {
         "this batch has already had $max_rounds branch(es) isolated and is STILL red — past the bound (MERGE_BATCH_BISECT=$max_rounds), the floor is cheaper than more bisecting"
       break
     fi
+    # ---- a RATCHET delta is not a boolean, so it is attributed, not bisected ----
+    # Checked BEFORE the bisect and sharing the bisect's round bound: a tip carrying a
+    # quality-ratchet block is answering a different question, and binary search over
+    # prefixes is not merely expensive on it, it is meaningless (mq_ratchet_attribute).
+    if mq_ratchet_regressed "$tiplog"; then
+      if mq_ratchet_attribute "$kept" "$repo" "$work_base" "$pending"; then
+        left="$(grep -c . "$pending" 2>/dev/null || echo 0)"
+        [ "$left" -gt 0 ] && echo ">> batch: RE-FORMING a batch from the $left surviving branch(es)"
+        continue
+      fi
+      mq_bump not_attributable
+      mq_dissolve "$kept" "$repo" "$work_base" \
+        "RATCHET-NOT-ATTRIBUTABLE — the tip regressed a tracked quality metric, every member is individually WITHIN tolerance, and the regression is therefore a property of the COMBINATION. No single branch can be blamed for it and none will be"
+      break
+    fi
     if ! mq_bisect "$kept" "$nstack" "$repo" "$work_base"; then
       mq_dissolve "$kept" "$repo" "$work_base" "the bisect could not be completed"
       break
@@ -685,6 +850,17 @@ mq_run_batch() {
 # batch; everyone else waits for the leader to write their result. Always returns 0:
 # by the time it does, this tasklist's <name>.status has been written by whoever
 # resolved it, and reap() reads it exactly as it reads the floor's.
+# mq_take_merge NAME BRANCH REPO BASE SUB WT — the ONE call driver.sh's merge phase
+# makes into this file, so the fork in the worker stays a single line.
+#   0  the queue OWNS this tasklist's merge; by the time it returns, <name>.status has
+#      been written by whoever resolved it and the worker is done.
+#   1  not eligible (mq_batchable said no). Said out loud exactly once, so no leader
+#      waits for it, and the caller falls through to the serialized floor.
+mq_take_merge() {
+  mq_batchable "$1" "$2" "$3" "$4" || { mq_unbatchable "$1"; return 1; }
+  mq_worker_merge "$@"
+}
+
 mq_worker_merge() {
   local name="$1" branch="$2" repo="$3" base="$4" sub="$5" wt="$6"
   local live; live="$(live_of "$name")"

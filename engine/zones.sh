@@ -203,8 +203,8 @@ zones_render() {
   return 0
 }
 
-# zones_merge_gate NAME BRANCH WORK_REPO BASE STATE TOUCHES — the decision the merge
-# phase asks for, and the only entry point driver.sh calls.
+# zones_merge_gate NAME BRANCH WORK_REPO BASE STATE TOUCHES [SCOPE_BASE] — the
+# decision the merge phase asks for, and the only entry point driver.sh calls.
 #
 #   0  MERGE — no zone with policy `review` matched what this branch changed, or one
 #      did and this exact change is already approved.
@@ -215,12 +215,21 @@ zones_render() {
 # true: the branch is rebased onto the latest base and its verify came back green.
 # $live is the caller's liveliness record, by dynamic scope (the same idiom as
 # driver.sh's worker_park) — absent, live_set is a no-op and nothing else changes.
+#
+# SCOPE_BASE is what "this branch's own changes" is measured FROM, and it defaults to
+# BASE — which is the same thing on the serialized floor, where HEAD carries nothing
+# but this branch. It exists for the opt-in merge queue (engine/mergequeue.sh), where
+# a member has been STACKED on its predecessors: there `base...HEAD` is the whole
+# batch, so the caller passes the predecessor's tip and both rules below stay per
+# BRANCH — a batch can neither dilute an oversized diff into an aggregate nor charge a
+# member for a zone one of its peers changed.
 zones_merge_gate() {
-  local name="$1" branch="$2" repo="$3" base="$4" state="$5" touches="${6:-}"
+  local name="$1" branch="$2" repo="$3" base="$4" state="$5" touches="${6:-}" scope="${7:-}"
   local conf files zmatch digest sha
+  [ -n "$scope" ] || scope="$base"
   conf="${ZONES_CONF:-$(zones_file "${CHIEF_PROJECT:-.}")}"
   live_set "${live:-}" phase=zone-check
-  files="$(git -C "$repo" diff --name-only "$base"...HEAD 2>/dev/null)"
+  files="$(git -C "$repo" diff --name-only "$scope"...HEAD 2>/dev/null)"
   # THE POLICY LAYER'S SECOND RULE, evaluated here rather than beside here: the
   # per-story DIFF-SIZE BUDGET (engine/budget.sh, sourced by the driver alongside
   # this file). It measures every branch, records the sizes into the story records,
@@ -228,7 +237,7 @@ zones_merge_gate() {
   # the match below. Folding it in at this point is what keeps the two rules from
   # DOUBLE-PROMPTING: one checksum, one request file, one `chief approve`, whether a
   # branch tripped a declared zone, an oversized story, or both at once.
-  budget_evaluate "$name" "$repo" "$base" "$state"
+  budget_evaluate "$name" "$repo" "$scope" "$state"
   budget_annotate "${SNAP:-}/$name.json" "$state" "$name"
   budget_note "$state" "$name"
   zmatch="$( [ -n "$conf" ] && zones_match review "$conf" "$files" "$touches"

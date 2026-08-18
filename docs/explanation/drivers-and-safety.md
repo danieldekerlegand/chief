@@ -305,9 +305,8 @@ Two kinds of branch are **never** batch members, and take the floor instead:
   about *that* tree, and a tip shared with other branches is not it;
 - one that changes a domain declared a `review` [overlap zone](#the-policy-layer-above-the-floor-overlap-zones--the-diff-size-budget).
   A batch-tip verify is not a human's yes, so such a branch is never smuggled into the
-  base as a batch member. The diff-size budget is likewise evaluated **per branch**,
-  with that branch checked out — a batch can never dilute an oversized diff into an
-  aggregate that clears the budget.
+  base as a batch member — see [below](#overlap-zones-and-the-diff-budget-under-batching)
+  for that rule and for how the diff-size budget stays per branch.
 
 ### A red tip: bisect, confirm, then blame
 
@@ -379,6 +378,91 @@ cost, so the search can never quietly absorb its own bill into the ratio:
    merge queue: 2 batch-tip verification(s) covering 5 branch(es) (max batch 4)
    merge queue: 3 extra verification(s) spent bisecting — 1 branch(es) isolated, 0 batch(es) dissolved to the serialized floor
 ```
+
+### A quality-ratchet regression on a batch tip: attributed, never bisected
+
+The merge gate has two axes and they fail in different **shapes**. The test axis is a
+boolean function of the tree, and that is exactly what makes a bisect over stacked
+prefixes sound. The [code-quality ratchet](../../engine/quality.sh) is not a boolean:
+it is a **metric delta**, measured against the base over the changed-file scope, and
+it is path-dependent in two ways a test suite is not.
+
+- It is **cross-branch by construction.** Duplication and decomposition are relations
+  *between* files. Two branches can each sit comfortably inside tolerance and still,
+  together, put two copies of the same block in the tree. Neither one of them did it.
+- **The scope moves with the prefix.** Probing "the first *k* branches" re-measures a
+  different file set against the base, so the answers a binary search would compare
+  are not answers to the same question. Bisecting them is not merely expensive — it
+  is meaningless.
+
+So a red tip carrying a ratchet block is **never bisected**. Chief attributes it
+mechanically instead: every member is restored to the sha its worker finished on and
+**re-measured alone** against the base over *its own* changed files — exactly what the
+serialized floor would have measured for it — and a branch is blamed only when **its
+individual delta exceeds the tolerance**. What is left over is not guessed at:
+
+- **One or more members are out of tolerance on their own** → each is left in the
+  floor's own `VERIFY-FAILED` state, with the ratchet's own output persisted to
+  `snapshots/<name>.verify-failed.log` where the next run's re-engagement reads it.
+  The survivors have never been verified without them, so they **re-form as a fresh
+  batch** and go round again rather than merging on the strength of a tip that
+  contained a blamed branch.
+- **Nobody is out of tolerance on their own** → `RATCHET-NOT-ATTRIBUTABLE`, a
+  first-class, named outcome. Every member is individually green and the *combination*
+  is not, so no single branch can be blamed for it and **none is**. The batch is
+  dissolved, its members are restored to their workers' shas and re-run through the
+  serialized floor, each measured against a base that already contains the ones merged
+  before it.
+
+Whether the floor then catches the joint regression is the ratchet's business rather
+than the queue's, and it is worth being exact about, because the two axes answer
+differently:
+
+- the **whole-tree baseline axis** does see it. Duplication between two branches' files
+  is a whole-tree fact, so the first branch merges and the second — now measured
+  against a tree containing the first — is blocked *there*, attributably. That is the
+  outcome the fallback is built for, and it needs a committed
+  `.chief/quality-baseline.json` (`chief quality ratchet --write-baseline`);
+- the **changed-file scope axis** does not. It measures only what the branch itself
+  changed, so a regression living in the *relation* between two branches' files is
+  invisible to it and both branches merge.
+
+A batch tip can therefore see a class of regression a per-branch gate cannot — the tip's
+scope contains both branches' files. That is a reason to commit a baseline if you batch;
+it is not a reason for the queue to invent a culprit. What the queue guarantees is
+narrower, and it is the part that matters: **it never blames a branch it cannot see the
+regression in, and it never merges anything the floor would have blocked.**
+
+Both halves of that are the rule: **a metric delta is never guessed at, and a
+regression is never allowed through because no single branch could be blamed.** The
+outcome is reported on its own summary line, for the same reason the bisect's cost is:
+
+```
+   merge queue: 3 per-branch quality-ratchet re-measurement(s) — 1 branch(es) attributed, 0 batch(es) RATCHET-NOT-ATTRIBUTABLE (dissolved to the serialized floor)
+```
+
+`CHIEF_MERGE_BATCH_BISECT` bounds this the same way it bounds the bisect — it is the
+number of *isolation rounds* one batch is worth, whichever mechanism spends them — so
+`0` means a red tip of any shape dissolves straight to the floor.
+
+### Overlap zones and the diff budget under batching
+
+Batching must not weaken the [policy layer](#the-policy-layer-above-the-floor-overlap-zones--the-diff-size-budget),
+and it is kept out of its way by two separate rules:
+
+- **A branch that changed a `review` zone is excluded from batching entirely.** That
+  is the choice, and it is the strict one: it is not "batched, then held" and not
+  "batched once approved" — `mq_batchable` refuses it before a batch is ever formed,
+  so it takes the floor and a human is asked about it exactly as today, on a branch
+  rebased onto the base and verified by itself. A batch-tip verify is never a human's
+  yes, and no `review`-zone branch is ever merged as a batch member on the strength of
+  one. (`test/merge-batch.sh` PART C asserts it: the zoned branch is held
+  `AWAITING-APPROVAL` and never appears in a batch, while its peers batch without it.)
+- **The diff-size budget is evaluated per branch, not per batch tip.** A stacked
+  member's `base...HEAD` is the *whole batch*, so the queue passes the tip the member
+  was stacked on as the scope base instead. The budget then measures that branch's own
+  stories — a batch can neither dilute an oversized diff into an aggregate that clears
+  the budget, nor charge a member for a peer's diff or a peer's zone.
 
 ## Interruptions & resume
 

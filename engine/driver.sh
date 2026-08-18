@@ -2151,10 +2151,7 @@ run_worker() {
     # handed to the queue (which races for this same $MERGE_LOCK and writes the same
     # <name>.status reap() reads); a branch that may NOT — its own `verify` array, or a
     # `review` overlap zone — falls through to the floor, which is where it belongs.
-    if mq_enabled && mq_batchable "$name" "$branch" "$work_repo" "$work_base"; then
-      mq_worker_merge "$name" "$branch" "$work_repo" "$work_base" "$sub" "$wt"
-      return 0
-    fi
+    mq_enabled && mq_take_merge "$name" "$branch" "$work_repo" "$work_base" "$sub" "$wt" && return 0
     # ---- SERIALIZED merge phase (only one tasklist touches main at a time) ----
     local waited=0
     live_set "$live" phase=merge-wait
@@ -2746,6 +2743,12 @@ if mq_enabled; then
   # would let the amortization ratio quietly absorb the cost of isolating a culprit.
   if [ "$(mq_count probes)" != 0 ] || [ "$(mq_count dissolved)" != 0 ]; then
     echo "   merge queue: $(mq_count probes) extra verification(s) spent bisecting — $(mq_count isolated) branch(es) isolated, $(mq_count dissolved) batch(es) dissolved to the serialized floor"
+  fi
+  # The RATCHET axis keeps its own line for the same reason: a metric delta on a tip is
+  # attributed by re-measuring each branch alone, never by bisection, and when nobody
+  # is individually out of tolerance the outcome has a NAME rather than a suspect.
+  if [ "$(mq_count ratchet_probes)" != 0 ] || [ "$(mq_count not_attributable)" != 0 ]; then
+    echo "   merge queue: $(mq_count ratchet_probes) per-branch quality-ratchet re-measurement(s) — $(mq_count ratchet_isolated) branch(es) attributed, $(mq_count not_attributable) batch(es) RATCHET-NOT-ATTRIBUTABLE (dissolved to the serialized floor)"
   fi
 fi
 echo "==================================================================="
