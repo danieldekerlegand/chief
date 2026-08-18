@@ -233,9 +233,32 @@ DEMOTE_REPEATS=0
 # choice must stay identical — a plan written against different project conventions
 # than the code it becomes is worse than no plan at all.
 #
-# The RESEARCH DOCUMENT goes in next-to-last, when there is one, and the BOUNDARY
-# DEMOTION NOTICE (above) after it — everything else in the prompt is standing context,
-# and that notice is the one part of it about the turn being composed right now.
+# The RESEARCH DOCUMENT goes in next-to-last, when there is one, then the PRIOR-WORK
+# NOTICE, and the BOUNDARY DEMOTION NOTICE (above) last — everything else in the prompt
+# is standing context, and those two are the parts of it about the turn being composed
+# right now.
+#
+# THE PRIOR-WORK NOTICE (tasklist 96, US-2) — what is ALREADY on this branch, named.
+# Every turn is a FRESH agent context: the stories that landed before it are commits it
+# has no memory of, and on a RESUMED run (the failure this tasklist exists for) they may
+# have been made by a different process entirely, hours ago. Left to infer, an agent has
+# exactly two moves — spend the turn rediscovering the work from the diff, or implement
+# a story that is already implemented. The second is the expensive one: two
+# implementations of one story on one branch is a genuinely messy state to unpick, far
+# worse than the unfinished story it was trying to avoid. So the notice states the fact
+# rather than leaving it to be discovered — WHICH stories are done, that their code is
+# already committed HERE, and that re-implementing one is a defect.
+#
+# NOT GATED ON "is this a resume?", deliberately. The hazard is identical at iteration 2
+# of an uninterrupted run — same fresh context, same commits it did not make — and chief
+# cannot tell the two apart from inside the turn anyway. It is gated on the only thing
+# that matters: whether any story is marked done. A first turn on an untouched tasklist
+# has none, emits nothing, and its prompt is byte-for-byte what it has always been.
+#
+# DERIVED FROM $PRD_FILE, not from a variable the loop maintains, and read at compose
+# time — so a story the BAR rule demoted at the boundary (which recomposes the prompt)
+# drops straight out of the list, and the notice can never claim work the record no
+# longer claims.
 #
 # The research document goes in after the project context, ordered by specificity —
 # engine loop, then project conventions, then the map of the code THIS tasklist is
@@ -249,7 +272,7 @@ DEMOTE_REPEATS=0
 # above the research phase) simply means no research section, and the prompt is
 # byte-for-byte what it has always been.
 _compose_prompt() {
-  local src="$1" dest="$2" ctx="${CHIEF_AGENT_CONTEXT:-}"
+  local src="$1" dest="$2" ctx="${CHIEF_AGENT_CONTEXT:-}" done_list next_id
   {
     cat "$src"
     if [ -n "$ctx" ] && [ -f "$CHIEF_PROJECT/$ctx" ]; then
@@ -270,6 +293,32 @@ _compose_prompt() {
       printf 'worktree does not persist). Do not rewrite it as part of a story.\n\n'
       printf -- '---\n\n'
       cat "$RESEARCH_DOC"
+    fi
+    # THE PRIOR-WORK NOTICE (see the header above). Both jq reads are guarded to empty,
+    # so a missing or half-written PRD costs the section, never the prompt.
+    done_list="$(jq -r '[.userStories[]? | select(.passes==true)]
+                         | map("  - \(.id) — \(.title // "untitled")") | join("\n")' \
+                   "$PRD_FILE" 2>/dev/null || echo "")"
+    if [ -n "$done_list" ]; then
+      next_id="$(jq -r '[.userStories[]? | select(.passes==false)][0].id // empty' \
+                   "$PRD_FILE" 2>/dev/null || echo "")"
+      printf '\n\n---\n\n# ALREADY DONE — work that is already committed on this branch\n\n'
+      printf 'Chief has the stories below recorded as COMPLETE for this tasklist, and\n'
+      printf 'their code is ALREADY ON the branch you have checked out. That is a stated\n'
+      printf 'fact, not something for you to establish by reading the diff or the log:\n\n'
+      printf '%s\n\n' "$done_list"
+      printf 'You have no memory of that work — every turn is a fresh context, and this run\n'
+      printf 'may be RESUMING a tasklist that was interrupted after those stories landed.\n'
+      printf 'The work is in the tree regardless. Read the files if you need them.\n\n'
+      printf 'RE-IMPLEMENTING ONE OF THOSE STORIES IS A DEFECT — and a worse one than\n'
+      printf 'leaving a story unfinished. Two implementations of one story on one branch is\n'
+      printf 'a genuinely messy state to unpick: the second duplicates, conflicts with or\n'
+      printf 'silently overrides the first, and a human has to work out which one is live.\n'
+      printf 'An unfinished story is simply work for the next iteration.\n'
+      if [ -n "$next_id" ]; then
+        printf '\nYour work this turn is %s — the highest-priority story still reading\n' "$next_id"
+        printf '`passes: false`. Only that one.\n'
+      fi
     fi
     # THE DEMOTION NOTICE goes LAST — after the map, after the conventions, at the end
     # of the prompt, because it is the only part of it that is about THIS turn. Injected

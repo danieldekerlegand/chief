@@ -29,6 +29,15 @@
 #      boundary has been reached, and losing it is an off-by-one straight into the
 #      re-implementation hazard.
 #
+#   A2. THE RESUMED AGENT IS TOLD (US-2). Resuming with the right COUNT is only half
+#      the guard — the agent still has to know that US-1 and US-2 are done and that
+#      their code is on the branch it just checked out, or the re-implementation hazard
+#      is exactly where it was. The resumed run's fake agent banks the prompt it was
+#      handed on its FIRST turn; the test asserts that prompt names both finished
+#      stories, does NOT name the unfinished one as done, and states outright that
+#      re-implementing one is a defect. The counterpart is asserted too: the FIRST turn
+#      of the fresh run (nothing done yet) gets no such section at all.
+#
 #   B. The TERMINAL RECORD is unmoved — the resumed run merges, and the parent still
 #      gets exactly ONE tasks/chief commit, still shaped
 #      `... complete @sha — bump sub + record + retire`, with the tasklist retired to
@@ -89,7 +98,12 @@ mkdir -p "$WORK/fake1" "$WORK/fake2"
 cat > "$WORK/fake1/claude" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
-cat >/dev/null
+# BANK THE PROMPT of the first turn only (both fakes do this; run_until_killed and the
+# restart each clear the file first). The prompt is what US-2 is about, and stdin is
+# where the claude provider receives it.
+cat > "$CHIEF_TEST_PROMPTFILE.$$"
+[ -f "$CHIEF_TEST_PROMPTFILE" ] || cp "$CHIEF_TEST_PROMPTFILE.$$" "$CHIEF_TEST_PROMPTFILE"
+rm -f "$CHIEF_TEST_PROMPTFILE.$$"
 PRD=".chief/state/prd.json"                       # cwd = the work-repo worktree
 id="$(jq -r 'first(.userStories[]|select(.passes==false)).id // empty' "$PRD")"
 [ -n "$id" ] || exit 0
@@ -134,7 +148,7 @@ chmod +x "$WORK/fake1/claude" "$WORK/fake2/claude"
 # to write the end-of-worker snapshot, which is the write this test must NOT get.
 run_until_killed() {
   local log="$1" pgid waited=0
-  rm -f "$WORK/killflag"
+  rm -f "$WORK/killflag" "$CHIEF_TEST_PROMPTFILE"
   set -m
   ( PATH="$WORK/fake1:$PATH" "$CHIEF" run >"$log" 2>&1 ) &
   local bg=$!
@@ -166,6 +180,7 @@ JSON
 export CHIEF_TEST_HANG_ON=US-2
 export CHIEF_TEST_KILLFLAG="$WORK/killflag"
 export CHIEF_TEST_RESUMEFILE="$WORK/resumed"
+export CHIEF_TEST_PROMPTFILE="$WORK/prompt"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ARM A — a SUBMODULE tasklist: killed at 2 of 3, restarted, must resume at 2 of 3
@@ -197,6 +212,12 @@ git add -A && git commit -q -m "resume-demo tasklist + verify hook"
 
 run_until_killed "$WORK/A/run1.log"
 
+# THE COUNTERPART (US-2): nothing was done when that first turn was composed, so the
+# prompt must carry no prior-work section at all — the untouched case is unperturbed.
+[ -f "$CHIEF_TEST_PROMPTFILE" ] || fail "A: the fresh run never handed its agent a prompt"
+! LC_ALL=C grep -qF 'ALREADY DONE' "$CHIEF_TEST_PROMPTFILE" \
+  || fail "A: the FIRST turn of a fresh tasklist was told work is already on the branch"
+
 # the branch really carries two stories' worth of work
 SUB="$REPO/sub"
 n_commits="$(git -C "$SUB" rev-list --count main..chief/resume-demo 2>/dev/null || echo 0)"
@@ -211,7 +232,7 @@ banked="$(jq '[.userStories[]|select(.passes==true)]|length' "$SNAPFILE" 2>/dev/
 [ "$banked" = "2" ] || fail "A: the durable snapshot banked $banked of 3, not 2 — the killed run lost a story"
 
 # RESTART: the resumed agent must be handed 2 passing with US-3 next
-rm -f "$CHIEF_TEST_RESUMEFILE"
+rm -f "$CHIEF_TEST_RESUMEFILE" "$CHIEF_TEST_PROMPTFILE"
 PATH="$WORK/fake2:$PATH" "$CHIEF" run >"$WORK/A/run2.log" 2>&1 || { cat "$WORK/A/run2.log" >&2; fail "A: restarted run exited non-zero"; }
 [ -f "$CHIEF_TEST_RESUMEFILE" ] || fail "A: the resumed run never invoked the agent"
 read -r a_passing a_next < "$CHIEF_TEST_RESUMEFILE"
@@ -221,6 +242,27 @@ read -r a_passing a_next < "$CHIEF_TEST_RESUMEFILE"
 # lives in .chief/state/parallel/<name>.log, and only the run summary reaches stdout.
 grep -q "RESUMING chief/resume-demo (1 story left)" "$REPO/.chief/state/parallel/resume-demo.log" \
   || fail "A: the worker did not report the resume as 1 story left"
+
+# ── US-2: the resumed agent was TOLD, it did not have to infer ────────────────
+# This is insimul:164's exact shape — 2 of 3 committed in a submodule, run restarted —
+# and the assertions are on strings only the ENGINE emits (the section heading and its
+# defect sentence) plus markers this fixture planted (the story titles "one"/"two").
+# Nothing here matches templates/agent-context.md, which quotes only the Research heading.
+[ -f "$CHIEF_TEST_PROMPTFILE" ] || fail "A: the resumed run banked no prompt"
+NOTICE="$WORK/A/notice.txt"
+LC_ALL=C sed -n '/# ALREADY DONE/,$p' "$CHIEF_TEST_PROMPTFILE" > "$NOTICE"
+[ -s "$NOTICE" ] || fail "A: the resumed prompt never told the agent what is already done"
+LC_ALL=C grep -qF 'already committed on this branch' "$NOTICE" \
+  || fail "A: the notice does not say the finished work is present on the checked-out branch"
+for done_story in 'US-1 — one' 'US-2 — two'; do
+  LC_ALL=C grep -qF "$done_story" "$NOTICE" || fail "A: the notice does not name '$done_story' as complete"
+done
+! LC_ALL=C grep -qF 'US-3 — three' "$NOTICE" \
+  || fail "A: the notice lists the UNFINISHED story US-3 among the completed ones"
+LC_ALL=C grep -qF 'RE-IMPLEMENTING ONE OF THOSE STORIES IS A DEFECT' "$NOTICE" \
+  || fail "A: the notice does not state that re-implementing a completed story is a defect"
+LC_ALL=C grep -qF 'Your work this turn is US-3' "$NOTICE" \
+  || fail "A: the notice does not point the resumed agent at US-3"
 
 # ── the terminal record is unmoved (criterion 3) ───────────────────────────────
 git -C "$SUB" checkout -q main
