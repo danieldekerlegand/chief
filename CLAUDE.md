@@ -153,8 +153,11 @@ VERSION              # engine version — bump on any engine/bin/install change
 - **Durable per-tasklist state lives OUTSIDE the worktree.** `run_worker` does `rm -rf "$wt"` at the
   top of every run, so anything written only under `$wt/.chief/state/` is rebuilt by each resumed run.
   The working shape: the driver owns an absolute path under `$STATE_ROOT`, hands it down as an env var
-  (`CHIEF_PAUSE_FILE`, `CHIEF_RESEARCH_FILE`), and `agent.sh` seeds FROM it and promotes back TO it the
-  moment the artifact is valid — not at the end of the loop, or a mid-run death loses it. Relatedly, a
+  (`CHIEF_PAUSE_FILE`, `CHIEF_RESEARCH_FILE`, `CHIEF_PRD_SNAPSHOT`), and `agent.sh` seeds FROM it and
+  promotes back TO it the moment the artifact is valid — not at the end of the loop, or a mid-run death
+  loses it. **For a `repo:<sub>` tasklist that snapshot IS the per-story record** — its tasklist is in the
+  parent and its work branch in the submodule, so neither side commits "2 of 3" and only
+  `.chief/state/snapshots/<name>.json` can answer it on a resume (`prd_state_source` in `driver.sh`). Relatedly, a
   new `agent.sh` exit code needs its `run_worker` arm placed **above** the EMPTY-NO-WORK guard whenever
   that stop can legitimately leave zero commits (as 2, 3, 4, 5 and 6 all can). Exit codes are a
   **contended namespace** across parallel tasklists — grep `AGENT_RC_` in `driver.sh` *and* agent.sh's
