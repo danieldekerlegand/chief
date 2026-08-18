@@ -248,6 +248,13 @@ TOOL="$PROVIDER"                         # compatibility name used in status out
 PARALLEL="${PARALLEL:-1}"                   # default sequential; -p N for concurrency
 AUTO_MERGE_MAIN="${CHIEF_AUTO_MERGE:-${AUTO_MERGE_MAIN:-1}}"
 NO_VERIFY="${NO_VERIFY:-0}"
+# MERGE QUEUE (engine/mergequeue.sh) — OPT-IN, and off unless someone asked for it.
+# 1 = the serialized floor, which is what every merge phase below still is by default;
+# N > 1 batches up to N merge-ready branches, stacks them and verifies the tip ONCE.
+# `chief run --merge-batch[=N]` sets it for one run; CHIEF_MERGE_BATCH in .chief/config
+# sets it per repo. MERGE_BATCH_WAIT bounds how long a batch leader waits for peers.
+MERGE_BATCH="${CHIEF_MERGE_BATCH:-${MERGE_BATCH:-1}}"
+MERGE_BATCH_WAIT="${CHIEF_MERGE_BATCH_WAIT:-${MERGE_BATCH_WAIT:-120}}"
 STRICT_VERIFY="${STRICT_VERIFY:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 POLL_SECONDS="${POLL_SECONDS:-5}"
@@ -435,6 +442,12 @@ source "$ENGINE/budget.sh"
 # them — and asks nothing at all of a repo that declares no zones and stays in budget.
 source "$ENGINE/zones.sh"
 ZONES_CONF="$(zones_file "$REPO")"
+# The OPT-IN BATCH MERGE QUEUE (engine/mergequeue.sh). Sourced after zones.sh because
+# its eligibility rule consults the zone registry: a branch that needs a human's yes
+# is never merged on the strength of a shared batch tip. Sourcing it is free — with
+# MERGE_BATCH=1 (the default) nothing below ever calls into it, and the merge phase
+# is the serialized floor it has always been.
+source "$ENGINE/mergequeue.sh"
 # git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
 # another uid, and an image with no committer identity. Sourced before anything runs
 # git on $REPO; its exports are inherited by every child — agent.sh, the verify hook,
@@ -2126,6 +2139,17 @@ run_worker() {
       echo "COMPLETE-UNMERGED $total/$total" > "$STATE/$name.status"
       echo ">> $name complete (auto-merge off) — branch $branch"; return 0
     fi
+    # ---- MERGE QUEUE (opt-in; engine/mergequeue.sh) --------------------------
+    # The ONE fork in the merge phase, and it is closed unless an operator opened it.
+    # With MERGE_BATCH=1 — the default — mq_enabled is false and everything below runs
+    # exactly as it always has. With batching on, a branch that may ride in a batch is
+    # handed to the queue (which races for this same $MERGE_LOCK and writes the same
+    # <name>.status reap() reads); a branch that may NOT — its own `verify` array, or a
+    # `review` overlap zone — falls through to the floor, which is where it belongs.
+    if mq_enabled && mq_batchable "$name" "$branch" "$work_repo" "$work_base"; then
+      mq_worker_merge "$name" "$branch" "$work_repo" "$work_base" "$sub" "$wt"
+      return 0
+    fi
     # ---- SERIALIZED merge phase (only one tasklist touches main at a time) ----
     local waited=0
     live_set "$live" phase=merge-wait
@@ -2296,7 +2320,7 @@ for n in $NAMES; do
         "$STATE/$n.files" "$STATE/$n.touches"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
 done
-echo "Chief PARALLEL run — tool=$TOOL  max-parallel=$PARALLEL  auto-merge=$AUTO_MERGE_MAIN  verify=$([ "$NO_VERIFY" = 1 ] && echo off || echo on)"
+echo "Chief PARALLEL run — tool=$TOOL  max-parallel=$PARALLEL  auto-merge=$AUTO_MERGE_MAIN  verify=$([ "$NO_VERIFY" = 1 ] && echo off || echo on)$(mq_enabled && printf '  merge-batch=%s' "$(mq_batch_max)")"
 echo "Pending:$NAMES"; echo
 
 # Block-and-explain UP FRONT anything whose deps can never be satisfied in this
@@ -2705,6 +2729,13 @@ if [ -n "$audit_out" ]; then
   echo "   domain. This run was still safe — every branch was rebased and re-verified"
   echo "   before merging — but the overlap was invisible to the scheduler:"
   printf '%s\n' "$audit_out"
+fi
+# MERGE QUEUE — the amortization, COUNTED rather than claimed (engine/mergequeue.sh).
+# "batching amortizes verification" is a statement about a ratio, so the ratio is
+# reported: gate invocations against branches they covered. Silent when batching was
+# off, so a default run's summary is byte-for-byte the one it always printed.
+if mq_enabled; then
+  echo "   merge queue: $(mq_count verifications) batch-tip verification(s) covering $(mq_count covered) branch(es) (max batch $(mq_batch_max))"
 fi
 echo "==================================================================="
 

@@ -29,3 +29,13 @@ CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode | amp
 #                                # zone · off = do not measure at all
 # CHIEF_DIFF_BUDGET_LINES=400    # changed lines (added+deleted) per story; 0 disables
 # CHIEF_DIFF_BUDGET_FILES=20     # changed files per story;                 0 disables
+# --- the OPT-IN batch MERGE QUEUE (docs/explanation/drivers-and-safety.md) ----------
+# OFF by default, and off is the serialized floor: rebase -> re-verify -> --no-ff, one
+# tasklist at a time, which is chief's correctness guarantee. Set N > 1 to batch up to
+# N merge-ready branches, stack them on the base and verify the batch TIP ONCE instead
+# of paying the verify gate once per branch. Merges stay --no-ff, one commit per
+# tasklist, serialized against the base; only the VERIFICATION is amortized. Needs
+# `chief run -p N` with N > 1 to have anything to batch. `chief run --merge-batch[=N]`
+# sets it for one run and beats this file.
+# CHIEF_MERGE_BATCH=1            # 1 = off (the floor) · N = max branches per batch
+# CHIEF_MERGE_BATCH_WAIT=120     # seconds a batch leader waits for peers; 0 = never wait

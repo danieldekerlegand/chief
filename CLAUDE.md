@@ -92,6 +92,13 @@ engine/
                      #   Runs ONCE per tasklist before the first story (opt-in: "research":true /
                      #   CHIEF_RESEARCH=1); the document is persisted, human-editable and reused, never
                      #   regenerated. agent.sh dispatches it; a failure is exit 6 -> RESEARCH-FAILED
+  mergequeue.sh      #   the OPT-IN batch merge queue: stack N merge-ready branches on the base and
+                     #   verify the batch TIP ONCE instead of paying the gate N times. OFF by default
+                     #   (`chief run --merge-batch[=N]` / CHIEF_MERGE_BATCH) — the serialized
+                     #   rebase -> re-verify -> --no-ff floor stays the correctness guarantee. A batch
+                     #   of one IS that floor (no special case); a red tip names no culprit, so the
+                     #   batch dissolves, every branch is restored to the sha its worker finished on,
+                     #   and its members re-run serially
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to

@@ -44,7 +44,7 @@ run_sh() {
 BASH_SUITE=(
   smoke provider provider-conformance ratelimit limitstate limitresume limitmonitor pause plan-review research liveliness monitor teardown reapscope reapenv bystander noworkguard evidence-gate criteria-scope measured-bars boundary-demotion five-cases noworkguard-jsononly headless events container account-env
   stale-resume conflict-forensics rebase-refusal touches-audit
-  quality-ratchet overlap-zones
+  quality-ratchet overlap-zones merge-batch
   gen doc-sync
   crossrepo submodule nested-submodule nested-submodule-pointer retry-on-failure per-tasklist-verify retire-dirty-tasklist
   version-bump

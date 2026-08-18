@@ -258,6 +258,74 @@ a `serialize` zone merges exactly as before, a `review` zone and an over-budget 
 each hold a rebased, verified-green branch, an approval survives a restart in a
 separate process, and `warn` reports without blocking.
 
+## The merge queue: batching verification (opt-in, off by default)
+
+Everything above describes the **floor**: for N finished tasklists, chief pays the
+verify gate N times — rebase, re-verify, `--no-ff`, one at a time. That is the
+correctness guarantee and it does not change. At portfolio scale it is also the
+dominant cost of the merge phase, and the merge queue
+([`engine/mergequeue.sh`](../../engine/mergequeue.sh)) is the opt-in way to amortize
+it, in the shape Bors and Gastown's "Refinery" have run for years: **stack** several
+merge-ready branches (rebase each onto the running batch tip) and **verify that tip
+once**.
+
+It is off unless someone asks for it:
+
+```
+chief run -p 4 --merge-batch      # up to 4 branches per batch (bare flag = 4)
+chief run -p 4 --merge-batch=6    # up to 6
+chief run -p 4                    # the serialized floor — unchanged
+```
+
+Per repo, in `.chief/config`: `CHIEF_MERGE_BATCH=4` (default `1` = off) and
+`CHIEF_MERGE_BATCH_WAIT=120` (seconds a batch leader waits for peers to finish before
+it closes the batch; `0` batches only what has already arrived). With the option
+absent the merge phase runs the same code it ran before this feature existed —
+there is exactly one `if` in `driver.sh` guarding the fork, and it is closed.
+
+What batching does **not** change:
+
+- **Merges are still `--no-ff`, one commit per tasklist, still serialized against the
+  base.** A batch is a verification-amortization device; it never makes concurrent
+  writes to the integration branch.
+- **A batch is only formed from branches that are already merge-ready under the rules
+  above** — the agent loop reached COMPLETE, the no-work guard passed, and the branch
+  rebases cleanly onto the tip. A branch that hits a rebase conflict is **ejected**
+  with the same `REBASE-CONFLICT` label and the same forensics file it gets today, and
+  the batch re-forms without it. One bad rebase never fails the whole batch.
+- **Ordering is deterministic**, so a batch is reproducible: completion order (the
+  order workers reached the merge phase), ties broken by tasklist name.
+- **A batch of one is the serialized path.** There is no special case for it — one
+  member means "rebase onto the base, verify that tree, merge `--no-ff`", which is
+  the floor, reached through the same loop.
+
+Two kinds of branch are **never** batch members, and take the floor instead:
+
+- one carrying its own per-tasklist `"verify": [...]` array — that gate was written
+  about *that* tree, and a tip shared with other branches is not it;
+- one that changes a domain declared a `review` [overlap zone](#the-policy-layer-above-the-floor-overlap-zones--the-diff-size-budget).
+  A batch-tip verify is not a human's yes, so such a branch is never smuggled into the
+  base as a batch member. The diff-size budget is likewise evaluated **per branch**,
+  with that branch checked out — a batch can never dilute an oversized diff into an
+  aggregate that clears the budget.
+
+**Determinism is the assumption.** Amortizing a gate across N branches is sound only
+when the gate is a deterministic function of the tree; a flaky gate turns the tip's
+verdict into a coin flip about a *set* rather than a fact about a *tree*. Chief cannot
+make a gate deterministic. What it does instead is refuse to blame a branch on the
+strength of a single observation: a **red tip names no culprit**, so the batch is
+dissolved, every branch is restored to the exact sha its worker finished on, and its
+members are re-run through the floor — one verify each, where a failure is
+attributable to the single branch that caused it. Correct, just no cheaper than not
+having batched.
+
+The amortization is **counted, not claimed**. The run summary reports the ratio it
+actually achieved:
+
+```
+   merge queue: 2 batch-tip verification(s) covering 5 branch(es) (max batch 4)
+```
+
 ## Interruptions & resume
 
 A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a crash

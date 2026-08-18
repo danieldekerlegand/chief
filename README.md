@@ -215,6 +215,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief run --local` | Cost-avoidance preset: every agent turn on a LOCAL/self-hosted endpoint via OpenCode — zero API cost, materially lower coding quality, and an error rather than a paid fallback when unconfigured ([`docs/guides/local-inference-preset.md`](docs/guides/local-inference-preset.md)). |
 | `chief run -n` | Dry run: print the schedule waves and exit (no git, no agents). |
 | `chief run --no-merge` | Complete branches but don't merge into the base. |
+| `chief run --merge-batch[=N]` | **Opt-in merge queue, off by default.** Batch up to N merge-ready branches (bare flag = 4), stack them on the base and verify the batch TIP **once** instead of paying the verify gate once per branch. Merges stay `--no-ff`, one commit per tasklist, serialized against the base — only the verification is amortized. Without the flag the merge phase is the unchanged serialized floor. Also `CHIEF_MERGE_BATCH` in `.chief/config` ([`docs/explanation/drivers-and-safety.md`](docs/explanation/drivers-and-safety.md)). |
 | `chief run --headless` | Non-interactive embedding mode: no colour, a `chief: run-id=…` line, a JSON outcome summary and a documented exit-code table ([`docs/guides/headless-invocation.md`](docs/guides/headless-invocation.md)). |
 | `chief run --account-env FILE` | Run this run's AGENT TURNS under a designated provider account: a `KEY=VALUE` credential env file applied at the provider boundary only (`--account-label NAME` names it in `ps`/`monitor`/events; also `CHIEF_ACCOUNT_ENV_FILE`). Values never reach logs, the registry or `argv` ([`docs/reference/account-credentials.md`](docs/reference/account-credentials.md)). |
 | `chief list` | List tasklists with pass status. |
@@ -307,7 +308,7 @@ tree at once.
 
 ## Status
 
-**v0.8.45** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.46** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

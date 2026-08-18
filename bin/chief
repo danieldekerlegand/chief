@@ -165,6 +165,19 @@ run flags:
                      the run registry and the run.started event — so an operator can see which
                      account a run spends without any surface carrying its secrets. Defaults to the
                      --account-env file's basename. Also settable as CHIEF_ACCOUNT_LABEL.
+      --merge-batch[=N]
+                     OPT-IN MERGE QUEUE: batch up to N merge-ready branches, stack them on the
+                     base and verify the batch TIP ONCE instead of paying the verify gate once
+                     per branch. Bare flag = 4; =1 is the serialized floor (i.e. off). DEFAULT
+                     OFF — without it the merge phase is the rebase -> re-verify -> --no-ff
+                     floor it has always been, which stays chief's correctness guarantee.
+                     Merges are still --no-ff, one commit per tasklist, still serialized against
+                     the base; only the VERIFICATION is amortized. A branch that carries its own
+                     "verify" array, or that changes a `review` overlap zone, is never batched.
+                     Also settable per repo as CHIEF_MERGE_BATCH in .chief/config; a leader waits
+                     CHIEF_MERGE_BATCH_WAIT seconds (default 120) for peers to finish before it
+                     closes a batch. Needs -p N > 1 to have anything to batch.
+                     See docs/explanation/drivers-and-safety.md
       --no-merge     complete branches but don't merge into the base
 
 pause/resume flags:
@@ -216,6 +229,11 @@ load_project() {
   # in every operator's shell. All optional; unset means the documented defaults
   # (400 lines / 20 files per story, reported and NOT blocking).
   export CHIEF_DIFF_BUDGET CHIEF_DIFF_BUDGET_LINES CHIEF_DIFF_BUDGET_FILES
+  # The OPT-IN BATCH MERGE QUEUE (engine/mergequeue.sh). Exported so a repo can set
+  # its own policy in .chief/config rather than in every operator's shell. UNSET is
+  # the default and the default is OFF: absent these, the merge phase is the
+  # serialized rebase -> re-verify -> --no-ff floor, unchanged.
+  export CHIEF_MERGE_BATCH CHIEF_MERGE_BATCH_WAIT
 }
 
 cmd_init() {
@@ -317,7 +335,7 @@ cmd_list() {
 
 cmd_run() {
   local parallel=1 dry=0 merge="" provider="" model="" preset="" verbose="" headless="" \
-        account_env="" account_label="" ; local names=()
+        account_env="" account_label="" merge_batch="" ; local names=()
   while [ "$#" -gt 0 ]; do case "$1" in
     -p|--parallel) parallel="$2"; shift 2 ;;
     -p*)           parallel="${1#-p}"; shift ;;
@@ -325,6 +343,11 @@ cmd_run() {
     -V|--verbose)  verbose=1; shift ;;
     --headless)    headless=1; shift ;;
     --no-merge)    merge=0; shift ;;
+    # The merge queue is OPT-IN and it is opted into HERE, per run. Bare = 4, a
+    # deliberately small default: a batch is a bet that N branches are jointly green,
+    # and the bet gets worse as N grows. `--merge-batch=1` is the floor (i.e. off).
+    --merge-batch)   merge_batch=4; shift ;;
+    --merge-batch=*) merge_batch="${1#*=}"; shift ;;
     --provider)    provider="$2"; shift 2 ;;
     --provider=*)  provider="${1#*=}"; shift ;;
     --model)       model="$2"; shift 2 ;;
@@ -383,6 +406,15 @@ cmd_run() {
   # assignment, so bash tries to RUN it ("AUTO_MERGE_MAIN=0: command not found").
   [ -n "$verbose" ] && export CHIEF_VERBOSE=1    # inherited by the driver, forwarded to agent.sh
   [ -n "$merge" ]   && export AUTO_MERGE_MAIN="$merge"
+  # A bad --merge-batch is a bad invocation, not something to silently round down to
+  # the floor: an operator who asked for batching and got the serialized path would
+  # read the (identical) log as proof that batching does nothing.
+  if [ -n "$merge_batch" ]; then
+    case "$merge_batch" in
+      ''|*[!0-9]*|0) echo "--merge-batch: expected a positive integer, got '$merge_batch'" >&2; exit 2 ;;
+    esac
+    export CHIEF_MERGE_BATCH="$merge_batch"
+  fi
   # HEADLESS — the programmatic entry point (docs/guides/headless-invocation.md). Explicit,
   # never inferred from `[ -t 1 ]`: a host that pipes an interactive run through `tee`
   # must get the SAME behavior it gets on a terminal, and a contract that changes
