@@ -160,7 +160,10 @@ Four more guards back this up:
 
 - **Refusal is not conflict (`REBASE-REFUSED`).** A non-zero `git rebase` is only a
   *content* collision when git leaves **≥1 unmerged path** behind. Git also refuses
-  outright — a work repo with uncommitted tracked changes, a leftover
+  outright — a work repo with uncommitted tracked changes (no longer reachable here:
+  they are parked for the critical section, see below), a stale **submodule
+  gitlink** (also no longer reachable: the merge phase syncs the submodule working
+  trees to the ref it just checked out, see below), a leftover
   `rebase-merge`/`rebase-apply`/`MERGE_HEAD`/`CHERRY_PICK_HEAD` state, a repo it will
   not operate on (dubious ownership) — and those leave **zero** conflicted paths. The
   merge phase pre-flights those causes before rebasing and, on a failure, lets the
@@ -178,6 +181,48 @@ Four more guards back this up:
   skips the rebase altogether: git would only have to open the repo to say "up to
   date", and that is the one place an environment fault could turn a guaranteed
   no-op into a non-zero exit — the field case this whole path comes from.
+
+- **The operator's own checkout is not part of the floor.** The merge phase does its
+  rebase → re-verify → `--no-ff` merge *in the work repo*, so it used to require that
+  checkout to be clean — and one uncommitted line in a file no branch touched was
+  enough to fail a tasklist that had finished every story. It no longer is: for the
+  length of that critical section chief **parks** the work repo's uncommitted tracked
+  changes in git's own stash and gives them back on the way out, so the gate measures
+  the branch and nothing else. **Editing the repo while a run is in flight is safe for
+  the merge.** The work is only ever in git's object store, it is applied back *by
+  sha* (never `stash@{0}`, which an operator's own `git stash` would displace) and
+  with `--index`, and there are three restore paths — the merge subshell's `EXIT`
+  trap, teardown on a signal, and a sweep of stale `.critical` markers on the next
+  run, for the SIGKILL where neither ran. A replay that cannot apply cleanly **drops
+  nothing**: the entry stays and the run summary names the `git stash apply <sha>`
+  that recovers it.
+
+- **` M <submodule>` is a stale working tree, not uncommitted work.** Git does not move
+  a submodule's working tree when a ref moves, so the moment a branch whose **gitlink**
+  differs is checked out, `git status` reports the submodule as modified — and no
+  commit and no stash can clear it (there is nothing in the superproject to save). A
+  branch whose whole purpose is to advance the pin was therefore blocked by the change
+  it exists to make, on every run, forever. So chief **classifies** the dirt instead of
+  loosening the check: every checkout of the work repo in the merge path is followed by
+  a `git submodule update --init --recursive`, scoped to the submodules that are
+  actually stale, and the startup gate does the same before judging the tree. The
+  suppression flag `--ignore-submodules=dirty` is deliberately *not* used — it hides
+  work **inside** a submodule (which must keep blocking) and does not hide a gitlink
+  mismatch (which must not). A submodule carrying uncommitted work of its own is never
+  synced and still refuses the merge, naming itself and the fix.
+
+- **The startup gate protects the AGENT, not the merge.** `chief run` still refuses to
+  start on a dirty tree, or off the base branch, and `FORCE=1` still skips that. What
+  it buys is the *fork point*: every worktree is created from the base branch's tip,
+  so anything uncommitted in the operator's checkout is invisible to every tasklist in
+  the run — the agent plans and builds against a base its operator has already moved
+  past, and can duplicate or contradict the change sitting in the editor. It never
+  protected the merge (it is checked *once*, at launch, and nothing re-checks it — an
+  operator who typed a line five minutes in walked straight past it), and since the
+  parking above there is nothing left there to protect. So it stays a block on the
+  narrower ground: a run forked from the wrong tree cannot be repaired afterwards.
+  `FORCE=1` is the right call when the uncommitted work is somewhere no tasklist in
+  the run will look.
 
 Terminal per-tasklist statuses: `MERGED @<sha>`, `COMPLETE-UNMERGED`, `INCOMPLETE`,
 `EMPTY-NO-WORK`, `UNVERIFIED`, `UNSATISFIABLE`, `WORKTREE-FAILED`, `CHECKOUT-FAILED`, `REBASE-CONFLICT`,

@@ -9,6 +9,12 @@
 # main (base an ancestor → the rebase is a provable no-op) all parked as
 # REBASE-CONFLICT, blocking merges that had nothing to merge.
 #
+# Tasklist 93 (US-1) added the accounting half: a refusal is not just labelled
+# correctly, it is not RE-DISPATCHED. Re-running an agent cannot clean an operator's
+# working tree, so the two extra attempts a retryable status buys are knowably doomed
+# before they are spent — observed in the field as two finished tasklists each burning
+# 3/3 attempts to re-refuse over one uncommitted line.
+#
 # Two layers, cheapest first:
 #
 #   A. UNIT   — rebase_refusal_cause() is lifted straight out of engine/driver.sh
@@ -21,14 +27,26 @@
 #               2. CONFLICT a sibling merges over the same file mid-turn: still
 #                           REBASE-CONFLICT, still naming the conflicted file (the
 #                           real-conflict path must not regress).
-#               3. REFUSED  the agent leaves uncommitted tracked work in the WORK
-#                           repo, so git declines with zero unmerged paths: the
-#                           distinct REBASE-REFUSED state, its own note naming the
+#               3. REFUSED  the agent leaves a REBASE in progress (a stray rebase-merge
+#                           directory) in the WORK repo, so git declines with zero
+#                           unmerged paths:
+#                           the distinct REBASE-REFUSED state, its own note naming the
 #                           cause and the command that clears it, and no conflict
-#                           report anywhere near it.
+#                           report anywhere near it. Scheduled WITH a dependent, and
+#                           asserted on ATTEMPTS as well as labels: exactly one agent
+#                           run (vs. RETRY_MAX for the real conflict above), a summary
+#                           that names the precondition and the fix instead of
+#                           "exhausted its retries", and a dependency cascade that did
+#                           not change shape.
 #
-# Order matters: REFUSED runs last because it leaves the work repo dirty on
-# purpose, and `chief run` refuses to start on a dirty base repo.
+# NOT covered here any more, on purpose: a work repo carrying plain UNCOMMITTED
+# TRACKED CHANGES. That used to be this file's refusal scenario, and as of tasklist 93
+# (US-2) it is no longer a refusal at all — the merge phase parks the operator's work
+# in the stash for the length of its critical section and gives it back on the way out.
+# test/dirty-checkout.sh owns that case now, including the data-safety half.
+#
+# Order matters: REFUSED runs last because it leaves a rebase in progress in the work
+# repo on purpose, and nothing after it should have to reason about that.
 #
 # Installs the COMMITTED state of this checkout (install.sh git-clones) — commit
 # engine changes before trusting a green run.
@@ -57,9 +75,13 @@ command -v git >/dev/null || fail "git is required"
 # Lifted from the engine itself, so the assertions cannot drift from the shipped
 # function. It is self-contained (a subshell `cd` + git), which is what makes this
 # possible at all.
-eval "$(awk '/^rebase_refusal_cause\(\) \{/,/^}/' "$ROOT/engine/driver.sh")"
-[ "$(type -t rebase_refusal_cause)" = function ] \
-  || fail "could not lift rebase_refusal_cause() out of engine/driver.sh — did it get renamed?"
+# Its two helpers come with it: the cause now CLASSIFIES the dirt (a stale submodule
+# gitlink is not uncommitted work and takes different advice — see dirt_classify).
+eval "$(LC_ALL=C awk '/^(dirt_classify|dirt_paths|rebase_refusal_cause)\(\) \{/,/^}/' "$ROOT/engine/driver.sh")"
+for _f in dirt_classify dirt_paths rebase_refusal_cause; do
+  [ "$(type -t "$_f")" = function ] \
+    || fail "could not lift $_f() out of engine/driver.sh — did it get renamed?"
+done
 
 U="$WORK/unit"; mkdir -p "$U"; ( cd "$U"
   git init -q -b main 2>/dev/null || { git init -q && git checkout -q -b main; }
@@ -104,9 +126,14 @@ CHIEF="$BIN/chief"
 #   ahead   — nothing. Base never moves, so the branch is strictly ahead of it.
 #   collide — land a REAL sibling merge on base over the same file (a genuine
 #             content conflict for the merge-phase rebase to hit).
-#   refuse  — leave uncommitted TRACKED work in the WORK repo, the way a crashed
-#             tool or an operator's stray edit does. git declines to rebase there,
-#             with zero unmerged paths — the whole point of the distinction.
+#   refuse  — leave a REBASE IN PROGRESS in the WORK repo (a stray rebase-merge
+#             directory), the way a crashed tool or an abandoned `git rebase` does.
+#             git declines to rebase there, with zero unmerged paths — the point of
+#             the distinction. A stray MERGE_HEAD would NOT do: `git checkout` clears
+#             merge state on its way past, and the merge phase checks the branch out
+#             before it asks whether a rebase can start.
+#             (Plain uncommitted work is deliberately NOT used: since tasklist 93 the
+#             merge phase parks that and merges anyway — see test/dirty-checkout.sh.)
 # COMPLETE in the same turn makes agent.sh exit before its iteration-boundary
 # hook, which is what lets the drift/dirt survive to the merge phase.
 mkdir -p "$WORK/fakebin"
@@ -119,6 +146,13 @@ MODE="${CHIEF_TEST_MODE:-ahead}"
 ONCE=".chief/state/.rr-scenario-done"
 name="$(jq -r '.branchName' "$PRD" | sed 's#^chief/##')"
 TRACKED="tasks/chief/$name.json"
+
+# One line per invocation, in a directory OUTSIDE the worktree (which the driver
+# rm -rf's at the top of every attempt). This is what makes "how many agent runs did
+# that failure cost?" answerable at all.
+if [ -n "${CHIEF_TEST_RUNS_DIR:-}" ]; then
+  mkdir -p "$CHIEF_TEST_RUNS_DIR"; echo "turn" >> "$CHIEF_TEST_RUNS_DIR/$name"
+fi
 
 id="$(jq -r 'first(.userStories[]|select(.passes==false)).id // empty' "$PRD")"
 if [ -n "$id" ]; then
@@ -146,7 +180,7 @@ if [ ! -f "$ONCE" ] && [ -n "${CHIEF_TEST_BASE_REPO:-}" ] && [ -n "${id:-}" ]; t
         git merge -q --no-ff "chief/$CHIEF_TEST_SIBLING" \
           -m "Merge chief/$CHIEF_TEST_SIBLING (chief, auto-verified)" ) >/dev/null 2>&1 || true ;;
     refuse)
-      printf 'an operator was editing this\n' >> "$CHIEF_TEST_BASE_REPO/dirt.txt" ;;
+      mkdir -p "$CHIEF_TEST_BASE_REPO/.git/rebase-merge" 2>/dev/null || true ;;
   esac
 fi
 
@@ -163,7 +197,6 @@ git commit -q --allow-empty -m init
 "$CHIEF" init >/dev/null || fail "chief init failed"
 rm -f tasks/chief/example.json
 printf 'base line\n' > shared.txt
-printf 'a tracked file no branch touches\n' > dirt.txt
 for n in rr-ahead rr-conflict rr-refuse; do
   jq -n --arg b "chief/$n" \
      '{project:"rr",branchName:$b,description:"rebase-refusal fixture",iters:2,
@@ -172,17 +205,30 @@ for n in rr-ahead rr-conflict rr-refuse; do
                      acceptanceCriteria:["out/<name>-US-1.txt"],passes:false,notes:""}]}' \
      > "tasks/chief/$n.json"
 done
+# A dependent of the REFUSED tasklist. Excluding a refusal from the retry allowlist
+# changes what is RE-DISPATCHED and nothing else — the dependency cascade below must
+# read exactly as it did when the refusal was (uselessly) retried three times first.
+jq -n '{project:"rr",branchName:"chief/rr-refuse-dep",description:"blocked-by-a-refusal probe",
+        iters:2,dependsOn:["rr-refuse"],touches:[],warmup:[],
+        userStories:[{id:"US-1",title:"story",description:"",
+                      acceptanceCriteria:["out/rr-refuse-dep-US-1.txt"],passes:false,notes:""}]}' \
+   > tasks/chief/rr-refuse-dep.json
 printf '#!/usr/bin/env bash\nset -eu\necho "verify: ok"\nexit 0\n' > .chief/verify.sh
 chmod +x .chief/verify.sh
 git add -A && git commit -q -m "fixture"
 
-run_chief() {   # $1 = tasklist name, $2 = CHIEF_TEST_MODE
-  CUR="$1"
+run_chief() {   # $1 = tasklist name (also the log name), $2 = CHIEF_TEST_MODE, $3.. = extra names to schedule
+  CUR="$1"; nm="$1"; mode="$2"; shift 2
+  # RETRY_MAX is pinned rather than inherited so the attempt assertions below state a
+  # number this test controls, not whatever the driver's default happens to be.
   ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" \
-      WT_ROOT="$WORK/wt" CHIEF_TEST_MODE="$2" CHIEF_TEST_SIBLING="$SIBLING" \
-      CHIEF_TEST_BASE_REPO="$REPO" \
-      "$CHIEF" run "$1" ) >"$WORK/$1.log" 2>&1 || true
+      WT_ROOT="$WORK/wt" CHIEF_TEST_MODE="$mode" CHIEF_TEST_SIBLING="$SIBLING" \
+      CHIEF_TEST_BASE_REPO="$REPO" CHIEF_TEST_RUNS_DIR="$WORK/agentruns" RETRY_MAX=3 \
+      "$CHIEF" run "$nm" "$@" ) >"$WORK/$nm.log" 2>&1 || true
 }
+run_log()    { cat "$WORK/$1.log" 2>/dev/null || echo; }
+attempts_of(){ cat "$REPO/.chief/state/parallel/$1.attempts" 2>/dev/null || echo 1; }
+turns_of()   { local f="$WORK/agentruns/$1"; [ -f "$f" ] && wc -l < "$f" | tr -d ' ' || echo 0; }
 worker_log() { cat "$REPO/.chief/state/parallel/$1.log" 2>/dev/null || echo; }
 status_of()  { cat "$REPO/.chief/state/parallel/$1.status" 2>/dev/null || echo MISSING; }
 token_of()   { status_of "$1" | awk '{print $1}'; }
@@ -218,24 +264,32 @@ has "git reported none" "$report" && fail "a REAL conflict reported no conflicte
 [ -f "$SNAP/rr-conflict.rebase-refused.md" ] && fail "a real content conflict also wrote a REFUSAL note — the two arms must be exclusive"
 has "scripted (collide)" "$(git -C "$REPO" log --oneline main)" && fail "a conflicting branch was merged into main"
 [ -z "$(git -C "$REPO" status --porcelain)" ] || fail "the work repo was left dirty by the aborted rebase"
+# ATTEMPT ACCOUNTING (tasklist 93, US-1) — the retryable half of the pair. A content
+# collision decays as the base moves and chief's pickup path re-engages the agent to
+# integrate it, so it is worth RETRY_MAX attempts and must keep spending them.
+[ "$(attempts_of rr-conflict)" = 3 ] \
+  || fail "a real content conflict took $(attempts_of rr-conflict) attempt(s), want 3 (RETRY_MAX) — the retry allowlist stopped covering it"
+has "↻ retrying rr-conflict (attempt 2/3)" "$(run_log rr-conflict)" \
+  || fail "a real content conflict was not re-dispatched to the agent"
+has "exhausted its retries (3/3)" "$(run_log rr-conflict)" \
+  || fail "the conflict's retry budget was not reported as spent"
 
-# ── 3. REFUSED — dirty work repo, ZERO unmerged paths: NOT a conflict ─────────
-run_chief rr-refuse refuse
+# ── 3. REFUSED — a merge left in progress, ZERO unmerged paths: NOT a conflict ─
+run_chief rr-refuse refuse rr-refuse-dep
 status="$(status_of rr-refuse)"
 [ "$(token_of rr-refuse)" = "REBASE-REFUSED" ] \
-  || fail "a rebase refused by a dirty work repo must report its own state, not a conflict — got '$status'"
-has "uncommitted" "$status" || fail "the REBASE-REFUSED status does not name the cause ('$status')"
+  || fail "a rebase refused by a half-operated-on work repo must report its own state, not a conflict — got '$status'"
+has "rebase-merge" "$status" || fail "the REBASE-REFUSED status does not name the cause ('$status')"
 has ".chief/state/snapshots/rr-refuse.rebase-refused.md" "$status" \
   || fail "the .status file does not point at the refusal note ('$status')"
 [ -f "$SNAP/rr-refuse.rebase-conflict.md" ] && fail "a REFUSED rebase wrote a CONFLICT report — it has no conflicted files to resolve"
 note="$(cat "$SNAP/rr-refuse.rebase-refused.md" 2>/dev/null || echo)"
 [ -n "$note" ] || fail "a refused rebase wrote no $SNAP/rr-refuse.rebase-refused.md"
-has "not a merge conflict" "$note" || fail "the refusal note does not deny the conflict"
-has "ZERO unmerged paths" "$note"  || fail "the refusal note does not say WHY it is not a conflict"
-has "uncommitted" "$note"          || fail "the refusal note does not name the cause"
-has "dirt.txt" "$note"             || fail "the refusal note does not show the work repo's dirty state"
-has "git stash" "$note"            || fail "the refusal note does not give the command that clears this cause"
-has "chief run rr-refuse" "$note"  || fail "the refusal note does not say how to pick the tasklist back up"
+has "not a merge conflict" "$note"  || fail "the refusal note does not deny the conflict"
+has "ZERO unmerged paths" "$note"   || fail "the refusal note does not say WHY it is not a conflict"
+has "rebase-merge" "$note"          || fail "the refusal note does not name the cause"
+has "git rebase --abort" "$note"    || fail "the refusal note does not give the command that clears THIS cause"
+has "chief run rr-refuse" "$note"   || fail "the refusal note does not say how to pick the tasklist back up"
 log="$(worker_log rr-refuse)"
 has "NOT a content conflict" "$log" || fail "the worker log calls a refusal a conflict"
 has "rr-refuse.rebase-refused.md" "$log" || fail "the worker log does not point at the refusal note"
@@ -245,6 +299,37 @@ has "scripted (refuse)" "$(git -C "$REPO" log --oneline chief/rr-refuse)" \
   || fail "the refused branch lost the agent's commit"
 [ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = main ] || fail "the work repo was not restored to main"
 [ -f "$REPO/tasks/chief/completed/rr-refuse.json" ] && fail "a refused tasklist was retired as if it had merged"
-git -C "$REPO" checkout -q -- dirt.txt                        # release the fixture's dirt
 
-echo "REBASE-REFUSAL PASS — a strictly-ahead branch merges with no rebase at all; a real content conflict is still REBASE-CONFLICT naming its files; a rebase refused by a dirty work repo is REBASE-REFUSED with its own cause-and-fix note, and never a conflict"
+# ── 4. ATTEMPT ACCOUNTING (tasklist 93, US-1) — a refusal costs ONE agent run ──
+# The field incident: two tasklists that had already finished every story failed to
+# merge over one uncommitted line in the operator's checkout, were classified as
+# something a retry could fix, and each burned 3/3 attempts to re-refuse identically —
+# six agent iterations for work that was already done. Re-running an agent cannot
+# clean someone else's working tree, so the second and third attempts were knowably
+# doomed before they were dispatched.
+rrun="$(run_log rr-refuse)"
+[ "$(attempts_of rr-refuse)" = 1 ] \
+  || fail "a REFUSED rebase took $(attempts_of rr-refuse) attempt(s), want exactly 1 — a refusal is being retried again"
+[ "$(turns_of rr-refuse)" = 1 ] \
+  || fail "the agent ran $(turns_of rr-refuse) time(s) for a refused rebase, want exactly 1 — retries are being spent on a precondition no agent can change"
+has "↻ retrying rr-refuse" "$rrun" && fail "a refused rebase was re-dispatched to the agent"
+has "rr-refuse exhausted its retries" "$rrun" \
+  && fail "a refusal reported 'exhausted its retries', which reads as a hard problem with the WORK rather than a precondition in the repo"
+# The summary names the precondition and the operator's move, not just a red line.
+has "git REFUSED to rebase" "$rrun" || fail "the run summary does not separate a refusal from the other failures"
+has "NOT retried" "$rrun"           || fail "the run summary does not say that not retrying was the decision"
+has "rebase-merge" "$rrun"          || fail "the run summary does not name the precondition (the half-finished git operation)"
+has "chief run rr-refuse" "$rrun"   || fail "the run summary does not give the operator's move"
+has "rr-refuse.rebase-refused.md" "$rrun" || fail "the run summary does not point at the cause-and-fix note"
+
+# ── 5. The dependency cascade is UNCHANGED — this story retries less, nothing more ─
+[ "$(cat "$REPO/.chief/state/parallel/rr-refuse-dep.state" 2>/dev/null || echo '?')" = blocked ] \
+  || fail "the dependent of a refused tasklist is not BLOCKED"
+has "⤬ rr-refuse-dep BLOCKED" "$rrun" || fail "the BLOCKED announcement changed shape"
+has 'needs "rr-refuse", which FAILED in this run' "$rrun" \
+  || fail "the dependent's reason no longer names the refused tasklist the way it always did"
+[ "$(turns_of rr-refuse-dep)" = 0 ] || fail "a blocked dependent still ran its agent"
+
+rm -rf "$REPO/.git/rebase-merge"                              # release the fixture's stuck rebase
+
+echo "REBASE-REFUSAL PASS — a strictly-ahead branch merges with no rebase at all; a real content conflict is still REBASE-CONFLICT naming its files and still spends all 3 attempts; a rebase refused by a half-operated-on work repo is REBASE-REFUSED with its own cause-and-fix note, never a conflict, and costs exactly ONE agent run while its dependents block as they always did"

@@ -140,8 +140,11 @@ Usage:
   chief help                  this message
 
 run flags:
-  -p, --parallel N   run up to N tasklists at once (default 1)
-  -n, --dry-run      print the schedule and exit (no git, no agents)
+  -p, --parallel N   run up to N tasklists at once (default 1) — also settable as PARALLEL=N
+                     in the environment; the flag wins, and omitting it leaves PARALLEL alone
+  -n, --dry-run      print the schedule and exit (no git, no agents) — also settable as
+                     DRY_RUN=1 in the environment, which `chief run` honours rather than
+                     overriding it with a real run
   -V, --verbose      trace each provider invocation into the log (provider · model · prompt) —
                      also settable as CHIEF_VERBOSE=1 in the environment or .chief/config
       --headless     non-interactive/programmatic mode for a host app embedding chief: no ANSI
@@ -343,7 +346,11 @@ cmd_list() {
 }
 
 cmd_run() {
-  local parallel=1 dry=0 merge="" provider="" model="" preset="" verbose="" headless="" \
+  # Every toggle here starts EMPTY, never at its default value: these are FLAGS, and
+  # the rule for the whole block is "a flag overrides the environment, an unset flag
+  # does not clobber it". Seeding `dry=0`/`parallel=1` and then splicing them into the
+  # driver's assignment prefix is what made `DRY_RUN=1 chief run` perform a REAL run.
+  local parallel="" dry="" merge="" provider="" model="" preset="" verbose="" headless="" \
         account_env="" account_label="" merge_batch="" ; local names=()
   while [ "$#" -gt 0 ]; do case "$1" in
     -p|--parallel) parallel="$2"; shift 2 ;;
@@ -393,6 +400,16 @@ cmd_run() {
     export CHIEF_PRESET="$preset"
   fi
   local model_explicit="$model"        # flag/preset value, before the config default
+  # PROVIDER/MODEL already obey the rule AT THIS SITE — the flag wins, and with no flag
+  # the value load_project() resolved is passed through untouched. They differ from
+  # PARALLEL/DRY_RUN on the OTHER axis, deliberately: load_project() sources
+  # .chief/config over the ambient environment, so exporting CHIEF_PROVIDER into a
+  # run does not select a provider (docs/guides/headless-invocation.md says so).
+  # It must stay that way, because chief EXPORTS these two to every child it spawns:
+  # an ambient CHIEF_PROVIDER is as likely to be an outer run's bookkeeping as an
+  # operator's request, and a `chief run` nested inside an agent turn must obey the
+  # inner project's config rather than inherit the outer run's provider. --provider /
+  # --model are the per-invocation override; .chief/config is the project setting.
   provider="${provider:-$CHIEF_PROVIDER}"; model="${model:-$CHIEF_MODEL}"
   case "$provider" in
     claude|devin|opencode|amp) ;;
@@ -478,8 +495,16 @@ cmd_run() {
   else
     unset CHIEF_ACCOUNT_LABEL
   fi
+  # PARALLEL and DRY_RUN are forwarded ONLY when a flag set them. The driver already
+  # defaults both (PARALLEL="${PARALLEL:-1}", DRY_RUN="${DRY_RUN:-0}"), so passing a
+  # seeded default here would override the operator's environment with it — which is
+  # how `DRY_RUN=1 chief run` came to launch a real run that was only noticed by the
+  # appearance of a worktree. Exported, not spliced into the assignment prefix, for the
+  # reason recorded above CHIEF_VERBOSE. Provider/model are unconditional because they
+  # are already resolved through the environment above.
+  [ -n "$dry" ]      && export DRY_RUN=1
+  [ -n "$parallel" ] && export PARALLEL="$parallel"
   CHIEF_PROVIDER="$provider" CHIEF_MODEL="$model" \
-    PARALLEL="$parallel" DRY_RUN="$dry" \
     bash "$ENGINE/driver.sh" ${names[@]+"${names[@]}"}
 }
 

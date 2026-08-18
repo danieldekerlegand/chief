@@ -38,6 +38,7 @@ mkdir -p "$WORK/fakebin"
 cat > "$WORK/fakebin/claude" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
+if [ -n "${SMOKE_TURNS:-}" ]; then echo turn >> "$SMOKE_TURNS"; fi   # one line per agent turn
 cat >/dev/null                                  # drain the prompt on stdin
 PRD=".chief/state/prd.json"                     # cwd = the worktree (set by the driver)
 name="$(jq -r '.branchName' "$PRD" | sed 's#^chief/##')"
@@ -81,10 +82,38 @@ SH
 chmod +x .chief/verify.sh
 git add -A && git commit -q -m "smoke: tasklist + verify hook"
 
-# ── 4. Run chief (sequential, auto-merge) with the fake agent first on PATH ────
+# ── 4. DRY_RUN in the ENVIRONMENT is honoured, not overridden by the CLI ──────
+# `cmd_run` used to seed `dry=0` and splice DRY_RUN="$dry" into the driver's
+# assignment prefix, so `DRY_RUN=1 chief run` performed a REAL run — observed in the
+# field, and only caught by the appearance of a worktree. Assert the three things a
+# simulation must not do: spawn an agent, create the branch, create a worktree.
+export SMOKE_TURNS="$WORK/turns"; : > "$SMOKE_TURNS"
+dry_run_asserts() {   # $1 = a label for the failure message
+  case "$(cat "$WORK/dry.log")" in
+    *"DRY RUN"*) ;;
+    *) cat "$WORK/dry.log"; fail "$1: no schedule printed — it performed a REAL run" ;;
+  esac
+  [ ! -s "$SMOKE_TURNS" ]                                    || fail "$1: spawned $(wc -l <"$SMOKE_TURNS") agent turn(s)"
+  if git rev-parse --verify -q chief/smoke >/dev/null; then     fail "$1: created the feature branch"; fi
+  [ "$(git worktree list | wc -l | tr -d ' ')" = 1 ]         || fail "$1: created a worktree"
+  ls .chief/state/parallel/*.status >/dev/null 2>&1          && fail "$1: wrote a tasklist status file"
+  return 0
+}
+PATH="$WORK/fakebin:$PATH" DRY_RUN=1 "$CHIEF" run >"$WORK/dry.log" 2>&1 \
+  || { cat "$WORK/dry.log"; fail "DRY_RUN=1 chief run exited non-zero"; }
+dry_run_asserts "DRY_RUN=1 chief run"
+# ...and the FLAG still beats an environment that says otherwise.
+PATH="$WORK/fakebin:$PATH" DRY_RUN=0 "$CHIEF" run -n >"$WORK/dry.log" 2>&1 \
+  || { cat "$WORK/dry.log"; fail "DRY_RUN=0 chief run -n exited non-zero"; }
+dry_run_asserts "DRY_RUN=0 chief run -n"
+
+# ── 5. Run chief (sequential, auto-merge) with the fake agent first on PATH ────
 PATH="$WORK/fakebin:$PATH" "$CHIEF" run >"$WORK/run.log" 2>&1 || { cat "$WORK/run.log"; fail "chief run exited non-zero"; }
 
-# ── 5. Assert the full-runtime outcome landed on the base branch ──────────────
+# ── 6. Assert the full-runtime outcome landed on the base branch ──────────────
+# The real run MUST have recorded turns, or the "no agent ran" assertion above was
+# vacuous (a counter nothing ever writes to is empty for the wrong reason).
+[ -s "$SMOKE_TURNS" ] || fail "no agent turn recorded by the real run — the dry-run assertions were vacuous"
 git checkout -q main
 [ -f out/US-1.txt ] && [ -f out/US-2.txt ]                     || fail "agent artifacts not merged to main"
 [ -f tasks/chief/completed/smoke.json ]                        || fail "tasklist not retired to completed/"
@@ -95,9 +124,9 @@ case "$(git log --oneline)" in *"Merge chief/smoke"*) ;; *) fail "no --no-ff mer
 if git rev-parse --verify -q chief/smoke >/dev/null; then fail "feature branch not deleted after merge"; fi
 case "$("$CHIEF" list)" in *smoke*) ;; *) fail "chief list doesn't show the completed smoke tasklist" ;; esac
 
-# ── 6. init guard: refuse to scaffold in $HOME (collides with the install prefix) ──
+# ── 7. init guard: refuse to scaffold in $HOME (collides with the install prefix) ──
 GHOME="$WORK/ghome"; mkdir -p "$GHOME"
 if ( cd "$GHOME" && HOME="$GHOME" "$CHIEF" init >/dev/null 2>&1 ); then fail "chief init did NOT refuse to run in \$HOME"; fi
 [ ! -e "$GHOME/.chief/config" ] || fail "chief init scaffolded into \$HOME despite the guard"
 
-echo "SMOKE PASS — install → init → agent loop → verify → merge → completed + \$HOME-init guard (offline)"
+echo "SMOKE PASS — install → init → dry-run honoured → agent loop → verify → merge → completed + \$HOME-init guard (offline)"

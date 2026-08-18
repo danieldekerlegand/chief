@@ -288,7 +288,10 @@ mq_member_fail() {   # mq_member_fail NAME PHASE STATUS EVENT DETAIL MESSAGE
 mq_stack_member() {
   local name="$1" branch="$2" repo="$3" base="$4" tip="$5"
   local pre_mb rpt refusal rb_out rb_rc=0 conflicted
-  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || {
+  # work_checkout throughout (driver.sh): git leaves submodule working trees where they
+  # were on every ref move, and a member that bumps a GITLINK would otherwise read as
+  # uncommitted work to the very next rebase_refusal_cause and be ejected for it.
+  work_checkout "$repo" "$branch" "$name" || {
     mq_member_fail "$name" checkout-failed CHECKOUT-FAILED tasklist.checkout-failed \
       "git checkout $branch failed in $repo" "!! $name: could not check out $branch for the merge batch"
     return 1; }
@@ -327,6 +330,9 @@ mq_stack_member() {
       "!! $name: git REFUSED to rebase $branch onto the batch tip — EJECTED, nothing merged, branch untouched: $refusal"
     return 1
   fi
+  # The replay may have moved a gitlink (the tip's, or this member's own); the next
+  # member stacks on this tree and the batch gate measures it.
+  submodules_sync "$repo" "$name"
   return 0
 }
 
@@ -338,7 +344,7 @@ mq_merge_member() {
   local name="$1" branch="$2" repo="$3" base="$4" sub="$5" pre_mb="$6" scope="${7:-}" sha rpt af
   local live; live="$(live_of "$name")"
   [ -n "$scope" ] || scope="$base"
-  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || {
+  work_checkout "$repo" "$branch" "$name" || {
     mq_member_fail "$name" checkout-failed CHECKOUT-FAILED tasklist.checkout-failed \
       "git checkout $branch failed in $repo" "!! $name: could not check out $branch to merge it"
     return 1; }
@@ -357,7 +363,7 @@ mq_merge_member() {
     return 1
   fi
   live_set "$live" phase=merging
-  git -C "$repo" checkout "$base" >/dev/null 2>&1
+  work_checkout "$repo" "$base" "$name"
   if git -C "$repo" merge --no-ff "$branch" -m "Merge $branch (chief, auto-verified)"; then
     sha="$(git -C "$repo" rev-parse --short HEAD)"
     finalize_merged "$name" "$branch" "$sha" "$repo" "$sub"
@@ -441,7 +447,7 @@ mq_bisect_max() {
 # is a local on purpose: run_verify reads $work_base from its caller's scope.
 mq_verify_at() {
   local name="$1" branch="$2" repo="$3" work_base="$4" log="$5" label="$6" vout vrc=0
-  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || return 2
+  work_checkout "$repo" "$branch" "$name" || return 2
   [ "$NO_VERIFY" = "1" ] && return 0
   mq_bump probes
   echo ">> batch: $label — extra gate run #$(mq_count probes) spent isolating a culprit"
@@ -521,7 +527,7 @@ mq_confirm_culprit() {
     echo "!! batch: $branch could not be put back on the sha its worker finished on — the bisect is unconfirmable"
     return 1
   fi
-  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || {
+  work_checkout "$repo" "$branch" "$name" || {
     echo "!! batch: could not check out $branch to confirm the bisect"; return 1; }
   if ! git -C "$repo" merge-base --is-ancestor "$work_base" "$branch" 2>/dev/null; then
     git -C "$repo" rebase "$work_base" >/dev/null 2>&1 || {
@@ -615,7 +621,7 @@ mq_ratchet_probe() {
   qq="${ENGINE:-}/quality.sh"
   [ -f "$qq" ] || { echo "!! batch:   no engine/quality.sh to re-measure $name with"; return 2; }
   git -C "$repo" checkout "$work_base" >/dev/null 2>&1
-  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || return 2
+  work_checkout "$repo" "$branch" "$name" || return 2
   mq_bump ratchet_probes
   echo ">> batch: RATCHET: re-measuring $name ($branch) ALONE against $work_base over its own changed files — attribution probe #$(mq_count ratchet_probes)"
   out="$(CHIEF_BASE_BRANCH="$work_base" bash "$qq" ratchet --root "$repo" --base "$work_base" -q 2>&1)" || rc=$?
@@ -675,7 +681,7 @@ mq_restore() {
   # Get OFF any member branch first. `git branch -f` refuses to move the branch that
   # is currently checked out — and it refuses quietly, which would leave a member
   # still stacked on a peer while this function cheerfully reported it restored.
-  [ -n "$repo" ] && git -C "$repo" checkout "$base" >/dev/null 2>&1
+  [ -n "$repo" ] && work_checkout "$repo" "$base" batch
   while IFS="$MQ_FS" read -r name branch repo _ _ sha; do
     [ -n "$branch" ] && [ -n "$sha" ] || continue
     [ "$(git -C "$repo" rev-parse "$branch" 2>/dev/null)" = "$sha" ] && continue
@@ -879,8 +885,15 @@ mq_worker_merge() {
         # CRITICAL SECTION, on the same terms as the floor's: from here the work repo
         # is mid git operation, and the marker tells teardown to wait it out and names
         # the repo + base to restore if the wait is spent.
-        trap 'git -C "$repo" checkout "$base" >/dev/null 2>&1 || true; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
-        { echo "name=$name"; echo "repo=$repo"; echo "base=$base"; } > "$STATE/$name.critical" 2>/dev/null || true
+        #
+        # And on the same terms in the other direction too: a batch stacks N branches
+        # in this same checkout, so the operator's uncommitted work is parked for the
+        # whole batch and given back by the same trap (merge_stash_push/pop in
+        # engine/driver.sh). A batch must never invent a new way for a repo to be
+        # dirty at merge time, nor a new way for that work to go missing.
+        local qstash=""
+        trap 'work_checkout "$repo" "$base" "$name" || true; merge_stash_pop "$repo" "$qstash" "$name" || echo "$repo|$qstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
+        merge_critical_enter "$repo" "$name" "$base" batch; qstash="$MERGE_STASH"
         mq_lead "$name" "$repo" "$base"
       )
       rmdir "$MERGE_LOCK" 2>/dev/null || true
