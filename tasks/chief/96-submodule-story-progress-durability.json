@@ -37,8 +37,8 @@
         "The guard against the worst case is explicit: the prompt states that re-implementing a completed story is a defect, since two implementations of one story on one branch is harder to unpick than an unfinished one.",
         "Demonstrated on the real case: a fixture reproducing `insimul:164`'s shape (2 of 3 stories committed in a submodule, run restarted) resumes at story 3."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "test/submodule-resume.sh PASS — arm A now also asserts the PROMPT the resumed agent was handed (banked from the fake agent's stdin on its first turn): it carries the `# ALREADY DONE — work that is already committed on this branch` section, names `US-1 — one` and `US-2 — two`, does NOT list the unfinished `US-3 — three` among them, states `RE-IMPLEMENTING ONE OF THOSE STORIES IS A DEFECT`, and points at `Your work this turn is US-3`. Counterpart asserted too: the FIRST turn of the fresh (0-done) run carries no such section. Counter-proof — with the section gutted on a throwaway commit the same test FAILS \"A: the resumed prompt never told the agent what is already done\". Fixture is insimul:164's shape (2 of 3 committed in a submodule, SIGKILLed, restarted). Also green: bash -n clean over bin/ engine/ test/ (0 failures); version-bump PASS (0.8.61); doc-sync PASS; doc-links 4 dead vs 4 on main; quality ratchet OK (no metric regressed); behavioral — smoke, provider-conformance, ratelimit, limitstate, noworkguard, plan-review, research, liveliness, evidence-gate, measured-bars, boundary-demotion, criteria-scope, five-cases, stall-flag, headless, events, stale-resume, submodule-gitlink, submodule-resume all PASS (19). KNOWN FLAKE, not from this change: test/limitresume.sh fails here and fails IDENTICALLY on main (3 of 3 vs 1 pass / 2 fails) — it asserts inside a 3-second limit window and this host is at load average 33 on 14 cores. shellcheck not installed locally — CI enforces it."
     }
   ],
   "crossRepo": [
