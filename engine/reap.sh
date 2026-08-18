@@ -88,6 +88,15 @@ if ! command -v chief_prefix >/dev/null 2>&1; then
   . "$_REAP_DIR/paths.sh"
 fi
 
+# The DISK half of the same idea. This file collects orphaned PROCESSES; sweep.sh
+# knows how to collect the bytes they left behind, and cannot decide on its own
+# whether a run is still behind a worktree — that is this file's question. driver.sh
+# has already sourced it when reap.sh is sourced from there.
+if ! command -v chief_sweep_candidate >/dev/null 2>&1; then
+  # shellcheck source=engine/sweep.sh
+  . "$_REAP_DIR/sweep.sh"
+fi
+
 CHIEF_PREFIX_DEFAULT="$(chief_prefix)"
 CHIEF_WT_ROOT_ALL="$(chief_worktree_root)"             # every repo's worktrees live here
 CHIEF_RUN_MARKER="--chief-run="                        # the argv spawn marker
@@ -1024,15 +1033,90 @@ EOF
   return 0
 }
 
+# ── the DISK PASS: artifacts of runs that already ended ──────────────────────
+#
+# US-1 (engine/sweep.sh) closed the future: a worktree chief removes takes its build
+# directories with it. This is the DEBT already on the fleet — two empty worktrees
+# plus a 1.4 GB one were found sitting behind finished runs in a single repo, and
+# nothing was ever going to come back for them, because the only code path that
+# sweeps is a run on that same tasklist.
+#
+# The whole design question is "may I delete this", and the answer is the SAME
+# liveness rule the process reaper above applies, not a second one invented here:
+#   · something is running with its cwd inside the worktree (key 1 of the process
+#     sweep — the driver puts every agent there), or
+#   · a live run exists for that worktree's REPO. Not for the tasklist: with `-p N`
+#     one driver moves between tasklists, and a worktree it is not standing in right
+#     now is one it will be standing in shortly.
+# Repo, not tasklist, is also all the run id can tell us — `<repo>-<cksum>-<epoch>-<pid>`
+# carries the repo's path cksum, which is exactly the key `<repo>-<cksum>/` in the
+# worktree root is built from.
+#
+# Liveness alone is not enough, which is why sweep.sh's disk pass demands an AGE
+# floor too: a run whose registry entry is a moment from being written reads as dead
+# for that moment. See chief_sweep_disk.
+
+# Every repo cksum with a live run behind it, as " ck ck ck " for a substring test.
+# Computed ONCE per reap — the registry scan and the process-table scan are the
+# expensive halves, and the answer does not change per worktree.
+chief_reap_live_cksums() {
+  local runs f rid ck pid out=" "
+  runs="${CHIEF_RUNS:-$CHIEF_PREFIX_DEFAULT/runs}"
+  for f in "$runs"/*.run; do
+    [ -e "$f" ] || continue
+    rid="$(sed -n 's/^runid=//p' "$f" 2>/dev/null | head -1)"
+    [ -n "$rid" ] || continue
+    chief_run_id_live "$rid" || continue
+    ck="$(chief_run_id_cksum "$rid")"
+    case "$ck" in ''|*[!0-9]*) continue ;; esac
+    case "$out" in *" $ck "*) ;; *) out="$out$ck " ;; esac
+  done
+  # A live driver that lost — or has not yet written — its run file still carries the
+  # marker on argv. This is the same "unregistered but alive" case the protected set
+  # spares, and here it is the difference between a bookkeeping gap and a deleted build.
+  for pid in $(chief_pids_tagged "$CHIEF_RUN_MARKER"); do
+    chief_pid_alive "$pid" || continue
+    rid="$(chief_pid_tag "$pid")"
+    ck="$(chief_run_id_cksum "$rid")"
+    case "$ck" in ''|*[!0-9]*) continue ;; esac
+    case "$out" in *" $ck "*) ;; *) out="$out$ck " ;; esac
+  done
+  printf '%s' "$out"
+}
+
+CHIEF_REAP_LIVE_CKSUMS=" "
+chief_reap_wt_live() {   # $1 = worktree path -> 0 when a run is still behind it
+  local wt="${1:-}" ck
+  [ -n "$wt" ] || return 0                       # unanswerable reads as live
+  [ -n "$(chief_pids_cwd_under "$wt")" ] && return 0
+  ck="${wt%/*}"; ck="${ck##*/}"; ck="${ck##*-}"   # <repo>-<cksum>/<tasklist> -> <cksum>
+  case "$ck" in ''|*[!0-9]*) return 0 ;; esac     # not a name chief made: leave it alone
+  case "$CHIEF_REAP_LIVE_CKSUMS" in *" $ck "*) return 0 ;; esac
+  return 1
+}
+
+chief_reap_disk() {      # $1 = dry (0|1)  $2 = min idle seconds  $3 = scope prefix
+  local dry="${1:-0}" age="${2:-}" scope="${3:-}" d=""
+  [ "$dry" = 1 ] && d="-n"
+  # The SAME refusal the process half is bound by, and for a sharper reason: a
+  # host-wide pass judged against a registry that is not this host's reads every
+  # healthy run as dead, and here that ends in an rm -rf rather than a report.
+  chief_reap_scope_guard "$CHIEF_RUN_MARKER$scope" || return 2
+  CHIEF_REAP_LIVE_CKSUMS="$(chief_reap_live_cksums)"
+  chief_sweep_disk "$CHIEF_WT_ROOT_ALL" "${age:-${CHIEF_SWEEP_MIN_AGE:-3600}}" \
+                   "$d" chief_reap_wt_live "$scope"
+}
+
 # ── CLI: `chief reap` ────────────────────────────────────────────────────────
 
 chief_reap_usage() {
   cat <<EOF
 chief reap [-n|--dry-run] [--grace N] [--scope RUN-ID-PREFIX]
+           [--no-disk | --disk-only] [--disk-age SECONDS]
 
 Sweep the host for ORPHANED chief work: driver/agent/tool processes still running
 with no live, registered run behind them (a run killed with SIGKILL, a terminal
-closed on an older engine, a crash).
+closed on an older engine, a crash) — and then the BYTES those runs left behind.
 
 Every process is NAMED BEFORE IT IS SIGNALLED, with or without -n: the repo, the
 tasklist, the run id it belongs to and the evidence that the run is dead. Processes
@@ -1046,6 +1130,19 @@ Then it stops what is left: TERM, then KILL after a grace period.
                   Without it the sweep is HOST-WIDE: every repo on this box, not
                   just the one you are standing in.
 
+THE DISK PASS. After the processes, build directories (target/ · node_modules/ ·
+.venv/ · build/) are reclaimed from worktrees under \$CHIEF_WT_ROOT_ALL with NO live
+run behind them — the same liveness rule, so a running build is never collected out
+from under itself, plus an idle-time floor so a run BETWEEN iterations is safe too.
+Only inside the worktree: a shared CARGO_TARGET_DIR or a symlink out is refused with
+the reason printed, never followed. With -n it reports bytes-by-path and deletes
+nothing, exactly as the process half does.
+
+      --no-disk       processes only
+      --disk-only     bytes only; signal nothing
+      --disk-age S    seconds a worktree must have been idle to be collectable
+                      (default ${CHIEF_SWEEP_MIN_AGE:-3600}). CHIEF_SWEEP=0 turns the pass off.
+
 Never touches a registered live run, a driver holding its repo's driver.lock,
 another user's processes, or anything outside $CHIEF_WT_ROOT_ALL.
 
@@ -1057,7 +1154,8 @@ EOF
 }
 
 chief_reap_main() {
-  local dry=0 grace="${CHIEF_REAP_GRACE:-5}" scope="" n where
+  local dry=0 grace="${CHIEF_REAP_GRACE:-5}" scope="" n where rc=0
+  local disk=1 procs=1 age="${CHIEF_SWEEP_MIN_AGE:-3600}"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       -n|--dry-run) dry=1; shift ;;
@@ -1065,31 +1163,51 @@ chief_reap_main() {
       --grace=*)    grace="${1#*=}"; shift ;;
       -s|--scope)   scope="${2:-}"; shift 2 ;;
       --scope=*)    scope="${1#*=}"; shift ;;
+      --no-disk)    disk=0; shift ;;
+      --disk-only)  procs=0; shift ;;
+      --disk-age)   age="${2:-}"; shift 2 ;;
+      --disk-age=*) age="${1#*=}"; shift ;;
       -h|--help)    chief_reap_usage; return 0 ;;
       *)            echo "chief reap: unknown argument '$1' (see 'chief reap --help')" >&2; return 2 ;;
     esac
   done
-  where="worktrees: $CHIEF_WT_ROOT_ALL"
-  [ -n "$scope" ] && where="$where; runs matching '$scope'"
-  chief_find_orphans "$CHIEF_WT_ROOT_ALL" "$CHIEF_RUN_MARKER$scope" || return $?
-  chief_report_unresolved
-  if [ -z "$CHIEF_ORPHANS" ]; then
-    echo "chief reap: no orphaned chief processes ($where)"
-    # An empty env read is not evidence of an empty host — say which keys actually ran.
-    [ -n "$(chief_env_key_mode)" ] || echo "  (this platform will not show another" \
-      "process's environment, so the inherited-\$CHIEF_RUN_ID key was inactive —" \
-      "cwd + argv carried this sweep)"
-    return 0
+  case "$age" in ''|*[!0-9]*) echo "chief reap: --disk-age wants whole seconds, got '$age'" >&2; return 2 ;; esac
+
+  if [ "$procs" = 1 ]; then
+    where="worktrees: $CHIEF_WT_ROOT_ALL"
+    [ -n "$scope" ] && where="$where; runs matching '$scope'"
+    # The scope guard's refusal is fatal for the disk pass too: it means this sweep is
+    # judging other prefixes' runs against a registry that never heard of them, and
+    # that misreading deletes builds here rather than merely reporting them.
+    chief_find_orphans "$CHIEF_WT_ROOT_ALL" "$CHIEF_RUN_MARKER$scope" || return $?
+    chief_report_unresolved
+    if [ -z "$CHIEF_ORPHANS" ]; then
+      echo "chief reap: no orphaned chief processes ($where)"
+      # An empty env read is not evidence of an empty host — say which keys actually ran.
+      [ -n "$(chief_env_key_mode)" ] || echo "  (this platform will not show another" \
+        "process's environment, so the inherited-\$CHIEF_RUN_ID key was inactive —" \
+        "cwd + argv carried this sweep)"
+    else
+      # shellcheck disable=SC2086
+      set -- $CHIEF_ORPHANS; n="$#"
+      if [ "$dry" = 1 ]; then
+        chief_report_orphans "chief reap: $n orphaned process(es) — chief work with no live, registered run. WOULD reap each of these:"
+        echo "  (dry run — nothing was signalled; drop -n to reap)" >&2
+      else
+        chief_report_orphans "chief reap: $n orphaned process(es) — chief work with no live, registered run. About to reap each of these:"
+        chief_reap_pids "$CHIEF_ORPHANS" "orphaned chief work" "$grace" || rc=$?
+      fi
+    fi
   fi
-  # shellcheck disable=SC2086
-  set -- $CHIEF_ORPHANS; n="$#"
-  if [ "$dry" = 1 ]; then
-    chief_report_orphans "chief reap: $n orphaned process(es) — chief work with no live, registered run. WOULD reap each of these:"
-    echo "  (dry run — nothing was signalled; drop -n to reap)" >&2
-    return 0
+
+  # The disk pass runs LAST and unconditionally: a host with no orphaned processes is
+  # exactly the host most likely to be carrying the artifacts of runs that ended
+  # cleanly. It also runs AFTER the signalling, so a just-reaped orphan's worktree is
+  # no longer holding a live cwd when liveness is asked.
+  if [ "$disk" = 1 ] && ! chief_reap_disk "$dry" "$age" "$scope"; then
+    [ "$rc" = 0 ] && rc=2
   fi
-  chief_report_orphans "chief reap: $n orphaned process(es) — chief work with no live, registered run. About to reap each of these:"
-  chief_reap_pids "$CHIEF_ORPHANS" "orphaned chief work" "$grace"
+  return $rc
 }
 
 # Run only when executed, not when sourced by driver.sh.

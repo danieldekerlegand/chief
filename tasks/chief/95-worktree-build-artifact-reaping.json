@@ -4,7 +4,9 @@
   "branchName": "chief/95-worktree-build-artifact-reaping",
   "parked": false,
   "dependsOn": [],
-  "touches": ["engine"],
+  "touches": [
+    "engine"
+  ],
   "iters": 5,
   "warmup": [
     "grep -n 'worktree add\\|worktree remove\\|worktree prune' engine/*.sh",
@@ -22,8 +24,8 @@
         "Reclaimed bytes are reported, so the operator sees what the run cost in disk as well as in tokens.",
         "A worktree chief did NOT create is never touched."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "engine/sweep.sh + test/sweep.sh: sweep 30 passed, 0 failed. Table-driven (target/node_modules/.venv/build); chief_sweep_candidate is a pure 3-path function refusing outside-worktree / symlink / not-a-chief-worktree / worktree-is-a-symlink / unknown-artifact with the reason stated. Adversarial cases green: shared CARGO_TARGET_DIR by absolute path, a symlinked build/ into it, a `..` escape, a sibling worktree, the repo-123 vs repo-123-evil prefix near-miss — the shared cache blob survived the live sweep. Bytes reported per worktree and totalled in the run summary. bash -n clean over bin/chief engine/*.sh install.sh test/*.sh; doc-sync PASS (README v0.8.58 == VERSION)."
     },
     {
       "id": "US-2",
@@ -35,8 +37,8 @@
         "It is bounded by age as well as liveness, so a worktree between iterations of a live run is never collected.",
         "Mutation-checked: a live run's target directory must survive a reap, and a stale one must not. Recorded in the notes."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "chief reap gains a disk pass (engine/reap.sh chief_reap_disk + engine/sweep.sh chief_sweep_disk). test/sweep.sh: 47 passed, 0 failed (was 30). test/reapscope.sh PASS end-to-end against a hermetic install. MUTATION CHECK, both directions, in both tests: with a live run behind the worktree (registered run file + a child whose cwd is inside it) the target/ survived the reap; with the run dead the same target/ was collected — and the live run's child was not signalled. -n reported \"WOULD reclaim ... — target (4.0 KB)\" by path and deleted nothing. Age floor: a worktree active under --disk-age (default 3600s) is LEFT ALONE with the elapsed time stated; an unanswerable mtime reads the same way, never as old. --scope holds (repo-77 did not reach other-99); --no-disk / --disk-only / CHIEF_SWEEP=0 each verified. The foreign-registry refusal now also guards --disk-only. bash -n clean over bin/chief engine/*.sh install.sh test/*.sh; version-bump PASS (0.8.59); doc-sync PASS; reapenv PASS; smoke/noworkguard/ratelimit/teardown PASS; quality ratchet OK (no tracked metric regressed); doc-links 4 dead vs 4 on main (no regression)."
     }
   ]
 }

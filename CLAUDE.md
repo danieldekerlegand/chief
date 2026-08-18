@@ -106,9 +106,27 @@ engine/
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
+  sweep.sh           #   the DISK half of reaping: what chief CAUSED TO BE BUILT inside a worktree
+                     #   goes with the worktree. A TABLE of toolchain artifact dirs (target/ ·
+                     #   node_modules/ · .venv/ · build/) — adding a toolchain is a row. Runs
+                     #   immediately before every worktree removal, because removal is best-effort
+                     #   at every site and a removal that loses is how a finished run strands
+                     #   gigabytes. `chief_sweep_candidate ROOT WT PATH` is a PURE function of
+                     #   three paths and the whole safety argument: a shared CARGO_TARGET_DIR, a
+                     #   symlink, a sibling worktree, a `..` escape are all REFUSED with a stated
+                     #   reason, never followed. Bytes reclaimed are reported per worktree and
+                     #   totalled in the run summary. `chief_sweep_disk` is the same thing for
+                     #   the DEBT already on the fleet — every worktree with no live run behind
+                     #   it — and takes the liveness predicate as a FUNCTION NAME, because that
+                     #   rule is reap.sh's (registry + process table) while the rm is this
+                     #   module's. Liveness AND an idle-age floor, so a run between iterations
+                     #   is safe; an unanswerable mtime reads as "leave it alone", never as old.
+                     #   CHIEF_SWEEP=0 opts out
   reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it);
                      #   also the PID-NAMESPACE token every pid-keyed record carries, so a shared prefix
-                     #   across containers is never read as "that pid is dead"
+                     #   across containers is never read as "that pid is dead". `chief reap` runs the
+                     #   DISK pass too (--no-disk / --disk-only / --disk-age), under the same
+                     #   foreign-registry refusal — misreading a live run there deletes a build
 templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json)
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
