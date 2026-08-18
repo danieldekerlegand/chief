@@ -25,8 +25,8 @@
         "`bin/chief ps` and `bin/chief monitor` are both checked, since the two call sites render the flag differently (one via `live_note … stale`, one via a bare fallback string).",
         "`provider-waiting` is classified explicitly and the classification is justified: it is NOT quiet-by-design like `rate-limited-waiting`, because a provider that never returns is a real hang. It takes a long threshold under US-2 rather than an exemption. Two runs on 2026-08-17 sat in this phase having produced 0 bytes and never reached iteration 1 — the case an exemption would hide."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "test/stall-flag.sh: PASS — 5 quiet-by-design phases unflagged and 36 flagged at 40m of silence, drift guard over all 39 phase literals engine/*.sh publishes, ceiling case (6h40m quiet) flags; chief ps AND chief monitor both green. Negative control (CHIEF_STALE_QUIET_SECONDS=900) fails the test as expected. bash -n clean on bin/chief + engine/*.sh + install.sh + test/*.sh + templates/*.sh; test/liveliness.sh, test/monitor.sh, test/limitmonitor.sh, test/doc-sync.sh: 4/4 green."
     },
     {
       "id": "US-2",

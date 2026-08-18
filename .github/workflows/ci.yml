@@ -98,6 +98,9 @@ jobs:
       - name: Bar rule at the iteration boundary (an unmeasured story is demoted before the next turn)
         run: bash test/boundary-demotion.sh
 
+      - name: Stall flag is run-state aware (a quiet-by-design phase is not also called stalled)
+        run: bash test/stall-flag.sh
+
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 

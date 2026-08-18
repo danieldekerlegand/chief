@@ -63,6 +63,47 @@ INTERVAL="${2:-2}"
 STALE_AFTER="${CHIEF_STALE_SECONDS:-900}"
 case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 
+# QUIET-BY-DESIGN PHASES — the ONE list of record phases whose silence IS the
+# behaviour rather than a symptom of it. Data, in one place: exempting a state is
+# adding a word here, never a condition at a render site.
+#
+# MEASURED 2026-08-13. Ten tasklists across three repos rendered
+# `rate-limited-waiting for 16m · ⚠ stalled — no activity for 16m` — chief printing
+# the reason for the silence and then flagging the silence, on one line, from the same
+# live_note() call. Every driver was alive (S+) and every run resumed when the window
+# reopened. agent.sh's `_rate_limit_wait` publishes the phase and THEN sleeps, so the
+# record cannot tick: the heartbeat gap IS the wait, exactly, and flagging it is
+# flagging chief's own countdown.
+#
+# The hold phases after it are here for the same reason plus one more: they are
+# normally reached with a coarse state that already excludes them from this check, so
+# listing them costs nothing and stops a record whose `phase` outran its `state` from
+# reproducing the bug.
+#
+# NOT ON THIS LIST, deliberately:
+#   provider-waiting   the whole duration of an agent turn (agent.sh sets it right
+#                      before the provider CLI and holds it until the CLI returns).
+#                      Quiet is USUAL here, not by design — a provider that never
+#                      returns is a real hang. On 2026-08-17 two runs sat in this
+#                      phase having produced 0 bytes and never reached iteration 1;
+#                      an exemption would have hidden the only genuine anomalies of
+#                      that night. It wants a LONGER threshold, not silence.
+#   verifying · warmup a non-tty `cargo test` block-buffers its output, so a gate can
+#                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
+#                      test binary changed between samples). Indistinguishable from a
+#                      wedged one from out here, so: a longer threshold, not silence.
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-approval '
+
+# The CEILING on that exemption — quiet by design is not quiet forever. A usage window
+# that never reopens is exactly what an operator has to be told about, so the exemption
+# expires rather than making a state permanently unflaggable. The figure is the
+# engine's own bound on one wait rather than a round number: `_seconds_until_reset`
+# (agent.sh) caps a single limit sleep at 21600s, so past 6h + one default window the
+# sleep should long since have returned and the phase should have moved. The waits
+# actually observed on 2026-08-13 were 5–16m and cleared on their own.
+STALE_QUIET_AFTER="${CHIEF_STALE_QUIET_SECONDS:-23400}"      # 21600 + STALE_AFTER
+case "$STALE_QUIET_AFTER" in ''|*[!0-9]*) STALE_QUIET_AFTER=23400 ;; esac
+
 # Colors only on a TTY (so piping `chief ps | …` stays clean).
 if [ -t 1 ]; then
   BOLD=$'\033[1m'; DIM=$'\033[2m'; GRN=$'\033[32m'; YEL=$'\033[33m'
@@ -151,11 +192,23 @@ live_phase_age() { # $1 name $2 stateroot -> "12m" ('' when unknown)
   elapsed "$ps"
 }
 
-# Is this heartbeat age past the staleness threshold? Unknown age (no record, no
-# heartbeat) is NEVER stale — absent evidence must not manufacture an alarm.
-is_stale() { # $1 age in seconds
+# How much silence THIS phase is allowed before it reads as stalled. The single place
+# the quiet-by-design list is consulted, so the row's at-risk decision and the note it
+# renders cannot drift apart — which is the whole defect: one half of the line said
+# `rate-limited-waiting`, the other half called the same silence a stall.
+stale_threshold_for_phase() { # $1 phase ('' = unknown) -> seconds
+  case "$STALE_QUIET_PHASES" in
+    *" ${1:-} "*) printf '%s' "$STALE_QUIET_AFTER" ;;
+    *)            printf '%s' "$STALE_AFTER" ;;
+  esac
+}
+
+# Is this heartbeat age past the staleness threshold FOR THIS PHASE? Unknown age (no
+# record, no heartbeat) is NEVER stale — absent evidence must not manufacture an alarm.
+# An unknown PHASE takes the default threshold, which is the pre-existing behaviour.
+is_stale() { # $1 age in seconds [$2 phase]
   case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$1" -ge "$STALE_AFTER" ]
+  [ "$1" -ge "$(stale_threshold_for_phase "${2:-}")" ]
 }
 
 # The fine-grained detail line: what this tasklist is doing RIGHT NOW (the record's
@@ -177,7 +230,11 @@ live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to 
   [ -n "$story" ] && note="$note · $story"
   case "$iter"  in ''|0|*[!0-9]*) ;; *) note="$note · iter $iter"   ;; esac
   case "$stall" in ''|0|*[!0-9]*) ;; *) note="$note · stall $stall" ;; esac
-  if [ "${3:-}" = stale ]; then
+  # The caller asks for the flag; this asks the POLICY whether this phase has earned
+  # it. Same predicate the row's glyph uses, so the two halves of the line always
+  # agree — and a caller that has not consulted the policy cannot reintroduce
+  # `rate-limited-waiting for 16m · ⚠ stalled — no activity for 16m`.
+  if [ "${3:-}" = stale ] && is_stale "$age" "$phase"; then
     note="$note · ⚠ stalled — no activity for $(dur "${age:-}")"
   else
     [ -n "$age" ] && note="$note · $(dur "$age") ago"
@@ -496,19 +553,24 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale rn zreq zz zf bo
+    local n st glyph gl lbl br prog act live age stale rn zreq zz zf bo lf lph
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
+      lf="$(live_file "$n" "$state")"
       # The record also carries the coarse state (set_state writes both), so a row
       # survives a missing/half-written <name>.state file.
-      [ -n "$st" ] || st="$(live_get "$(live_file "$n" "$state")" state)"
+      [ -n "$st" ] || st="$(live_get "$lf" state)"
       [ -n "$st" ] || st=unknown
-      # At-risk = scheduler says RUNNING but the record stopped ticking. A paused
-      # tasklist is deliberately excluded: it has its own glyph and an ETA, and a
-      # long quiet wait is what it is SUPPOSED to be doing.
-      age="$(live_age "$(live_file "$n" "$state")")"
+      # At-risk = scheduler says RUNNING but the record stopped ticking FOR LONGER
+      # THAN ITS PHASE ALLOWS. A paused tasklist is deliberately excluded: it has its
+      # own glyph and an ETA, and a long quiet wait is what it is SUPPOSED to be
+      # doing. The record's phase says the same thing one level down — a run asleep on
+      # a usage limit is quiet on purpose while the scheduler still calls it running —
+      # so the threshold is per-phase (STALE_QUIET_PHASES above), not one number.
+      age="$(live_age "$lf")"
+      lph="$(live_get "$lf" phase)"
       stale=0
-      [ "$st" = running ] && is_stale "$age" && stale=1
+      [ "$st" = running ] && is_stale "$age" "$lph" && stale=1
       glyph="$(glyph_for "$st")"; gl="${glyph%%|*}"; lbl="${glyph##*|}"
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
@@ -578,7 +640,14 @@ render() {
   return 0
 }
 
-if [ "$MODE" = watch ]; then
+# `lib` renders NOTHING. It is the seam a test uses to source this file and drive the
+# rendering helpers (stale_threshold_for_phase · is_stale · live_note) directly against
+# a synthetic record — which is how "which phases are exempt from the stall flag" stays
+# a checkable table instead of a reading of the shell. Unreachable from the CLI:
+# bin/chief only ever passes `once` (chief ps) or `watch` (chief monitor).
+if [ "$MODE" = lib ]; then
+  :
+elif [ "$MODE" = watch ]; then
   trap 'printf "\033[?25h"' EXIT                  # always restore the cursor
   trap 'exit 0' INT TERM                          # clean exit on Ctrl-C (EXIT trap runs)
   printf '\033[?25l'                              # hide cursor while watching
