@@ -19,7 +19,13 @@
 #                    fails here.
 #   2. THE CEILING — the exemption EXPIRES. Quiet by design is not quiet forever; a
 #                    usage window that never reopens must still become noteworthy.
-#   3. BOTH VIEWS  — `chief ps` and `chief monitor`, against a synthetic registry.
+#   3. THE DIAGNOSIS — the flag NAMES the state it was stuck in and the limit that
+#                    state had earned. 'stalled in rate-limited-waiting … past its
+#                    6h30m limit' is actionable; 'no activity for 2h' is not.
+#   4. GONE ≠ QUIET — a worker pid that died mid-run is a different, worse finding than
+#                    a quiet one, and must not render as the same note. A worker that
+#                    wrote its verdict FINISHED and is not either.
+#   5. BOTH VIEWS  — `chief ps` and `chief monitor`, against a synthetic registry.
 #                    The two render the flag differently (live_note … stale vs a bare
 #                    fallback string), so a fix landing in one is not a fix.
 set -euo pipefail
@@ -48,11 +54,14 @@ echo "stall-flag: part 1 — the exempt/flagged table"
 
 # QUIET — silence here is the state, and chief printed the reason for it already.
 QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-approval'
-# FLAGGED — every other phase the engine publishes. `provider-waiting` heads the list
-# on purpose: it is the whole duration of an agent turn and so is quiet MOST of the
-# time, but a provider that never returns is a real hang — on 2026-08-17 two runs sat
-# in it having produced 0 bytes and never reached iteration 1. It takes a longer
-# threshold, never an exemption, and this line is where that decision is recorded.
+# FLAGGED — every other phase the engine publishes, each against ITS OWN threshold.
+# `provider-waiting` heads the list on purpose: it is the whole duration of an agent
+# turn and so is quiet MOST of the time, but a provider that never returns is a real
+# hang — on 2026-08-17 two runs sat in it having produced 0 bytes and never reached
+# iteration 1. It is classified EXPLICITLY at the default rather than lengthened:
+# agent.sh's `_beat_start` ticks the record every ~15s for the whole provider call, so
+# 15m of silence there is ~60 missed beats — a dead ticker, not a long turn — and a
+# longer threshold would hide exactly those two runs. Never an exemption, either.
 FLAGGED_PHASES='provider-waiting agent-turn writing stalled unverified complete
   research research-failed plan-turn plan-ready plan-invalid review-wait approved
   worktree seeded warmup reconcile merge-wait merge-queued batch-stacking rebasing
@@ -76,7 +85,10 @@ note() {
   live_note probe "$STATE" stale
 }
 
-flagged() { case "$(note "$1" "$2")" in *stalled*) return 0 ;; *) return 1 ;; esac; }
+# Match the MARKER, not the word: `stalled` is itself a phase literal (agent.sh
+# publishes it at a no-progress iteration boundary), so a bare *stalled* glob is true
+# of that row's phase name whether or not the flag was ever appended.
+flagged() { case "$(note "$1" "$2")" in *'⚠ stalled'*) return 0 ;; *) return 1 ;; esac; }
 
 # 40m of silence: nearly 3x the 15m default, and the age the real rows carried.
 for p in $QUIET_PHASES; do
@@ -86,8 +98,14 @@ for p in $QUIET_PHASES; do
     *) fail "'$p' lost its phase / elapsed-in-phase: $(note "$p" 2400)" ;;
   esac
 done
+# Every non-exempt phase, driven against ITS OWN threshold in both directions — which
+# is what makes "each phase carries its own" a checkable claim rather than a comment.
 for p in $FLAGGED_PHASES; do
-  flagged "$p" 2400 || fail "'$p' went quiet for 40m and was NOT flagged: $(note "$p" 2400)"
+  thr="$(stale_threshold_for_phase "$p")"
+  flagged "$p" "$(( thr + 60 ))" \
+    || fail "'$p' went quiet past its own ${thr}s threshold and was NOT flagged: $(note "$p" "$(( thr + 60 ))")"
+  flagged "$p" "$(( thr - 60 ))" \
+    && fail "'$p' was flagged BEFORE its own ${thr}s threshold: $(note "$p" "$(( thr - 60 ))")"
 done
 # The threshold function is the one place the list is consulted — assert it directly
 # too, so a caller that forgets to pass the phase is a visible regression.
@@ -95,6 +113,13 @@ done
   || fail "stale_threshold_for_phase didn't give the quiet phase its own threshold"
 [ "$(stale_threshold_for_phase provider-waiting)" = "$STALE_AFTER" ] \
   || fail "provider-waiting must keep the DEFAULT threshold, not a longer one"
+# The re-tuned phases: the figure is the 36m block-buffered `cargo test` of
+# cuneiform:314 (2026-08-13) plus one default window, and a round number substituted
+# for it later should have to change this line deliberately.
+for p in verifying warmup; do
+  [ "$(stale_threshold_for_phase "$p")" = 3060 ] \
+    || fail "'$p' must carry its own measured threshold (2160 observed + one window), got $(stale_threshold_for_phase "$p")"
+done
 [ "$(stale_threshold_for_phase '')" = "$STALE_AFTER" ] \
   || fail "an unknown phase must take the default threshold (pre-existing behaviour)"
 
@@ -117,12 +142,64 @@ flagged rate-limited-waiting "$(( STALE_QUIET_AFTER + 600 ))" \
   || fail "a quiet-by-design phase past its ceiling must STILL flag: $(note rate-limited-waiting "$(( STALE_QUIET_AFTER + 600 ))")"
 # …and the default is untouched for everything else.
 [ "$STALE_AFTER" = 900 ] || fail "the default staleness window moved (now $STALE_AFTER)"
-flagged provider-waiting 899 && fail "a phase under the default threshold was flagged"
+# 890, not 899: the fixture stamps the record and then reads it back a beat later, so
+# an offset within a second of the boundary is decided by whether the clock ticked
+# between the two — a flake, not a policy. The thr±60 sweep above is the real check.
+flagged provider-waiting 890 && fail "a phase under the default threshold was flagged"
 flagged provider-waiting 900 || fail "the default threshold no longer flags at 900s"
 
-# ══ PART 3 — BOTH VIEWS ══════════════════════════════════════════════════════
+# ══ PART 3 — THE DIAGNOSIS ═══════════════════════════════════════════════════
+# A flag that only reports silence is a flag an operator learns to skip. Past its own
+# threshold, the line has to say WHICH state was quiet and what that state was allowed.
+echo "stall-flag: part 3 — the flag names the state and its limit"
+diag() {  # PHASE OFFSET SUBSTRING… — every substring must appear in the flagged line
+  local p="$1" off="$2" line; shift 2
+  line="$(note "$p" "$off")"
+  for want in "$@"; do
+    case "$line" in *"$want"*) ;; *) fail "the flag for '$p' is missing '$want': $line" ;; esac
+  done
+}
+diag rate-limited-waiting "$(( STALE_QUIET_AFTER + 600 ))" \
+  'stalled in rate-limited-waiting' 'past its 6h30m limit'
+diag verifying 3200 'stalled in verifying' 'past its 51m limit'
+diag provider-waiting 1200 'stalled in provider-waiting' 'past its 15m limit'
+
+# ══ PART 4 — GONE ≠ QUIET ════════════════════════════════════════════════════
+# The other half of "is this run in trouble": a quiet worker is THERE and not talking,
+# an absent one is not coming back. Rendering both as the same yellow note is how nine
+# runs came to be killed on 2026-08-17 on the assumption they were the same thing.
+echo "stall-flag: part 4 — a dead worker is not a quiet one"
+sh -c 'exit 0' & dead_pid=$!
+wait "$dead_pid" 2>/dev/null || true
+kill -0 "$dead_pid" 2>/dev/null && fail "fixture pid $dead_pid is somehow still alive"
+
+# A FRESH heartbeat throughout: 'gone' must not need the run to be stale first.
+live_set "$PAR/probe.live.json" name=probe state=running phase=agent-turn story=US-1 iter=2
+rm -f "$PAR/probe.pid" "$PAR/probe.status"
+worker_gone probe "$STATE" && fail "no pid file at all is UNKNOWN, and unknown is never dead"
+case "$(live_note probe "$STATE" stale)" in
+  *dead*) fail "a tasklist with no pid file was reported dead: $(live_note probe "$STATE" stale)" ;;
+esac
+echo "$$" > "$PAR/probe.pid"
+worker_gone probe "$STATE" && fail "a LIVE worker pid must not read as dead"
+echo "$dead_pid" > "$PAR/probe.pid"
+worker_gone probe "$STATE" || fail "a dead worker pid with no verdict must read as gone"
+case "$(live_note probe "$STATE")" in
+  *'✗ dead'*) ;;
+  *) fail "the detail line must say the worker is gone: $(live_note probe "$STATE")" ;;
+esac
+case "$(live_note probe "$STATE" stale)" in
+  *stalled*) fail "a dead worker must not be downgraded to 'stalled': $(live_note probe "$STATE" stale)" ;;
+esac
+# …and a worker that wrote its verdict FINISHED. The scheduler reaps it on its next
+# poll; a row must not flash ✗ for one tick every time a tasklist completes.
+echo "MERGED @0123456" > "$PAR/probe.status"
+worker_gone probe "$STATE" && fail "a worker that recorded a verdict has finished, not died"
+rm -f "$PAR/probe.pid" "$PAR/probe.status"
+
+# ══ PART 5 — BOTH VIEWS ══════════════════════════════════════════════════════
 # `chief ps` and `chief monitor` are separate render paths over the same rows.
-echo "stall-flag: part 3 — chief ps and chief monitor"
+echo "stall-flag: part 5 — chief ps and chief monitor"
 RUNS="$WORK/monruns"; mkdir -p "$RUNS" "$WORK/mrepo" "$WORK/mtasks" "$WORK/mwt"
 sleep 300 & holder=$!                      # a live pid: the monitor prunes dead runs
 
@@ -140,6 +217,9 @@ mkrow() {  # NAME COARSE-STATE PHASE AGE
 mkrow limit-wait running rate-limited-waiting 2400          # quiet by design, 40m
 mkrow prov-wait  running provider-waiting     2400          # NOT exempt, 40m
 mkrow limit-dead running rate-limited-waiting "$(( STALE_QUIET_AFTER + 600 ))"   # past the ceiling
+mkrow gate-wait  running verifying            2400          # re-tuned: 40m < its 51m
+mkrow worker-off running agent-turn             60          # heartbeat FRESH, worker gone
+echo "$dead_pid" > "$PAR/worker-off.pid"
 
 cat > "$RUNS/$holder.run" <<EOF
 pid=$holder
@@ -154,7 +234,7 @@ state=$STATE
 staterel=.chief/state
 tasks=$WORK/mtasks
 wt=$WORK/mwt
-names=limit-wait prov-wait limit-dead
+names=limit-wait prov-wait limit-dead gate-wait worker-off
 EOF
 
 row() { printf '%s\n' "$2" | grep -A1 "$1 " | tr -d '\n'; }
@@ -171,20 +251,39 @@ check() {  # LABEL OUTPUT
   case "$r" in *'⚠'*) ;; *) fail "$what: the provider-waiting row lost its ⚠ glyph: $r" ;; esac
   r="$(row limit-dead "$out")"
   case "$r" in *stalled*) ;; *) fail "$what: a rate-limit wait past the ceiling was NOT flagged: $r" ;; esac
+  # The re-tune, at the render site: 40m quiet in a gate is inside the 51m that phase
+  # earned, and 40m quiet in provider-waiting (above) is not. One number could not
+  # have got both of those right.
+  r="$(row gate-wait "$out")"
+  case "$r" in
+    *stalled*) fail "$what: a 40m verify is inside its own 51m threshold and must not flag: $r" ;;
+    *'⚠'*)     fail "$what: a 40m verify still took the ⚠ glyph: $r" ;;
+  esac
+  # Gone, on a FRESH heartbeat: a row that is quiet has to look different from a row
+  # that is not there, in the glyph AND in the words.
+  r="$(row worker-off "$out")"
+  case "$r" in *'✗'*) ;; *) fail "$what: a dead worker did not take the ✗ glyph: $r" ;; esac
+  case "$r" in *dead*) ;; *) fail "$what: a dead worker is not reported as gone: $r" ;; esac
+  case "$r" in *stalled*) fail "$what: a dead worker was downgraded to 'stalled': $r" ;; esac
 }
 
 ps_out="$(CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" ps)" || fail "chief ps exited non-zero"
-echo "--- chief ps (quiet-by-design · not-exempt · past-the-ceiling) ---"; printf '%s\n' "$ps_out"
+echo "--- chief ps (quiet-by-design · not-exempt · past-the-ceiling · re-tuned · gone) ---"; printf '%s\n' "$ps_out"
 check "chief ps" "$ps_out"
 
 # `chief monitor` is the same render in a redraw loop: run it, wait for a frame, stop.
 mon_log="$WORK/monitor.out"
 CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" monitor 1 > "$mon_log" 2>&1 &
 mon_pid=$!
-for _ in $(seq 1 50); do grep -q 'limit-dead' "$mon_log" 2>/dev/null && break; sleep 0.2; done
+# Wait for the LAST row's detail line, not just its row: the poll used to break on
+# the first frame byte that matched and then assert against a half-drawn frame.
+for _ in $(seq 1 50); do
+  [ "$(grep -A1 'worker-off' "$mon_log" 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ] && break
+  sleep 0.2
+done
 kill "$mon_pid" 2>/dev/null || true; wait "$mon_pid" 2>/dev/null || true
 mon_out="$(tr -d '\033' < "$mon_log")"
-grep -q 'limit-dead' "$mon_log" || fail "chief monitor never rendered a frame"
+grep -q 'worker-off' "$mon_log" || fail "chief monitor never rendered a frame"
 check "chief monitor" "$mon_out"
 
-echo "stall-flag: OK — quiet-by-design states are not flagged, and the exemption expires"
+echo "stall-flag: OK — per-phase thresholds, a flag that names the state, and gone ≠ quiet"
