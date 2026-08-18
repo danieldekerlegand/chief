@@ -838,6 +838,104 @@ rebase_refusal_cause() {
     exit 0 )
 }
 
+# ---------------------------------------------------------------------------
+# THE OPERATOR'S UNCOMMITTED WORK — parked for the merge, and always given back
+# ---------------------------------------------------------------------------
+# The merge phase does its rebase → verify → merge IN THE WORK REPO, i.e. in the
+# operator's own checkout. That made a clean working tree an unwritten PRECONDITION
+# of merging: one uncommitted line anywhere in the repo — a file the branch never
+# touches — and `rebase_refusal_cause` above declines, the tasklist is parked
+# REBASE-REFUSED, and its dependents block. `chief run` checks the tree ONCE at
+# startup and nothing re-checks it, so an operator editing their own repo while a run
+# is in flight (a reasonable way to work) walks straight into it. Observed twice in
+# one afternoon: two tasklists that had finished every story, each failing to merge
+# over a single modified tracked file.
+#
+# So the merge phase stops requiring it, by PARKING the work for the duration of the
+# critical section and restoring it on the way out. Three ways to do that were on the
+# table; this is (b), and here is why not the other two:
+#
+#   (a) `git rebase --autostash` — one flag, and WRONG. Autostash pops the moment the
+#       rebase ends, so the operator's changes are back in the tree for the re-verify
+#       and the `--no-ff` merge that follow. The gate would then be measuring the
+#       branch PLUS someone's half-finished edit, and a green result would not mean
+#       what it says. It also covers exactly one of the three git commands here: the
+#       `git checkout <branch>` before it and the merge after it are still exposed.
+#
+#   (c) rebase + verify + merge in a DEDICATED worktree, never checking the operator's
+#       checkout out onto the branch at all — the structural fix, and rejected on two
+#       counts. First, verify: `run_verify` runs the project's hook with cwd = the work
+#       repo, and every real project's gate leans on untracked, unclonable state there
+#       (node_modules, target/, .env, a warm build cache). A fresh worktree per merge
+#       either fails the gate or pays a cold build for it, every merge. Second, the
+#       merge itself has to land ON the base branch, which the operator's checkout
+#       holds; a linked worktree cannot check out that same branch, so it would have to
+#       merge detached and move `refs/heads/<base>` by hand — leaving the operator's
+#       working tree silently BEHIND its own HEAD. That trades a loud, recoverable
+#       refusal for a quiet corruption of the thing this story exists to protect.
+#
+# (b) keeps the merge exactly where it is, keeps verify honest (it runs against the
+# branch and nothing else), and confines the new risk to one question: is the work
+# always given back? That question has a bounded answer, below.
+#
+# THE SAFETY CONTRACT. The parked work is never held anywhere but git's own stash, so
+# it survives a SIGKILL, a lost terminal and a reboot. `merge_stash_pop` runs from the
+# subshell's `trap … EXIT`, so it fires on the happy path AND on every failure and
+# abort arm; the sha is also written into `$STATE/<name>.critical`, which teardown
+# reads on a signal and the next run's preflight sweeps for. And a replay that cannot
+# apply cleanly DROPS NOTHING — the stash entry stays, and it is named.
+CHIEF_STASH_TAG="chief: parked operator work for the merge of"
+
+# merge_stash_push REPO NAME — park the repo's uncommitted TRACKED changes and echo
+# the stash commit sha. Echoes NOTHING when there was nothing to park (the common
+# path: one `git status`). UNTRACKED files are deliberately left alone — they never
+# block a checkout of a tracked path, and sweeping a build tree into a stash is a far
+# bigger surprise than the problem it would solve. Stdout is the sha and only the sha;
+# the caller logs.
+merge_stash_push() {
+  local repo="$1" name="$2" sha
+  [ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ] || return 0
+  git -C "$repo" stash push --quiet --message "$CHIEF_STASH_TAG ${name:-a tasklist}" >/dev/null 2>&1 || return 0
+  sha="$(git -C "$repo" rev-parse --verify --quiet refs/stash 2>/dev/null || echo)"
+  [ -n "$sha" ] && printf '%s' "$sha"
+  return 0
+}
+
+# merge_stash_pop REPO SHA NAME — give it back. A no-op when SHA is empty (nothing was
+# parked) or when the object is already gone (a previous pop won the race), so it is
+# safe to call from a trap that may fire more than once.
+#
+# Applied by SHA, never by `stash@{0}`: the index is a stack, and an operator who
+# stashed something themselves while the merge ran would otherwise get the wrong entry
+# back. `--index` first so a staged change comes back staged; a plain apply is only
+# retried when the failed attempt left the tree untouched, so a conflicted apply is
+# never stacked on top of itself.
+#
+# Returns 1 — with the stash INTACT — when the work cannot be replayed. Nothing here
+# ever drops an entry it did not successfully apply.
+merge_stash_pop() {
+  local repo="$1" sha="$2" name="$3" rc=0 entry
+  [ -n "$sha" ] || return 0
+  git -C "$repo" cat-file -e "${sha}^{commit}" 2>/dev/null || return 0
+  git -C "$repo" stash apply --index "$sha" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" != 0 ] && [ -z "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    rc=0; git -C "$repo" stash apply "$sha" >/dev/null 2>&1 || rc=$?
+  fi
+  if [ "$rc" = 0 ]; then
+    # Drop the ENTRY that names this sha, found by walking the reflog — dropping
+    # `stash@{0}` blind would discard whatever happens to be on top instead.
+    entry="$(git -C "$repo" stash list --format='%gd %H' 2>/dev/null | awk -v s="$sha" '$2==s{print $1; exit}')"
+    [ -n "$entry" ] && git -C "$repo" stash drop --quiet "$entry" >/dev/null 2>&1
+    echo ">> ${name:-chief}: restored the uncommitted changes chief parked for the merge"
+    return 0
+  fi
+  echo "!! ${name:-chief}: chief parked this repo's uncommitted changes for the merge and CANNOT replay them cleanly."
+  echo "!! ${name:-chief}: NOTHING WAS DROPPED — the work is intact in the stash. To get it back:"
+  echo "     git -C $repo stash list        # '$CHIEF_STASH_TAG ${name:-a tasklist}'"
+  echo "     git -C $repo stash apply $sha"
+  return 1
+}
+
 # ITERATION-BOUNDARY integration — the throttled wrapper around integrate_base().
 # Called once between agent iterations (never during one). Same args as
 # integrate_base; always returns 0 — nothing here may end an iteration or a
@@ -1556,13 +1654,20 @@ stop_repair_repo() {
   return 0
 }
 
+# The stash restore is done HERE rather than inside stop_repair_repo(), because that
+# function returns early once the repo is already back on its base — which is exactly
+# the state a critical section that finished its merge but was killed before its trap
+# ran leaves behind, and it is still owed the operator's work.
 stop_repair_repos() {
-  local f r b
+  local f r b st n
   for f in "$STATE"/*.critical; do
     [ -e "$f" ] || continue
     r="$(sed -n 's/^repo=//p' "$f" 2>/dev/null | head -1)"
     b="$(sed -n 's/^base=//p' "$f" 2>/dev/null | head -1)"
+    st="$(sed -n 's/^stash=//p' "$f" 2>/dev/null | head -1)"
+    n="$(sed -n 's/^name=//p' "$f" 2>/dev/null | head -1)"
     stop_repair_repo "$r" "${b:-$BASE_BRANCH}"
+    [ -n "$st" ] && [ -n "$r" ] && { merge_stash_pop "$r" "$st" "$n" >&2 || echo "$r|$st" > "$STATE/$n.stash"; }
     rm -f "$f" 2>/dev/null || true
   done
   stop_repair_repo "$REPO" "$BASE_BRANCH"
@@ -1665,6 +1770,21 @@ stop_sleep() {
 }
 
 rmdir "$MERGE_LOCK" "$WT_LOCK" 2>/dev/null || true  # clear stale merge/worktree locks from a killed run
+# Stale mid-merge markers from a killed run. Before they go, HARVEST any operator work
+# a previous merge phase parked in the stash and never got to give back — a SIGKILL,
+# a closed terminal or a reboot skips the trap that restores it. The work is not lost
+# either way (a stash entry outlives the process that made it), but a run that took it
+# owes it back, and an operator should not have to know it was taken. Restored below,
+# AFTER the preflight cleanliness gate — putting it back first would fail the gate on
+# the strength of the run that borrowed it.
+STALE_STASHES=""
+for f in "$STATE"/*.critical; do
+  [ -e "$f" ] || continue
+  cs="$(sed -n 's/^stash=//p' "$f" 2>/dev/null | head -1)"
+  cr="$(sed -n 's/^repo=//p'  "$f" 2>/dev/null | head -1)"
+  cn="$(sed -n 's/^name=//p'  "$f" 2>/dev/null | head -1)"
+  [ -n "$cs" ] && [ -n "$cr" ] && STALE_STASHES="$STALE_STASHES $cr|$cs|${cn:-a previous run}"
+done
 rm -f "$STATE"/*.critical 2>/dev/null || true       # stale mid-merge markers from a killed run
 rm -f "$STATE"/*.state "$STATE"/*.pid "$STATE"/*.live.json 2>/dev/null || true   # fresh scheduler state
 # Register this run in the global registry so `chief ps`/`chief monitor` can find
@@ -1753,6 +1873,18 @@ if [ "$FORCE" != "1" ]; then
     git -C "$REPO" status --short | head; exit "$(hl_rc "$HL_RC_CONFIG" 1)"
   fi
 fi
+
+# GIVE BACK what a killed run borrowed (harvested from the stale .critical markers
+# above). This is the last of the three restore paths — the subshell's own EXIT trap
+# covers a normal exit, teardown covers a signal, and this covers the case where
+# neither ran at all. It is deliberately AFTER the gate: the tree the gate judged is
+# the one the previous run left, not the one it was about to be handed back.
+for e in $STALE_STASHES; do
+  sr="${e%%|*}"; rest="${e#*|}"; ss="${rest%%|*}"; sn="${rest#*|}"
+  git -C "$sr" cat-file -e "${ss}^{commit}" 2>/dev/null || continue
+  echo "  (a previous run was killed mid-merge holding this repo's uncommitted changes in the stash — restoring them)" >&2
+  merge_stash_pop "$sr" "$ss" "$sn" >&2 || true
+done
 
 # worker_park OUTCOME DETAIL MESSAGE — record a worker that stopped with its branch
 # intact, and say so four ways at once.
@@ -2166,8 +2298,27 @@ run_worker() {
       # is what strands a repo needing manual `git rebase --abort`. The marker tells
       # the driver's teardown to wait this out before it reaps, and names the repo +
       # base to restore if the wait is spent. Removed on every exit path.
-      trap 'git -C "$work_repo" checkout "$work_base" >/dev/null 2>&1 || true; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
+      #
+      # The trap also gives back whatever uncommitted work the operator had in this
+      # checkout (merge_stash_push/pop above). It reads $mstash at FIRE time, which is
+      # why it is armed BEFORE the push: a kill landing between the two would other-
+      # wise be the one window where the stash has no restorer. Declared empty first:
+      # under `set -u` the trap must be able to read it even if the subshell dies
+      # before the push assigns it.
+      local mstash=""
+      trap 'git -C "$work_repo" checkout "$work_base" >/dev/null 2>&1 || true; merge_stash_pop "$work_repo" "$mstash" "$name" || echo "$work_repo|$mstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
       { echo "name=$name"; echo "repo=$work_repo"; echo "base=$work_base"; } > "$STATE/$name.critical" 2>/dev/null || true
+      # PARK the operator's uncommitted tracked work. A clean work repo is no longer a
+      # precondition of merging: it is a state the merge phase CREATES, for the length
+      # of the critical section, and undoes on the way out. The sha goes into the
+      # marker so teardown (and the next run's preflight) can restore it if this
+      # subshell is killed before its trap runs.
+      mstash="$(merge_stash_push "$work_repo" "$name")"
+      if [ -n "$mstash" ]; then
+        { echo "name=$name"; echo "repo=$work_repo"; echo "base=$work_base"; echo "stash=$mstash"; } > "$STATE/$name.critical" 2>/dev/null || true
+        rm -f "$STATE/$name.stash" 2>/dev/null || true
+        echo ">> $name: the work repo had uncommitted tracked changes — PARKED in the stash @$(printf '%s' "$mstash" | cut -c1-7) for the merge, and restored on the way out (they are not lost if this run dies: git stash list)"
+      fi
       # Free the branch from its worktree so the work repo can check it out.
       wt_git remove --force "$wt" 2>/dev/null || true
       git -C "$work_repo" checkout "$branch" >/dev/null 2>&1 || { live_set "$live" phase=checkout-failed
@@ -2627,7 +2778,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -2642,6 +2793,17 @@ for n in $NAMES; do
   # Collected off the STATUS, not the scheduler state: a refusal is 'failed' like any
   # other, and the summary block below is what separates it from one worth re-running.
   case "$(cat "$STATE/$n.status" 2>/dev/null || echo)" in REBASE-REFUSED*) refused="$refused $n" ;; esac
+  # The merge phase parks the operator's uncommitted work for the length of its
+  # critical section (merge_stash_push). This file exists only when giving it back
+  # could not be done cleanly — the entry was KEPT, so the block below is the run's
+  # obligation to say where it is.
+  if [ -s "$STATE/$n.stash" ]; then
+    sr="$(cut -d'|' -f1 < "$STATE/$n.stash")"; ss="$(cut -d'|' -f2 < "$STATE/$n.stash")"
+    # Self-clearing: once the operator has applied and dropped it the object is gone,
+    # and a pointer to a stash that no longer exists is worse than no pointer at all.
+    if git -C "$sr" cat-file -e "${ss}^{commit}" 2>/dev/null; then stashed="$stashed $n"
+    else rm -f "$STATE/$n.stash" 2>/dev/null || true; fi
+  fi
 done
 echo "   (logs: $STATE/<name>.log)"
 # Retried tasklists, said once and plainly. A tasklist that failed on its LAST attempt
@@ -2673,6 +2835,22 @@ if [ -n "$refused" ]; then
     printf '      %s\n' "clear the cause above in the work repo, then: chief run $rn"
     [ -f "$SNAP/$rn.rebase-refused.md" ] && printf '      %s\n' "the cause and the exact command: $SNAP_REL/$rn.rebase-refused.md"
   done
+fi
+# UNREPLAYED OPERATOR WORK. Loud, unconditional, and above every other note here,
+# because it is the only line in this summary about something that is not chief's:
+# the merge phase borrowed the operator's uncommitted changes and could not put them
+# back (the merge touched the same lines). Nothing was dropped — the whole point of
+# parking in git's own stash rather than a temp file is that the entry outlives every
+# way this can go wrong — but an operator who never knew it was taken has no reason
+# to run `git stash list`, so the run says it.
+if [ -n "$stashed" ]; then
+  echo "   ⚠️  YOUR UNCOMMITTED WORK IS IN THE STASH, not the working tree:$stashed"
+  for sn in $stashed; do
+    ssr="$(cut -d'|' -f1 < "$STATE/$sn.stash")"; ssha="$(cut -d'|' -f2 < "$STATE/$sn.stash")"
+    printf '    · %-30s git -C %s stash apply %s\n' "$sn" "$ssr" "$ssha"
+  done
+  echo "    chief parked it to merge, and the merge changed the same lines — so it replayed with"
+  echo "    conflicts and the entry was KEPT rather than dropped. Nothing is lost."
 fi
 # A usage-limit pause is not a failure and must not read like one: say plainly that
 # the branch is intact, how much of the self-heal budget it spent, and that a re-run

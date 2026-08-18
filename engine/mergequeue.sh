@@ -879,8 +879,21 @@ mq_worker_merge() {
         # CRITICAL SECTION, on the same terms as the floor's: from here the work repo
         # is mid git operation, and the marker tells teardown to wait it out and names
         # the repo + base to restore if the wait is spent.
-        trap 'git -C "$repo" checkout "$base" >/dev/null 2>&1 || true; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
+        #
+        # And on the same terms in the other direction too: a batch stacks N branches
+        # in this same checkout, so the operator's uncommitted work is parked for the
+        # whole batch and given back by the same trap (merge_stash_push/pop in
+        # engine/driver.sh). A batch must never invent a new way for a repo to be
+        # dirty at merge time, nor a new way for that work to go missing.
+        local qstash=""
+        trap 'git -C "$repo" checkout "$base" >/dev/null 2>&1 || true; merge_stash_pop "$repo" "$qstash" "$name" || echo "$repo|$qstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
         { echo "name=$name"; echo "repo=$repo"; echo "base=$base"; } > "$STATE/$name.critical" 2>/dev/null || true
+        qstash="$(merge_stash_push "$repo" "$name")"
+        if [ -n "$qstash" ]; then
+          { echo "name=$name"; echo "repo=$repo"; echo "base=$base"; echo "stash=$qstash"; } > "$STATE/$name.critical" 2>/dev/null || true
+          rm -f "$STATE/$name.stash" 2>/dev/null || true
+          echo ">> batch: the work repo had uncommitted tracked changes — PARKED in the stash @$(printf '%s' "$qstash" | cut -c1-7) for this batch, and restored on the way out"
+        fi
         mq_lead "$name" "$repo" "$base"
       )
       rmdir "$MERGE_LOCK" 2>/dev/null || true

@@ -102,7 +102,7 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   # here is paid for twice, and a failing test is named and its output streamed.
   if [ "${CHIEF_VERIFY_TESTS:-1}" = "1" ]; then
     say "behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)"
-    CHIEF_BYSTANDER_TESTS="smoke provider-conformance ratelimit limitstate limitresume limitmonitor pause plan-review research liveliness teardown reapscope reapenv noworkguard evidence-gate criteria-scope measured-bars boundary-demotion five-cases headless events container account-env stale-resume conflict-forensics rebase-refusal touches-audit quality-ratchet overlap-zones merge-batch gen" \
+    CHIEF_BYSTANDER_TESTS="smoke provider-conformance ratelimit limitstate limitresume limitmonitor pause plan-review research liveliness teardown reapscope reapenv noworkguard evidence-gate criteria-scope measured-bars boundary-demotion five-cases headless events container account-env stale-resume conflict-forensics rebase-refusal dirty-checkout touches-audit quality-ratchet overlap-zones merge-batch gen" \
       bash test/bystander.sh || block "behavioral tests failed (see above)"
   else
     say "behavioral tests skipped (CHIEF_VERIFY_TESTS=0)"

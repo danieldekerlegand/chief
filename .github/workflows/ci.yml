@@ -119,6 +119,9 @@ jobs:
       - name: Refused rebase vs real conflict (a dirty work repo is not a merge conflict)
         run: bash test/rebase-refusal.sh
 
+      - name: Dirty operator checkout (the merge parks uncommitted work and always gives it back)
+        run: bash test/dirty-checkout.sh
+
       - name: Under-tagged touches audit (co-scheduled tasklists that edited the same file are reported)
         run: bash test/touches-audit.sh
 

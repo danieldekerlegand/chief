@@ -27,9 +27,10 @@
 #               2. CONFLICT a sibling merges over the same file mid-turn: still
 #                           REBASE-CONFLICT, still naming the conflicted file (the
 #                           real-conflict path must not regress).
-#               3. REFUSED  the agent leaves uncommitted tracked work in the WORK
-#                           repo, so git declines with zero unmerged paths: the
-#                           distinct REBASE-REFUSED state, its own note naming the
+#               3. REFUSED  the agent leaves a REBASE in progress (a stray rebase-merge
+#                           directory) in the WORK repo, so git declines with zero
+#                           unmerged paths:
+#                           the distinct REBASE-REFUSED state, its own note naming the
 #                           cause and the command that clears it, and no conflict
 #                           report anywhere near it. Scheduled WITH a dependent, and
 #                           asserted on ATTEMPTS as well as labels: exactly one agent
@@ -38,8 +39,14 @@
 #                           "exhausted its retries", and a dependency cascade that did
 #                           not change shape.
 #
-# Order matters: REFUSED runs last because it leaves the work repo dirty on
-# purpose, and `chief run` refuses to start on a dirty base repo.
+# NOT covered here any more, on purpose: a work repo carrying plain UNCOMMITTED
+# TRACKED CHANGES. That used to be this file's refusal scenario, and as of tasklist 93
+# (US-2) it is no longer a refusal at all — the merge phase parks the operator's work
+# in the stash for the length of its critical section and gives it back on the way out.
+# test/dirty-checkout.sh owns that case now, including the data-safety half.
+#
+# Order matters: REFUSED runs last because it leaves a rebase in progress in the work
+# repo on purpose, and nothing after it should have to reason about that.
 #
 # Installs the COMMITTED state of this checkout (install.sh git-clones) — commit
 # engine changes before trusting a green run.
@@ -115,9 +122,14 @@ CHIEF="$BIN/chief"
 #   ahead   — nothing. Base never moves, so the branch is strictly ahead of it.
 #   collide — land a REAL sibling merge on base over the same file (a genuine
 #             content conflict for the merge-phase rebase to hit).
-#   refuse  — leave uncommitted TRACKED work in the WORK repo, the way a crashed
-#             tool or an operator's stray edit does. git declines to rebase there,
-#             with zero unmerged paths — the whole point of the distinction.
+#   refuse  — leave a REBASE IN PROGRESS in the WORK repo (a stray rebase-merge
+#             directory), the way a crashed tool or an abandoned `git rebase` does.
+#             git declines to rebase there, with zero unmerged paths — the point of
+#             the distinction. A stray MERGE_HEAD would NOT do: `git checkout` clears
+#             merge state on its way past, and the merge phase checks the branch out
+#             before it asks whether a rebase can start.
+#             (Plain uncommitted work is deliberately NOT used: since tasklist 93 the
+#             merge phase parks that and merges anyway — see test/dirty-checkout.sh.)
 # COMPLETE in the same turn makes agent.sh exit before its iteration-boundary
 # hook, which is what lets the drift/dirt survive to the merge phase.
 mkdir -p "$WORK/fakebin"
@@ -164,7 +176,7 @@ if [ ! -f "$ONCE" ] && [ -n "${CHIEF_TEST_BASE_REPO:-}" ] && [ -n "${id:-}" ]; t
         git merge -q --no-ff "chief/$CHIEF_TEST_SIBLING" \
           -m "Merge chief/$CHIEF_TEST_SIBLING (chief, auto-verified)" ) >/dev/null 2>&1 || true ;;
     refuse)
-      printf 'an operator was editing this\n' >> "$CHIEF_TEST_BASE_REPO/dirt.txt" ;;
+      mkdir -p "$CHIEF_TEST_BASE_REPO/.git/rebase-merge" 2>/dev/null || true ;;
   esac
 fi
 
@@ -181,7 +193,6 @@ git commit -q --allow-empty -m init
 "$CHIEF" init >/dev/null || fail "chief init failed"
 rm -f tasks/chief/example.json
 printf 'base line\n' > shared.txt
-printf 'a tracked file no branch touches\n' > dirt.txt
 for n in rr-ahead rr-conflict rr-refuse; do
   jq -n --arg b "chief/$n" \
      '{project:"rr",branchName:$b,description:"rebase-refusal fixture",iters:2,
@@ -259,23 +270,22 @@ has "↻ retrying rr-conflict (attempt 2/3)" "$(run_log rr-conflict)" \
 has "exhausted its retries (3/3)" "$(run_log rr-conflict)" \
   || fail "the conflict's retry budget was not reported as spent"
 
-# ── 3. REFUSED — dirty work repo, ZERO unmerged paths: NOT a conflict ─────────
+# ── 3. REFUSED — a merge left in progress, ZERO unmerged paths: NOT a conflict ─
 run_chief rr-refuse refuse rr-refuse-dep
 status="$(status_of rr-refuse)"
 [ "$(token_of rr-refuse)" = "REBASE-REFUSED" ] \
-  || fail "a rebase refused by a dirty work repo must report its own state, not a conflict — got '$status'"
-has "uncommitted" "$status" || fail "the REBASE-REFUSED status does not name the cause ('$status')"
+  || fail "a rebase refused by a half-operated-on work repo must report its own state, not a conflict — got '$status'"
+has "rebase-merge" "$status" || fail "the REBASE-REFUSED status does not name the cause ('$status')"
 has ".chief/state/snapshots/rr-refuse.rebase-refused.md" "$status" \
   || fail "the .status file does not point at the refusal note ('$status')"
 [ -f "$SNAP/rr-refuse.rebase-conflict.md" ] && fail "a REFUSED rebase wrote a CONFLICT report — it has no conflicted files to resolve"
 note="$(cat "$SNAP/rr-refuse.rebase-refused.md" 2>/dev/null || echo)"
 [ -n "$note" ] || fail "a refused rebase wrote no $SNAP/rr-refuse.rebase-refused.md"
-has "not a merge conflict" "$note" || fail "the refusal note does not deny the conflict"
-has "ZERO unmerged paths" "$note"  || fail "the refusal note does not say WHY it is not a conflict"
-has "uncommitted" "$note"          || fail "the refusal note does not name the cause"
-has "dirt.txt" "$note"             || fail "the refusal note does not show the work repo's dirty state"
-has "git stash" "$note"            || fail "the refusal note does not give the command that clears this cause"
-has "chief run rr-refuse" "$note"  || fail "the refusal note does not say how to pick the tasklist back up"
+has "not a merge conflict" "$note"  || fail "the refusal note does not deny the conflict"
+has "ZERO unmerged paths" "$note"   || fail "the refusal note does not say WHY it is not a conflict"
+has "rebase-merge" "$note"          || fail "the refusal note does not name the cause"
+has "git rebase --abort" "$note"    || fail "the refusal note does not give the command that clears THIS cause"
+has "chief run rr-refuse" "$note"   || fail "the refusal note does not say how to pick the tasklist back up"
 log="$(worker_log rr-refuse)"
 has "NOT a content conflict" "$log" || fail "the worker log calls a refusal a conflict"
 has "rr-refuse.rebase-refused.md" "$log" || fail "the worker log does not point at the refusal note"
@@ -304,7 +314,7 @@ has "rr-refuse exhausted its retries" "$rrun" \
 # The summary names the precondition and the operator's move, not just a red line.
 has "git REFUSED to rebase" "$rrun" || fail "the run summary does not separate a refusal from the other failures"
 has "NOT retried" "$rrun"           || fail "the run summary does not say that not retrying was the decision"
-has "uncommitted" "$rrun"           || fail "the run summary does not name the precondition (the dirty checkout)"
+has "rebase-merge" "$rrun"          || fail "the run summary does not name the precondition (the half-finished git operation)"
 has "chief run rr-refuse" "$rrun"   || fail "the run summary does not give the operator's move"
 has "rr-refuse.rebase-refused.md" "$rrun" || fail "the run summary does not point at the cause-and-fix note"
 
@@ -316,6 +326,6 @@ has 'needs "rr-refuse", which FAILED in this run' "$rrun" \
   || fail "the dependent's reason no longer names the refused tasklist the way it always did"
 [ "$(turns_of rr-refuse-dep)" = 0 ] || fail "a blocked dependent still ran its agent"
 
-git -C "$REPO" checkout -q -- dirt.txt                        # release the fixture's dirt
+rm -rf "$REPO/.git/rebase-merge"                              # release the fixture's stuck rebase
 
-echo "REBASE-REFUSAL PASS — a strictly-ahead branch merges with no rebase at all; a real content conflict is still REBASE-CONFLICT naming its files and still spends all 3 attempts; a rebase refused by a dirty work repo is REBASE-REFUSED with its own cause-and-fix note, never a conflict, and costs exactly ONE agent run while its dependents block as they always did"
+echo "REBASE-REFUSAL PASS — a strictly-ahead branch merges with no rebase at all; a real content conflict is still REBASE-CONFLICT naming its files and still spends all 3 attempts; a rebase refused by a half-operated-on work repo is REBASE-REFUSED with its own cause-and-fix note, never a conflict, and costs exactly ONE agent run while its dependents block as they always did"
