@@ -33,8 +33,8 @@
 #
 # SCHEDULER STATES (per tasklist, in $STATE/<name>.state):
 #   pending · running · done · failed · blocked · rate-limited · paused ·
-#   awaiting-review
-# THREE of these are NON-TERMINAL, and none of them is a failure:
+#   awaiting-review · awaiting-approval
+# FOUR of these are NON-TERMINAL, and none of them is a failure:
 #   · 'rate-limited' — the worker's agent loop exited 2, i.e. it stopped on a Claude
 #     usage/session limit (see engine/agent.sh's exit-code contract). Nothing is
 #     wrong with that branch — it is merely blocked until the limit window resets —
@@ -53,6 +53,18 @@
 #     the siblings, and the next run resumes reading the verdict off disk instead of
 #     re-asking. Chief never manufactures the missing approval — an unreachable
 #     reviewer is not a yes.
+#   · 'awaiting-approval' — the MERGE POLICY LAYER held the branch: it changed a
+#     domain declared an OVERLAP ZONE with policy `review` (engine/zones.sh,
+#     docs/reference/overlap-zones.md), or a story blew the per-story DIFF-SIZE
+#     BUDGET under CHIEF_DIFF_BUDGET=block (engine/budget.sh,
+#     docs/reference/diff-budget.md). One state, one approval, for both.
+#     The merge floor ALREADY RAN: it is rebased onto the latest base and its verify
+#     came back green, and it is held anyway, because the risk the layer exists for —
+#     two parallel branches whose designs disagree — is invisible to every automated
+#     gate. `chief approve <name>` records the human YES; the next run reads it off
+#     disk and merges. This is the one park where the branch's worktree is already
+#     gone (the merge phase removes it before checking out): the BRANCH is what is
+#     kept, rebased and green, and a resumed run rebuilds the rest.
 # dep_broken() treats NONE of them as broken: the dependents of a tasklist that is
 # only waiting stay 'pending' (schedulable) instead of cascading to 'blocked'.
 #
@@ -306,6 +318,7 @@ tasklist_outcome() {
     PLAN-INVALID*)                    printf 'plan-invalid' ;;
     RESEARCH-FAILED*)                 printf 'research-failed' ;;
     AWAITING-REVIEW*)                 printf 'awaiting-review' ;;
+    AWAITING-APPROVAL*)               printf 'awaiting-approval' ;;
     BAD-REPO*)                        printf 'bad-repo' ;;
     # No status line (or one no worker writes): fall back to the scheduler state,
     # which is what distinguishes "blocked on a dep" from "never launched" from
@@ -317,6 +330,7 @@ tasklist_outcome() {
          rate-limited) printf 'rate-limited' ;;
          paused)          printf 'paused' ;;
          awaiting-review) printf 'awaiting-review' ;;
+         awaiting-approval) printf 'awaiting-approval' ;;
          *)               printf 'failed' ;;
        esac ;;
   esac
@@ -409,6 +423,17 @@ source "$ENGINE/criteria.sh"
 # The BAR rule on acceptance criteria (engine/measure.sh): a story claiming a
 # checkable bar must record the value it observed, or it is `unverified`, not passed.
 source "$ENGINE/measure.sh"
+# The per-story DIFF-SIZE BUDGET (engine/budget.sh): larger diffs carry higher
+# conflict probability, so change size is the lever. Sourced BEFORE zones.sh, whose
+# merge gate calls it — the two are one policy layer with one approval, not two
+# checkpoints. Warn-only by default: it reports, and the merge continues.
+source "$ENGINE/budget.sh"
+# The OVERLAP ZONE REGISTRY (engine/zones.sh): the per-repo declaration of domains
+# where a green gate is not sufficient authority to merge. A policy layer ABOVE the
+# merge floor — it runs after the rebase and after a green verify, never instead of
+# them — and asks nothing at all of a repo that declares no zones and stays in budget.
+source "$ENGINE/zones.sh"
+ZONES_CONF="$(zones_file "$REPO")"
 # git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
 # another uid, and an image with no committer identity. Sourced before anything runs
 # git on $REPO; its exports are inherited by every child — agent.sh, the verify hook,
@@ -1153,9 +1178,10 @@ deps_satisfied() {
   return 0
 }
 dep_broken() {   # a dep failed/blocked -> this tasklist can never run
-  # 'rate-limited', 'paused' and 'awaiting-review' are deliberately absent: a dep
-  # waiting out a usage limit, parked by an operator pause, or waiting on a human's
-  # verdict is not broken — it is unfinished work with its branch intact that the next
+  # 'rate-limited', 'paused', 'awaiting-review' and 'awaiting-approval' are
+  # deliberately absent: a dep waiting out a usage limit, parked by an operator
+  # pause, waiting on a human's plan verdict, or held by the merge policy layer for a
+  # human's approval is not broken — it is unfinished work with its branch intact that the next
   # run resumes. Its dependents must therefore stay pending (schedulable on resume)
   # rather than cascade to 'blocked'.
   local d
@@ -1709,12 +1735,13 @@ if [ "$FORCE" != "1" ]; then
   fi
 fi
 
-# worker_park OUTCOME DETAIL MESSAGE — record a worker that stopped BEFORE the merge
-# phase with its branch and worktree intact, and say so four ways at once.
+# worker_park OUTCOME DETAIL MESSAGE — record a worker that stopped with its branch
+# intact, and say so four ways at once.
 #
-# Four arms of run_worker end this way (an operator pause, an unformable plan, an
-# unapproved one, and a research phase that could not draw the map), and each of them
-# used to spell out the same five lines. They are the same transition, so they are
+# Five arms of run_worker end this way (an operator pause, an unformable plan, an
+# unapproved one, a research phase that could not draw the map, and a branch held at
+# an overlap zone), and each of them used to spell out the same five lines. They are
+# the same transition, so they are
 # one function: the four surfaces a stop has to
 # reach — the liveliness record `chief ps` renders, the event a subscriber sees, the
 # <name>.status line reap() maps to a scheduler state, and the human log — are
@@ -1737,6 +1764,11 @@ worker_park() {
     # but an actionable one: the fix is usually to write the document by hand.
     research-failed) phase=research-failed; status=RESEARCH-FAILED; ev=tasklist.research-failed; state=failed; story="" ;;
     awaiting-review) phase=awaiting-review; status=AWAITING-REVIEW; ev=tasklist.awaiting-review; state=awaiting-review ;;
+    # The one arm that fires INSIDE the merge phase, after the floor came back
+    # green (engine/zones.sh). Its worktree is already gone — the merge phase
+    # removes it to free the branch — so unlike its four siblings what is kept is
+    # the BRANCH, rebased onto the latest base and verified.
+    awaiting-approval) phase=awaiting-approval; status=AWAITING-APPROVAL; ev=tasklist.awaiting-approval; state=awaiting-approval ;;
     *) return 0 ;;
   esac
   live_set "$live" phase="$phase" story="$story"
@@ -2183,6 +2215,16 @@ run_worker() {
           echo "VERIFY-FAILED" > "$STATE/$name.status"; echo "!! $name verify failed post-rebase (persisted for re-engagement)"; exit 0
         fi
       fi
+      # ---- THE POLICY LAYER: a green gate is not always enough authority --------
+      # AFTER the floor, never instead of it (engine/zones.sh + engine/budget.sh): a
+      # non-zero return means "held — do not merge", and it has already said why.
+      # One gate, one approval — a declared zone and an oversized story never both ask.
+      if ! zones_merge_gate "$name" "$branch" "$work_repo" "$work_base" "$STATE" \
+                            "$(touches_of "$name" | tr '\n' ' ')"; then
+        worker_park awaiting-approval "the merge policy layer (overlap zone / diff budget) — rebased + verified, held for a human" \
+          "   Branch $branch is kept (rebased, green) — approve what no gate can check, then re-run:  chief approve $name && chief run"
+        exit 0
+      fi
       live_set "$live" phase=merging
       git -C "$work_repo" checkout "$work_base" >/dev/null 2>&1
       if git -C "$work_repo" merge --no-ff "$branch" -m "Merge $branch (chief, auto-verified)"; then
@@ -2192,8 +2234,11 @@ run_worker() {
         finalize_merged "$name" "$branch" "$sha" "$work_repo" "$sub"
         # cleared: this branch is green + merged, so every failure artifact from a
         # previous attempt (verify output, conflict forensics) is now stale.
+        # The zone request + verdict go with them: the change they were about is now
+        # ON the base, and a verdict that outlived its subject can only mislead.
         rm -f "$SNAP/$name.verify-failed.log" "$SNAP/$name.rebase-conflict.md" \
-              "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
+              "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
+              "$(zones_request_file "$STATE" "$name")" "$(zones_approval_file "$STATE" "$name")" 2>/dev/null || true
         live_set "$live" phase=merged story=
         event_emit tasklist.merged name="$name" state=done detail="$branch --no-ff into $work_base @$sha${sub:+ ($sub)}"
         echo "MERGED @$sha${sub:+ ($sub)}" > "$STATE/$name.status"; echo ">> $name MERGED @$sha${sub:+ in $sub}"
@@ -2432,6 +2477,12 @@ reap() {   # collect any finished workers, update state
       # re-arms it (only a verdict can), and the run ends with the branch, the plan
       # and every annotation kept for the next `chief run`.
       AWAITING-REVIEW*) set_state "$n" awaiting-review ;;
+      # Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
+      # or an over-budget story (docs/reference/diff-budget.md). Non-terminal on the
+      # same terms again — but note what is different: this branch already passed the
+      # whole merge floor. Nothing here re-arms it either; `chief approve` records the
+      # verdict and the next run reads it.
+      AWAITING-APPROVAL*) set_state "$n" awaiting-approval ;;
       *) set_state "$n" failed ;;
     esac
     echo "  ● $n finished → $st"
@@ -2529,7 +2580,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -2539,6 +2590,7 @@ for n in $NAMES; do
     rate-limited) ran=1; paused="$paused $n" ;;   # it ran; it is paused, not failed
     paused) ran=1; parked="$parked $n" ;;         # it ran; the operator stopped it
     awaiting-review) ran=1; inreview="$inreview $n" ;;  # it ran; a human hasn't approved its plan
+    awaiting-approval) ran=1; inzone="$inzone $n" ;;   # it ran, rebased and verified green; a human hasn't approved the zone it changed
   esac
 done
 echo "   (logs: $STATE/<name>.log)"
@@ -2608,6 +2660,20 @@ if [ -n "$inreview" ]; then
   done
   echo "    Approve the plan (docs/plan-review.md), then pick it up where it stopped:  chief run"
 fi
+# Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
+# or an over-budget story (docs/reference/diff-budget.md). Reported apart from the
+# three holds above because what is true of this one is stronger: the branch is
+# rebased onto the latest base and its verify came back green. Nothing is wrong with
+# it — the repo declared that green is not sufficient authority to merge this change.
+if [ -n "$inzone" ]; then
+  echo "   ⏸ AWAITING APPROVAL — $(set -- $inzone; echo $#) tasklist(s) rebased + verified GREEN, held by the merge policy layer:$inzone"
+  for n in $inzone; do
+    printf '    · %-30s %s\n' "$n" "$(cat "$STATE/$n.status" 2>/dev/null || echo AWAITING-APPROVAL)"
+    zones_render "$(jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | @tsv' \
+                      "$(zones_request_file "$STATE" "$n")" 2>/dev/null || echo)"
+  done
+  echo "    Approve what a gate cannot check (whether the designs agree, whether the size is warranted), then:  chief approve <name> && chief run"
+fi
 # Only claim there are branches to review if there actually are: chief/* heads not
 # yet reachable from the base branch. A blanket "unmerged branches remain" sends
 # people hunting for work that a no-op run never created.
@@ -2645,6 +2711,7 @@ for n in $NAMES; do
     verify-failed)            hl_verify=1 ;;
     paused|rate-limited)      hl_held=1 ;;
     awaiting-review)          hl_held=1 ;;   # withheld pending a human verdict, not failed
+    awaiting-approval)        hl_held=1 ;;   # withheld pending a human approval, not failed
     blocked|not-launched)     ;;   # never ran — the no-work rule below covers these
     no-work)                  hl_failed=1 ;;   # the false-complete guard fired: a fault
     *)                        hl_failed=1 ;;

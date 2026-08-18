@@ -24,7 +24,9 @@ The map. Structured per the ecosystem
 
 - [Account credentials — running under a designated provider account](reference/account-credentials.md)
 - [Cross-repo dependencies](reference/cross-repo-dependencies.md)
+- [The per-story diff-size budget](reference/diff-budget.md)
 - [The event stream — chief's machine-readable status contract](reference/events.md)
+- [Overlap zones — where a green gate is not enough authority to merge](reference/overlap-zones.md)
 - [Roadmap input contract (`chief gen`)](reference/roadmap-input.md)
 - [Tasklist schema](reference/tasklist-schema.md)
 - [The verify hook (`.chief/verify.sh`)](reference/verify-hook.md)
@@ -42,3 +44,4 @@ The map. Structured per the ecosystem
 *immutable; superseded by a successor, never edited in place*
 
 - [Decision: chief stays CLI-only — the desktop GUI is chief-cloud's](decisions/desktop-gui-decision.md)
+- [Decision: chief builds the overlap-zone registry; it does not bind a conflict predictor](decisions/conflict-predictor-adoption-decision.md)

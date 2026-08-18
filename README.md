@@ -226,6 +226,7 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 | `chief models [provider]` | List the models you can pass to `--model` (live from devin/opencode; stable aliases for claude; none for amp). |
 | `chief quality ratchet` | The merge gate's second, MEASURED axis: deterministic code-quality metrics (duplication, function length, nesting depth, single-use helpers, lint counts) compared branch-vs-base, exiting non-zero when one regressed past its tolerance — so `verify.sh` can BLOCK a merge that made the codebase worse with every test still green. No model judgment anywhere; `measure` emits the raw record, `--write-baseline` is the reviewable re-baseline hatch ([`docs/reference/verify-hook.md`](docs/reference/verify-hook.md)). |
 | `chief reap [-n] [--grace N] [--scope P]` | Stop orphaned chief work — agent trees with no live, registered run behind them (`-n` reports only). **Host-wide**: every repo on the box, not just the current one; `--scope <repo>-<cksum>-` narrows it to one repo's runs. |
+| `chief approve [names…]` | Release a branch **held at an overlap zone** — a domain this repo declared in `.chief/zones.conf` as one where a green gate is not sufficient authority to merge. The branch is already rebased and verified GREEN; the approval is durable, bound by checksum to the change it approved, and never re-asked after a restart (no name = report what is waiting) ([`docs/reference/overlap-zones.md`](docs/reference/overlap-zones.md)). |
 | `chief pause [--all]` | Withhold agent turns — drain, never kill: in-flight iterations finish, the rest park as paused. |
 | `chief resume [--all]` | Lift the pause and re-arm parked tasklists as pending for the next `chief run`. |
 | `chief update` | Self-update the installed engine (`CHIEF_VERSION` pins a tag). |
@@ -243,6 +244,11 @@ A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a c
 - [`docs/reference/cross-repo-dependencies.md`](docs/reference/cross-repo-dependencies.md) — waiting on
   a tasklist in another repo with `"<repo>:<tasklist>"`.
 - [`docs/reference/verify-hook.md`](docs/reference/verify-hook.md) — writing `verify.sh`.
+- [`docs/reference/overlap-zones.md`](docs/reference/overlap-zones.md) — the per-repo
+  registry of domains where a green gate is not sufficient authority to merge: a branch
+  that changed one is held for a human AFTER it rebases and verifies (`chief approve`).
+  The policy layer above the merge floor, for the one risk no automated gate sees —
+  parallel branches whose code does not collide and whose designs disagree.
 - [`docs/guides/providers.md`](docs/guides/providers.md) — the provider seam: the onboarding
   checklist for adding an agent CLI (one `_run_provider` case + one conformance
   fixture), the invariants a provider must satisfy, and how usage-limit detection
@@ -301,7 +307,7 @@ tree at once.
 
 ## Status
 
-**v0.8.40** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.42** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

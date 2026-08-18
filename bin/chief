@@ -119,6 +119,14 @@ Usage:
                               in .chief/quality.conf; `--write-baseline` is the reviewable
                               re-baseline hatch; CHIEF_VERIFY_QUALITY=0 skips it.
                               See docs/reference/verify-hook.md
+  chief approve [names…]      release a branch HELD AT AN OVERLAP ZONE — a domain this repo
+       [--list] [-m NOTE]     declared in .chief/zones.conf as one where a green gate is not
+                              sufficient authority to merge. The branch is already rebased onto
+                              the base and verified GREEN; what you are approving is the thing no
+                              gate can check — that its design agrees with what else landed. The
+                              verdict is durable and bound by checksum to the change it approved,
+                              so a restart never re-asks. No name (or --list) reports what is
+                              waiting. See docs/reference/overlap-zones.md
   chief pause [--all]         withhold AGENT TURNS: launch no tasklist and start no new agent
                               iteration — but DRAIN, never kill: the iteration in flight runs to
                               completion so its commits land, a tasklist whose agent loop already
@@ -203,6 +211,11 @@ load_project() {
   # unattended-safe value; a project that sets none of them behaves exactly as before.
   export CHIEF_REVIEW CHIEF_REVIEWER CHIEF_REVIEW_TIMEOUT CHIEF_REVIEW_MAX_ROUNDS \
          CHIEF_REVIEW_NONINTERACTIVE
+  # The per-story DIFF-SIZE BUDGET (engine/budget.sh · docs/reference/diff-budget.md).
+  # Exported for the same reason: a repo's size policy belongs in .chief/config, not
+  # in every operator's shell. All optional; unset means the documented defaults
+  # (400 lines / 20 files per story, reported and NOT blocking).
+  export CHIEF_DIFF_BUDGET CHIEF_DIFF_BUDGET_LINES CHIEF_DIFF_BUDGET_FILES
 }
 
 cmd_init() {
@@ -228,7 +241,9 @@ cmd_init() {
     *) echo "  note: not a git repo yet — run 'git init' before 'chief run' (it needs a clean git tree on the base branch)." >&2 ;;
   esac
   mkdir -p "$root/.chief" "$root/tasks/chief/completed"
-  for f in config verify.sh agent-context.md quality.conf; do
+  # zones.conf ships with every line commented out — a scaffolded repo declares no
+  # overlap zones and so behaves exactly as it did before the registry existed.
+  for f in config verify.sh agent-context.md quality.conf zones.conf; do
     if [ -e "$root/.chief/$f" ]; then echo "  keep  .chief/$f (exists)"
     else cp "$TEMPLATES/$f" "$root/.chief/$f"; echo "  init  .chief/$f"; fi
   done
@@ -651,6 +666,54 @@ cmd_reap()    { bash "$ENGINE/reap.sh" "$@" ; }
 # docs/reference/verify-hook.md.
 cmd_quality() { bash "$ENGINE/quality.sh" "$@" ; }
 
+# ── overlap-zone approval (the YES no automated gate can give) ───────────────
+# The merge floor — rebase, re-verify, merge --no-ff — is chief's correctness
+# guarantee, and it is blind to exactly one thing: two parallel branches whose code
+# does not collide and whose DESIGNS disagree. Both rebase clean, both verify green.
+# A repo names the domains where that is unacceptable in .chief/zones.conf with
+# policy `review` (engine/zones.sh · docs/reference/overlap-zones.md); a branch that
+# changed one is held AFTER the floor ran, in state 'awaiting-approval', and this is
+# the command that releases it.
+#
+# The verdict is a FILE next to the driver's state, so it survives process death, a
+# rebuilt worktree and the end of the run — and it is BOUND by checksum to the change
+# it approved (the branch's changed-file list plus the zones matched), so a yes never
+# silently carries over to the next thing that branch does.
+#
+# No name (or --list) reports what is waiting. Idempotent: approving twice is a no-op
+# that exits 0, exactly like `chief pause` on an already-paused repo.
+cmd_approve() {
+  local list=0 note="" names="" n rc=0 state found=0
+  while [ "$#" -gt 0 ]; do case "$1" in
+    -l|--list)  list=1; shift ;;
+    -m|--note)  [ "$#" -ge 2 ] || { echo "chief approve: --note needs a value" >&2; exit 2; }
+                note="$2"; shift 2 ;;
+    -*)         echo "unknown flag: $1  (usage: chief approve [--list] [-m NOTE] [names…])" >&2; exit 2 ;;
+    *)          names="$names $1"; shift ;;
+  esac; done
+  load_project
+  # shellcheck disable=SC1091
+  source "$ENGINE/zones.sh"
+  # live.sh only defines functions; used to keep the liveliness record in step with
+  # the state file re-armed above. Missing (older install) -> silently skipped.
+  # shellcheck disable=SC1091
+  [ -f "$ENGINE/live.sh" ] && source "$ENGINE/live.sh"
+  state="$CHIEF_PROJECT/$CHIEF_STATE_DIR/parallel"
+  if [ "$list" = 1 ] || [ -z "$names" ]; then
+    echo "chief approve — branches held at an overlap zone in $(basename "$CHIEF_PROJECT"):"
+    for n in "$state"/*.zone-request.json; do
+      [ -e "$n" ] || continue
+      zones_show "$state" "$(basename "$n" .zone-request.json)"; found=1
+    done
+    [ "$found" = 0 ] && {
+      echo "  = nothing is awaiting approval"
+      echo "    (a repo declares its zones in .chief/zones.conf — docs/reference/overlap-zones.md)"; }
+    exit 0
+  fi
+  for n in $names; do zones_approve "$state" "$n" "$note" || rc=1; done
+  exit "$rc"
+}
+
 # ── operator pause / resume (the human's quota lever) ────────────────────────
 # The pause is a FLAG FILE under a repo's scheduler state — <state>/parallel/.paused —
 # polled by the driver's launch gate and by agent.sh's iteration boundary (see the
@@ -834,6 +897,7 @@ case "$cmd" in
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   quality)              cmd_quality "$@" ;;
+  approve)              cmd_approve "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;
   resume)               cmd_pause_resume resume "$@" ;;
   version|-v|--version) echo "chief $VERSION" ;;

@@ -66,9 +66,9 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 # Colors only on a TTY (so piping `chief ps | …` stays clean).
 if [ -t 1 ]; then
   BOLD=$'\033[1m'; DIM=$'\033[2m'; GRN=$'\033[32m'; YEL=$'\033[33m'
-  RED=$'\033[31m'; CYN=$'\033[36m'; RST=$'\033[0m'
+  RED=$'\033[31m'; CYN=$'\033[36m'; MAG=$'\033[35m'; RST=$'\033[0m'
 else
-  BOLD=; DIM=; GRN=; YEL=; RED=; CYN=; RST=
+  BOLD=; DIM=; GRN=; YEL=; RED=; CYN=; MAG=; RST=
 fi
 
 field() { sed -n "s/^$1=//p" "$2" 2>/dev/null | head -1; }
@@ -212,6 +212,11 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     # the only question the row has to answer: an account's quota, an operator, or
     # a reviewer who has not looked yet.
     awaiting-review) printf '%s⏸%s|in-review' "$CYN" "$RST" ;;
+    # Held at an OVERLAP ZONE (docs/reference/overlap-zones.md). The same ⏸ once
+    # more — it is a hold, not a fault — and its own label, because this row is the
+    # one whose branch already PASSED everything: rebased, verified green, waiting
+    # only on the judgement no gate can make.
+    awaiting-approval) printf '%s⏸%s|zone-hold' "$MAG" "$RST" ;;
     pending)         printf '%s○%s|pending' "$DIM" "$RST" ;;
     *)               printf '%s·%s|%s'      "$DIM" "$RST" "${1:-unknown}" ;;
   esac
@@ -491,7 +496,7 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale rn
+    local n st glyph gl lbl br prog act live age stale rn zreq zz zf bo
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
       # The record also carries the coarse state (set_state writes both), so a row
@@ -528,6 +533,17 @@ render() {
         # unblock it. Same ⏸ colour as the row.
         printf '       %s↳ %s%s\n' "$CYN" \
           "awaiting review: a human has not approved its plan · branch + worktree + plan kept · approve it, then: chief run" "$RST"
+      elif [ "$st" = awaiting-approval ]; then
+        # Inline like the row above it, but reading the request the driver wrote:
+        # unlike the other three holds the interesting part is WHICH domain stopped
+        # it, and that is the whole answer to "why is a green branch not merged".
+        # Degrades to the bare fact when the request (or jq) is unavailable.
+        zreq="$state/parallel/$n.zone-request.json"
+        zz="$(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$zreq" 2>/dev/null || echo)"
+        zf="$(jq -r '(.files // []) | length' "$zreq" 2>/dev/null || echo)"
+        printf '       %s↳ awaiting approval: rebased + verified GREEN, held at %s%s · approve: chief approve %s%s\n' \
+          "$MAG" "${zz:-a review-policy overlap zone}" \
+          "$([ -n "$zf" ] && printf ' (%s changed file(s))' "$zf")" "$n" "$RST"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)
         # above the note the agent last wrote. Both are optional; neither line prints
@@ -545,6 +561,17 @@ render() {
           [ -n "$act" ] && printf '       %s↳ %s%s\n' "$DIM" "$act" "$RST"
         fi
       fi
+      # The per-story DIFF-SIZE BUDGET's finding (engine/budget.sh), on a row in ANY
+      # state and silent unless a story went over. It belongs outside the arms above
+      # because the case it exists for is the default one: under `warn` the branch
+      # MERGES, so this row will read `done`, and the oversize would otherwise have
+      # been visible only in a worker log nobody reopens.
+      bo="$(jq -r 'select(.over == true)
+             | "diff budget: " + ([ (.stories // [])[] | select(.over)
+                 | .story + " " + (.lines | tostring) + "L/" + (.files | tostring) + "F" ] | join(", "))
+               + " · budget " + (.limit.lines | tostring) + "L/" + (.limit.files | tostring) + "F per story ("
+               + (.mode // "warn") + ")"' "$state/parallel/$n.budget.json" 2>/dev/null || echo)"
+      [ -n "$bo" ] && printf '       %s↳ %s%s\n' "$YEL" "$bo" "$RST"
     done
   done
   [ "$UNREG_N" -gt 0 ] && unreg_render
