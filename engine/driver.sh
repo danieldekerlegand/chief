@@ -255,6 +255,11 @@ NO_VERIFY="${NO_VERIFY:-0}"
 # sets it per repo. MERGE_BATCH_WAIT bounds how long a batch leader waits for peers.
 MERGE_BATCH="${CHIEF_MERGE_BATCH:-${MERGE_BATCH:-1}}"
 MERGE_BATCH_WAIT="${CHIEF_MERGE_BATCH_WAIT:-${MERGE_BATCH_WAIT:-120}}"
+# How many branches ONE red batch may isolate by bisection before chief stops paying
+# for the search and dissolves to the serialized floor instead. 0 = never bisect (a
+# red tip dissolves immediately), which is the right setting for a gate known to be
+# flaky, since bisect is only sound on a deterministic one.
+MERGE_BATCH_BISECT="${CHIEF_MERGE_BATCH_BISECT:-${MERGE_BATCH_BISECT:-2}}"
 STRICT_VERIFY="${STRICT_VERIFY:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 POLL_SECONDS="${POLL_SECONDS:-5}"
@@ -2736,6 +2741,12 @@ fi
 # off, so a default run's summary is byte-for-byte the one it always printed.
 if mq_enabled; then
   echo "   merge queue: $(mq_count verifications) batch-tip verification(s) covering $(mq_count covered) branch(es) (max batch $(mq_batch_max))"
+  # The BISECT's own bill, on its own line and only when it was spent: probes + the
+  # confirming runs are EXTRA gate invocations, and folding them into the line above
+  # would let the amortization ratio quietly absorb the cost of isolating a culprit.
+  if [ "$(mq_count probes)" != 0 ] || [ "$(mq_count dissolved)" != 0 ]; then
+    echo "   merge queue: $(mq_count probes) extra verification(s) spent bisecting — $(mq_count isolated) branch(es) isolated, $(mq_count dissolved) batch(es) dissolved to the serialized floor"
+  fi
 fi
 echo "==================================================================="
 

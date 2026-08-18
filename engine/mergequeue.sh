@@ -17,15 +17,23 @@
 #
 # THE COST OF THAT TRADE, stated plainly: a batch tip is a single observation about N
 # branches. When it is GREEN that is strictly stronger than N separate observations.
-# When it is RED it says only "one of these is bad" — isolating which is the job of
-# the bisect, and until that exists this module falls back to re-verifying every
-# member serially (correct, just no cheaper than the floor).
+# When it is RED it says only "one of these is bad" and names none of them — so the
+# tip is BISECTED (mq_bisect): binary-search the stacked prefixes for the smallest red
+# one, confirm the branch it points at by re-verifying that branch ALONE on the base,
+# blame it, merge the prefix the search proved green, and re-form a batch from the
+# survivors. Worst case that is ceil(log2 N) + 1 extra gate runs instead of N.
 #
-# DETERMINISM IS THE ASSUMPTION. Amortizing a gate across N branches is only sound
-# when the gate is a deterministic function of the tree. A flaky gate makes the tip's
-# verdict a coin flip about a set rather than a fact about a tree. Chief cannot make
-# a gate deterministic; what it can do is never blame a branch on the strength of one
-# observation, and fall back to the floor when the observations disagree.
+# DETERMINISM IS THE ASSUMPTION, and the bisect is where it bites. Amortizing a gate
+# across N branches is only sound when the gate is a deterministic function of the
+# tree; a flaky gate makes the tip's verdict a coin flip about a SET rather than a
+# fact about a TREE, and a bisect over coin flips blames an innocent branch with total
+# confidence. Chief cannot make a gate deterministic. What it does instead is refuse
+# to blame anything on the strength of ONE observation: every bisect verdict is put to
+# a confirming run of the isolated branch by itself, and when the two disagree — a
+# flaky gate, or a failure that is JOINT rather than any one branch's — the bisect is
+# ABANDONED, every branch is restored, and the whole batch goes through the serialized
+# floor. Correct, just slower. `MERGE_BATCH_BISECT=0` skips straight to that, which is
+# the honest setting for a gate known to be flaky.
 #
 # ORDERING IS DETERMINISTIC, so a batch is reproducible: members are stacked in
 # COMPLETION ORDER (the order their workers reached the merge phase), ties broken by
@@ -48,11 +56,14 @@
 # a tasklist is `running` until its worker returns, and its <name>.status is what
 # reap() maps to a scheduler state.
 #
-# A BATCH OF ONE IS THE SERIALIZED PATH. There is no `if [ $n = 1 ]` anywhere below.
-# One member means: rebase it onto the base, verify that tree once, merge it --no-ff.
-# That is the floor, reached through the same loop the batch uses — which is also why
-# a tasklist that must not be batched (see mq_batchable) is simply given a batch of
-# its own rather than a separate code path.
+# A BATCH OF ONE IS THE SERIALIZED PATH. One member means: rebase it onto the base,
+# verify that tree once, merge it --no-ff — the floor, reached through the same loop
+# the batch uses, which is also why a tasklist that must not be batched (see
+# mq_batchable) is simply given a batch of its own rather than a separate code path.
+# The single `[ "$nstack" = 1 ]` in mq_run_batch is not a divergent path: it is the
+# statement that a red tip covering ONE branch already names its culprit, so there is
+# nothing to bisect and the floor's own VERIFY-FAILED arm applies verbatim. It is also
+# the recursion's base case — which is why dissolving a batch cannot loop.
 #
 # Bash 3.2 only: no associative arrays, no `declare -A`, no process substitution.
 
@@ -343,9 +354,12 @@ mq_merge_member() {
 
 # mq_verify_tip — the one verification a batch buys, counted as it is spent.
 # NAME is the tip member's, which is what run_verify keys its (absent, by
-# mq_batchable) per-tasklist array off.
+# mq_batchable) per-tasklist array off. LOG is where a red tip's output is persisted:
+# for a batch of ONE that is the floor's own $SNAP/<name>.verify-failed.log — the file
+# the next run reads to re-engage the agent — and for a real batch it is the anonymous
+# tip log, because a red tip is not yet about any one branch.
 mq_verify_tip() {
-  local name="$1" repo="$2" work_base="$3" covered="$4" vout vrc=0
+  local name="$1" repo="$2" work_base="$3" covered="$4" log="$5" vout vrc=0
   # `covered` counts branches a gate was ASKED about; `verifications` counts gates
   # actually run. Under NO_VERIFY=1 the second must stay 0 — reporting a verification
   # that never happened is exactly the kind of claim this counter exists to replace.
@@ -356,16 +370,169 @@ mq_verify_tip() {
   vout="$(run_verify "$repo" "$name" 2>&1)"; vrc=$?
   printf '%s\n' "$vout"
   [ "$vrc" = 0 ] && return 0
-  printf '%s\n' "$vout" > "$SNAP/.batch-tip.verify-failed.log"
+  printf '%s\n' "$vout" > "$log"
   return 1
 }
 
-# mq_restore — put every branch back exactly as its worker left it. Called on every
-# path that DISSOLVES a batch, before anything else happens: a member whose branch
-# still sits on top of peers that may never merge is a branch carrying work it did
-# not do, and the next run would merge it.
+# ---------------------------------------------------------------------------
+# The bisect — turning "one of these N is bad" into "THIS one is bad"
+# ---------------------------------------------------------------------------
+# A red tip is a single observation about N branches: it says one of them is bad and
+# names none of them. Discarding the whole batch for it is correct but throws away the
+# reason to batch at all, so chief does what Bors and Gastown's Refinery do — BISECT.
+#
+# THE SEARCH SPACE IS ALREADY BUILT. Member k's branch was rebased onto member k-1, so
+# member k's branch IS the tip of the first k branches. Probing a prefix costs one
+# checkout and one gate run; nothing is re-stacked. Binary search for the SMALLEST red
+# prefix and its last branch is the one whose arrival broke the stack.
+#
+# HOW MANY EXTRA VERIFICATIONS THAT COSTS, stated honestly: ceil(log2 N) probes plus
+# one confirming run, on top of the tip. For N=8 that is 1+3+1 = 5 against the floor's
+# 8, and the survivors' batch makes it 6 — a win. For N=3 it is 5 against 3, a loss.
+# Bisect pays off as batches grow; it is not free, and the counters in the run summary
+# report what it actually cost rather than what it was supposed to.
+
+# How many branches ONE batch may isolate before chief stops bisecting and pays the
+# floor. Each isolation costs a fresh round, so a batch with many bad members is
+# cheaper re-run serially than bisected repeatedly; this bound is what makes a
+# pathological batch DEGRADE instead of loop. 0 disables bisect entirely — the honest
+# setting for a gate known to be flaky, where the floor is the only sound answer.
+mq_bisect_max() {
+  local n="${MERGE_BATCH_BISECT:-2}"
+  case "$n" in ''|*[!0-9]*) n=2 ;; esac
+  printf '%s' "$n"
+}
+
+# mq_verify_at NAME BRANCH REPO WORK_BASE LOG LABEL
+#   0 = green   1 = red (output persisted to LOG)   2 = could not even check out
+# Every gate run here is an EXTRA one — the price of isolating a culprit — so it is
+# counted apart from the batch tips (`probes`) and the summary reports both. WORK_BASE
+# is a local on purpose: run_verify reads $work_base from its caller's scope.
+mq_verify_at() {
+  local name="$1" branch="$2" repo="$3" work_base="$4" log="$5" label="$6" vout vrc=0
+  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || return 2
+  [ "$NO_VERIFY" = "1" ] && return 0
+  mq_bump probes
+  echo ">> batch: $label — extra gate run #$(mq_count probes) spent isolating a culprit"
+  vout="$(run_verify "$repo" "$name" 2>&1)"; vrc=$?
+  printf '%s\n' "$vout"
+  [ "$vrc" = 0 ] && return 0
+  [ -n "$log" ] && printf '%s\n' "$vout" > "$log"
+  return 1
+}
+
+# mq_bisect KEPT N REPO WORK_BASE — binary search for the smallest RED prefix.
+# Sets MQ_CULPRIT to that prefix's 1-based index and returns 0; returns 1 if the
+# search could not be completed at all (abandon, and pay the floor).
+#
+# Two facts bound the search and both are OBSERVED, never assumed:
+#   · prefix N is RED   — that is why we are here (mq_verify_tip just said so);
+#   · prefix `lo-1` is GREEN — `lo` only ever advances past a prefix a gate just passed.
+# Prefix 0 is the base branch, taken as green because the floor put it there green.
+# So at exit the culprit's predecessors carry a real green observation, which is what
+# lets the caller merge them without re-verifying: the invariant is that nothing
+# reaches the base without a green gate run on a tree containing it, and that prefix
+# had one.
+MQ_CULPRIT=0
+mq_bisect() {
+  local kept="$1" n="$2" repo="$3" work_base="$4" lo=1 hi mid rec name branch rc
+  hi="$n"; MQ_CULPRIT=0
+  while [ "$lo" -lt "$hi" ]; do
+    mid=$(( (lo + hi) / 2 ))
+    rec="$(sed -n "${mid}p" "$kept")"
+    name="$(printf '%s' "$rec" | cut -d"$MQ_FS" -f1)"
+    branch="$(printf '%s' "$rec" | cut -d"$MQ_FS" -f2)"
+    rc=0
+    mq_verify_at "$name" "$branch" "$repo" "$work_base" "$SNAP/.batch-bisect.verify-failed.log" \
+      "BISECT: the first $mid of $n stacked branch(es), tip $branch" || rc=$?
+    case "$rc" in
+      0) echo ">> batch:   the first $mid branch(es) are GREEN together"; lo=$(( mid + 1 )) ;;
+      1) echo "!! batch:   the first $mid branch(es) are RED together";   hi="$mid" ;;
+      *) echo "!! batch:   could not check out $branch to probe the stack"; return 1 ;;
+    esac
+  done
+  MQ_CULPRIT="$lo"
+  echo ">> batch: BISECT points at member #$MQ_CULPRIT of $n — $(sed -n "${MQ_CULPRIT}p" "$kept" | cut -d"$MQ_FS" -f1)"
+  return 0
+}
+
+# mq_confirm_culprit REC REPO WORK_BASE — the second observation, without which no
+# branch is ever blamed.
+#
+# The bisect's verdict is an inference from ONE reading of a SHARED tree, and it is
+# sound only while the gate is a deterministic function of that tree. So before a
+# branch is labelled, chief puts it in exactly the position the serialized floor would
+# have: restored to the sha its worker finished on, rebased onto the base ALONE, and
+# verified. Red again = confirmed, and the branch is left in the floor's own
+# VERIFY-FAILED state, its log written where the next run looks for it.
+#
+# Green = the two observations DISAGREE. Either the gate is flaky, or the failure is
+# JOINT — this branch is fine by itself and only breaks in combination with a peer it
+# was stacked on. Neither is a licence to blame it, so the caller abandons the bisect
+# and re-runs every member through the floor, where a joint failure resolves itself
+# correctly: the first branch merges, the second meets it ON the base and fails there,
+# attributably.
+#   0 = confirmed (this branch is the culprit)   1 = not confirmed (abandon)
+mq_confirm_culprit() {
+  local rec="$1" repo="$2" work_base="$3" name branch sha rc=0
+  name="$(printf '%s' "$rec" | cut -d"$MQ_FS" -f1)"
+  branch="$(printf '%s' "$rec" | cut -d"$MQ_FS" -f2)"
+  sha="$(printf '%s' "$rec" | cut -d"$MQ_FS" -f6)"
+  echo ">> batch: CONFIRMING $name ($branch) alone on $work_base before blaming it for the red tip"
+  # Off the branch before moving it — the bisect's last probe left HEAD ON it, and a
+  # `git branch -f` against the checked-out branch fails. Silently, in the shape this
+  # function is written: the branch would stay STACKED, the "isolated" verify would be
+  # a second reading of the very tree the bisect already read, and a joint failure
+  # would be confirmed as a single branch's fault. So the move is checked, not hoped.
+  git -C "$repo" checkout "$work_base" >/dev/null 2>&1
+  [ -n "$sha" ] && git -C "$repo" branch -f "$branch" "$sha" >/dev/null 2>&1
+  if [ -n "$sha" ] && [ "$(git -C "$repo" rev-parse "$branch" 2>/dev/null)" != "$sha" ]; then
+    echo "!! batch: $branch could not be put back on the sha its worker finished on — the bisect is unconfirmable"
+    return 1
+  fi
+  git -C "$repo" checkout "$branch" >/dev/null 2>&1 || {
+    echo "!! batch: could not check out $branch to confirm the bisect"; return 1; }
+  if ! git -C "$repo" merge-base --is-ancestor "$work_base" "$branch" 2>/dev/null; then
+    git -C "$repo" rebase "$work_base" >/dev/null 2>&1 || {
+      git -C "$repo" rebase --abort 2>/dev/null || true
+      echo "!! batch: $branch could not be rebased onto $work_base alone — the bisect is unconfirmable"; return 1; }
+  fi
+  mq_verify_at "$name" "$branch" "$repo" "$work_base" "$SNAP/$name.verify-failed.log" \
+    "CONFIRM: $branch alone on $work_base" || rc=$?
+  case "$rc" in
+    1) echo ">> batch: CONFIRMED — $branch fails on its own; it is the culprit"; return 0 ;;
+    0) echo "!! batch: NOT CONFIRMED — $branch is GREEN alone on $work_base though the stack containing it was RED." ;;
+    *) echo "!! batch: NOT CONFIRMED — $branch could not be verified alone." ;;
+  esac
+  return 1
+}
+
+# mq_blame REC — the floor's VERIFY-FAILED arm, written for an isolated batch member.
+# Same label, same status string, same event, same persisted log: an isolated culprit
+# is left in EXACTLY the state a serialized failure leaves it in, which is what makes
+# it eligible for the existing bounded re-arm on the next run with no new plumbing.
+mq_blame() {
+  local rec="$1" name branch
+  name="$(printf '%s' "$rec" | cut -d"$MQ_FS" -f1)"
+  branch="$(printf '%s' "$rec" | cut -d"$MQ_FS" -f2)"
+  mq_member_fail "$name" verify-failed "VERIFY-FAILED" tasklist.verify-failed \
+    "verify failed on $branch alone, isolated by a batch bisect; log: $SNAP_REL/$name.verify-failed.log" \
+    "!! $name verify failed — ISOLATED by the batch bisect and left exactly as a serialized failure leaves it (persisted for re-engagement)"
+}
+
+# mq_restore — put every branch back exactly as its worker left it. Called at the top
+# of every batch ROUND and on every path that DISSOLVES a batch, before anything else
+# happens: a member whose branch still sits on top of a peer that may never merge is a
+# branch carrying work it did not do, and rebasing THAT onto the base would replay the
+# peer's commits with it. A branch already at its worker's sha is left alone, silently.
 mq_restore() {
-  local recs="$1" name branch repo sha
+  local recs="$1" name branch repo sha base
+  repo="$(head -1 "$recs" | cut -d"$MQ_FS" -f3)"
+  base="$(head -1 "$recs" | cut -d"$MQ_FS" -f4)"
+  # Get OFF any member branch first. `git branch -f` refuses to move the branch that
+  # is currently checked out — and it refuses quietly, which would leave a member
+  # still stacked on a peer while this function cheerfully reported it restored.
+  [ -n "$repo" ] && git -C "$repo" checkout "$base" >/dev/null 2>&1
   while IFS="$MQ_FS" read -r name branch repo _ _ sha; do
     [ -n "$branch" ] && [ -n "$sha" ] || continue
     [ "$(git -C "$repo" rev-parse "$branch" 2>/dev/null)" = "$sha" ] && continue
@@ -374,56 +541,138 @@ mq_restore() {
   done < "$recs"
 }
 
-# mq_run_batch RECS — the leader's whole job, with $MERGE_LOCK held.
-#
-# STACK -> VERIFY ONCE -> MERGE EACH. A batch of one runs exactly these three steps
-# against the base, which is the serialized floor; there is no special case for it.
-mq_run_batch() {
-  local recs="$1"
-  local name branch repo work_base sub sha tip nstack pre_mb kept one rec
-  kept="$(mq_dir)/.stacked.$$.$(mq_count depth)"
-  repo="$(head -1 "$recs" | cut -d"$MQ_FS" -f3)"
-  work_base="$(head -1 "$recs" | cut -d"$MQ_FS" -f4)"
-  tip="$work_base"; : > "$kept"; nstack=0
-  while IFS="$MQ_FS" read -r name branch _ _ sub sha; do
+# mq_merge_all RECS REPO WORK_BASE — the floor's merge step for each member in order.
+mq_merge_all() {
+  local recs="$1" repo="$2" work_base="$3" name branch sub pre_mb
+  while IFS="$MQ_FS" read -r name branch _ _ sub _; do
     [ -n "$name" ] || continue
-    live_set "$(live_of "$name")" phase=batch-stacking
-    if mq_stack_member "$name" "$branch" "$repo" "$work_base" "$tip"; then
-      printf '%s%s%s%s%s%s%s%s%s%s%s\n' \
-        "$name" "$MQ_FS" "$branch" "$MQ_FS" "$repo" "$MQ_FS" "$work_base" "$MQ_FS" "$sub" "$MQ_FS" "$sha" >> "$kept"
-      tip="$branch"; nstack=$(( nstack + 1 ))
-    fi
+    pre_mb="$(git -C "$repo" merge-base "$branch" "$work_base" 2>/dev/null || echo)"
+    mq_merge_member "$name" "$branch" "$repo" "$work_base" "$sub" "$pre_mb" || true
   done < "$recs"
-  if [ "$nstack" = 0 ]; then
-    echo ">> batch: every member was ejected before it could be stacked — nothing to verify"
-    rm -f "$kept"; return 0
-  fi
-  echo ">> batch: stacked $nstack branch(es) on $work_base — tip is $tip"
-  # ONE verification for the whole stack. $tip is checked out (the last successful
-  # rebase left it there), so this is a gate run on a tree containing every member.
-  if mq_verify_tip "$(tail -1 "$kept" | cut -d"$MQ_FS" -f1)" "$repo" "$work_base" "$nstack"; then
-    while IFS="$MQ_FS" read -r name branch _ _ sub _; do
-      [ -n "$name" ] || continue
-      pre_mb="$(git -C "$repo" merge-base "$branch" "$work_base" 2>/dev/null || echo)"
-      mq_merge_member "$name" "$branch" "$repo" "$work_base" "$sub" "$pre_mb" || true
-    done < "$kept"
-    rm -f "$kept"; return 0
-  fi
-  # RED TIP. One observation about $nstack branches, which names no culprit. Until the
-  # bisect exists, the honest fallback is the floor: dissolve the batch, restore every
-  # branch to the sha its worker finished on, and re-run each member as a batch of ONE
-  # — where a verify failure is attributable to the single branch that caused it.
-  echo "!! batch: the tip verify FAILED for $nstack stacked branch(es) — a red tip names no culprit."
-  echo "!! batch: DISSOLVING and falling back to the serialized floor (one verify per branch)."
-  mq_restore "$kept"
-  mq_bump depth
-  one="$kept.solo"
+}
+
+# mq_dissolve RECS REPO WORK_BASE REASON — give up on the batch and pay the floor.
+# Restore every branch to the sha its worker finished on FIRST (a branch left stacked
+# carries commits belonging to peers that may never merge), then re-run each member as
+# a batch of ONE — which is the serialized path, reached through the same loop.
+mq_dissolve() {
+  local recs="$1" repo="$2" work_base="$3" reason="$4" one rec
+  echo "!! batch: $reason"
+  echo "!! batch: DISSOLVING — every branch goes back to the sha its worker finished on and through the serialized floor, one verify each."
+  mq_bump dissolved
+  git -C "$repo" checkout "$work_base" >/dev/null 2>&1 || true
+  mq_restore "$recs"
+  one="$recs.solo"
   while IFS= read -r rec; do
     [ -n "$rec" ] || continue
     printf '%s\n' "$rec" > "$one"
     mq_run_batch "$one"
-  done < "$kept"
-  rm -f "$one" "$kept"
+  done < "$recs"
+  rm -f "$one"
+}
+
+# mq_run_batch RECS — the leader's whole job, with $MERGE_LOCK held.
+#
+#   STACK  ->  VERIFY THE TIP ONCE  ->  merge every member.
+#   A red tip  ->  BISECT  ->  merge the prefix the bisect PROVED green, blame the one
+#                  branch a confirming run agreed about, re-form a batch from the
+#                  survivors (they have never been verified without it) and go round.
+#
+# A BATCH OF ONE IS THE SERIALIZED PATH, on every arm: stack it on the base, verify
+# that tree, merge it --no-ff — and a red tip on a batch of one is simply that
+# branch's own VERIFY-FAILED, with the same label and the same log the floor writes.
+# That is also the recursion's base case, which is why dissolving cannot loop.
+#
+# TERMINATION. Every round either ends the batch or removes at least one member from
+# `pending` (the culprit is blamed, its proven-green predecessors are merged), so the
+# loop is finite on its own; the mq_bisect_max bound is the tighter one, capping how
+# many isolations are worth paying for before the floor is simply cheaper.
+mq_run_batch() {
+  local recs="$1"
+  local repo work_base pending kept tag rounds max_rounds rec
+  local name branch sub sha tip nstack tiplog i left
+  repo="$(head -1 "$recs" | cut -d"$MQ_FS" -f3)"
+  work_base="$(head -1 "$recs" | cut -d"$MQ_FS" -f4)"
+  max_rounds="$(mq_bisect_max)"; rounds=0
+  mq_bump depth; tag="$$.$(mq_count depth)"
+  pending="$(mq_dir)/.pending.$tag"; kept="$(mq_dir)/.stacked.$tag"
+  cp "$recs" "$pending"
+  while [ -s "$pending" ]; do
+    # Every round starts from the shas the WORKERS finished on. A survivor of an
+    # earlier round is still sitting on top of a branch that was just blamed, and
+    # rebasing THAT onto the base would replay the culprit's commits with it.
+    mq_restore "$pending"
+    tip="$work_base"; : > "$kept"; nstack=0
+    while IFS="$MQ_FS" read -r name branch _ _ sub sha; do
+      [ -n "$name" ] || continue
+      live_set "$(live_of "$name")" phase=batch-stacking
+      if mq_stack_member "$name" "$branch" "$repo" "$work_base" "$tip"; then
+        printf '%s%s%s%s%s%s%s%s%s%s%s\n' \
+          "$name" "$MQ_FS" "$branch" "$MQ_FS" "$repo" "$MQ_FS" "$work_base" "$MQ_FS" "$sub" "$MQ_FS" "$sha" >> "$kept"
+        tip="$branch"; nstack=$(( nstack + 1 ))
+      fi
+    done < "$pending"
+    : > "$pending"
+    if [ "$nstack" = 0 ]; then
+      echo ">> batch: every member was ejected before it could be stacked — nothing to verify"
+      break
+    fi
+    echo ">> batch: stacked $nstack branch(es) on $work_base — tip is $tip"
+    # ONE verification for the whole stack. $tip is checked out (the last successful
+    # rebase left it there), so this is a gate run on a tree containing every member.
+    name="$(tail -1 "$kept" | cut -d"$MQ_FS" -f1)"
+    tiplog="$SNAP/.batch-tip.verify-failed.log"
+    [ "$nstack" = 1 ] && tiplog="$SNAP/$name.verify-failed.log"
+    if mq_verify_tip "$name" "$repo" "$work_base" "$nstack" "$tiplog"; then
+      mq_merge_all "$kept" "$repo" "$work_base"
+      break
+    fi
+    # ---- RED TIP ------------------------------------------------------------
+    if [ "$nstack" = 1 ]; then
+      # One member, one observation, and it is about a tree containing nothing else.
+      # This IS the floor's verify failure, so it gets the floor's arm verbatim.
+      mq_blame "$(cat "$kept")"
+      break
+    fi
+    echo "!! batch: the tip verify FAILED for $nstack stacked branch(es) — a red tip names no culprit, so go and find one."
+    rounds=$(( rounds + 1 ))
+    if [ "$rounds" -gt "$max_rounds" ]; then
+      mq_dissolve "$kept" "$repo" "$work_base" \
+        "this batch has already had $max_rounds branch(es) isolated and is STILL red — past the bound (MERGE_BATCH_BISECT=$max_rounds), the floor is cheaper than more bisecting"
+      break
+    fi
+    if ! mq_bisect "$kept" "$nstack" "$repo" "$work_base"; then
+      mq_dissolve "$kept" "$repo" "$work_base" "the bisect could not be completed"
+      break
+    fi
+    i="$MQ_CULPRIT"
+    rec="$(sed -n "${i}p" "$kept")"
+    if ! mq_confirm_culprit "$rec" "$repo" "$work_base"; then
+      mq_dissolve "$kept" "$repo" "$work_base" \
+        "the bisect pointed at member #$i but a confirming re-verification of it ALONE disagreed — one observation is not a verdict, and a wrong branch is not blamed on the strength of it"
+      break
+    fi
+    # Counted HERE and not in mq_blame: `isolated` is the number of branches a BISECT
+    # picked out of a batch, and a batch of one that fails its own verify was never
+    # isolated from anything — it is the floor's plain failure, borrowing the same arm.
+    mq_bump isolated
+    mq_blame "$rec"
+    # The predecessors carry a real green observation (the bisect passed the gate on
+    # the prefix that ends at member i-1), so they merge on that — not on a guess.
+    if [ "$i" -gt 1 ]; then
+      sed -n "1,$(( i - 1 ))p" "$kept" > "$kept.green"
+      echo ">> batch: merging the $(( i - 1 )) branch(es) the bisect PROVED green together"
+      mq_merge_all "$kept.green" "$repo" "$work_base"
+      rm -f "$kept.green"
+    fi
+    # The survivors have never been verified WITHOUT the branch just isolated, so they
+    # go round as a fresh batch rather than being merged on the strength of a tip that
+    # contained it. That is the documented choice: re-form, do not merge blind.
+    sed -n "$(( i + 1 )),\$p" "$kept" > "$pending"
+    left="$(grep -c . "$pending" 2>/dev/null || echo 0)"
+    [ "$left" -gt 0 ] && echo ">> batch: RE-FORMING a batch from the $left surviving branch(es)"
+  done
+  rm -f "$pending" "$kept"
   return 0
 }
 

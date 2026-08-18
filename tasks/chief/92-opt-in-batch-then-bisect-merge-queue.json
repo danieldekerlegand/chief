@@ -45,8 +45,8 @@
         "Every path through batching and bisecting ends with the same invariant the serialized floor guarantees: nothing reaches `$CHIEF_BASE_BRANCH` that has not had a green verify on a tree containing it",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "test/merge-batch.sh green (PART A: 3 verifications for 3 tasklists, no queue; PART B: 1 batch-tip verification for 3 branches). Bisect exercised on a scratch hermetic harness of 4 branches (fake claude, temp prefixes, counting verify hook): (a) ONE poison branch -> tip red, probes on prefixes 2 and 3, culprit #3 confirmed ALONE on main, 3 extra gate runs, alpha+bravo merged on the proven-green prefix, delta re-formed as a batch of 1 and merged, charlie VERIFY-FAILED, its artifact absent from main, 7 hook invocations total; (b) JOINT failure (red only with alpha+charlie together) -> bisect pointed at the later branch, the confirming run of it alone came back GREEN -> NOT CONFIRMED, batch dissolved, all 4 restored and re-run serialized: 3 merged, the second of the pair VERIFY-FAILED, main green; (c) TWO independent culprits -> both isolated and blocked, both good branches merged, terminates; (d) CHIEF_MERGE_BATCH_BISECT=0 -> 0 probes, 3 batches dissolved to the floor; =1 -> bound hit on the second culprit, 1 batch dissolved. In every case nothing red reached main. bash -n clean on bin/chief + engine/*.sh + test/*.sh + install.sh; scripts/check-doc-links.mjs unchanged at 6 dead references (same as HEAD); shellcheck absent locally (CI enforces). Full merge gate re-run after committing: `.chief/verify.sh` = \"verify: OK (allowing merge)\" — BYSTANDER PASS over all 30 behavioural tests (merge-batch, smoke, ratelimit, noworkguard, limitresume, pause, teardown, gen, …), version-bump green on VERSION 0.8.44, DOC-SYNC PASS (README states v0.8.44). (An earlier standalone run of test/limitresume.sh failed a ~24s timing assertion while my scratch harnesses were competing for CPU; it passes standalone and in the clean gate run.)"
     },
     {
       "id": "US-3",

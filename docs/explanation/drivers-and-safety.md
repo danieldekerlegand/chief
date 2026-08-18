@@ -1,6 +1,6 @@
 # Drivers, scheduling, and the safety model
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-18 · **Owner:** chief
 
 `chief run` uses one driver; `-p N` (`--parallel`) sets max concurrency (default 1
 = sequential). Every tasklist — even at `-p 1` — runs in its own **git worktree**
@@ -309,21 +309,75 @@ Two kinds of branch are **never** batch members, and take the floor instead:
   with that branch checked out — a batch can never dilute an oversized diff into an
   aggregate that clears the budget.
 
-**Determinism is the assumption.** Amortizing a gate across N branches is sound only
-when the gate is a deterministic function of the tree; a flaky gate turns the tip's
-verdict into a coin flip about a *set* rather than a fact about a *tree*. Chief cannot
-make a gate deterministic. What it does instead is refuse to blame a branch on the
-strength of a single observation: a **red tip names no culprit**, so the batch is
-dissolved, every branch is restored to the exact sha its worker finished on, and its
-members are re-run through the floor — one verify each, where a failure is
-attributable to the single branch that caused it. Correct, just no cheaper than not
-having batched.
+### A red tip: bisect, confirm, then blame
+
+A red batch tip says *one of these N is bad* and names none of them. Discarding the
+whole batch for that would be correct, and would also throw away the reason to batch,
+so chief does what Bors and Gastown's Refinery do — it **bisects**.
+
+The search space is already built. Member *k*'s branch was rebased onto member *k-1*,
+so member *k*'s branch **is** the tip of the first *k* branches: probing a prefix costs
+one checkout and one gate run, and nothing is re-stacked. Chief binary-searches for the
+**smallest red prefix**; the branch at that boundary is the one whose arrival broke the
+stack. Two facts bound the search and both are *observed*, never assumed — prefix *N*
+is red (that is why we are here) and prefix `lo-1` is green (`lo` only advances past a
+prefix a gate just passed). Prefix 0 is the base branch, taken as green because the
+floor put it there green.
+
+Then, before anything is labelled, the verdict is **confirmed**. The suspected branch
+is restored to the sha its worker finished on, rebased onto the base *alone*, and
+verified — exactly the position the serialized floor would have put it in.
+
+- **Red again** → confirmed. The branch is left in the floor's own `VERIFY-FAILED`
+  state, with the same status string, the same event and the same
+  `snapshots/<name>.verify-failed.log` the floor persists, so it is eligible for the
+  existing bounded re-arm on the next run with no new plumbing. Its predecessors —
+  the prefix the search *proved* green — are merged on that observation. The
+  survivors *after* it have never been verified without it, so they are **re-formed
+  into a fresh batch** and go round again rather than being merged on the strength of
+  a tip that contained the culprit.
+- **Green** → the two observations disagree, and chief does not pick one. Either the
+  gate is flaky, or the failure is **joint** (this branch is fine by itself and only
+  breaks in combination with a peer it was stacked on). Neither licenses blaming it,
+  so the bisect is **abandoned**: every branch is restored to the sha its worker
+  finished on and the whole batch is re-run through the serialized floor. A joint
+  failure then resolves itself correctly there — the first branch merges, the second
+  meets it *on the base* and fails there, attributably.
+
+**Multiple culprits terminate.** Each round either ends the batch or removes at least
+one member, so the loop is finite on its own. `CHIEF_MERGE_BATCH_BISECT` (default `2`)
+is the tighter bound: after that many isolations a still-red batch **dissolves to the
+serialized floor** rather than bisecting again, because past a couple of bad members
+the floor is simply cheaper. `0` disables bisect entirely — a red tip dissolves
+immediately, which is what this feature did before bisect existed and is the honest
+setting for a gate you know to be flaky.
+
+**Determinism is the assumption, and the bisect is where it bites.** Amortizing a gate
+across N branches is sound only when the gate is a deterministic function of the tree;
+a flaky gate turns the tip's verdict into a coin flip about a *set* rather than a fact
+about a *tree*, and a bisect over coin flips blames an innocent branch with total
+confidence. Chief cannot make a gate deterministic — see
+[the verify hook contract](../reference/verify-hook.md). What it can do is never blame
+a branch on the strength of one observation, which is what the confirming run above is
+for, and fall back to the floor the moment two observations disagree.
+
+**What bisect costs.** `ceil(log2 N)` probes plus one confirming run, on top of the
+tip. For N=8 that is 1+3+1 = 5 gate runs against the floor's 8, and the survivors'
+batch makes it 6 — a win. For N=3 it is 5 against 3 — a loss. Bisect pays off as
+batches grow, and it is not free.
+
+**Whatever the path, the invariant holds:** nothing reaches `$CHIEF_BASE_BRANCH` that
+has not had a green gate run on a tree containing it. A green tip merges its members;
+a proven-green prefix merges on the probe that proved it; survivors are re-verified;
+an abandoned bisect re-verifies everything one branch at a time.
 
 The amortization is **counted, not claimed**. The run summary reports the ratio it
-actually achieved:
+actually achieved, and — on its own line, only when it was spent — what the bisect
+cost, so the search can never quietly absorb its own bill into the ratio:
 
 ```
    merge queue: 2 batch-tip verification(s) covering 5 branch(es) (max batch 4)
+   merge queue: 3 extra verification(s) spent bisecting — 1 branch(es) isolated, 0 batch(es) dissolved to the serialized floor
 ```
 
 ## Interruptions & resume

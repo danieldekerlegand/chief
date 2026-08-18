@@ -1,6 +1,6 @@
 # The verify hook (`.chief/verify.sh`)
 
-> **Status:** Current · **Updated:** 2026-08-17 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-18 · **Owner:** chief
 
 Chief calls this to decide whether a completed, rebased branch may merge. It's the
 one place your project's real quality bar lives.
@@ -42,6 +42,29 @@ new_failures() { comm -23 <(printf '%s\n' "$1"|sort -u) <(printf '%s\n' "$2"|sor
 
 (The extraction this tool came from ships a full baselined verify — copy that
 approach if your suite is noisy.)
+
+## Determinism: what the opt-in merge queue assumes of this hook
+
+The serialized floor asks nothing of this hook beyond exit 0 / non-zero: it runs it
+once per branch, on that branch's own tree, and a flaky answer costs one branch one
+re-run. The **opt-in merge queue**
+([drivers-and-safety](../explanation/drivers-and-safety.md#a-red-tip-bisect-confirm-then-blame))
+asks for one more thing, and only while it is switched on: that this hook be a
+**deterministic function of the tree** it is run against.
+
+The reason is the bisect. A batch tip's red verdict is amortized across N branches, and
+isolating which one is bad is a binary search over trees. A hook whose answer varies
+run-to-run — a test with a real clock or a real network in it, a race, an
+order-dependent suite — turns that search into a search over coin flips, and a coin
+flip cannot be bisected. Chief will not pretend otherwise: every bisect verdict is put
+to a **confirming run of the isolated branch alone**, and if the two observations
+disagree the bisect is abandoned and the whole batch is re-run through the serialized
+floor. That is a correct answer, not a cheaper one, so a flaky hook does not corrupt
+anything — it just spends the batch's savings and then some.
+
+If you know your gate is not deterministic, say so rather than paying for the search:
+`CHIEF_MERGE_BATCH_BISECT=0` makes a red tip dissolve to the floor immediately, and
+`CHIEF_MERGE_BATCH=1` (the default) opts out of batching altogether.
 
 ## Who checks what: chief, this hook, and you
 

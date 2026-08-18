@@ -174,9 +174,18 @@ run flags:
                      Merges are still --no-ff, one commit per tasklist, still serialized against
                      the base; only the VERIFICATION is amortized. A branch that carries its own
                      "verify" array, or that changes a `review` overlap zone, is never batched.
+                     A RED batch tip names no culprit, so it is BISECTED: binary-search the
+                     stacked prefixes for the smallest failing one, confirm that branch by
+                     re-verifying it ALONE, blame it (VERIFY-FAILED, exactly as a serialized
+                     failure would), merge the prefix the search proved green, and re-form a
+                     batch from the survivors. If the confirming run DISAGREES with the bisect
+                     — a flaky gate, or a failure that is joint rather than one branch's — the
+                     bisect is abandoned and the whole batch takes the floor.
                      Also settable per repo as CHIEF_MERGE_BATCH in .chief/config; a leader waits
                      CHIEF_MERGE_BATCH_WAIT seconds (default 120) for peers to finish before it
-                     closes a batch. Needs -p N > 1 to have anything to batch.
+                     closes a batch, and CHIEF_MERGE_BATCH_BISECT (default 2, 0 = never bisect)
+                     bounds how many branches one red batch may isolate before it dissolves to
+                     the floor. Needs -p N > 1 to have anything to batch.
                      See docs/explanation/drivers-and-safety.md
       --no-merge     complete branches but don't merge into the base
 
