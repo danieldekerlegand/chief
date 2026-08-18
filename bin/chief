@@ -211,6 +211,11 @@ load_project() {
   # unattended-safe value; a project that sets none of them behaves exactly as before.
   export CHIEF_REVIEW CHIEF_REVIEWER CHIEF_REVIEW_TIMEOUT CHIEF_REVIEW_MAX_ROUNDS \
          CHIEF_REVIEW_NONINTERACTIVE
+  # The per-story DIFF-SIZE BUDGET (engine/budget.sh · docs/reference/diff-budget.md).
+  # Exported for the same reason: a repo's size policy belongs in .chief/config, not
+  # in every operator's shell. All optional; unset means the documented defaults
+  # (400 lines / 20 files per story, reported and NOT blocking).
+  export CHIEF_DIFF_BUDGET CHIEF_DIFF_BUDGET_LINES CHIEF_DIFF_BUDGET_FILES
 }
 
 cmd_init() {

@@ -34,6 +34,16 @@
 #     list AND the zones it matched (`zones_digest`). Approving a branch does not
 #     pre-approve the next thing it does, and widening the registry re-asks.
 #
+# THE OTHER RULE IN THE SAME LAYER. `zones_merge_gate` below is the merge phase's ONE
+# policy question, and it asks two rules: the declared zones here, and the per-story
+# DIFF-SIZE BUDGET in engine/budget.sh (which reports on every branch and, under
+# CHIEF_DIFF_BUDGET=block, contributes hold lines in this file's own zone shape).
+# They are unified at the gate rather than stacked as two checkpoints because they
+# are the same question — "this branch is green and still needs a person" — and a
+# branch that trips both must be asked about ONCE. A plan approval (docs/plan-review.md)
+# is the genuinely different decision: it is asked BEFORE any code exists, about
+# intent; this one is asked AFTER the floor has run, about a finished, verified diff.
+#
 # REGISTRY FORMAT (docs/reference/overlap-zones.md). One zone per line, in
 # `.chief/zones.conf` (override with $CHIEF_ZONES); `#` starts a comment:
 #
@@ -209,17 +219,27 @@ zones_merge_gate() {
   local name="$1" branch="$2" repo="$3" base="$4" state="$5" touches="${6:-}"
   local conf files zmatch digest sha
   conf="${ZONES_CONF:-$(zones_file "${CHIEF_PROJECT:-.}")}"
-  [ -n "$conf" ] || return 0                      # no registry: nothing to ask about
   live_set "${live:-}" phase=zone-check
   files="$(git -C "$repo" diff --name-only "$base"...HEAD 2>/dev/null)"
-  zmatch="$(zones_match review "$conf" "$files" "$touches")"
-  [ -n "$zmatch" ] || return 0                    # no review-policy zone matched
+  # THE POLICY LAYER'S SECOND RULE, evaluated here rather than beside here: the
+  # per-story DIFF-SIZE BUDGET (engine/budget.sh, sourced by the driver alongside
+  # this file). It measures every branch, records the sizes into the story records,
+  # and — only under CHIEF_DIFF_BUDGET=block — contributes zone-shaped hold lines to
+  # the match below. Folding it in at this point is what keeps the two rules from
+  # DOUBLE-PROMPTING: one checksum, one request file, one `chief approve`, whether a
+  # branch tripped a declared zone, an oversized story, or both at once.
+  budget_evaluate "$name" "$repo" "$base" "$state"
+  budget_annotate "${SNAP:-}/$name.json" "$state" "$name"
+  budget_note "$state" "$name"
+  zmatch="$( [ -n "$conf" ] && zones_match review "$conf" "$files" "$touches"
+             budget_holds "$state" "$name" )"
+  [ -n "$zmatch" ] || return 0                    # nothing in the policy layer matched
   # Bound to WHAT it approved: the changed-file list plus the zones it matched. An
   # approval for a previous change of this branch does not carry over, and widening
   # the registry onto it re-asks.
   digest="$(zones_digest "$files" "$zmatch")"
   if zones_approved "$(zones_approval_file "$state" "$name")" "$digest"; then
-    echo ">> $name: overlap zone(s) changed, and this exact change is APPROVED ($digest) — merging"
+    echo ">> $name: the policy layer matched, and this exact change is APPROVED ($digest) — merging"
     zones_render "$zmatch"
     return 0
   fi
@@ -229,8 +249,8 @@ zones_merge_gate() {
   # The whole explanation is printed HERE, where the facts are, so the caller only has
   # to record the park: what was held, which zone held it, and what is actually being
   # asked — which is never "is this green" (it is), but "does this design agree".
-  echo "!! $name HELD AT AN OVERLAP ZONE — it is rebased onto $base and its verify came back GREEN; it is"
-  echo "   not merged because it changed a domain this repo declared needs a human:"
+  echo "!! $name HELD BY THE MERGE POLICY LAYER — it is rebased onto $base and its verify came back GREEN;"
+  echo "   it is not merged because it changed something this repo declared needs a human first:"
   zones_render "$zmatch"
   echo "   The merge floor already ran. What is being asked is the thing no gate can check: whether this"
   echo "   branch's design agrees with what else landed. The request: $(zones_request_file "$state" "$name")"

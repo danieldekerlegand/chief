@@ -20,3 +20,12 @@ CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode | amp
 # CHIEF_LOCAL_ENDPOINT_ENV=OPENAI_BASE_URL   # env var the endpoint is published as
 # CHIEF_LOCAL_API_KEY=local                  # placeholder credential local servers accept
 # CHIEF_LOCAL_API_KEY_ENV=OPENAI_API_KEY     # env var that credential is published as
+# --- the per-story DIFF-SIZE BUDGET (docs/reference/diff-budget.md) -----------------
+# Larger diffs carry higher conflict probability, so change size is the lever. Chief
+# measures every branch's diff against the base, DECOMPOSED BY STORY, and reports any
+# story that went over. Defaults shown; unset means exactly these.
+# CHIEF_DIFF_BUDGET=warn         # warn = report and merge anyway (default) · block =
+#                                # hold the branch for `chief approve`, like an overlap
+#                                # zone · off = do not measure at all
+# CHIEF_DIFF_BUDGET_LINES=400    # changed lines (added+deleted) per story; 0 disables
+# CHIEF_DIFF_BUDGET_FILES=20     # changed files per story;                 0 disables

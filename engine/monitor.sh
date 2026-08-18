@@ -496,7 +496,7 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale rn zreq zz zf
+    local n st glyph gl lbl br prog act live age stale rn zreq zz zf bo
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
       # The record also carries the coarse state (set_state writes both), so a row
@@ -561,6 +561,17 @@ render() {
           [ -n "$act" ] && printf '       %s↳ %s%s\n' "$DIM" "$act" "$RST"
         fi
       fi
+      # The per-story DIFF-SIZE BUDGET's finding (engine/budget.sh), on a row in ANY
+      # state and silent unless a story went over. It belongs outside the arms above
+      # because the case it exists for is the default one: under `warn` the branch
+      # MERGES, so this row will read `done`, and the oversize would otherwise have
+      # been visible only in a worker log nobody reopens.
+      bo="$(jq -r 'select(.over == true)
+             | "diff budget: " + ([ (.stories // [])[] | select(.over)
+                 | .story + " " + (.lines | tostring) + "L/" + (.files | tostring) + "F" ] | join(", "))
+               + " · budget " + (.limit.lines | tostring) + "L/" + (.limit.files | tostring) + "F per story ("
+               + (.mode // "warn") + ")"' "$state/parallel/$n.budget.json" 2>/dev/null || echo)"
+      [ -n "$bo" ] && printf '       %s↳ %s%s\n' "$YEL" "$bo" "$RST"
     done
   done
   [ "$UNREG_N" -gt 0 ] && unreg_render

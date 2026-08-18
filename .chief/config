@@ -8,3 +8,9 @@ CHIEF_TOOL=claude                # AI CLI that drives the agent loop: claude | a
 # CHIEF_VERIFY=.chief/verify.sh  # branch verification hook (exit 0 = pass; empty = skip)
 # CHIEF_AGENT_CONTEXT=.chief/agent-context.md   # project-specific agent instructions
 # CHIEF_AUTO_MERGE=1             # 1 = verify+merge completed branches; 0 = leave for review
+# --- the per-story DIFF-SIZE BUDGET (docs/reference/diff-budget.md) ------------
+# Defaults apply unless set: 400 changed lines / 20 changed files per story, and
+# `warn` — chief reports an oversized story and merges anyway.
+# CHIEF_DIFF_BUDGET=warn         # warn (default) · block (hold for chief approve) · off
+# CHIEF_DIFF_BUDGET_LINES=400    # changed lines (added+deleted) per story; 0 disables
+# CHIEF_DIFF_BUDGET_FILES=20     # changed files per story;                 0 disables

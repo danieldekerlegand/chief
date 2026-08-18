@@ -53,10 +53,13 @@
 #     the siblings, and the next run resumes reading the verdict off disk instead of
 #     re-asking. Chief never manufactures the missing approval — an unreachable
 #     reviewer is not a yes.
-#   · 'awaiting-approval' — the branch changed a domain the repo declared an OVERLAP
-#     ZONE with policy `review` (engine/zones.sh, docs/reference/overlap-zones.md).
+#   · 'awaiting-approval' — the MERGE POLICY LAYER held the branch: it changed a
+#     domain declared an OVERLAP ZONE with policy `review` (engine/zones.sh,
+#     docs/reference/overlap-zones.md), or a story blew the per-story DIFF-SIZE
+#     BUDGET under CHIEF_DIFF_BUDGET=block (engine/budget.sh,
+#     docs/reference/diff-budget.md). One state, one approval, for both.
 #     The merge floor ALREADY RAN: it is rebased onto the latest base and its verify
-#     came back green, and it is held anyway, because the risk zones exist for —
+#     came back green, and it is held anyway, because the risk the layer exists for —
 #     two parallel branches whose designs disagree — is invisible to every automated
 #     gate. `chief approve <name>` records the human YES; the next run reads it off
 #     disk and merges. This is the one park where the branch's worktree is already
@@ -420,10 +423,15 @@ source "$ENGINE/criteria.sh"
 # The BAR rule on acceptance criteria (engine/measure.sh): a story claiming a
 # checkable bar must record the value it observed, or it is `unverified`, not passed.
 source "$ENGINE/measure.sh"
+# The per-story DIFF-SIZE BUDGET (engine/budget.sh): larger diffs carry higher
+# conflict probability, so change size is the lever. Sourced BEFORE zones.sh, whose
+# merge gate calls it — the two are one policy layer with one approval, not two
+# checkpoints. Warn-only by default: it reports, and the merge continues.
+source "$ENGINE/budget.sh"
 # The OVERLAP ZONE REGISTRY (engine/zones.sh): the per-repo declaration of domains
 # where a green gate is not sufficient authority to merge. A policy layer ABOVE the
 # merge floor — it runs after the rebase and after a green verify, never instead of
-# them — and a complete no-op for a repo that declares no zones.
+# them — and asks nothing at all of a repo that declares no zones and stays in budget.
 source "$ENGINE/zones.sh"
 ZONES_CONF="$(zones_file "$REPO")"
 # git as a CONTAINER hands it to us (engine/gitenv.sh): a bind-mounted repo owned by
@@ -1172,7 +1180,7 @@ deps_satisfied() {
 dep_broken() {   # a dep failed/blocked -> this tasklist can never run
   # 'rate-limited', 'paused', 'awaiting-review' and 'awaiting-approval' are
   # deliberately absent: a dep waiting out a usage limit, parked by an operator
-  # pause, waiting on a human's plan verdict, or held at an overlap zone for a
+  # pause, waiting on a human's plan verdict, or held by the merge policy layer for a
   # human's approval is not broken — it is unfinished work with its branch intact that the next
   # run resumes. Its dependents must therefore stay pending (schedulable on resume)
   # rather than cascade to 'blocked'.
@@ -2207,13 +2215,13 @@ run_worker() {
           echo "VERIFY-FAILED" > "$STATE/$name.status"; echo "!! $name verify failed post-rebase (persisted for re-engagement)"; exit 0
         fi
       fi
-      # ---- OVERLAP ZONES: a domain where a green gate is not enough authority ----
-      # AFTER the floor, never instead of it (engine/zones.sh): a non-zero return
-      # means "held — do not merge", and it has already said why. A repo that
-      # declares no zones never reaches the question at all.
+      # ---- THE POLICY LAYER: a green gate is not always enough authority --------
+      # AFTER the floor, never instead of it (engine/zones.sh + engine/budget.sh): a
+      # non-zero return means "held — do not merge", and it has already said why.
+      # One gate, one approval — a declared zone and an oversized story never both ask.
       if ! zones_merge_gate "$name" "$branch" "$work_repo" "$work_base" "$STATE" \
                             "$(touches_of "$name" | tr '\n' ' ')"; then
-        worker_park awaiting-approval "overlap zone(s) with policy review — rebased + verified, held for a human" \
+        worker_park awaiting-approval "the merge policy layer (overlap zone / diff budget) — rebased + verified, held for a human" \
           "   Branch $branch is kept (rebased, green) — approve what no gate can check, then re-run:  chief approve $name && chief run"
         exit 0
       fi
@@ -2469,7 +2477,8 @@ reap() {   # collect any finished workers, update state
       # re-arms it (only a verdict can), and the run ends with the branch, the plan
       # and every annotation kept for the next `chief run`.
       AWAITING-REVIEW*) set_state "$n" awaiting-review ;;
-      # Held at an OVERLAP ZONE (docs/reference/overlap-zones.md). Non-terminal on the
+      # Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
+      # or an over-budget story (docs/reference/diff-budget.md). Non-terminal on the
       # same terms again — but note what is different: this branch already passed the
       # whole merge floor. Nothing here re-arms it either; `chief approve` records the
       # verdict and the next run reads it.
@@ -2651,18 +2660,19 @@ if [ -n "$inreview" ]; then
   done
   echo "    Approve the plan (docs/plan-review.md), then pick it up where it stopped:  chief run"
 fi
-# Held at an OVERLAP ZONE (docs/reference/overlap-zones.md). Reported apart from the
+# Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
+# or an over-budget story (docs/reference/diff-budget.md). Reported apart from the
 # three holds above because what is true of this one is stronger: the branch is
 # rebased onto the latest base and its verify came back green. Nothing is wrong with
-# it — the repo declared that green is not sufficient authority to merge this domain.
+# it — the repo declared that green is not sufficient authority to merge this change.
 if [ -n "$inzone" ]; then
-  echo "   ⏸ AWAITING APPROVAL — $(set -- $inzone; echo $#) tasklist(s) rebased + verified GREEN, held at an overlap zone:$inzone"
+  echo "   ⏸ AWAITING APPROVAL — $(set -- $inzone; echo $#) tasklist(s) rebased + verified GREEN, held by the merge policy layer:$inzone"
   for n in $inzone; do
     printf '    · %-30s %s\n' "$n" "$(cat "$STATE/$n.status" 2>/dev/null || echo AWAITING-APPROVAL)"
     zones_render "$(jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | @tsv' \
                       "$(zones_request_file "$STATE" "$n")" 2>/dev/null || echo)"
   done
-  echo "    Approve what a gate cannot check (whether the designs agree), then re-run:  chief approve <name> && chief run"
+  echo "    Approve what a gate cannot check (whether the designs agree, whether the size is warranted), then:  chief approve <name> && chief run"
 fi
 # Only claim there are branches to review if there actually are: chief/* heads not
 # yet reachable from the base branch. A blanket "unmerged branches remain" sends

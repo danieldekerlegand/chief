@@ -37,11 +37,13 @@
 # 'plan-invalid' the stop when it does not. 'review-wait' is the bounded window in
 # which a human reviewer is being waited on, and 'awaiting-review' the park when that
 # window closes with no approval — a hold, not a fault (docs/plan-review.md).
-# The zone phases belong to the OVERLAP ZONE REGISTRY (docs/reference/overlap-zones.md)
-# and sit at the far end of the merge phase: 'zone-check' is the branch's real changed
-# files being matched against the repo's declared zones, and 'awaiting-approval' the
-# hold when one with policy `review` matched and no human has said yes to THIS change.
-# It is the only hold whose branch has already passed the whole merge floor.
+# The zone phases belong to the MERGE POLICY LAYER and sit at the far end of the merge
+# phase: 'zone-check' is the branch's real changed files being matched against the
+# repo's declared overlap zones (docs/reference/overlap-zones.md) AND measured against
+# the per-story diff-size budget (docs/reference/diff-budget.md) — one phase, because
+# it is one gate asking one question — and 'awaiting-approval' the hold when either
+# rule matched and no human has said yes to THIS change. It is the only hold whose
+# branch has already passed the whole merge floor.
 # The research-* phases belong to the opt-in RESEARCH PHASE, which runs ONCE per
 # tasklist BEFORE the first story and before any plan turn: 'research' is the agent
 # mapping the code into the structured document every story then reads, and
