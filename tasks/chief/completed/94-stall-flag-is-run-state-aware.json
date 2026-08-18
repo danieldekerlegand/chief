@@ -26,7 +26,17 @@
         "`provider-waiting` is classified explicitly and the classification is justified: it is NOT quiet-by-design like `rate-limited-waiting`, because a provider that never returns is a real hang. It takes a long threshold under US-2 rather than an exemption. Two runs on 2026-08-17 sat in this phase having produced 0 bytes and never reached iteration 1 — the case an exemption would hide."
       ],
       "passes": true,
-      "notes": "test/stall-flag.sh: PASS — 5 quiet-by-design phases unflagged and 36 flagged at 40m of silence, drift guard over all 39 phase literals engine/*.sh publishes, ceiling case (6h40m quiet) flags; chief ps AND chief monitor both green. Negative control (CHIEF_STALE_QUIET_SECONDS=900) fails the test as expected. bash -n clean on bin/chief + engine/*.sh + install.sh + test/*.sh + templates/*.sh; test/liveliness.sh, test/monitor.sh, test/limitmonitor.sh, test/doc-sync.sh: 4/4 green."
+      "notes": "test/stall-flag.sh: PASS — 5 quiet-by-design phases unflagged and 36 flagged at 40m of silence, drift guard over all 39 phase literals engine/*.sh publishes, ceiling case (6h40m quiet) flags; chief ps AND chief monitor both green. Negative control (CHIEF_STALE_QUIET_SECONDS=900) fails the test as expected. bash -n clean on bin/chief + engine/*.sh + install.sh + test/*.sh + templates/*.sh; test/liveliness.sh, test/monitor.sh, test/limitmonitor.sh, test/doc-sync.sh: 4/4 green.",
+      "diffSize": {
+        "files": 8,
+        "lines": 300,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -40,7 +50,17 @@
         "`shellcheck` (or the repo's existing shell lint) passes on `engine/monitor.sh`, and `.chief/verify.sh` is green."
       ],
       "passes": true,
-      "notes": "`.chief/verify.sh`: OK (allowing merge), exit 0 — quality ratchet ok (max_nesting_depth 5->5 delta 0; function_length_max 177->192 delta +15, tol 15 — render() is AT the edge), bash -n, VERSION-bump policy, behavioural bystander subset, doc-sync, tasklist jq all green. shellcheck 0.11.0 -S error on engine/monitor.sh + test/stall-flag.sh: CLEAN (run via `npx --yes shellcheck`; brew install cannot write /opt/homebrew here, so verify.sh's own shellcheck step self-skipped). test/stall-flag.sh: PASS, 5 parts, 3/3 consecutive runs green — every non-exempt phase asserted at its OWN threshold +/-60s, verifying/warmup pinned at 3060s, provider-waiting at the 900s default, flag text asserted to name the state and its limit ('stalled in rate-limited-waiting ... past its 6h30m limit'), dead-worker truth table (no pid / live pid / dead+verdict = not dead; dead+no verdict = gone) and both chief ps and chief monitor rendering the ✗ row. 3 negative controls each FAIL as expected: re-tune removed, dead-detection disabled, generic message restored. test/liveliness.sh, test/monitor.sh, test/limitmonitor.sh, test/doc-sync.sh: 4/4 PASS."
+      "notes": "`.chief/verify.sh`: OK (allowing merge), exit 0 — quality ratchet ok (max_nesting_depth 5->5 delta 0; function_length_max 177->192 delta +15, tol 15 — render() is AT the edge), bash -n, VERSION-bump policy, behavioural bystander subset, doc-sync, tasklist jq all green. shellcheck 0.11.0 -S error on engine/monitor.sh + test/stall-flag.sh: CLEAN (run via `npx --yes shellcheck`; brew install cannot write /opt/homebrew here, so verify.sh's own shellcheck step self-skipped). test/stall-flag.sh: PASS, 5 parts, 3/3 consecutive runs green — every non-exempt phase asserted at its OWN threshold +/-60s, verifying/warmup pinned at 3060s, provider-waiting at the 900s default, flag text asserted to name the state and its limit ('stalled in rate-limited-waiting ... past its 6h30m limit'), dead-worker truth table (no pid / live pid / dead+verdict = not dead; dead+no verdict = gone) and both chief ps and chief monitor rendering the ✗ row. 3 negative controls each FAIL as expected: re-tune removed, dead-detection disabled, generic message restored. test/liveliness.sh, test/monitor.sh, test/limitmonitor.sh, test/doc-sync.sh: 4/4 PASS.",
+      "diffSize": {
+        "files": 7,
+        "lines": 311,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -52,7 +72,17 @@
         "A run whose driver pid is GONE is visually distinct from one that is merely quiet. US-2 records this as landing here or as an explicit follow-up; either way the two must not render identically, because on 2026-08-17 nine runs were killed on the assumption they were the same thing."
       ],
       "notes": "test/stall-flag.sh: PASS, 6 parts — part 6 drives all five row arms (live_note · limit_note · op_note · hold_note x2) and asserts each shows its OWN elapsed-in-phase (40m / 25m / 1h01m / 3h10m / 13m, no two alike) in chief ps AND chief monitor, on a FRESH heartbeat (rows read `for 40m ... 1s ago`) so the duration provably comes from phase_since and not the render clock; part 5 additionally pins the `gone` row LABEL. 3 negative controls each FAIL as expected: gone-label reverted, hold_note elapsed removed, live_phase_age re-pointed at heartbeat. .chief/verify.sh: OK (allowing merge), exit 0 — quality ratchet ok (function_length_max 177->180 delta +3 tol 15, max_nesting_depth 5->5, single_use_functions 13->14 tol 2). test/liveliness.sh, test/monitor.sh, test/limitmonitor.sh, test/overlap-zones.sh, test/plan-review.sh, test/doc-sync.sh: green.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 6,
+        "lines": 184,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-4",
@@ -66,8 +96,19 @@
         "Re-engagement after a failed post-rebase verify — the driver's `persisted for re-engagement` path — reports itself as such rather than inheriting whatever phase the previous attempt left behind."
       ],
       "passes": true,
-      "notes": "test/stall-flag.sh: PASS, 9 parts — part 8 drives agent.sh through two consecutive no-progress iterations (fake provider on PATH, STALL_LIMIT=2, no driver) and the record's polled transcript reads `agent-turn provider-waiting agent-turn stalled integrating agent-turn provider-waiting agent-turn stalled integrating`: both provider turns ran under provider-waiting and both boundary-hook samples under `integrating`, never `stalled`, while the budget still ended the run — exit 1 at iteration 2 with stall=2, stall_limit=2, terminal phase `stalled`. Part 7 renders the two findings apart in BOTH views (`no progress last iter (2/2)` · `(1/5)` · `(2)` for an older record with no budget, vs `⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit`). Part 9's two-run hermetic driver fixture: run 1 leaves VERIFY-FAILED, run 2 emits tasklist.re-engaged with detail 'every story passes but the branch failed verify post-rebase last run'. 5 negative controls each FAIL as expected (hook phase removed; the iteration's first live_set removed; bare 'stall N' restored — that one also fails test/liveliness.sh; mark_reengage removed; stall_limit never published). .chief/verify.sh: OK (allowing merge), exit 0 — quality ratchet ok (function_length_max 509->519 delta +10 tol 15; max_nesting_depth 6->6; single_use_functions 47->48 tol 2; duplicate_blocks 0->0), bash -n clean, VERSION-bump 0.8.57 covers every engine/bin change, behavioural bystander subset 34/34 PASS, DOC-SYNC PASS (README states v0.8.57), tasklist jq ok. test/events.sh and test/liveliness.sh: PASS. shellcheck 0.11.0 -S error on the 7 changed shell files: clean (the SC1072/SC1073 errors it reports in bin/chief + engine/quality.sh reproduce unchanged on main)."
+      "notes": "test/stall-flag.sh: PASS, 9 parts — part 8 drives agent.sh through two consecutive no-progress iterations (fake provider on PATH, STALL_LIMIT=2, no driver) and the record's polled transcript reads `agent-turn provider-waiting agent-turn stalled integrating agent-turn provider-waiting agent-turn stalled integrating`: both provider turns ran under provider-waiting and both boundary-hook samples under `integrating`, never `stalled`, while the budget still ended the run — exit 1 at iteration 2 with stall=2, stall_limit=2, terminal phase `stalled`. Part 7 renders the two findings apart in BOTH views (`no progress last iter (2/2)` · `(1/5)` · `(2)` for an older record with no budget, vs `⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit`). Part 9's two-run hermetic driver fixture: run 1 leaves VERIFY-FAILED, run 2 emits tasklist.re-engaged with detail 'every story passes but the branch failed verify post-rebase last run'. 5 negative controls each FAIL as expected (hook phase removed; the iteration's first live_set removed; bare 'stall N' restored — that one also fails test/liveliness.sh; mark_reengage removed; stall_limit never published). .chief/verify.sh: OK (allowing merge), exit 0 — quality ratchet ok (function_length_max 509->519 delta +10 tol 15; max_nesting_depth 6->6; single_use_functions 47->48 tol 2; duplicate_blocks 0->0), bash -n clean, VERSION-bump 0.8.57 covers every engine/bin change, behavioural bystander subset 34/34 PASS, DOC-SYNC PASS (README states v0.8.57), tasklist jq ok. test/events.sh and test/liveliness.sh: PASS. shellcheck 0.11.0 -S error on the 7 changed shell files: clean (the SC1072/SC1073 errors it reports in bin/chief + engine/quality.sh reproduce unchanged on main).",
+      "diffSize": {
+        "files": 12,
+        "lines": 482,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     }
   ],
-  "description": "🔴 **chief flags a run as stalled for being quiet in states where quiet is what it is supposed to look like — and gives an operator no way to tell slow from stuck.**\n\n**Measured 2026-08-17.** Nine runs were stopped as 'stalled'. Seven were working: logs of 73KB, 47KB and 21KB at iterations 1–2, no limit hits, nothing wrong. They looked stalled because `chief monitor` showed `provider-waiting` and never changed, and there was no elapsed time beside it to say whether that meant *forty seconds into a turn* or *forty minutes into nothing*.\n\n**`provider-waiting` is the whole duration of every agent turn.** `agent.sh:713` sets it immediately before invoking the provider CLI and it holds until the provider returns. It is not an error, and it is not counted as a stall — `stall=$((stall+1))` fires only at an iteration boundary with no new passing story and no new commit (`agent.sh:846`). So the phase label and the stall counter measure different things, and the display shows the one that cannot progress.\n\n⚠️ **`provider-waiting` must NOT be exempted the way `rate-limited-waiting` is.** A rate-limit wait is quiet by design and resolves itself. A provider that never returns is a real hang, and two of the nine runs produced **0 bytes and never reached iteration 1** — the only genuine anomalies of the set. Exempting the phase would make exactly that case invisible. It needs a LONG threshold, which US-2's per-phase design already provides, not an exemption.\n\nThe diagnosis cost about an hour and three wrong theories — rate limits (the 429s were from logs days old), the provider (only one repo was even on Devin), and the installed-version gap. Every one of those would have been a glance if the display carried elapsed-in-phase."
+  "description": "🔴 **chief flags a run as stalled for being quiet in states where quiet is what it is supposed to look like — and gives an operator no way to tell slow from stuck.**\n\n**Measured 2026-08-17.** Nine runs were stopped as 'stalled'. Seven were working: logs of 73KB, 47KB and 21KB at iterations 1–2, no limit hits, nothing wrong. They looked stalled because `chief monitor` showed `provider-waiting` and never changed, and there was no elapsed time beside it to say whether that meant *forty seconds into a turn* or *forty minutes into nothing*.\n\n**`provider-waiting` is the whole duration of every agent turn.** `agent.sh:713` sets it immediately before invoking the provider CLI and it holds until the provider returns. It is not an error, and it is not counted as a stall — `stall=$((stall+1))` fires only at an iteration boundary with no new passing story and no new commit (`agent.sh:846`). So the phase label and the stall counter measure different things, and the display shows the one that cannot progress.\n\n⚠️ **`provider-waiting` must NOT be exempted the way `rate-limited-waiting` is.** A rate-limit wait is quiet by design and resolves itself. A provider that never returns is a real hang, and two of the nine runs produced **0 bytes and never reached iteration 1** — the only genuine anomalies of the set. Exempting the phase would make exactly that case invisible. It needs a LONG threshold, which US-2's per-phase design already provides, not an exemption.\n\nThe diagnosis cost about an hour and three wrong theories — rate limits (the 429s were from logs days old), the provider (only one repo was even on Devin), and the installed-version gap. Every one of those would have been a glance if the display carried elapsed-in-phase.",
+  "mergedToMain": "1ff485a"
 }
