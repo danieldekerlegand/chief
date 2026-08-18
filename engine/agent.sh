@@ -180,16 +180,36 @@ rm -f "$LIMIT_RETRY_FILE"
 #                   cheaper than correcting the code it would otherwise produce.
 RESEARCH_DOC="$STATE_DIR/research.md"
 RESEARCH_STORE="${CHIEF_RESEARCH_FILE:-}"
+# THE BOUNDARY DEMOTION NOTICE — what `_measure_boundary` (below) demoted, in the
+# words `engine/measure.sh` already prints at merge, held on disk so the NEXT turn's
+# prompt can carry it.
+#
+# A demotion the agent is not TOLD about reads to it as its own edit failing to save,
+# and the only thing it can conclude is to make the same edit again. Naming the story
+# and quoting the bar is the whole difference between "chief undid my work" and "chief
+# is asking for the number I already have". It is deliberately NOT generic advice —
+# `instructions.md` step 8 is generic advice, it is in the prompt on every single turn,
+# and the four runs of 2026-08-17 that this tasklist exists for all received it.
+#
+# Written by the boundary check and cleared by it (a boundary that demotes nothing has
+# nothing outstanding to say). Removed at startup because $STATE_DIR outlives the
+# process on an in-place run, and last run's demotion is not this run's news.
+DEMOTION_FILE="$STATE_DIR/.demoted.md"
+rm -f "$DEMOTION_FILE"
 # _compose_prompt INSTRUCTIONS DEST — the prompt one turn is handed: the engine's
 # loop instructions followed by the project's own context. A turn picks its
 # INSTRUCTIONS (implement, or the PLAN turn below) and everything downstream of that
 # choice must stay identical — a plan written against different project conventions
 # than the code it becomes is worse than no plan at all.
 #
-# The RESEARCH DOCUMENT goes in last, when there is one. Last on purpose: it is the
-# most specific thing in the prompt — engine loop, then project conventions, then the
-# map of the code THIS tasklist is about to change. Injected here rather than at each
-# call site so the implement turn and the PLAN turn cannot end up with different maps;
+# The RESEARCH DOCUMENT goes in next-to-last, when there is one, and the BOUNDARY
+# DEMOTION NOTICE (above) after it — everything else in the prompt is standing context,
+# and that notice is the one part of it about the turn being composed right now.
+#
+# The research document goes in after the project context, ordered by specificity —
+# engine loop, then project conventions, then the map of the code THIS tasklist is
+# about to change. Injected here rather than at each call site so the implement turn
+# and the PLAN turn cannot end up with different maps;
 # a plan reasoned from a map the implementation never saw is the same class of bug as
 # a plan written against different project conventions.
 #
@@ -219,6 +239,31 @@ _compose_prompt() {
       printf 'worktree does not persist). Do not rewrite it as part of a story.\n\n'
       printf -- '---\n\n'
       cat "$RESEARCH_DOC"
+    fi
+    # THE DEMOTION NOTICE goes LAST — after the map, after the conventions, at the end
+    # of the prompt, because it is the only part of it that is about THIS turn. Injected
+    # here rather than appended to $PROMPT_FILE by the caller so it cannot be lost: the
+    # implement prompt is rebuilt from scratch by _research_refresh at the top of every
+    # iteration, and the PLAN turn composes its own file — one call site, three prompts.
+    if [ -s "$DEMOTION_FILE" ]; then
+      printf '\n\n---\n\n# STOP — chief DEMOTED a story you marked. It is back at `passes: false`.\n\n'
+      printf 'This is not your edit failing to save, and re-marking it is not the fix.\n\n'
+      printf 'At the end of the last iteration chief held every story reading `passes: true`\n'
+      printf 'to the bars its OWN acceptance criteria state. The story below claims a bar and\n'
+      printf 'its `notes` recorded no observed value, so chief set `passes: false` and\n'
+      printf '`unverified: true` on it, verbatim as it will be reported at merge time:\n\n'
+      cat "$DEMOTION_FILE"
+      printf '\nChief cannot evaluate that bar itself — which is why it will not record it as\n'
+      printf 'met, and why nothing but your own observation clears this. DO IT FIRST, before\n'
+      printf 'any other work this turn:\n\n'
+      printf '  1. Put the value you OBSERVED — the number, the exit status, the word "green" —\n'
+      printf "     into that story's \`notes\` in \`%s/prd.json\`\n" "${CHIEF_STATE_DIR:-.chief/state}"
+      printf '     (and in the tracked tasklist, if that file is in your worktree).\n'
+      printf '  2. Set its `passes` back to `true` in the same edit.\n'
+      printf '  3. If the output is no longer in your context, RE-RUN the check and record\n'
+      printf '     what it actually printed. Do not reconstruct it from memory.\n\n'
+      printf 'Do NOT mark it again without the value. The same check runs at the end of THIS\n'
+      printf 'iteration and will demote it again.\n'
     fi
   } > "$dest"
 }
@@ -519,15 +564,40 @@ _emit_story_events() {
 # NOT REACHED ON THE COMPLETE TURN: the loop exits above this point, so a story marked
 # by the last turn is still the merge floor's business, exactly as before. This is the
 # EARLIER of two moments for one rule, never a replacement for the later one.
+#
+# AND IT TELLS THE NEXT TURN. A demotion the agent never sees is indistinguishable
+# from its own edit not having saved, and the only repair for that is to make the same
+# edit again — which is the loop this check would otherwise create. So the report is
+# banked in $DEMOTION_FILE and the prompt is recomposed around it (see _compose_prompt),
+# naming the story and quoting the bar in measure.sh's own words. Not generic advice:
+# instructions.md step 8 is the generic advice, every turn already gets it, and the
+# runs this exists for got it too.
 _measure_boundary() {
   local report
   command -v measure_gate >/dev/null 2>&1 || return 0
   report="$(measure_gate "$PRD_FILE" 2>/dev/null || true)"
-  [ -n "$report" ] || return 0
+  if [ -z "$report" ]; then
+    # A boundary that demotes nothing has nothing outstanding to tell the next turn —
+    # so drop the notice and rebuild the prompt without it. Cleared HERE rather than
+    # "after one turn" so the notice always describes the state the check last found:
+    # the turn that records its number stops being nagged the moment it does.
+    if [ -s "$DEMOTION_FILE" ]; then
+      rm -f "$DEMOTION_FILE"
+      _compose_prompt "$ENGINE/instructions.md" "$PROMPT_FILE"
+    fi
+    return 0
+  fi
   echo ""
   echo "!! Iteration ${1:-?}: demoted back to passes:false — a story claims a measurable bar and recorded no observed value:"
   printf '%s\n' "$report"
   echo "   Chief cannot evaluate the bar, so it will not record it as met. Put the value you OBSERVED in that story's 'notes', then mark it again."
+  # SAID TO THE AGENT, not only to the log. The log is read by an operator, hours
+  # later, on a run that has already ended — the same audience and the same moment the
+  # merge-time report already had. What is new here is that the next TURN can act, and
+  # it acts on its prompt: bank the report and recompose, so the very next invocation
+  # opens with what was demoted and which bar it has to answer.
+  printf '%s\n' "$report" > "$DEMOTION_FILE"
+  _compose_prompt "$ENGINE/instructions.md" "$PROMPT_FILE"
   # It is not a passing story any more, so the event stream's set difference must stop
   # remembering it as one — otherwise the re-mark that lands it properly, with its
   # number, would emit no `story.passed` at all.

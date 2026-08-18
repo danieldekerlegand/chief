@@ -13,7 +13,8 @@
 #   bd-fix   turn 1 marks US-1 passing with NO observed value and does not complete.
 #            Turn 2 records what the runtime PRD says at the TOP of the turn (the
 #            assertion this test exists for — `passes:false`, before it does anything
-#            else), then re-marks with the number and completes -> MERGED.
+#            else) AND the prompt it was handed (which must name the demoted story and
+#            quote its bar), then re-marks with the number and completes -> MERGED.
 #   bd-last  marks and completes in the SAME turn, so the boundary is never reached.
 #            The merge-time gate (engine/driver.sh) must still catch it -> UNVERIFIED.
 #            That is the floor: the boundary check is an earlier moment for one rule,
@@ -45,11 +46,12 @@ mkdir -p "$WORK/fakebin"
 cat > "$WORK/fakebin/claude" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
-cat >/dev/null                                   # drain the prompt
 W="@WORK@"
+P="$(mktemp)"; cat > "$P"                        # THE PROMPT this turn was invoked with
 PRD=".chief/state/prd.json"                      # cwd = the worktree
 name="$(jq -r '.branchName' "$PRD" | sed 's#^chief/##')"
 turn=$(( $(cat "$W/turns-$name" 2>/dev/null || echo 0) + 1 )); echo "$turn" > "$W/turns-$name"
+cp "$P" "$W/prompt-$name-$turn"                  # kept outside the worktree, like the rest
 # WHAT THIS TURN INHERITS, read before anything is touched: the pass-flag the previous
 # turn left behind, as the runtime PRD reports it at the top of THIS turn.
 jq -r '[.userStories[]|select(.id=="US-1")|.passes][0]' "$PRD" > "$W/seen-$name-$turn"
@@ -118,7 +120,31 @@ i2="$(grep -n 'Chief Iteration 2' "$LOG" | head -1 | cut -d: -f1)"
 [ -n "$i2" ] || fail "the log never shows a second iteration"
 [ "$d" -lt "$i2" ] || fail "the demotion was reported AFTER iteration 2 started — that is not the boundary"
 
-# ── 3. an agent that then records the number is not punished ──────────────────
+# ── 3. …and the reason reaches the PROMPT the provider is handed, not just the log ──
+# The log is read by an operator, hours later, on a run that has already ended — the
+# same audience the merge-time report already had. The turn that can still ACT on the
+# demotion only ever sees its prompt. Grep for strings only the ENGINE emits (the
+# notice heading, and measure.sh's own report lines) plus the bar this fixture planted:
+# instructions.md talks about bars and demotion on EVERY turn, so a loose match here
+# would go green with nothing injected at all.
+P2="$WORK/prompt-bd-fix-2"
+[ -s "$P2" ] || fail "turn 2's prompt was never captured"
+grep -q 'chief DEMOTED a story you marked' "$P2" \
+  || fail "turn 2's prompt never tells the agent a story was demoted"
+grep -q '✗ US-1 — reach GREEN acceptance' "$P2" \
+  || fail "the notice in the prompt does not name the demoted story (id + title)"
+grep -q 'claimed: "the suite reaches GREEN acceptance; the baseline to beat is 77 failed"' "$P2" \
+  || fail "the notice in the prompt does not quote the bar the criterion states"
+grep -q 'recorded: "Reworked the exporter seam." — no observed value in it' "$P2" \
+  || fail "the notice in the prompt does not say what the notes DID say"
+# …and it is absent when nothing was demoted. A notice that is always there is noise,
+# and an agent that learns to skip it is back where this tasklist started.
+! grep -q 'chief DEMOTED a story you marked' "$WORK/prompt-bd-fix-1" \
+  || fail "turn 1's prompt carries a demotion notice with nothing yet demoted"
+! grep -q 'chief DEMOTED a story you marked' "$WORK/prompt-bd-last-1" \
+  || fail "bd-last's single turn carries a demotion notice with nothing yet demoted"
+
+# ── 4. an agent that then records the number is not punished ──────────────────
 case "$(status bd-fix)" in MERGED*) ;; *) fail "the re-marked branch did not merge, got: '$(status bd-fix)'" ;; esac
 git checkout -q main
 [ -f out/bd-fix.txt ]                    || fail "the re-marked branch's work is not on main"
@@ -126,11 +152,11 @@ git checkout -q main
 grep -q 'down from the 77 baseline' tasks/chief/completed/bd-fix.json \
   || fail "the observed value the second turn recorded is not in the completed record"
 
-# ── 4. the merge floor STAYS: a story marked by the LAST turn is still caught ──
+# ── 5. the merge floor STAYS: a story marked by the LAST turn is still caught ──
 case "$(status bd-last)" in UNVERIFIED*) ;; *) fail "the merge-time gate no longer catches a last-turn marking, got: '$(status bd-last)'" ;; esac
 [ ! -f out/bd-last.txt ]                    || fail "the unmeasured branch was merged to main"
 [ ! -f tasks/chief/completed/bd-last.json ] || fail "the unmeasured tasklist was retired"
 [ "$(jq -r '.userStories[]|select(.id=="US-1")|.unverified' "$REPO/.chief/state/snapshots/bd-last.json")" = "true" ] \
   || fail "the last-turn marking was not marked unverified"
 
-echo "BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, and the merge floor still catches a last-turn marking"
+echo "BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, the next turn's PROMPT names it and quotes its bar, and the merge floor still catches a last-turn marking"
