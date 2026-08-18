@@ -219,3 +219,147 @@ EOF
   fi
   return 0
 }
+
+# ── AGE: when was anything last done in here? ────────────────────────────────
+#
+# US-1 sweeps a worktree chief is FINISHED with — the driver says so by calling at
+# the moment of removal, so liveness is not in question. `chief reap` has no such
+# caller: it walks worktrees it knows nothing about, and the run behind one may be
+# alive but merely BETWEEN ITERATIONS — a fresh `claude` turn is starting, nothing
+# is running in the directory yet, and the registry lookup a moment later would have
+# said "live". So the reap gate is liveness AND age, and this is the age half.
+#
+# The witness is the newest mtime at depth<=2 of the worktree: the source files an
+# agent edits, the build directories a compiler writes into, the `.chief` state the
+# driver stamps. One `find`, one or two `stat` execs — deliberately not a walk of
+# the three-quarters of a million files this module exists because of.
+#
+# UNKNOWABLE AGE IS NOT OLD AGE. When neither stat dialect answers, `chief_sweep_idle`
+# reports -1 and every caller must read that as "leave it alone" — the conservative
+# direction, and the one that fails visibly (a stated reason per worktree) instead of
+# quietly reclaiming a live run's build.
+
+CHIEF_SWEEP_STAT_MODE=""
+chief_sweep_stat_mode() {   # -> "gnu" | "bsd" | "" (probed once per shell)
+  if [ -z "$CHIEF_SWEEP_STAT_MODE" ]; then
+    CHIEF_SWEEP_STAT_MODE="-"
+    if   [ -n "$(stat -c '%Y' . 2>/dev/null)" ]; then CHIEF_SWEEP_STAT_MODE=gnu
+    elif [ -n "$(stat -f '%m' . 2>/dev/null)" ]; then CHIEF_SWEEP_STAT_MODE=bsd
+    fi
+  fi
+  [ "$CHIEF_SWEEP_STAT_MODE" = "-" ] || printf '%s' "$CHIEF_SWEEP_STAT_MODE"
+}
+
+chief_sweep_mtime() {   # $1 = dir -> newest mtime epoch at depth<=2 ('' when unknowable)
+  local mode
+  [ -d "${1:-}" ] || return 0
+  mode="$(chief_sweep_stat_mode)"
+  [ -n "$mode" ] || return 0
+  # A symlink is excluded rather than followed, for the same reason the verdict
+  # refuses one: its target is not this worktree's business.
+  if [ "$mode" = gnu ]; then
+    find "$1" -maxdepth 2 ! -type l -exec stat -c '%Y' {} + 2>/dev/null
+  else
+    find "$1" -maxdepth 2 ! -type l -exec stat -f '%m' {} + 2>/dev/null
+  fi | LC_ALL=C awk '$1 ~ /^[0-9]+$/ && $1 > m { m = $1 } END { if (m) print m }'
+}
+
+chief_sweep_idle() {    # $1 = dir -> seconds since the newest activity, or -1 unknown
+  local m now
+  m="$(chief_sweep_mtime "${1:-}")"
+  [ -n "$m" ] || { printf '%s' -1; return 0; }
+  now="$(date +%s 2>/dev/null)"
+  case "$now" in ''|*[!0-9]*) printf '%s' -1; return 0 ;; esac
+  [ "$m" -gt "$now" ] && { printf '%s' 0; return 0; }   # a future stamp is not idleness
+  printf '%s' "$(( now - m ))"
+}
+
+chief_sweep_label() {   # $1 = .../worktrees/<repo>-<cksum>/<tasklist> -> "<repo> · <tasklist>"
+  local wt="${1:-}" repo
+  repo="${wt%/*}"; repo="${repo##*/}"; repo="${repo%-*}"
+  printf '%s · %s' "${repo:-?}" "${wt##*/}"
+}
+
+# ── the DISK PASS — the artifacts of runs that already ended ─────────────────
+#
+# chief_sweep_disk ROOT AGE DRY LIVEFN [SCOPE]
+#
+#   ROOT    chief's worktree root; every `<repo>-<cksum>/<tasklist>` under it is a
+#           worktree chief created, and nothing else writes there.
+#   AGE     minimum idle seconds before a worktree may be collected.
+#   DRY     "-n" to report bytes-by-path and delete nothing.
+#   LIVEFN  the NAME of a predicate `f WORKTREE` returning 0 when a run is behind it.
+#           Injected rather than called directly because the liveness rule belongs to
+#           engine/reap.sh (the registry, the process table, the pid namespace) while
+#           the deletion belongs here — and because a test can then pin BOTH verdicts
+#           against a fixture, with no chief install and no live run to race.
+#   SCOPE   optional: only repos whose worktree directory shares a prefix with it.
+#
+# Reports, per worktree left alone, WHY — a reap that silently reclaimed nothing is
+# indistinguishable from a reap that had nothing to reclaim.
+chief_sweep_disk() {
+  local root="${1:-}" age="${2:-3600}" dry="${3:-}" livefn="${4:-}" scope="${5:-}"
+  local rootc repo wt base label idle
+  CHIEF_SWEEP_DISK_BYTES=0; CHIEF_SWEEP_DISK_COUNT=0
+  CHIEF_SWEEP_DISK_SWEPT=0; CHIEF_SWEEP_DISK_LIVE=0; CHIEF_SWEEP_DISK_YOUNG=0
+  case "$age" in ''|*[!0-9]*) age=3600 ;; esac
+  [ -n "$livefn" ] || return 0
+  if [ "${CHIEF_SWEEP:-1}" = 0 ]; then
+    echo ">> disk: build-artifact reaping is off (CHIEF_SWEEP=0)"; return 0
+  fi
+  rootc="$(chief_sweep_canon "$root")"
+  [ -n "$rootc" ] || return 0
+
+  for repo in "$rootc"/*; do
+    [ -d "$repo" ] && [ ! -L "$repo" ] || continue
+    base="${repo##*/}"
+    if [ -n "$scope" ]; then
+      # Either direction: the run-id prefix an operator types ("myrepo-1234-") is
+      # longer than the worktree directory ("myrepo-1234"), and a bare repo name
+      # ("myrepo") is shorter. Both should select it.
+      case "$scope" in "$base"*) ;; *) case "$base" in "$scope"*) ;; *) continue ;; esac ;; esac
+    fi
+    for wt in "$repo"/*; do
+      [ -d "$wt" ] && [ ! -L "$wt" ] || continue
+      label="$(chief_sweep_label "$wt")"
+
+      # 1. LIVENESS — the same rule the process reaper applies, so a running build
+      #    can never be collected out from under itself.
+      if "$livefn" "$wt"; then
+        CHIEF_SWEEP_DISK_LIVE=$(( CHIEF_SWEEP_DISK_LIVE + 1 ))
+        echo ">> disk: $label — LEFT ALONE, a live run is behind this worktree"
+        continue
+      fi
+
+      # 2. AGE — a run between iterations has a live registry entry, but a run whose
+      #    registry entry is a moment from being written does not. The floor covers
+      #    that window, and covers an unanswerable age the same way.
+      idle="$(chief_sweep_idle "$wt")"
+      if [ "$idle" -lt 0 ]; then
+        CHIEF_SWEEP_DISK_YOUNG=$(( CHIEF_SWEEP_DISK_YOUNG + 1 ))
+        echo ">> disk: $label — LEFT ALONE, this host will not report a modification time"
+        continue
+      fi
+      if [ "$idle" -lt "$age" ]; then
+        CHIEF_SWEEP_DISK_YOUNG=$(( CHIEF_SWEEP_DISK_YOUNG + 1 ))
+        echo ">> disk: $label — LEFT ALONE, active ${idle}s ago (under the ${age}s floor)"
+        continue
+      fi
+
+      chief_sweep_worktree "$rootc" "$wt" "disk $label" "$dry" || true
+      if [ "${CHIEF_SWEEP_COUNT:-0}" -gt 0 ]; then
+        CHIEF_SWEEP_DISK_SWEPT=$(( CHIEF_SWEEP_DISK_SWEPT + 1 ))
+        CHIEF_SWEEP_DISK_COUNT=$(( CHIEF_SWEEP_DISK_COUNT + CHIEF_SWEEP_COUNT ))
+        CHIEF_SWEEP_DISK_BYTES=$(( CHIEF_SWEEP_DISK_BYTES + CHIEF_SWEEP_BYTES ))
+      fi
+    done
+  done
+
+  if [ "$CHIEF_SWEEP_DISK_COUNT" -gt 0 ]; then
+    echo "chief reap: $([ "$dry" = "-n" ] && echo 'WOULD reclaim' || echo reclaimed) $(chief_sweep_human "$CHIEF_SWEEP_DISK_BYTES") of build artifacts — $CHIEF_SWEEP_DISK_COUNT director$([ "$CHIEF_SWEEP_DISK_COUNT" = 1 ] && echo y || echo ies) across $CHIEF_SWEEP_DISK_SWEPT worktree(s) with no live run"
+    [ "$dry" = "-n" ] && echo "  (dry run — nothing was deleted; drop -n to reclaim)" >&2
+  else
+    echo "chief reap: no collectable build artifacts (${CHIEF_SWEEP_DISK_LIVE} worktree(s) behind a live run, ${CHIEF_SWEEP_DISK_YOUNG} too recently active)"
+  fi
+  return 0
+}

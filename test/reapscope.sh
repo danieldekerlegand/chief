@@ -204,6 +204,40 @@ out="$("$CHIEF" reap -n --scope "$RS" 2>&1)" || fail "chief reap -n exited non-z
 case "$out" in *"no orphaned chief processes"*) ;; *) fail "expected a clean sweep after the reap, got:
 $out" ;; esac
 
+# ── 4b. the DISK pass: bytes behind runs that already ended ──────────────────
+# The process half of this file proves what must not be SIGNALLED; this proves what
+# must not be DELETED, against the same fixtures and the same liveness rule. Both
+# worktrees below are aged past the floor, so age saves neither and liveness is the
+# only thing standing between the live run and an rm -rf.
+mkdir -p "$WTS/${RS}delta-333/tl-d/target/debug" "$WTS/${RS}beta-222/tl-b/target/debug"
+echo blob > "$WTS/${RS}delta-333/tl-d/target/debug/blob"     # nothing alive behind it
+echo blob > "$WTS/${RS}beta-222/tl-b/target/debug/blob"      # the live run's child works here
+find "$WTS/${RS}delta-333" "$WTS/${RS}beta-222" -exec touch -t 202001010000 {} + 2>/dev/null || true
+
+out="$("$CHIEF" reap --disk-only -n --scope "$RS" 2>&1)" || fail "chief reap --disk-only -n exited non-zero:
+$out"
+case "$out" in *"WOULD reclaim"*) ;; *) fail "the disk dry run reclaimed nothing:
+$out" ;; esac
+case "$out" in *"tl-d"*target*) ;; *) fail "the disk dry run does not report bytes by path:
+$out" ;; esac
+[ -f "$WTS/${RS}delta-333/tl-d/target/debug/blob" ] || fail "-n DELETED a build directory — the dry-run contract is broken"
+
+out="$("$CHIEF" reap --disk-only --scope "$RS" 2>&1)" || fail "chief reap --disk-only exited non-zero:
+$out"
+[ -d "$WTS/${RS}delta-333/tl-d/target" ] && fail "a stale worktree's target survived the reap:
+$out"
+[ -f "$WTS/${RS}beta-222/tl-b/target/debug/blob" ] \
+  || fail "THE REAP DELETED A LIVE RUN'S TARGET (pid $live_child is working in tl-b):
+$out"
+[ -d "$WTS/${RS}delta-333/tl-d" ] || fail "the disk pass removed the worktree itself, not just its build directories"
+alive "$live_child" || fail "the disk pass signalled the live run's child (pid $live_child)"
+
+# --no-disk is the other half of the switch: processes only, bytes untouched.
+mkdir -p "$WTS/${RS}delta-333/tl-d/target"; echo blob > "$WTS/${RS}delta-333/tl-d/target/blob"
+find "$WTS/${RS}delta-333" -exec touch -t 202001010000 {} + 2>/dev/null || true
+"$CHIEF" reap --no-disk -n --scope "$RS" >/dev/null 2>&1 || true
+[ -f "$WTS/${RS}delta-333/tl-d/target/blob" ] || fail "--no-disk still ran the disk pass"
+
 # ── 5. the guard: an UNSCOPED sweep out of this registry is refused ───────────
 # Everything above is scoped by hand, and a convention nobody enforces is a defect
 # waiting for its next author. The engine refuses the combination outright: a
@@ -225,4 +259,4 @@ $out" ;; esac
 # And it refuses BEFORE looking: nothing was signalled on the way out.
 alive "$foreign_drv" || fail "the refused sweep signalled something anyway (pid $foreign_drv)"
 
-echo "REAPSCOPE PASS — orphans found by cwd + run marker (never by argv paths); live runs, lock-holding drivers and a developer's own claude untouched; repo scoping holds; an unscoped sweep out of a foreign registry is refused"
+echo "REAPSCOPE PASS — orphans found by cwd + run marker (never by argv paths); live runs, lock-holding drivers and a developer's own claude untouched; repo scoping holds; an unscoped sweep out of a foreign registry is refused; the disk pass collects a stale worktree's build dirs and spares a live run's"

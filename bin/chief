@@ -107,7 +107,11 @@ Usage:
                               every repo on this box, not just the one you are in —
                               --scope <repo>-<cksum>- narrows it to one repo's runs.
                               Never touches a live run, another user's processes, or
-                              your own claude sessions.
+                              your own claude sessions. Then the DISK half: build
+                              directories (target/ node_modules/ .venv/ build/) left
+                              behind in worktrees with no live run and idle past
+                              --disk-age (default 1h). --no-disk / --disk-only pick
+                              one half; a shared cache or a symlink out is refused.
   chief quality SUB [opts]    the code-quality RATCHET — the merge gate's second, MEASURED axis.
                               `measure` emits a deterministic metric record (size · complexity ·
                               duplication · decomposition · lint violations) for a file set;

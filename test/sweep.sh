@@ -103,5 +103,65 @@ CHIEF_SWEEP=0 chief_sweep_worktree "$WTS" "$WT" tl-a >/dev/null
 chief_sweep_worktree "$WTS" "$WORK/not-chief/tl" other >/dev/null
 [ -d "$WORK/not-chief/tl/target" ] && ok || fail "swept a worktree chief did not create"
 
+# ── 6. the DISK pass: liveness AND age, mutation-checked in both directions ──
+# `chief reap`'s pass walks worktrees it knows nothing about, so the only thing
+# standing between a running build and an rm -rf is this gate. The liveness rule
+# itself lives in engine/reap.sh (registry + process table); chief_sweep_disk takes
+# it as a function NAME, which is what lets this file pin both verdicts against a
+# fixture with no chief install and no live run to race.
+DWTS="$WORK/disk/worktrees"
+mkdir -p "$DWTS/repo-77/live-tl/target/debug" \
+         "$DWTS/repo-77/stale-tl/target/debug" \
+         "$DWTS/repo-77/stale-tl/node_modules/dep" \
+         "$DWTS/repo-77/fresh-tl/target/debug" \
+         "$DWTS/other-99/stale-tl/target/debug"
+for f in live-tl stale-tl fresh-tl; do echo blob > "$DWTS/repo-77/$f/target/debug/blob"; done
+echo blob > "$DWTS/repo-77/stale-tl/node_modules/dep/blob"
+echo blob > "$DWTS/other-99/stale-tl/target/debug/blob"
+# live-tl is aged EXACTLY like stale-tl, so the only thing saving it is liveness.
+find "$DWTS/repo-77/live-tl" "$DWTS/repo-77/stale-tl" "$DWTS/other-99" \
+     -exec touch -t 202001010000 {} + 2>/dev/null
+
+fake_live() { case "${1##*/}" in live-tl) return 0 ;; *) return 1 ;; esac; }
+
+# -n: bytes by path, nothing signalled — the existing dry-run contract.
+out="$(chief_sweep_disk "$DWTS" 3600 -n fake_live 2>&1)"
+case "$out" in *"WOULD reclaim"*) ok ;; *) fail "disk dry run reclaimed nothing: $out" ;; esac
+case "$out" in *"stale-tl"*target*) ok ;; *) fail "disk dry run named no path: $out" ;; esac
+case "$out" in *"live-tl — LEFT ALONE, a live run"*) ok ;; *) fail "disk dry run did not spare the live worktree: $out" ;; esac
+case "$out" in *"fresh-tl — LEFT ALONE, active"*) ok ;; *) fail "disk dry run ignored the age floor: $out" ;; esac
+[ -f "$DWTS/repo-77/stale-tl/target/debug/blob" ] && ok || fail "disk dry run DELETED a stale target"
+
+# --scope selects one repo. "repo-77" is a prefix of the worktree dir; a run id
+# prefix ("other-99-") is LONGER than it. Both must select, and neither may leak.
+out="$(chief_sweep_disk "$DWTS" 3600 -n fake_live repo-77 2>&1)"
+case "$out" in *other-99*) fail "scope repo-77 reached other-99: $out" ;; *) ok ;; esac
+[ -d "$DWTS/other-99/stale-tl/target" ] && ok || fail "scoped dry run deleted an out-of-scope target"
+out="$(chief_sweep_disk "$DWTS" 3600 '' fake_live other-99-1234- 2>&1)"
+[ -d "$DWTS/other-99/stale-tl/target" ] && fail "a run-id-shaped scope selected nothing" || ok
+
+# The mutation check: the live run's target must survive, the stale one must not.
+out="$(chief_sweep_disk "$DWTS" 3600 '' fake_live 2>&1)"
+case "$out" in *reclaimed*worktree*) ok ;; *) fail "disk pass reported no reclaim: $out" ;; esac
+[ -d "$DWTS/repo-77/live-tl/target" ]  && ok || fail "DISK PASS DELETED A LIVE RUN'S TARGET"
+[ -d "$DWTS/repo-77/fresh-tl/target" ] && ok || fail "disk pass collected a worktree under the age floor"
+[ -d "$DWTS/repo-77/stale-tl/target" ] && fail "disk pass left a stale target behind" || ok
+[ -d "$DWTS/repo-77/stale-tl/node_modules" ] && fail "disk pass left a stale node_modules behind" || ok
+[ -d "$DWTS/repo-77/stale-tl" ] && ok || fail "disk pass removed the worktree itself, not just its build dirs"
+
+# The age floor is the whole defence for a run BETWEEN iterations: with the floor
+# raised past the fixture's age, a dead-but-recent worktree is still spared.
+mkdir -p "$DWTS/repo-77/stale-tl/target"; echo blob > "$DWTS/repo-77/stale-tl/target/blob"
+chief_sweep_disk "$DWTS" 999999999 '' fake_live >/dev/null 2>&1
+[ -f "$DWTS/repo-77/stale-tl/target/blob" ] && ok || fail "the age floor did not hold"
+
+# CHIEF_SWEEP=0 is the operator's off switch here too.
+CHIEF_SWEEP=0 chief_sweep_disk "$DWTS" 0 '' fake_live >/dev/null 2>&1
+[ -f "$DWTS/repo-77/stale-tl/target/blob" ] && ok || fail "CHIEF_SWEEP=0 still ran the disk pass"
+
+# An idle time this host cannot answer is not old age.
+CHIEF_SWEEP_STAT_MODE="-" chief_sweep_disk "$DWTS" 0 '' fake_live >/dev/null 2>&1
+[ -f "$DWTS/repo-77/stale-tl/target/blob" ] && ok || fail "an unknowable mtime was read as old"
+
 echo "sweep: $pass passed, $nfail failed"
 [ "$nfail" -eq 0 ] || exit 1
