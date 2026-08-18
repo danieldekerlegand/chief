@@ -48,8 +48,8 @@
         "A story demoted twice in a row for the same reason does NOT loop indefinitely — it is either escalated or the run stops with the demotion named. An agent that cannot produce a number for a bar will otherwise burn its whole budget rediscovering that.",
         "A test drives the re-mark path and asserts both: the good case advances, and the pathological case terminates rather than spinning."
       ],
-      "notes": "",
-      "passes": false
+      "notes": "test/boundary-demotion.sh PASS with the two new blocks: bd-remark (the evidenced re-mark logs \"Iteration 2: progress\" and never \"Iteration 2: no progress\", then merges) and bd-spin (exactly 2 turns, UNVERIFIED 0/1, not merged, not retired). The negative control — the same test against the pre-change engine 441f339 — FAILS with \"bd-spin spent 20 turns re-marking one story\" (HARD_MAX), so it discriminates. Full suite test/all.sh: 42 passed, 0 failed, 1 skipped. .chief/verify.sh rc=0, \"verify: OK (allowing merge)\": quality ratchet OK — function_length_max 478 -> 490 (delta +12, tol 15), single_use_functions 32 -> 32, duplicate_blocks 2 -> 2; doc-links 4 dead vs 4 on main; VERSION 0.8.45 + doc-sync green. bash -n clean on bin/chief + engine/*.sh + test/*.sh; shellcheck not installed on this host (CI enforces it).",
+      "passes": true
     }
   ]
 }
