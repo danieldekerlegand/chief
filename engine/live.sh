@@ -25,12 +25,27 @@
 #     can read the record even where jq is absent.
 #
 # PHASE VOCABULARY (the fine-grained sub-phase; the coarse lifecycle is `state`):
-#   agent.sh   agent-turn · provider-waiting · writing · rate-limited-waiting · stalled ·
-#              operator-paused · research · research-failed · plan-turn · plan-ready ·
-#              plan-invalid · review-wait · awaiting-review
-#   driver.sh  worktree · warmup · reconcile · merge-wait · rebasing · verifying ·
-#              zone-check · merging · merged · done · operator-paused ·
+#   agent.sh   agent-turn · provider-waiting · writing · integrating ·
+#              rate-limited-waiting · stalled · operator-paused · research ·
+#              research-failed · plan-turn · plan-ready · plan-invalid ·
+#              review-wait · awaiting-review
+#   driver.sh  worktree · re-engaging · warmup · reconcile · merge-wait · rebasing ·
+#              verifying · zone-check · merging · merged · done · operator-paused ·
 #              research-failed · plan-invalid · awaiting-review · awaiting-approval
+# EVERY PHASE IS A STATEMENT ABOUT NOW. That is the whole contract of this field, and
+# 'stalled' is where it was broken: agent.sh publishes it at an iteration boundary that
+# advanced neither a passing story nor HEAD — a true statement about the iteration that
+# just ENDED, and a false one from the instant the next turn begins. It is therefore
+# published ONLY between iterations (and as the terminal verdict when the loop gives
+# up); the next iteration's FIRST write moves the phase off it, and the boundary work
+# that used to inherit it has its own words: 'integrating' is the iteration-boundary
+# hook re-integrating the base branch sibling merges keep advancing (driver.sh
+# --integrate-base — minutes, and real work), and 're-engaging' is the driver picking
+# a branch back up that already claims to be done (its verify failed post-rebase, its
+# pass-flags were a misfire, or it will not rebase). Measured 2026-08-17: tasklist 99
+# read 'stalled' for ~25 minutes while it was re-integrating, fixing a ratchet
+# regression and merging, and 98 read it with a 2-second heartbeat while working.
+# 'no progress last iteration' is what `stall`/`stall_limit` say; it is not a phase.
 # The plan-* phases belong to the opt-in PLAN REVIEW checkpoint (docs/plan-review.md)
 # and appear only on a tasklist that enabled it: 'plan-turn' is the agent writing a
 # plan instead of code, 'plan-ready' the artifact passing its schema check, and
@@ -56,8 +71,13 @@
 
 # Field order is the write order. Numeric fields are emitted unquoted (0 = unset);
 # everything else is emitted as a JSON string.
-LIVE_FIELDS='name state phase story iter passing total stall waits retry_at phase_since heartbeat'
-LIVE_NUMERIC=' iter passing total stall waits retry_at phase_since heartbeat '
+# `stall` and `stall_limit` are a PAIR — the consecutive no-progress iterations the
+# agent loop has counted, and the budget it counts them against. Written together
+# because the count alone cannot tell an operator whether a run is one iteration from
+# stopping or has barely started, and because that pair is the ONLY place "no progress
+# last iteration" belongs: it is a fact about the last boundary, never about now.
+LIVE_FIELDS='name state phase story iter passing total stall stall_limit waits retry_at phase_since heartbeat'
+LIVE_NUMERIC=' iter passing total stall stall_limit waits retry_at phase_since heartbeat '
 
 # live_get FILE KEY -> the raw value ('' when the file or key is absent).
 # The writer's format is rigid (one `  "key": value,` per line), so a sed reader is
@@ -96,7 +116,7 @@ live_set() {
   # Listed explicitly (not `eval local`) so the per-field scratch vars stay OUT of
   # the caller's globals — driver.sh and agent.sh both source this file.
   local _lv_name _lv_state _lv_phase _lv_story _lv_iter _lv_passing _lv_total \
-        _lv_stall _lv_waits _lv_retry_at _lv_phase_since _lv_heartbeat
+        _lv_stall _lv_stall_limit _lv_waits _lv_retry_at _lv_phase_since _lv_heartbeat
   dir="$(dirname "$f")"
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
   now="$(date +%s)"

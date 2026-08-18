@@ -145,6 +145,7 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `tasklist.plan-invalid` | `failed` | plan review is on and the PLAN turn wrote no well-formed plan artifact; branch + worktree kept (see [plan-review.md](plan-review.md)) |
 | `tasklist.awaiting-review` | `awaiting-review` | plan review is on and the story's plan has **no human approval**, with none obtainable here (no reviewer, non-interactive host, the window elapsed, or the annotate → re-plan budget is spent). A **park, not a failure**: branch, worktree, plan and annotations kept, and the next run reads the verdict off disk rather than re-asking. Also emitted with a **null `story`** when the tasklist's up-front **research map** is what nobody approved — same park, one rung further up the leverage hierarchy, and nothing was implemented at all |
 | `tasklist.re-dispatch` | `pending` | the usage-limit window elapsed and it is queued again — carries `limit` |
+| `tasklist.re-engaged` | `running` | the run picked up a branch that already claims to be finished and sent the agent back in — its verify failed post-rebase, its pass-flags were a misfire with no commits behind them, or it will not rebase (`detail` says which). Not a terminal event: the tasklist goes on to its own outcome |
 
 ### Story scope (`name` + `story`)
 
@@ -237,7 +238,8 @@ one.
   never tear.
 - **Order across tasklists is not promised.** Order events on `ts`, then on
   `(name, event)`. Within a single tasklist the sequence is causal:
-  `tasklist.launched` → `story.passed`… → one terminal tasklist event.
+  `tasklist.launched` → (`tasklist.re-engaged`, when the branch was already claiming
+  to be done) → `story.passed`… → one terminal tasklist event.
 - The log is **append-only and never rewritten**, so re-reading from byte 0 replays
   the whole run and `tail -f` misses nothing.
 

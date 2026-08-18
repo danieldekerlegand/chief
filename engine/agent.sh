@@ -1186,6 +1186,19 @@ while :; do
     exit 3
   fi
   i=$((i+1))
+  # A TURN THAT HAS BEGUN IS NOT THE LAST ONE'S VERDICT. The boundary below publishes
+  # phase=stalled when an iteration advanced neither a passing story nor HEAD; that is
+  # true of the iteration that just ENDED and false from this line onward. So this is
+  # the iteration's FIRST write, ahead of everything that can take time (the research
+  # re-read, the review gate, the prompt compose) — nothing between here and the turn
+  # can still be read as 'stalled', which is the word chief uses for "give up on this".
+  # Measured 2026-08-17: tasklist 98 displayed `stalled` with a 2-second heartbeat
+  # while it was working. The COUNT is untouched — it stays in `$stall`, it is still
+  # published (with the budget it is measured against), and it still ends the run at
+  # $STALL_LIMIT below. Only the claim about what is happening NOW is corrected.
+  # $TURN_PHASE refines this a few lines down for a plan turn; agent-turn is the right
+  # answer for every iteration until that is known.
+  live_set "$LIVE" phase=agent-turn iter="$i" stall="$stall" stall_limit="$STALL_LIMIT"
   # THE HUMAN-CORRECTION WINDOW. Re-read the durable research document and rebuild
   # this turn's prompt around it, EVERY iteration. A person who opened the map
   # between stories and fixed it has their correction in the very next story's
@@ -1251,7 +1264,8 @@ while :; do
   echo "  Chief Iteration $i ($TOOL)$TURN_LABEL — budget $MAX_ITERATIONS · cap $HARD_MAX · $(_passes)/$(_total) passing"
   echo "==============================================================="
   live_set "$LIVE" phase="$TURN_PHASE" iter="$i" story="$(_story)" \
-    passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" retry_at=0
+    passing="$(_passes)" total="$(_total)" stall="$stall" stall_limit="$STALL_LIMIT" \
+    waits="$waits" retry_at=0
 
   # Run the selected provider with the composed Chief prompt. The provider's own
   # exit status is preserved (PIPESTATUS, not tee's) for limit classification.
@@ -1367,11 +1381,16 @@ while :; do
   if [ "$now_pass" -gt "$prev_pass" ] || [ "$now_head" != "$prev_head" ]; then
     stall=0
     echo "Iteration $i: progress ($now_pass/$(_total) passing). Continuing..."
-    live_set "$LIVE" phase=agent-turn stall=0 passing="$now_pass" total="$(_total)" story="$(_story)"
+    live_set "$LIVE" phase=agent-turn stall=0 stall_limit="$STALL_LIMIT" \
+      passing="$now_pass" total="$(_total)" story="$(_story)"
   else
     stall=$((stall+1))
     echo "Iteration $i: no progress (stall $stall/$STALL_LIMIT)."
-    live_set "$LIVE" phase=stalled stall="$stall"
+    # BETWEEN iterations, and only here: the phase is the verdict on the boundary just
+    # reached, and the next iteration's first write (top of the loop) takes it back.
+    # The budget travels with the count so a reader can tell "1 of 2" from "2 of 2"
+    # without knowing this run's $STALL_LIMIT.
+    live_set "$LIVE" phase=stalled stall="$stall" stall_limit="$STALL_LIMIT"
   fi
   prev_pass=$now_pass; prev_head=$now_head
 
@@ -1381,6 +1400,12 @@ while :; do
   # only here, so it can never touch the tree while a turn is in flight, and its
   # failure is never fatal: integration is best-effort, the merge phase is the floor.
   if [ -n "${CHIEF_ITER_HOOK:-}" ]; then
+    # ITS OWN PHASE, because this is the stretch that made `stalled` a lie in the
+    # field: the hook re-enters driver.sh --integrate-base, which fetches, rebases and
+    # queues behind the merge lock a sibling worker may hold for the length of a verify
+    # gate. On 2026-08-17 tasklist 99 spent ~25 minutes in exactly this window and
+    # displayed the previous boundary's `stalled` for all of it.
+    live_set "$LIVE" phase=integrating
     eval "$CHIEF_ITER_HOOK" || true
     # A hook may rewrite HEAD (a clean rebase does). Re-baseline, or the NEXT
     # iteration would read the hook's rewrite as the agent having made progress.
@@ -1392,6 +1417,11 @@ while :; do
     echo ""
     echo "Chief stalled $stall iterations after its $MAX_ITERATIONS-iter budget without completing. Stopping."
     echo "Check $PROGRESS_FILE for status."
+    # The one place `stalled` is a statement about now: the loop is over BECAUSE it
+    # stalled. Published explicitly so the record does not exit carrying whatever the
+    # boundary hook above left behind.
+    live_set "$LIVE" phase=stalled iter="$i" stall="$stall" stall_limit="$STALL_LIMIT" \
+      passing="$(_passes)" total="$(_total)"
     exit 1
   fi
   if [ "$i" -ge "$HARD_MAX" ]; then

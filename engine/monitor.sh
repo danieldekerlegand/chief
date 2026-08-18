@@ -34,12 +34,24 @@
 # file, no fields, no jq — and its absence degrades to exactly the row this printed
 # before it existed.
 #
-# And when that last-activity age crosses CHIEF_STALE_SECONDS (default 900 = 15m) a
-# RUNNING tasklist is flagged at-risk: a red ⚠ glyph in place of the ● and an explicit
-# '⚠ stalled' on its detail line. That is the third bucket the operator needs — a run
-# is actively-progressing (● + a ticking heartbeat), paused on a usage limit (⏸ + a
-# retry ETA), or stalled (⚠) — and none of them can be mistaken for another. The flag
-# is derived purely from the record + the registry; the monitor never touches a run.
+# And when that last-activity age crosses the threshold THIS PHASE has earned
+# (CHIEF_STALE_SECONDS, default 900 = 15m, re-tuned per phase below) a RUNNING
+# tasklist is flagged at-risk: a red ⚠ glyph in place of the ● and an explicit
+# '⚠ stalled in <phase>' on its detail line — the state it is stuck in, not just the
+# silence, because the silence alone is a thing an operator learns to ignore. A
+# tasklist whose WORKER PID is gone takes a ✗ instead: absent is a different and worse
+# finding than quiet, and rendering the two identically is how a working run gets
+# killed. So: actively-progressing (● + a ticking heartbeat), paused on a usage limit
+# (⏸ + a retry ETA), stalled (⚠ + which state), or gone (✗) — and none of them can be
+# mistaken for another. All of it is derived from the record + the registry + a
+# kill -0; the monitor never touches a run.
+#
+# The one word that had to stop meaning two things is 'stall'. The agent loop's
+# counter — the iterations that advanced nothing, and the budget they are spent
+# against — is normal and is rendered in those words: 'no progress last iter (1/2)'.
+# The ⚠ flag is the other finding entirely: this run has not made a SOUND for longer
+# than its current phase is allowed. The first is a run working its way through a hard
+# story; the second is the one worth stopping.
 #
 # Invoked by the CLI:
 #   chief ps                 -> monitor.sh once
@@ -62,6 +74,84 @@ INTERVAL="${2:-2}"
 # 15m is well under the multi-hour silence this signal exists to catch.
 STALE_AFTER="${CHIEF_STALE_SECONDS:-900}"
 case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
+
+# QUIET-BY-DESIGN PHASES — the ONE list of record phases whose silence IS the
+# behaviour rather than a symptom of it. Data, in one place: exempting a state is
+# adding a word here, never a condition at a render site.
+#
+# MEASURED 2026-08-13. Ten tasklists across three repos rendered
+# `rate-limited-waiting for 16m · ⚠ stalled — no activity for 16m` — chief printing
+# the reason for the silence and then flagging the silence, on one line, from the same
+# live_note() call. Every driver was alive (S+) and every run resumed when the window
+# reopened. agent.sh's `_rate_limit_wait` publishes the phase and THEN sleeps, so the
+# record cannot tick: the heartbeat gap IS the wait, exactly, and flagging it is
+# flagging chief's own countdown.
+#
+# The hold phases after it are here for the same reason plus one more: they are
+# normally reached with a coarse state that already excludes them from this check, so
+# listing them costs nothing and stops a record whose `phase` outran its `state` from
+# reproducing the bug.
+#
+# NOT ON THIS LIST, deliberately:
+#   provider-waiting   the whole duration of an agent turn (agent.sh sets it right
+#                      before the provider CLI and holds it until the CLI returns).
+#                      Quiet is USUAL here, not by design — a provider that never
+#                      returns is a real hang. On 2026-08-17 two runs sat in this
+#                      phase having produced 0 bytes and never reached iteration 1;
+#                      an exemption would have hidden the only genuine anomalies of
+#                      that night. It wants a LONGER threshold, not silence.
+#   verifying · warmup a non-tty `cargo test` block-buffers its output, so a gate can
+#                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
+#                      test binary changed between samples). Indistinguishable from a
+#                      wedged one from out here, so: a longer threshold, not silence.
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-approval '
+
+# The CEILING on that exemption — quiet by design is not quiet forever. A usage window
+# that never reopens is exactly what an operator has to be told about, so the exemption
+# expires rather than making a state permanently unflaggable. The figure is the
+# engine's own bound on one wait rather than a round number: `_seconds_until_reset`
+# (agent.sh) caps a single limit sleep at 21600s, so past 6h + one default window the
+# sleep should long since have returned and the phase should have moved. The waits
+# actually observed on 2026-08-13 were 5–16m and cleared on their own.
+STALE_QUIET_AFTER="${CHIEF_STALE_QUIET_SECONDS:-23400}"      # 21600 + STALE_AFTER
+case "$STALE_QUIET_AFTER" in ''|*[!0-9]*) STALE_QUIET_AFTER=23400 ;; esac
+
+# PER-PHASE THRESHOLDS — `phase:seconds`, one entry per phase that was RE-TUNED
+# against a measurement. This is the second half of the same idea as the list above:
+# suppressing the flag outright would trade a false positive for a blind spot, so what
+# moves is the THRESHOLD, never the concept. 15m is alarming for an agent turn and
+# unremarkable for a usage window; both numbers can be right at once only if the
+# number is per-phase.
+#
+# A phase ABSENT from this table takes $STALE_AFTER, so the default is unchanged for
+# every phase nobody has evidence about. An entry is a claim, and a claim wants the
+# figure that was actually OBSERVED — not a round number that felt safe:
+#
+#   verifying · warmup   36m + one default window. A non-tty `cargo test`
+#                        block-buffers its output, so cuneiform:314 ran 36m (2160s)
+#                        quiet on 2026-08-13 while working — sampling the child PID
+#                        showed the test binary CHANGING between samples
+#                        (render_oauth_session_gate -> render_offline_walker). Neither
+#                        phase has a ticker behind it (only the agent turn does), so
+#                        the gate's silence IS the record's silence, and the flag has
+#                        to clear the longest gate actually seen plus one window.
+#   provider-waiting     the DEFAULT, stated here rather than left to fall through —
+#                        an explicit entry is what makes "we looked at this one" a
+#                        fact in the table rather than an omission. agent.sh's
+#                        `_beat_start` ticks the record every ${LIVE_BEAT_SECONDS:-15}s
+#                        for the whole provider call, so 15m of silence in this phase
+#                        is ~60 missed beats: the turn is not long, the ticker is
+#                        DEAD. Lengthening it would hide exactly the runs that need
+#                        the flag — on 2026-08-17 two sat in this phase having
+#                        produced 0 bytes and never reached iteration 1.
+#
+# Interpolated, not literal: re-tuning $STALE_AFTER (CHIEF_STALE_SECONDS) still moves
+# every phase that only ever agreed with the default.
+STALE_PHASE_SECONDS="
+  verifying:3060
+  warmup:3060
+  provider-waiting:$STALE_AFTER
+"
 
 # Colors only on a TTY (so piping `chief ps | …` stays clean).
 if [ -t 1 ]; then
@@ -151,11 +241,75 @@ live_phase_age() { # $1 name $2 stateroot -> "12m" ('' when unknown)
   elapsed "$ps"
 }
 
-# Is this heartbeat age past the staleness threshold? Unknown age (no record, no
-# heartbeat) is NEVER stale — absent evidence must not manufacture an alarm.
-is_stale() { # $1 age in seconds
+# How much silence THIS phase is allowed before it reads as stalled. The single place
+# the policy is consulted, so the row's at-risk decision and the note it renders
+# cannot drift apart — which is the whole defect: one half of the line said
+# `rate-limited-waiting`, the other half called the same silence a stall.
+#
+# Three tiers, most specific first, and every phase resolves through exactly one of
+# them: a measured per-phase entry, the quiet-by-design ceiling, then the default.
+# Re-tuning a phase is one line in the table; exempting one is one word in the list.
+stale_threshold_for_phase() { # $1 phase ('' = unknown) -> seconds
+  local p="${1:-}" e
+  # 1. an explicit entry — a number someone measured for THIS state. It wins over the
+  #    tier below on purpose: a figure with an observation behind it beats a bucket.
+  if [ -n "$p" ]; then
+    for e in $STALE_PHASE_SECONDS; do
+      case "$e" in "$p":*) printf '%s' "${e#*:}"; return 0 ;; esac
+    done
+  fi
+  # 2. quiet by design — the ceiling, so the exemption expires instead of being one.
+  case "$STALE_QUIET_PHASES" in
+    *" $p "*) printf '%s' "$STALE_QUIET_AFTER"; return 0 ;;
+  esac
+  # 3. everything else, including an unknown phase: the pre-existing behaviour.
+  printf '%s' "$STALE_AFTER"
+}
+
+# Is this heartbeat age past the staleness threshold FOR THIS PHASE? Unknown age (no
+# record, no heartbeat) is NEVER stale — absent evidence must not manufacture an alarm.
+# An unknown PHASE takes the default threshold, which is the pre-existing behaviour.
+is_stale() { # $1 age in seconds [$2 phase]
   case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$1" -ge "$STALE_AFTER" ]
+  [ "$1" -ge "$(stale_threshold_for_phase "${2:-}")" ]
+}
+
+# IS THE WORKER STILL THERE? A quiet run and an ABSENT one are different conditions
+# — the first wants patience, the second wants `chief reap` — and until now both
+# rendered as the same yellow note, which is how nine runs came to be killed on
+# 2026-08-17 on the assumption they were the same thing. Two files the scheduler
+# already maintains answer it without touching the run:
+#   <name>.pid      driver.sh writes it when it forks the worker, removes it in reap()
+#   <name>.status   run_worker TRUNCATES it at its top and writes the verdict on the
+#                   way out — so a non-empty status means the worker FINISHED and the
+#                   scheduler simply has not reaped it yet (one $POLL_SECONDS tick).
+#                   Finishing is not dying, and a row must not flash ✗ for a tick.
+# Unknown in either direction is NOT dead: no pid file, an unreadable one, a pid that
+# is alive — absent evidence must not manufacture an alarm, the same rule is_stale
+# follows. The pid is read raw, which is only meaningful because the caller has
+# already excluded runs from another PID NAMESPACE (render skips a foreign run before
+# it reaches its rows); a bare pid from another namespace means nothing here.
+worker_gone() { # $1 name $2 stateroot -> 0 when its worker died without a verdict
+  local pid
+  pid="$(cat "$2/parallel/$1.pid" 2>/dev/null || echo)"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null && return 1
+  [ -s "$2/parallel/$1.status" ] && return 1
+  return 0
+}
+
+# The at-risk detail line when there is NO record to read, or one with no phase in it.
+# live_note's line names the state that went quiet; here there is no state to name, so
+# this stays the generic sentence it has always been — one for each finding.
+# It still carries ELAPSED-IN-PHASE when the record has a `phase_since` but no phase
+# to put beside it: this is the second of the two render paths, and a duration that
+# appears in one view and not the other reproduces the very split this file keeps
+# closing — one half of the line saying more than the other half.
+flag_fallback() { # $1 dead-flag $2 age $3 elapsed-in-phase ('' unknown) -> the line
+  local held=""
+  [ -n "${3:-}" ] && held=" · in this state for $3"
+  if [ "${1:-0}" = 1 ]; then printf '✗ dead — its worker pid is gone and left no verdict%s · chief reap' "$held"
+  else printf '⚠ stalled — no activity for %s%s' "$(dur "${2:-}")" "$held"; fi
 }
 
 # The fine-grained detail line: what this tasklist is doing RIGHT NOW (the record's
@@ -164,21 +318,47 @@ is_stale() { # $1 age in seconds
 # last activity. Empty when there is no record or no phase, which is what makes the
 # fallback automatic. With $3=stale the trailing age becomes the at-risk flag instead.
 live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to add)
-  local lf note phase story iter stall age pa
+  local lf note phase story iter stall slimit age pa
   lf="$(live_file "$1" "$2")"
   [ -f "$lf" ] || return 0
   phase="$(live_get "$lf" phase)"
   [ -n "$phase" ] || return 0
   story="$(live_get "$lf" story)"; iter="$(live_get "$lf" iter)"
-  stall="$(live_get "$lf" stall)"; age="$(live_age "$lf")"
+  stall="$(live_get "$lf" stall)"; slimit="$(live_get "$lf" stall_limit)"
+  age="$(live_age "$lf")"
   pa="$(live_phase_age "$1" "$2")"
   note="$phase"
   [ -n "$pa" ] && note="$note for $pa"
   [ -n "$story" ] && note="$note · $story"
   case "$iter"  in ''|0|*[!0-9]*) ;; *) note="$note · iter $iter"   ;; esac
-  case "$stall" in ''|0|*[!0-9]*) ;; *) note="$note · stall $stall" ;; esac
-  if [ "${3:-}" = stale ]; then
-    note="$note · ⚠ stalled — no activity for $(dur "${age:-}")"
+  # NO PROGRESS LAST ITERATION vs NOT DOING ANYTHING — two findings an operator acts
+  # on differently, and until now both wore the word 'stall'. This is the first: the
+  # agent loop's budget counter, a fact about the boundary that has already passed. It
+  # is NORMAL (an iteration that only re-read the tree spends one) and the run is
+  # working while it shows. The second is the ⚠ flag below — silence past what this
+  # phase is allowed — and that is the one worth stopping. The budget is rendered with
+  # the count when the record carries it: '2/2' is one iteration from the end of the
+  # run and '1/5' is a shrug, and 'stall 2' could not tell them apart.
+  case "$stall" in ''|0|*[!0-9]*) ;; *)
+    case "$slimit" in
+      ''|0|*[!0-9]*) note="$note · no progress last iter ($stall)" ;;
+      *)             note="$note · no progress last iter ($stall/$slimit)" ;;
+    esac ;;
+  esac
+  # The caller asks for the flag; this asks the POLICY whether this phase has earned
+  # it. Same predicate the row's glyph uses, so the two halves of the line always
+  # agree — and a caller that has not consulted the policy cannot reintroduce
+  # `rate-limited-waiting for 16m · ⚠ stalled — no activity for 16m`.
+  # GONE outranks QUIET. Checked first and independently of $3, because a worker that
+  # died is worth saying however fresh its last heartbeat was — a run killed ten
+  # seconds ago is not stale yet and is still never coming back.
+  if [ "$(live_get "$lf" state)" = running ] && worker_gone "$1" "$2"; then
+    note="$note · ✗ dead — its worker pid is gone and left no verdict · chief reap"
+  elif [ "${3:-}" = stale ] && is_stale "$age" "$phase"; then
+    # The flag carries the DIAGNOSIS, not just the silence: which state it was stuck
+    # in, and the limit that state has earned. 'stalled in rate-limited-waiting …
+    # past its 6h30m limit' is actionable; 'no activity for 2h' is a thing to ignore.
+    note="$note · ⚠ stalled in $phase — no activity for $(dur "${age:-}"), past its $(dur "$(stale_threshold_for_phase "$phase")") limit"
   else
     [ -n "$age" ] && note="$note · $(dur "$age") ago"
   fi
@@ -316,6 +496,34 @@ op_note() {   # $1 name  $2 stateroot -> one line
   age="$(live_age "$(live_file "$n" "$2")")"
   [ -n "$age" ] && note="$note · $(dur "$age") ago"
   printf '%s' "$note"
+}
+
+# The two HUMAN-VERDICT holds' detail lines — the plan-review park and the overlap-zone
+# park. Unlike the usage-limit and operator holds there is no per-tasklist ETA or budget
+# to read: the whole answer is WHICH person has not looked yet, and how to unblock it.
+# They were written inline in render()'s row loop; they live here because both of them
+# were missing the one thing every other row already had — HOW LONG the hold has been
+# held. 'awaiting review' says nothing an operator can act on; 'awaiting review · held
+# 3h12m' is the difference between a checkpoint working and a checkpoint forgotten, and
+# it is the same `phase_since` reading limit_note and op_note already print.
+# Prints the whole ↳ line (both arms are a hold, so both keep the row's ⏸ colouring).
+hold_note() { # $1 name $2 stateroot $3 coarse state -> one full '↳' line
+  local pa held zreq zz zf
+  pa="$(live_phase_age "$1" "$2")"; held="${pa:+ · held $pa}"
+  if [ "$3" = awaiting-review ]; then
+    printf '       %s↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept%s · approve it, then: chief run%s\n' \
+      "$CYN" "$held" "$RST"
+    return 0
+  fi
+  # Reading the request the driver wrote: the interesting part is which domain stopped
+  # it, and that is the whole answer to "why is a green branch not merged". Degrades to
+  # the bare fact when the request (or jq) is unavailable.
+  zreq="$2/parallel/$1.zone-request.json"
+  zz="$(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$zreq" 2>/dev/null || echo)"
+  zf="$(jq -r '(.files // []) | length' "$zreq" 2>/dev/null || echo)"
+  printf '       %s↳ awaiting approval: rebased + verified GREEN, held at %s%s%s · approve: chief approve %s%s\n' \
+    "$MAG" "${zz:-a review-policy overlap zone}" \
+    "$([ -n "$zf" ] && printf ' (%s changed file(s))' "$zf")" "$held" "$1" "$RST"
 }
 
 # The run-level HOLDS banner: what is stopping this repo from launching anything,
@@ -496,23 +704,35 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale rn zreq zz zf bo
+    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
+      lf="$(live_file "$n" "$state")"
       # The record also carries the coarse state (set_state writes both), so a row
       # survives a missing/half-written <name>.state file.
-      [ -n "$st" ] || st="$(live_get "$(live_file "$n" "$state")" state)"
+      [ -n "$st" ] || st="$(live_get "$lf" state)"
       [ -n "$st" ] || st=unknown
-      # At-risk = scheduler says RUNNING but the record stopped ticking. A paused
-      # tasklist is deliberately excluded: it has its own glyph and an ETA, and a
-      # long quiet wait is what it is SUPPOSED to be doing.
-      age="$(live_age "$(live_file "$n" "$state")")"
+      # At-risk = scheduler says RUNNING but the record stopped ticking FOR LONGER
+      # THAN ITS PHASE ALLOWS. A paused tasklist is deliberately excluded: it has its
+      # own glyph and an ETA, and a long quiet wait is what it is SUPPOSED to be
+      # doing. The record's phase says the same thing one level down — a run asleep on
+      # a usage limit is quiet on purpose while the scheduler still calls it running —
+      # so the threshold is per-phase (STALE_QUIET_PHASES above), not one number.
+      age="$(live_age "$lf")"
+      lph="$(live_get "$lf" phase)"
       stale=0
-      [ "$st" = running ] && is_stale "$age" && stale=1
+      [ "$st" = running ] && is_stale "$age" "$lph" && stale=1
+      dead=0                       # …and ABSENT is not the same finding as quiet
+      [ "$st" = running ] && worker_gone "$n" "$state" && dead=1
       glyph="$(glyph_for "$st")"; gl="${glyph%%|*}"; lbl="${glyph##*|}"
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
       [ "$stale" = 1 ] && gl="${RED}⚠${RST}"
+      # …and the LABEL moves with the glyph. A gone row that still reads `running` in
+      # the one column an operator scans is the 2026-08-17 mistake in miniature: the
+      # scheduler's word for it is stale by definition (nothing survives to update it),
+      # so the row says what is TRUE, not what was last written down.
+      [ "$dead" = 1 ] && { gl="${RED}✗${RST}"; lbl=gone; }   # outranks ⚠: gone is not slow
       br="$(branch_of "$n" "$tasks")"
       prog="$(stories "$n" "$wt" "$staterel" "$state" "$tasks")"
       [ "$prog" = '?/?' ] && prog="$(live_prog "$n" "$state")"
@@ -526,31 +746,15 @@ render() {
         # record's phase here is always 'operator-paused', which would only repeat
         # the word without saying what was kept or how to pick it back up.
         printf '       %s↳ %s%s\n' "$YEL" "$(op_note "$n" "$state")" "$RST"
-      elif [ "$st" = awaiting-review ]; then
-        # Inline rather than a note function: unlike the usage-limit and operator
-        # holds there is no per-tasklist state to read (no reset ETA, no flag file) —
-        # the whole answer is "a person has not approved the plan yet", plus how to
-        # unblock it. Same ⏸ colour as the row.
-        printf '       %s↳ %s%s\n' "$CYN" \
-          "awaiting review: a human has not approved its plan · branch + worktree + plan kept · approve it, then: chief run" "$RST"
-      elif [ "$st" = awaiting-approval ]; then
-        # Inline like the row above it, but reading the request the driver wrote:
-        # unlike the other three holds the interesting part is WHICH domain stopped
-        # it, and that is the whole answer to "why is a green branch not merged".
-        # Degrades to the bare fact when the request (or jq) is unavailable.
-        zreq="$state/parallel/$n.zone-request.json"
-        zz="$(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$zreq" 2>/dev/null || echo)"
-        zf="$(jq -r '(.files // []) | length' "$zreq" 2>/dev/null || echo)"
-        printf '       %s↳ awaiting approval: rebased + verified GREEN, held at %s%s · approve: chief approve %s%s\n' \
-          "$MAG" "${zz:-a review-policy overlap zone}" \
-          "$([ -n "$zf" ] && printf ' (%s changed file(s))' "$zf")" "$n" "$RST"
+      elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-approval ]; then
+        hold_note "$n" "$state" "$st"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)
         # above the note the agent last wrote. Both are optional; neither line prints
         # empty. A stale row says so in words, in red, so the flag survives a grep.
-        if [ "$stale" = 1 ]; then
+        if [ "$stale" = 1 ] || [ "$dead" = 1 ]; then
           live="$(live_note "$n" "$state" stale)"
-          [ -n "$live" ] || live="⚠ stalled — no activity for $(dur "$age")"
+          [ -n "$live" ] || live="$(flag_fallback "$dead" "$age" "$(live_phase_age "$n" "$state")")"
           printf '       %s↳ %s%s\n' "$RED" "$live" "$RST"
         else
           live="$(live_note "$n" "$state")"
@@ -578,7 +782,14 @@ render() {
   return 0
 }
 
-if [ "$MODE" = watch ]; then
+# `lib` renders NOTHING. It is the seam a test uses to source this file and drive the
+# rendering helpers (stale_threshold_for_phase · is_stale · live_note) directly against
+# a synthetic record — which is how "which phases are exempt from the stall flag" stays
+# a checkable table instead of a reading of the shell. Unreachable from the CLI:
+# bin/chief only ever passes `once` (chief ps) or `watch` (chief monitor).
+if [ "$MODE" = lib ]; then
+  :
+elif [ "$MODE" = watch ]; then
   trap 'printf "\033[?25h"' EXIT                  # always restore the cursor
   trap 'exit 0' INT TERM                          # clean exit on Ctrl-C (EXIT trap runs)
   printf '\033[?25l'                              # hide cursor while watching

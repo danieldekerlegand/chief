@@ -226,6 +226,11 @@ mkrepo "$WORK/bad" evbad "US-1" 'echo "verify: deliberately red"; exit 1'
 # DOES take a turn (it reports one, because it really happened and really cost tokens),
 # but that turn has nothing left to do and announces no story: story.passed appears ONCE
 # across both attempts — a subscriber must never see a story announced twice.
+# The retry's launched is followed by `tasklist.re-engaged`: the second attempt picks up
+# a branch that already passes every story and whose verify failed, which is not a fresh
+# start and says so (engine/driver.sh mark_reengage). It is the durable half of that
+# statement — the live phase is gone the moment the turn begins, and "why did this branch
+# run again?" is a question asked afterwards.
 PATH="$WORK/fakebin:$PATH" RETRY_MAX=2 "$CHIEF" run --headless -p 1 >"$WORK/run2.log" 2>&1 && rc2=0 || rc2=$?
 [ "$rc2" = 4 ] || { tail -30 "$WORK/run2.log" >&2; fail "a verify-failed headless run exited $rc2, want 4 (HL_RC_VERIFY)"; }
 
@@ -236,7 +241,7 @@ n2="$(validate "$LOG2" "run 2")"
 echo "--- $(basename "$LOG2") ($n2 events) ---"; cat "$LOG2"
 
 got="$(seq_of "$LOG2")"
-want="run.started tasklist.launched story.passed agent.turn tasklist.verify-failed tasklist.launched agent.turn tasklist.verify-failed run.finished"
+want="run.started tasklist.launched story.passed agent.turn tasklist.verify-failed tasklist.launched tasklist.re-engaged agent.turn tasklist.verify-failed run.finished"
 [ "$got" = "$want" ] || fail "verify-failed sequence
   want: $want
   got:  $got"

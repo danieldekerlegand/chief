@@ -23,9 +23,13 @@ my-api  (pid 12345 · -p3 · claude · 12m · →main)
        ↳ claude-waiting for 40s · US-3 · iter 5 · 12s ago
        ↳ US-2 done: added refresh-token rotation; see api/auth/*.ts
    ⚠ search                 running   1/6     chief/search
-       ↳ verifying for 41m · US-2 · iter 3 · ⚠ stalled — no activity for 38m
+       ↳ verifying for 58m · US-2 · iter 3 · ⚠ stalled in verifying — no activity for 55m, past its 51m limit
    ⏸ billing                paused    3/5     chief/billing
        ↳ paused: usage limit — retry at 15:10 (28m) · re-dispatch 1/3 · paused 32m · 32m ago
+   ⏸ checkout               in-review 0/4     chief/checkout
+       ↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept · held 3h10m · approve it, then: chief run
+   ✗ importer               gone      2/5     chief/importer
+       ↳ agent-turn for 4m · US-3 · iter 2 · ✗ dead — its worker pid is gone and left no verdict · chief reap
    ○ web                    pending   0/3     chief/web
 
 web  (pid 12346 · -p2 · claude · 3m · →main)
@@ -49,10 +53,11 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 
 | Field | Shown as | Written by |
 |---|---|---|
-| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `claude-waiting`, `writing`, `rate-limited-waiting`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
+| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
 | `phase_since` | `verifying for 41m` — elapsed **in this phase** | bumped only when the phase actually changes |
 | `story` / `iter` | `US-3 · iter 5` | the agent loop, each iteration |
-| `stall` / `waits` | `stall 2` | the agent loop's no-progress and limit-wait counters |
+| `stall` / `stall_limit` | `no progress last iter (1/2)` | the agent loop's no-progress counter and the budget it is spent against |
+| `waits` | the limit-wait count | the agent loop's usage-limit sleeps |
 | `passing` / `total` | the progress column, when no `prd.json` is readable | agent + driver |
 | `retry_at` | the retry ETA on a paused row | the driver's usage-limit self-heal |
 | `heartbeat` | `12s ago` — time since the run last did *anything* | **every** write; an in-turn ticker keeps it moving through a long `claude` call |
@@ -62,12 +67,74 @@ column:
 
 - **`●` actively progressing** — a phase and a recent heartbeat.
 - **`⚠` stalled / at-risk** — the scheduler still says `running`, but the heartbeat
-  is older than **`CHIEF_STALE_SECONDS`** (default **900**, i.e. 15 min). The row
-  says so in words (`⚠ stalled — no activity for 38m`), so `chief ps | grep stalled`
-  works in a script.
+  is older than **the threshold that phase has earned** (see below). The row says so
+  in words *and names the state it is stuck in* — `⚠ stalled in verifying — no
+  activity for 58m, past its 51m limit` — so `chief ps | grep stalled` works in a
+  script and the line carries the diagnosis rather than just the silence.
+- **`✗` gone** — the scheduler says `running`, but the tasklist's worker **pid is
+  dead** and it left no verdict in `<name>.status`. That is a different and worse
+  finding than a quiet run — quiet wants patience, gone wants `chief reap` — and the
+  two never render alike: the **label reads `gone`** too, not the `running` the
+  scheduler last wrote down (nothing survived to update it). A worker that *did* write
+  its verdict has simply finished and is waiting to be reaped; it is not flagged.
 - **`⏸` paused** — quiet *on purpose*, so it is never flagged stalled no matter how
   old the heartbeat is. Two different things pause a tasklist, and the next section
   is about telling them apart.
+
+### How long it has been in that state — on every row, not just a flagged one
+
+Every `↳` line carries **elapsed-in-phase**, in whichever words that arm uses:
+`verifying for 58m`, `paused 32m`, `parked 1h01m`, `held 3h10m`. It is the single
+field that separates *forty seconds into a turn* from *forty minutes into nothing* —
+and without it a run that is merely slow is indistinguishable from one that is stuck,
+which is how seven working runs came to be killed as stalled on 2026-08-17.
+
+It comes from `phase_since`, which moves **only when the phase actually changes** — so
+a phase nobody has re-stamped reads as long-held, where a duration measured from the
+render clock or from the heartbeat would show every row as instantaneous. That is also
+why it is not the same number as the trailing `12s ago`: the heartbeat says when the
+run last did *anything*, the phase age says how long it has been doing *this*. A row
+can legitimately read `provider-waiting for 40m · 12s ago` — a long turn, ticking.
+
+### "No progress last iteration" is not "stalled"
+
+Two different findings used to share the word *stall*, and only one of them is worth
+acting on:
+
+- **`no progress last iter (1/2)`** — the agent loop's own counter. An iteration ended
+  without advancing a passing story or `HEAD`, which is *normal*: a story that needed
+  reading before writing spends one. The number in parentheses is the budget
+  (`$STALL_LIMIT`), so `2/2` is one iteration from the end of the run and `1/5` is a
+  shrug. The run is **working** while this shows.
+- **`⚠ stalled in <phase> — no activity for …`** — this run has not made a *sound* for
+  longer than its current phase is allowed. That is the one worth stopping.
+
+`stalled` is also a **phase**, and it means only what it says: chief is *between*
+iterations, having just counted a no-progress one — or the loop has given up. It is
+never the phase of a turn that is running. The next iteration's first write moves off
+it, and the two stretches that used to inherit it now have their own words:
+`integrating` (the iteration-boundary hook re-integrating a base that sibling merges
+moved — minutes of real work) and `re-engaging` (the driver picking a branch back up
+that already claims to be done, because its verify failed post-rebase, its pass-flags
+were a misfire, or it will not rebase). On 2026-08-17 a tasklist read `stalled` for
+~25 minutes while it was doing exactly the first of those, and another read it with a
+2-second heartbeat while it was working.
+
+### One threshold could not be right for every phase
+
+15 minutes is alarming for an agent turn and unremarkable for a usage window, so the
+staleness threshold is **per-phase** (`engine/monitor.sh`). A phase nobody has
+re-tuned takes the default, unchanged:
+
+| Phase | Silence allowed | Why that number |
+|---|---|---|
+| *(anything not listed)* | `CHIEF_STALE_SECONDS`, default **900** (15m) | an agent turn ticks the record every ~15s, so 15m of silence is ~60 missed beats |
+| `provider-waiting` | **900** — the default, *deliberately* | quiet for most of a healthy turn, but a provider that never returns is a real hang; a longer window would hide a run that produced 0 bytes and never reached iteration 1 |
+| `verifying` · `warmup` | **3060** (51m) | a non-tty `cargo test` block-buffers its output — one observed gate ran 36m quiet while genuinely working — plus one default window |
+| `rate-limited-waiting` and the other holds | `CHIEF_STALE_QUIET_SECONDS`, default **23400** (6h30m) | quiet *is* the behaviour; the figure is the engine's own 6h cap on a single limit sleep plus one window, so the exemption **expires** rather than making the state unflaggable |
+
+A quiet-by-design phase past that ceiling still flags — a usage window that never
+reopens is exactly what you need told.
 
 ## Two pauses, one glyph — which one is holding the run?
 
@@ -107,6 +174,9 @@ no ticker, so a `npm ci` + `cargo build` verify can go quiet for minutes:
 ```sh
 CHIEF_STALE_SECONDS=2700 chief monitor    # 45 min before a run reads as stalled
 ```
+
+`CHIEF_STALE_SECONDS` moves the default *and* every phase that only ever agreed with
+it; `CHIEF_STALE_QUIET_SECONDS` moves the ceiling on the quiet-by-design holds.
 
 Everything here is **optional in every direction**: a tasklist with no record (an
 older engine, a run that hasn't started) simply renders the row it always did — no

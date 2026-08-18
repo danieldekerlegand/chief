@@ -2140,6 +2140,25 @@ worker_park() {
   return 0
 }
 
+# mark_reengage REASON — the pickup path is RE-ENGAGING a branch, and says so.
+#
+# Three ways a run picks up a branch that already claims to be finished: its verify
+# failed post-rebase (the `persisted for re-engagement` path below), its pass-flags
+# were a misfire with no commits behind them, or it will not rebase onto the base. All
+# three send the agent back in, and none of them is a fresh start — but the display had
+# no word for it, so the row read as whatever the PREVIOUS attempt left behind while
+# the pickup rebuilt the worktree and re-integrated the base. That stretch is minutes,
+# and on 2026-08-17 it was read as a hung run and killed.
+#
+# Two surfaces, written together: the live phase an operator sees while it happens, and
+# an event that OUTLIVES it — the phase is gone the moment the agent turn starts, and
+# "why was this branch run again?" is a question asked afterwards.
+# $live/$name are the caller's, by dynamic scope (the same idiom as worker_park).
+mark_reengage() {
+  live_set "$live" phase=re-engaging story=
+  event_emit tasklist.re-engaged name="$name" state=running detail="$1"
+}
+
 # ---------------------------------------------------------------------------
 # Worker — one per tasklist. Runs the agent loop in an isolated worktree, then
 # (serialized) rebases → verifies → merges. Writes $STATE/<name>.status + .log.
@@ -2199,10 +2218,19 @@ run_worker() {
         wt_git add "$wt" -b "$branch" "$work_base" >/dev/null 2>&1 || { echo "WORKTREE-FAILED" > "$STATE/$name.status"; echo "!! could not create worktree"; return 0; }
       else
         wt_git add "$wt" "$branch" >/dev/null 2>&1 || { echo "WORKTREE-FAILED" > "$STATE/$name.status"; echo "!! could not attach worktree to $branch"; return 0; }
-        if   [ "$left" = "0" ] && [ -n "$vfail" ]; then echo ">> $name: branch $branch passes all stories but FAILED verify last run — re-engaging the agent to fix it"
-        elif [ "$left" = "0" ] && [ -z "$bhw" ];   then echo ">> $name: branch $branch marks all stories done but has NO commits vs $work_base — re-running the agent (ignoring the false all-pass)"
-        elif [ "$left" = "0" ];                    then echo ">> $name: all stories already pass on $branch — skip agent, go to verify+merge"; skip_agent=1
-        else echo ">> $name: RESUMING $branch ($left stor$([ "$left" = 1 ] && echo y || echo ies) left)"; fi
+        # The two RE-ENGAGE arms each say it twice: once to the log for a human, once
+        # into the record + event stream for everything else (mark_reengage above).
+        if [ "$left" = "0" ] && [ -n "$vfail" ]; then
+          echo ">> $name: branch $branch passes all stories but FAILED verify last run — re-engaging the agent to fix it"
+          mark_reengage "every story passes but the branch failed verify post-rebase last run ($SNAP_REL/$name.verify-failed.log)"
+        elif [ "$left" = "0" ] && [ -z "$bhw" ]; then
+          echo ">> $name: branch $branch marks all stories done but has NO commits vs $work_base — re-running the agent (ignoring the false all-pass)"
+          mark_reengage "every story is marked done with no commits vs $work_base — the pass-flags are a misfire"
+        elif [ "$left" = "0" ]; then
+          echo ">> $name: all stories already pass on $branch — skip agent, go to verify+merge"; skip_agent=1
+        else
+          echo ">> $name: RESUMING $branch ($left stor$([ "$left" = 1 ] && echo y || echo ies) left)"
+        fi
         # PICKUP FRESHNESS (see integrate_base): a branch from a prior run starts
         # this run as far behind base as it stopped, so the merge phase inherits a
         # whole run's drift on top of whatever this run adds. Integrate it NOW.
@@ -2214,6 +2242,7 @@ run_worker() {
             # agent instead — integrating the base is work, and it has the context.
             skip_agent=0
             echo ">> $name: all stories pass but the branch will not rebase onto $work_base — re-engaging the agent to integrate the base instead of walking into a known merge-phase conflict"
+            mark_reengage "every story passes but the branch will not rebase onto $work_base"
           fi
         fi
       fi
