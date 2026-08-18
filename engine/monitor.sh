@@ -294,9 +294,15 @@ worker_gone() { # $1 name $2 stateroot -> 0 when its worker died without a verdi
 # The at-risk detail line when there is NO record to read, or one with no phase in it.
 # live_note's line names the state that went quiet; here there is no state to name, so
 # this stays the generic sentence it has always been — one for each finding.
-flag_fallback() { # $1 dead-flag $2 age -> the line a record-less at-risk row shows
-  if [ "${1:-0}" = 1 ]; then printf '✗ dead — its worker pid is gone and left no verdict · chief reap'
-  else printf '⚠ stalled — no activity for %s' "$(dur "${2:-}")"; fi
+# It still carries ELAPSED-IN-PHASE when the record has a `phase_since` but no phase
+# to put beside it: this is the second of the two render paths, and a duration that
+# appears in one view and not the other reproduces the very split this file keeps
+# closing — one half of the line saying more than the other half.
+flag_fallback() { # $1 dead-flag $2 age $3 elapsed-in-phase ('' unknown) -> the line
+  local held=""
+  [ -n "${3:-}" ] && held=" · in this state for $3"
+  if [ "${1:-0}" = 1 ]; then printf '✗ dead — its worker pid is gone and left no verdict%s · chief reap' "$held"
+  else printf '⚠ stalled — no activity for %s%s' "$(dur "${2:-}")" "$held"; fi
 }
 
 # The fine-grained detail line: what this tasklist is doing RIGHT NOW (the record's
@@ -469,6 +475,34 @@ op_note() {   # $1 name  $2 stateroot -> one line
   age="$(live_age "$(live_file "$n" "$2")")"
   [ -n "$age" ] && note="$note · $(dur "$age") ago"
   printf '%s' "$note"
+}
+
+# The two HUMAN-VERDICT holds' detail lines — the plan-review park and the overlap-zone
+# park. Unlike the usage-limit and operator holds there is no per-tasklist ETA or budget
+# to read: the whole answer is WHICH person has not looked yet, and how to unblock it.
+# They were written inline in render()'s row loop; they live here because both of them
+# were missing the one thing every other row already had — HOW LONG the hold has been
+# held. 'awaiting review' says nothing an operator can act on; 'awaiting review · held
+# 3h12m' is the difference between a checkpoint working and a checkpoint forgotten, and
+# it is the same `phase_since` reading limit_note and op_note already print.
+# Prints the whole ↳ line (both arms are a hold, so both keep the row's ⏸ colouring).
+hold_note() { # $1 name $2 stateroot $3 coarse state -> one full '↳' line
+  local pa held zreq zz zf
+  pa="$(live_phase_age "$1" "$2")"; held="${pa:+ · held $pa}"
+  if [ "$3" = awaiting-review ]; then
+    printf '       %s↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept%s · approve it, then: chief run%s\n' \
+      "$CYN" "$held" "$RST"
+    return 0
+  fi
+  # Reading the request the driver wrote: the interesting part is which domain stopped
+  # it, and that is the whole answer to "why is a green branch not merged". Degrades to
+  # the bare fact when the request (or jq) is unavailable.
+  zreq="$2/parallel/$1.zone-request.json"
+  zz="$(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$zreq" 2>/dev/null || echo)"
+  zf="$(jq -r '(.files // []) | length' "$zreq" 2>/dev/null || echo)"
+  printf '       %s↳ awaiting approval: rebased + verified GREEN, held at %s%s%s · approve: chief approve %s%s\n' \
+    "$MAG" "${zz:-a review-policy overlap zone}" \
+    "$([ -n "$zf" ] && printf ' (%s changed file(s))' "$zf")" "$held" "$1" "$RST"
 }
 
 # The run-level HOLDS banner: what is stopping this repo from launching anything,
@@ -649,7 +683,7 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale dead rn zreq zz zf bo lf lph
+    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
       lf="$(live_file "$n" "$state")"
@@ -673,7 +707,11 @@ render() {
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
       [ "$stale" = 1 ] && gl="${RED}⚠${RST}"
-      [ "$dead" = 1 ] && gl="${RED}✗${RST}"      # outranks ⚠: gone is not slow
+      # …and the LABEL moves with the glyph. A gone row that still reads `running` in
+      # the one column an operator scans is the 2026-08-17 mistake in miniature: the
+      # scheduler's word for it is stale by definition (nothing survives to update it),
+      # so the row says what is TRUE, not what was last written down.
+      [ "$dead" = 1 ] && { gl="${RED}✗${RST}"; lbl=gone; }   # outranks ⚠: gone is not slow
       br="$(branch_of "$n" "$tasks")"
       prog="$(stories "$n" "$wt" "$staterel" "$state" "$tasks")"
       [ "$prog" = '?/?' ] && prog="$(live_prog "$n" "$state")"
@@ -687,31 +725,15 @@ render() {
         # record's phase here is always 'operator-paused', which would only repeat
         # the word without saying what was kept or how to pick it back up.
         printf '       %s↳ %s%s\n' "$YEL" "$(op_note "$n" "$state")" "$RST"
-      elif [ "$st" = awaiting-review ]; then
-        # Inline rather than a note function: unlike the usage-limit and operator
-        # holds there is no per-tasklist state to read (no reset ETA, no flag file) —
-        # the whole answer is "a person has not approved the plan yet", plus how to
-        # unblock it. Same ⏸ colour as the row.
-        printf '       %s↳ %s%s\n' "$CYN" \
-          "awaiting review: a human has not approved its plan · branch + worktree + plan kept · approve it, then: chief run" "$RST"
-      elif [ "$st" = awaiting-approval ]; then
-        # Inline like the row above it, but reading the request the driver wrote:
-        # unlike the other three holds the interesting part is WHICH domain stopped
-        # it, and that is the whole answer to "why is a green branch not merged".
-        # Degrades to the bare fact when the request (or jq) is unavailable.
-        zreq="$state/parallel/$n.zone-request.json"
-        zz="$(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$zreq" 2>/dev/null || echo)"
-        zf="$(jq -r '(.files // []) | length' "$zreq" 2>/dev/null || echo)"
-        printf '       %s↳ awaiting approval: rebased + verified GREEN, held at %s%s · approve: chief approve %s%s\n' \
-          "$MAG" "${zz:-a review-policy overlap zone}" \
-          "$([ -n "$zf" ] && printf ' (%s changed file(s))' "$zf")" "$n" "$RST"
+      elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-approval ]; then
+        hold_note "$n" "$state" "$st"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)
         # above the note the agent last wrote. Both are optional; neither line prints
         # empty. A stale row says so in words, in red, so the flag survives a grep.
         if [ "$stale" = 1 ] || [ "$dead" = 1 ]; then
           live="$(live_note "$n" "$state" stale)"
-          [ -n "$live" ] || live="$(flag_fallback "$dead" "$age")"
+          [ -n "$live" ] || live="$(flag_fallback "$dead" "$age" "$(live_phase_age "$n" "$state")")"
           printf '       %s↳ %s%s\n' "$RED" "$live" "$RST"
         else
           live="$(live_note "$n" "$state")"

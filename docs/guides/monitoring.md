@@ -26,6 +26,10 @@ my-api  (pid 12345 · -p3 · claude · 12m · →main)
        ↳ verifying for 58m · US-2 · iter 3 · ⚠ stalled in verifying — no activity for 55m, past its 51m limit
    ⏸ billing                paused    3/5     chief/billing
        ↳ paused: usage limit — retry at 15:10 (28m) · re-dispatch 1/3 · paused 32m · 32m ago
+   ⏸ checkout               in-review 0/4     chief/checkout
+       ↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept · held 3h10m · approve it, then: chief run
+   ✗ importer               gone      2/5     chief/importer
+       ↳ agent-turn for 4m · US-3 · iter 2 · ✗ dead — its worker pid is gone and left no verdict · chief reap
    ○ web                    pending   0/3     chief/web
 
 web  (pid 12346 · -p2 · claude · 3m · →main)
@@ -69,11 +73,27 @@ column:
 - **`✗` gone** — the scheduler says `running`, but the tasklist's worker **pid is
   dead** and it left no verdict in `<name>.status`. That is a different and worse
   finding than a quiet run — quiet wants patience, gone wants `chief reap` — and the
-  two never render alike. A worker that *did* write its verdict has simply finished
-  and is waiting to be reaped; it is not flagged.
+  two never render alike: the **label reads `gone`** too, not the `running` the
+  scheduler last wrote down (nothing survived to update it). A worker that *did* write
+  its verdict has simply finished and is waiting to be reaped; it is not flagged.
 - **`⏸` paused** — quiet *on purpose*, so it is never flagged stalled no matter how
   old the heartbeat is. Two different things pause a tasklist, and the next section
   is about telling them apart.
+
+### How long it has been in that state — on every row, not just a flagged one
+
+Every `↳` line carries **elapsed-in-phase**, in whichever words that arm uses:
+`verifying for 58m`, `paused 32m`, `parked 1h01m`, `held 3h10m`. It is the single
+field that separates *forty seconds into a turn* from *forty minutes into nothing* —
+and without it a run that is merely slow is indistinguishable from one that is stuck,
+which is how seven working runs came to be killed as stalled on 2026-08-17.
+
+It comes from `phase_since`, which moves **only when the phase actually changes** — so
+a phase nobody has re-stamped reads as long-held, where a duration measured from the
+render clock or from the heartbeat would show every row as instantaneous. That is also
+why it is not the same number as the trailing `12s ago`: the heartbeat says when the
+run last did *anything*, the phase age says how long it has been doing *this*. A row
+can legitimately read `provider-waiting for 40m · 12s ago` — a long turn, ticking.
 
 ### One threshold could not be right for every phase
 

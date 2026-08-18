@@ -51,7 +51,8 @@
         "It renders in both call sites (`engine/monitor.sh` ~175 and ~519), which US-1 already notes diverge — a duration that appears in one view and not the other reproduces the current problem for whichever half an operator happens to be reading.",
         "A run whose driver pid is GONE is visually distinct from one that is merely quiet. US-2 records this as landing here or as an explicit follow-up; either way the two must not render identically, because on 2026-08-17 nine runs were killed on the assumption they were the same thing."
       ],
-      "notes": null
+      "notes": "test/stall-flag.sh: PASS, 6 parts — part 6 drives all five row arms (live_note · limit_note · op_note · hold_note x2) and asserts each shows its OWN elapsed-in-phase (40m / 25m / 1h01m / 3h10m / 13m, no two alike) in chief ps AND chief monitor, on a FRESH heartbeat (rows read `for 40m ... 1s ago`) so the duration provably comes from phase_since and not the render clock; part 5 additionally pins the `gone` row LABEL. 3 negative controls each FAIL as expected: gone-label reverted, hold_note elapsed removed, live_phase_age re-pointed at heartbeat. .chief/verify.sh: OK (allowing merge), exit 0 — quality ratchet ok (function_length_max 177->180 delta +3 tol 15, max_nesting_depth 5->5, single_use_functions 13->14 tol 2). test/liveliness.sh, test/monitor.sh, test/limitmonitor.sh, test/overlap-zones.sh, test/plan-review.sh, test/doc-sync.sh: green.",
+      "passes": true
     },
     {
       "id": "US-4",

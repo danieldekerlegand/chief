@@ -28,6 +28,11 @@
 #   5. BOTH VIEWS  — `chief ps` and `chief monitor`, against a synthetic registry.
 #                    The two render the flag differently (live_note … stale vs a bare
 #                    fallback string), so a fix landing in one is not a fix.
+#   6. ELAPSED-IN-PHASE — and the other half of the same morning: seven of the nine
+#                    runs killed on 2026-08-17 were working, and looked stalled only
+#                    because the phase never changed and nothing said how long it had
+#                    been held. Every row arm carries the duration, in both views, from
+#                    `phase_since` and never from the render clock.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -265,6 +270,11 @@ check() {  # LABEL OUTPUT
   case "$r" in *'✗'*) ;; *) fail "$what: a dead worker did not take the ✗ glyph: $r" ;; esac
   case "$r" in *dead*) ;; *) fail "$what: a dead worker is not reported as gone: $r" ;; esac
   case "$r" in *stalled*) fail "$what: a dead worker was downgraded to 'stalled': $r" ;; esac
+  # …and in the LABEL column too. The glyph and the detail line are not enough on their
+  # own: the label is the field `chief ps | grep` and a scanning eye both land on, and a
+  # gone row that still reads `running` there is the mistake of 2026-08-17 restated.
+  case "$r" in *' gone '*) ;; *) fail "$what: a dead worker's row is still labelled with its stale scheduler state: $r" ;; esac
+  case "$r" in *running*) fail "$what: a dead worker's row still reads 'running': $r" ;; esac
 }
 
 ps_out="$(CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" ps)" || fail "chief ps exited non-zero"
@@ -286,4 +296,75 @@ mon_out="$(tr -d '\033' < "$mon_log")"
 grep -q 'worker-off' "$mon_log" || fail "chief monitor never rendered a frame"
 check "chief monitor" "$mon_out"
 
-echo "stall-flag: OK — per-phase thresholds, a flag that names the state, and gone ≠ quiet"
+
+
+# ══ PART 6 — ELAPSED-IN-PHASE IS ROUTINE, NOT ONLY WHEN FLAGGED ══════════════
+# The other half of the 2026-08-17 morning: seven of the nine runs killed as 'stalled'
+# were working. `chief monitor` showed `provider-waiting` and never changed, and there
+# was no duration beside it to say whether that meant forty SECONDS into a turn or
+# forty MINUTES into nothing. So every row arm — not just a flagged one — has to carry
+# how long the current state has been held.
+#
+# Two properties are asserted, and the second is the one that makes the first mean
+# anything:
+#   • EVERY arm of the row loop carries it. The five coarse states dispatch to five
+#     different note paths (live_note · limit_note · op_note · hold_note ×2), and a
+#     duration that appears in one view and not another reproduces the split.
+#   • It comes from `phase_since`, NOT from the render clock and NOT from the
+#     heartbeat. Every fixture below heartbeats FRESH while its phase is hours old:
+#     a duration derived from either of the other two timestamps would read ~0s here,
+#     which is exactly the reading that made a long hold look instantaneous.
+echo "stall-flag: part 6 — elapsed-in-phase in every arm, from phase_since"
+
+# Backdate phase_since ONLY. The heartbeat stays now, so nothing here is stale and
+# nothing takes a flag — this is the ORDINARY view.
+mkphase() {  # NAME COARSE-STATE PHASE PHASE-AGE-SECONDS
+  local n="$1" f v t
+  echo "$2" > "$PAR/$n.state"
+  f="$PAR/$n.live.json"
+  live_set "$f" name="$n" state="$2" phase="$3" story=US-3 iter=2 passing=1 total=4
+  v="$(live_get "$f" phase_since)"; t="$f.bd"
+  sed "s/\"phase_since\": $v/\"phase_since\": $(( v - $4 ))/" "$f" > "$t" && mv "$t" "$f"
+}
+mkphase held-run    running           agent-turn            2400    # 40m
+mkphase held-limit  rate-limited      rate-limited-waiting  1500    # 25m
+mkphase held-op     paused            operator-paused       3660    # 1h01m
+mkphase held-review awaiting-review   awaiting-review      11400    # 3h10m
+mkphase held-zone   awaiting-approval awaiting-approval      780    # 13m
+printf '{"zones":[{"zone":"engine"}],"files":["engine/monitor.sh"]}\n' > "$PAR/held-zone.zone-request.json"
+
+sed "s|^names=.*|names=held-run held-limit held-op held-review held-zone|" \
+  "$RUNS/$holder.run" > "$RUNS/$holder.run.tmp" && mv "$RUNS/$holder.run.tmp" "$RUNS/$holder.run"
+
+held_check() {  # LABEL OUTPUT
+  local what="$1" out="$2" r pair
+  # name:duration — the value each arm must be showing, and no two alike, so a note
+  # that reads another row's record (or a constant) cannot pass.
+  for pair in held-run:40m held-limit:25m held-op:1h01m held-review:3h10m held-zone:13m; do
+    r="$(row "${pair%%:*}" "$out")"
+    case "$r" in
+      *"${pair##*:}"*) ;;
+      *) fail "$what: ${pair%%:*} does not show its elapsed-in-phase (${pair##*:}): $r" ;;
+    esac
+    # Never flagged: the heartbeat is fresh. Elapsed-in-phase is INFORMATION, and the
+    # moment it reads as an alarm an operator is back to ignoring it.
+    case "$r" in *'⚠ stalled'*) fail "$what: ${pair%%:*} heartbeats fresh and must not be flagged: $r" ;; esac
+  done
+}
+
+held_out="$(CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" ps)" || fail "chief ps (part 6) exited non-zero"
+echo "--- chief ps (running · rate-limited · operator-paused · in-review · zone-hold) ---"; printf '%s\n' "$held_out"
+held_check "chief ps" "$held_out"
+
+mon2_log="$WORK/monitor2.out"
+CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" monitor 1 > "$mon2_log" 2>&1 &
+mon2_pid=$!
+for _ in $(seq 1 50); do
+  [ "$(grep -A1 'held-zone' "$mon2_log" 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ] && break
+  sleep 0.2
+done
+kill "$mon2_pid" 2>/dev/null || true; wait "$mon2_pid" 2>/dev/null || true
+grep -q 'held-zone' "$mon2_log" || fail "chief monitor never rendered a part-6 frame"
+held_check "chief monitor" "$(tr -d '\033' < "$mon2_log")"
+
+echo "stall-flag: OK — per-phase thresholds, a flag that names the state, gone ≠ quiet, and elapsed-in-phase in every arm"
