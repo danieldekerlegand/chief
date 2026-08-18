@@ -33,13 +33,25 @@
 #                    because the phase never changed and nothing said how long it had
 #                    been held. Every row arm carries the duration, in both views, from
 #                    `phase_since` and never from the render clock.
+#   7. TWO FINDINGS, TWO SENTENCES — the agent loop's no-progress COUNTER (normal, and
+#                    now rendered as 'no progress last iter (n/N)') is not the at-risk
+#                    FLAG (this run has not made a sound). One word for both is what
+#                    made the actionable one unreadable.
+#   8. THE PHASE IS ABOUT NOW — the agent loop driven through two consecutive
+#                    no-progress iterations: `stalled` appears only BETWEEN them, the
+#                    boundary hook that used to inherit it reports its own work, and
+#                    the budget still stops the run on schedule.
+#   9. RE-ENGAGEMENT SAYS SO — a real (hermetic) run picking a VERIFY-FAILED branch
+#                    back up announces itself instead of wearing the phase the previous
+#                    attempt left behind.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 holder=""
+poller=""
 cleanup() {
-  if [ -n "$holder" ]; then kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true; fi
+  for p in $holder $poller; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$WORK"
 }
 trap 'rc=$?; cleanup; exit "$rc"' EXIT
@@ -67,12 +79,12 @@ QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review 
 # agent.sh's `_beat_start` ticks the record every ~15s for the whole provider call, so
 # 15m of silence there is ~60 missed beats — a dead ticker, not a long turn — and a
 # longer threshold would hide exactly those two runs. Never an exemption, either.
-FLAGGED_PHASES='provider-waiting agent-turn writing stalled unverified complete
-  research research-failed plan-turn plan-ready plan-invalid review-wait approved
-  worktree seeded warmup reconcile merge-wait merge-queued batch-stacking rebasing
-  rebase-conflict rebase-refused verifying verify-failed zone-check merging merged
-  done checkout-failed merge-conflict re-dispatch empty-no-work incomplete
-  complete-unmerged unsatisfiable'
+FLAGGED_PHASES='provider-waiting agent-turn writing integrating stalled unverified
+  complete research research-failed plan-turn plan-ready plan-invalid review-wait
+  approved worktree re-engaging seeded warmup reconcile merge-wait merge-queued
+  batch-stacking rebasing rebase-conflict rebase-refused verifying verify-failed
+  zone-check merging merged done checkout-failed merge-conflict re-dispatch
+  empty-no-work incomplete complete-unmerged unsatisfiable'
 
 STATE="$WORK/mon"; PAR="$STATE/parallel"
 mkdir -p "$PAR"
@@ -367,4 +379,268 @@ kill "$mon2_pid" 2>/dev/null || true; wait "$mon2_pid" 2>/dev/null || true
 grep -q 'held-zone' "$mon2_log" || fail "chief monitor never rendered a part-6 frame"
 held_check "chief monitor" "$(tr -d '\033' < "$mon2_log")"
 
-echo "stall-flag: OK — per-phase thresholds, a flag that names the state, gone ≠ quiet, and elapsed-in-phase in every arm"
+# ══ PART 7 — THE COUNTER IS NOT THE FLAG ═════════════════════════════════════
+# Two findings wore one word. `stall 2` on a row that is heartbeating every fifteen
+# seconds says the LAST iteration advanced nothing — normal, and the run is working —
+# while `⚠ stalled` says this run has not made a sound. An operator who has learned
+# that the first is noise reads past the second, which is how nine runs came to be
+# killed on 2026-08-17. The counter now says what it means, in words, with the budget
+# it is spent against: '2/2' is one iteration from the end of the run, '1/5' is a shrug.
+#
+# Its own state dir and its own rows: nothing here re-uses (or has to clean up) the
+# fixtures parts 5 and 6 built, so a row asserted there cannot be perturbed here.
+echo "stall-flag: part 7 — 'no progress last iter' vs the at-risk flag"
+STATE7="$WORK/mon7"; PAR7="$STATE7/parallel"; mkdir -p "$PAR7"
+
+mkcount() {  # NAME PHASE HEARTBEAT-AGE STALL STALL-LIMIT
+  local n="$1" f v t
+  echo running > "$PAR7/$n.state"
+  f="$PAR7/$n.live.json"
+  live_set "$f" name="$n" state=running phase="$2" story=US-1 iter=4 passing=1 total=4 \
+    stall="$4" stall_limit="$5"
+  for k in heartbeat phase_since; do
+    v="$(live_get "$f" "$k")"; t="$f.bd"
+    sed "s/\"$k\": $v/\"$k\": $(( v - $3 ))/" "$f" > "$t" && mv "$t" "$f"
+  done
+}
+mkcount spent-budget  agent-turn         30 2 2   # ticking: one iteration from the end
+mkcount early-stall   agent-turn         30 1 5   # ticking: barely started
+mkcount old-record    agent-turn         30 2 0   # an engine that wrote no budget
+mkcount really-quiet  provider-waiting 2400 1 2   # BOTH a counter and a real flag
+
+sed -e "s|^state=.*|state=$STATE7|" \
+    -e "s|^names=.*|names=spent-budget early-stall old-record really-quiet|" \
+  "$RUNS/$holder.run" > "$RUNS/$holder.run.tmp" && mv "$RUNS/$holder.run.tmp" "$RUNS/$holder.run"
+
+count_check() {  # LABEL OUTPUT
+  local what="$1" out="$2" r
+  r="$(row spent-budget "$out")"
+  case "$r" in *'no progress last iter (2/2)'*) ;; *) fail "$what: the no-progress counter is not in words with its budget: $r" ;; esac
+  case "$r" in *'⚠'*|*stalled*) fail "$what: a ticking run with a spent stall budget was flagged at-risk: $r" ;; esac
+  r="$(row early-stall "$out")"
+  case "$r" in *'no progress last iter (1/5)'*) ;; *) fail "$what: the counter lost its own budget: $r" ;; esac
+  # An older engine's record carries the count and no budget — it must still render,
+  # and must not invent a limit it was never told.
+  r="$(row old-record "$out")"
+  case "$r" in *'no progress last iter (2)'*) ;; *) fail "$what: a record with no stall_limit stopped rendering the count: $r" ;; esac
+  case "$r" in *'(2/0)'*) fail "$what: an absent budget was rendered as a limit of 0: $r" ;; esac
+  # And the two findings TOGETHER on one row, in two sentences that cannot be confused:
+  # the last iteration advanced nothing AND this run has gone silent past its limit.
+  r="$(row really-quiet "$out")"
+  case "$r" in *'no progress last iter (1/2)'*) ;; *) fail "$what: the quiet row lost its counter: $r" ;; esac
+  case "$r" in *'⚠ stalled in provider-waiting'*) ;; *) fail "$what: the quiet row lost the at-risk flag: $r" ;; esac
+  # The old phrasing is what made them one finding — it must be gone from both views.
+  case "$out" in *'· stall '*) fail "$what: the bare 'stall N' phrasing is back: $out" ;; esac
+}
+
+cnt_out="$(CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" ps)" || fail "chief ps (part 7) exited non-zero"
+echo "--- chief ps (spent budget · early · no-budget · quiet-and-counting) ---"; printf '%s\n' "$cnt_out"
+count_check "chief ps" "$cnt_out"
+
+cnt_log="$WORK/monitor3.out"
+CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" monitor 1 > "$cnt_log" 2>&1 &
+cnt_pid=$!
+for _ in $(seq 1 50); do
+  [ "$(grep -A1 'really-quiet' "$cnt_log" 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ] && break
+  sleep 0.2
+done
+kill "$cnt_pid" 2>/dev/null || true; wait "$cnt_pid" 2>/dev/null || true
+grep -q 'really-quiet' "$cnt_log" || fail "chief monitor never rendered a part-7 frame"
+count_check "chief monitor" "$(tr -d '\033' < "$cnt_log")"
+
+# ══ PART 8 — THE PHASE IS A STATEMENT ABOUT NOW ══════════════════════════════
+# agent.sh sets phase=stalled at an iteration boundary that advanced neither a passing
+# story nor HEAD. The COUNT is right there and is the budget mechanism. The PHASE is
+# the claim that goes stale: it used to persist through everything that happens next,
+# and what happens next is the ITERATION-BOUNDARY HOOK — the driver re-integrating a
+# base that sibling merges keep moving, which fetches, rebases and queues behind a
+# merge lock another worker can hold for the length of a verify gate. Measured
+# 2026-08-17: tasklist 99 read `stalled` for ~25 minutes of exactly that while it was
+# re-engaging, fixing a ratchet regression and merging; 98 read it with a 2-second
+# heartbeat. Both were working.
+#
+# The loop is driven for real (a fake provider on PATH, no driver, no install) through
+# two consecutive no-progress iterations, and three witnesses are collected: the phase
+# each TURN ran under, the phase the HOOK ran under, and a polled transcript of every
+# value the record held, in order.
+echo "stall-flag: part 8 — two no-progress iterations"
+command -v git >/dev/null || fail "git required"
+command -v jq  >/dev/null || fail "jq required"
+export GIT_AUTHOR_NAME=sf GIT_AUTHOR_EMAIL=sf@test GIT_COMMITTER_NAME=sf GIT_COMMITTER_EMAIL=sf@test
+
+AG="$WORK/agentrepo"; OBS="$WORK/obs"; AGLIVE="$WORK/agent.live.json"
+mkdir -p "$AG/.chief/state" "$OBS" "$WORK/agentbin"
+git init -q -b main "$AG" 2>/dev/null || { git init -q "$AG"; git -C "$AG" checkout -q -b main; }
+git -C "$AG" commit -q --allow-empty -m init
+cat > "$AG/.chief/state/prd.json" <<'JSON'
+{"branchName":"chief/sf","userStories":[{"id":"US-1","title":"never lands","description":"","acceptanceCriteria":[],"passes":false,"notes":""}]}
+JSON
+printf '# Chief Progress Log\n' > "$AG/.chief/state/progress.txt"
+printf 'stall-flag agent context\n' > "$AG/agent-context.md"
+git -C "$AG" add -A && git -C "$AG" commit -q -m scaffold
+
+# The provider does NOTHING — no commit, no pass flip. That IS a no-progress
+# iteration, and it records the phase it was running under.
+cat > "$WORK/agentbin/claude" <<FAKE
+#!/usr/bin/env bash
+set -eu
+cat >/dev/null
+. "$ROOT/engine/live.sh"
+printf '%s\n' "\$(live_get "$AGLIVE" phase)" >> "$OBS/turn.phases"
+exit 0
+FAKE
+chmod +x "$WORK/agentbin/claude"
+# The hook stands in for driver.sh --integrate-base: it records the phase IT runs
+# under and takes a second, so the sample is a fact and not a race.
+cat > "$WORK/hook.sh" <<HOOK
+#!/usr/bin/env bash
+. "$ROOT/engine/live.sh"
+printf '%s\n' "\$(live_get "$AGLIVE" phase)" >> "$OBS/hook.phases"
+sleep 1
+HOOK
+chmod +x "$WORK/hook.sh"
+
+# The transcript: every phase the record holds, in order, deduped.
+( prev=""
+  while :; do
+    cur="$(live_get "$AGLIVE" phase)"
+    if [ -n "$cur" ] && [ "$cur" != "$prev" ]; then printf '%s\n' "$cur" >> "$OBS/transcript"; prev="$cur"; fi
+    sleep 0.05
+  done ) & poller=$!
+
+agent_rc=0
+( cd "$AG" && env -u CHIEF_PRESET -u CHIEF_TOOL -u CHIEF_VERBOSE -u CHIEF_TASKLIST \
+    CHIEF_PROVIDER=claude CHIEF_PROJECT="$AG" CHIEF_HOME="$ROOT/engine" \
+    CHIEF_STATE_DIR=.chief/state CHIEF_AGENT_CONTEXT=agent-context.md \
+    CHIEF_LIVE_FILE="$AGLIVE" CHIEF_ITER_HOOK="bash $WORK/hook.sh" STALL_LIMIT=2 \
+    PATH="$WORK/agentbin:$PATH" bash "$ROOT/engine/agent.sh" 2 ) > "$WORK/agent.log" 2>&1 || agent_rc=$?
+kill "$poller" 2>/dev/null || true; wait "$poller" 2>/dev/null || true; poller=""
+
+# 8a) THE BUDGET IS UNTOUCHED. Legibility must not be bought with a budget leak: two
+#     no-progress iterations in a row still end the run, at the same iteration.
+[ "$agent_rc" = 1 ] || { tail -20 "$WORK/agent.log" >&2; fail "two stalled iterations no longer stop the run (agent.sh exited $agent_rc, want 1)"; }
+grep -q 'Chief stalled 2 iterations' "$WORK/agent.log" || { tail -20 "$WORK/agent.log" >&2; fail "the give-up line does not report 2 counted stalls"; }
+[ "$(live_get "$AGLIVE" stall)" = 2 ] || fail "the stall count did not persist across the boundary (record says '$(live_get "$AGLIVE" stall)')"
+[ "$(live_get "$AGLIVE" stall_limit)" = 2 ] || fail "the record does not carry the budget the count is measured against"
+[ "$(live_get "$AGLIVE" iter)" = 2 ] || fail "the run did not spend exactly 2 iterations (iter=$(live_get "$AGLIVE" iter))"
+# It gave up BECAUSE it stalled — the one place the word is a statement about now.
+[ "$(live_get "$AGLIVE" phase)" = stalled ] || fail "the terminal record should read stalled, got '$(live_get "$AGLIVE" phase)'"
+
+# 8b) NO TURN RAN UNDER THE PREVIOUS ITERATION'S VERDICT.
+[ "$(grep -c . "$OBS/turn.phases")" = 2 ] || { cat "$OBS/turn.phases" >&2; fail "expected exactly 2 provider turns"; }
+while read -r ph; do
+  [ "$ph" = provider-waiting ] || fail "a turn ran under phase '$ph' — a turn that has begun is not the last one's verdict"
+done < "$OBS/turn.phases"
+
+# 8c) THE BOUNDARY HOOK IS WORK, AND SAYS SO. This is the 25 minutes of 2026-08-17:
+#     before the fix both samples read `stalled`.
+[ "$(grep -c . "$OBS/hook.phases")" = 2 ] || { cat "$OBS/hook.phases" >&2; fail "expected the iteration-boundary hook to run twice"; }
+while read -r ph; do
+  [ "$ph" = integrating ] || fail "the iteration-boundary hook ran under phase '$ph' — it is re-integrating the base, not stalling"
+done < "$OBS/hook.phases"
+
+# 8d) …and `stalled` is still published BETWEEN the iterations — this is a phase that
+#     expires, not a phase that was deleted.
+grep -qx 'stalled' "$OBS/transcript" || { cat "$OBS/transcript" >&2; fail "the no-progress boundary no longer publishes 'stalled' at all"; }
+# Nothing that RUNS may follow it directly: what the record says after a stalled
+# boundary is the work that boundary handed off to.
+awk 'p=="stalled" && ($0=="provider-waiting" || $0=="writing") {found=1} {p=$0} END{exit !found}' \
+  "$OBS/transcript" && { cat "$OBS/transcript" >&2; fail "a turn ran with 'stalled' still on the record"; }
+# The whole boundary, in order and in one line: the iteration ends, chief says so,
+# the hook does the work that ending handed it, and the next TURN is a turn — the
+# record reads `agent-turn` while it runs, and `stalled` only between them.
+case " $(tr '\n' ' ' < "$OBS/transcript")" in
+  *' stalled integrating agent-turn provider-waiting '*) ;;
+  *) cat "$OBS/transcript" >&2; fail "the boundary does not read stalled → integrating → agent-turn → the next turn" ;;
+esac
+echo "   ok  transcript: $(tr '\n' ' ' < "$OBS/transcript")"
+
+# 8e) THE FIRST WRITE OF AN ITERATION IS WHAT MOVES OFF IT. In this harness the window
+#     between the iteration counter and the turn is milliseconds wide; in the field it
+#     holds the research re-read, the plan-review gate and the prompt compose, and a
+#     loop that publishes late displays the previous boundary's verdict for all of it.
+#     That window is not reliably samplable from outside, so it is asserted on the
+#     source: the first live_set after `i=$((i+1))` names the turn, not the verdict.
+#     LC_ALL=C — agent.sh's comments are full of em-dashes and BSD awk aborts on a
+#     multi-byte character in a UTF-8 locale.
+first_write="$(LC_ALL=C awk '/i=\$\(\(i\+1\)\)/{seen=1} seen && /live_set "\$LIVE" phase=/{print; exit}' "$ROOT/engine/agent.sh")"
+case "$first_write" in
+  *'phase=agent-turn'*) ;;
+  *) fail "an iteration's FIRST live_set must move the phase off the last boundary's verdict, got: ${first_write:-<none>}" ;;
+esac
+
+# ══ PART 9 — RE-ENGAGEMENT ANNOUNCES ITSELF ══════════════════════════════════
+# The driver's `persisted for re-engagement` path: a branch whose stories all pass but
+# whose verify failed post-rebase is picked back up and the agent sent in to fix it.
+# The pickup rebuilds the worktree and re-integrates the base before the first turn —
+# minutes — and it is not a fresh start, so it must not read as one. Two surfaces: the
+# live phase while it happens, and an event that outlives it, because "why did this
+# branch run again?" is a question asked afterwards.
+echo "stall-flag: part 9 — a re-engaged branch says so"
+DR="$WORK/reengage"; mkdir -p "$DR" "$WORK/drvbin" "$WORK/drvruns"
+cat > "$WORK/drvbin/claude" <<'FAKE'
+#!/usr/bin/env bash
+set -eu
+cat >/dev/null
+PRD=".chief/state/prd.json"                       # cwd = the worktree
+name="$(jq -r '.branchName' "$PRD" | sed 's#^chief/##')"; TRACKED="tasks/chief/$name.json"
+id="$(jq -r 'first(.userStories[]|select(.passes==false)).id // empty' "$PRD")"
+if [ -n "$id" ]; then
+  mkdir -p out; echo "impl $id" > "out/$id.txt"
+  for f in "$PRD" "$TRACKED"; do
+    [ -f "$f" ] || continue
+    t="$(mktemp)"; jq --arg id "$id" '(.userStories[]|select(.id==$id).passes)=true' "$f" > "$t" && mv "$t" "$f"
+  done
+else
+  mkdir -p out; echo "fixed what verify rejected" > out/fix.txt   # the re-engaged turn
+fi
+git add -A >/dev/null 2>&1 || true; git commit -q -m "feat: scripted" >/dev/null 2>&1 || true
+[ "$(jq '[.userStories[]|select(.passes==false)]|length' "$PRD")" = "0" ] && echo "<promise>COMPLETE</promise>"
+exit 0
+FAKE
+chmod +x "$WORK/drvbin/claude"
+
+git init -q -b main "$DR" 2>/dev/null || { git init -q "$DR"; git -C "$DR" checkout -q -b main; }
+git -C "$DR" commit -q --allow-empty -m init
+( cd "$DR" && bash "$ROOT/bin/chief" init >/dev/null && rm -f tasks/chief/example.json ) \
+  || fail "chief init failed"
+cat > "$DR/tasks/chief/re.json" <<'JSON'
+{ "project":"re","branchName":"chief/re","description":"re-engagement",
+  "iters":2,"dependsOn":[],"touches":[],"warmup":[],
+  "userStories":[{"id":"US-1","title":"one","description":"","acceptanceCriteria":["out/US-1.txt exists"],"passes":false,"notes":"created out/US-1.txt"}] }
+JSON
+printf '#!/usr/bin/env bash\nset -eu\nexit "${SF_VERIFY_RC:-0}"\n' > "$DR/.chief/verify.sh"
+chmod +x "$DR/.chief/verify.sh"
+git -C "$DR" add -A && git -C "$DR" commit -q -m "re setup"
+
+drv() {  # VERIFY-RC LOG — one hermetic run of the driver, straight from this checkout
+  ( cd "$DR" && SF_VERIFY_RC="$1" RETRY_MAX=1 CHIEF_RUNS="$WORK/drvruns" \
+      CHIEF_REPOS="$WORK/drvrepos" CHIEF_WORKTREE_ROOT="$WORK/drvwt" \
+      PATH="$WORK/drvbin:$PATH" bash "$ROOT/bin/chief" run ) > "$2" 2>&1 || true
+}
+events() { cat "$WORK/drvruns"/*.events.jsonl 2>/dev/null || true; }
+
+drv 1 "$WORK/re1.log"
+case "$(cat "$DR/.chief/state/parallel/re.status" 2>/dev/null)" in
+  VERIFY-FAILED*) ;;
+  *) tail -30 "$WORK/re1.log" >&2; fail "the first run did not leave the branch VERIFY-FAILED" ;;
+esac
+events | jq -e 'select(.event=="tasklist.re-engaged")' >/dev/null 2>&1 \
+  && fail "a first, un-re-engaged run announced a re-engagement"
+
+drv 0 "$WORK/re2.log"
+# The worker's own log, not the run's stdout: run_worker redirects everything it says
+# into $STATE/parallel/<name>.log, and the run summary is all that reaches the console.
+grep -q 're-engaging the agent to fix it' "$DR/.chief/state/parallel/re.log" \
+  || { tail -30 "$DR/.chief/state/parallel/re.log" >&2; fail "the second run did not re-engage the VERIFY-FAILED branch"; }
+ev="$(events | jq -c 'select(.event=="tasklist.re-engaged")' | tail -1)"
+[ -n "$ev" ] || { events | tail -20 >&2; fail "the re-engagement was never published to the event stream"; }
+[ "$(printf '%s' "$ev" | jq -r '.name')"  = re      ] || fail "the re-engaged event names the wrong tasklist: $ev"
+[ "$(printf '%s' "$ev" | jq -r '.state')" = running ] || fail "a re-engagement is a running tasklist, not a terminal state: $ev"
+case "$(printf '%s' "$ev" | jq -r '.detail')" in
+  *verify*) ;;
+  *) fail "the re-engaged event does not say WHY the branch was picked back up: $ev" ;;
+esac
+echo "   ok  re-engaged: $(printf '%s' "$ev" | jq -r '.detail')"
+
+echo "stall-flag: OK — per-phase thresholds, a flag that names the state, gone ≠ quiet, elapsed-in-phase in every arm, the counter told apart from the flag, a phase that is about NOW, and a re-engagement that announces itself"

@@ -53,10 +53,11 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 
 | Field | Shown as | Written by |
 |---|---|---|
-| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `claude-waiting`, `writing`, `rate-limited-waiting`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
+| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
 | `phase_since` | `verifying for 41m` — elapsed **in this phase** | bumped only when the phase actually changes |
 | `story` / `iter` | `US-3 · iter 5` | the agent loop, each iteration |
-| `stall` / `waits` | `stall 2` | the agent loop's no-progress and limit-wait counters |
+| `stall` / `stall_limit` | `no progress last iter (1/2)` | the agent loop's no-progress counter and the budget it is spent against |
+| `waits` | the limit-wait count | the agent loop's usage-limit sleeps |
 | `passing` / `total` | the progress column, when no `prd.json` is readable | agent + driver |
 | `retry_at` | the retry ETA on a paused row | the driver's usage-limit self-heal |
 | `heartbeat` | `12s ago` — time since the run last did *anything* | **every** write; an in-turn ticker keeps it moving through a long `claude` call |
@@ -94,6 +95,30 @@ render clock or from the heartbeat would show every row as instantaneous. That i
 why it is not the same number as the trailing `12s ago`: the heartbeat says when the
 run last did *anything*, the phase age says how long it has been doing *this*. A row
 can legitimately read `provider-waiting for 40m · 12s ago` — a long turn, ticking.
+
+### "No progress last iteration" is not "stalled"
+
+Two different findings used to share the word *stall*, and only one of them is worth
+acting on:
+
+- **`no progress last iter (1/2)`** — the agent loop's own counter. An iteration ended
+  without advancing a passing story or `HEAD`, which is *normal*: a story that needed
+  reading before writing spends one. The number in parentheses is the budget
+  (`$STALL_LIMIT`), so `2/2` is one iteration from the end of the run and `1/5` is a
+  shrug. The run is **working** while this shows.
+- **`⚠ stalled in <phase> — no activity for …`** — this run has not made a *sound* for
+  longer than its current phase is allowed. That is the one worth stopping.
+
+`stalled` is also a **phase**, and it means only what it says: chief is *between*
+iterations, having just counted a no-progress one — or the loop has given up. It is
+never the phase of a turn that is running. The next iteration's first write moves off
+it, and the two stretches that used to inherit it now have their own words:
+`integrating` (the iteration-boundary hook re-integrating a base that sibling merges
+moved — minutes of real work) and `re-engaging` (the driver picking a branch back up
+that already claims to be done, because its verify failed post-rebase, its pass-flags
+were a misfire, or it will not rebase). On 2026-08-17 a tasklist read `stalled` for
+~25 minutes while it was doing exactly the first of those, and another read it with a
+2-second heartbeat while it was working.
 
 ### One threshold could not be right for every phase
 

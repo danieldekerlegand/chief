@@ -274,7 +274,11 @@ case "$hung" in *'40m'*) ;; *) fail "the stalled row doesn't say how long it's b
 case "$hung" in *'agent-turn for 40m'*) ;; *) fail "the stalled row lost its elapsed-in-phase: $hung" ;; esac
 # The flag carries the DIAGNOSIS: which state was quiet, not just that something was.
 case "$hung" in *'stalled in agent-turn'*) ;; *) fail "the stall flag doesn't name the state it was stuck in: $hung" ;; esac
-case "$hung" in *'stall 2'*) ;; *) fail "the stalled row lost the agent's stall count: $hung" ;; esac
+# The COUNTER, in the words that keep it apart from the flag above: the last
+# iteration advanced nothing (normal, and the run is working) is a different finding
+# from this run has gone silent (the one worth stopping). See test/stall-flag.sh
+# part 7 — this record carries no stall_limit, which is the older-engine shape.
+case "$hung" in *'no progress last iter (2)'*) ;; *) fail "the stalled row lost the agent's no-progress count: $hung" ;; esac
 
 # 3c) Paused on a usage limit: quiet is EXPECTED, so an equally old heartbeat must
 #     not turn a pause into an alarm — it keeps ⏸ and shows when it will retry.

@@ -46,6 +46,13 @@
 # mistaken for another. All of it is derived from the record + the registry + a
 # kill -0; the monitor never touches a run.
 #
+# The one word that had to stop meaning two things is 'stall'. The agent loop's
+# counter — the iterations that advanced nothing, and the budget they are spent
+# against — is normal and is rendered in those words: 'no progress last iter (1/2)'.
+# The ⚠ flag is the other finding entirely: this run has not made a SOUND for longer
+# than its current phase is allowed. The first is a run working its way through a hard
+# story; the second is the one worth stopping.
+#
 # Invoked by the CLI:
 #   chief ps                 -> monitor.sh once
 #   chief monitor [interval] -> monitor.sh watch [interval]   (refresh in place)
@@ -311,19 +318,33 @@ flag_fallback() { # $1 dead-flag $2 age $3 elapsed-in-phase ('' unknown) -> the 
 # last activity. Empty when there is no record or no phase, which is what makes the
 # fallback automatic. With $3=stale the trailing age becomes the at-risk flag instead.
 live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to add)
-  local lf note phase story iter stall age pa
+  local lf note phase story iter stall slimit age pa
   lf="$(live_file "$1" "$2")"
   [ -f "$lf" ] || return 0
   phase="$(live_get "$lf" phase)"
   [ -n "$phase" ] || return 0
   story="$(live_get "$lf" story)"; iter="$(live_get "$lf" iter)"
-  stall="$(live_get "$lf" stall)"; age="$(live_age "$lf")"
+  stall="$(live_get "$lf" stall)"; slimit="$(live_get "$lf" stall_limit)"
+  age="$(live_age "$lf")"
   pa="$(live_phase_age "$1" "$2")"
   note="$phase"
   [ -n "$pa" ] && note="$note for $pa"
   [ -n "$story" ] && note="$note · $story"
   case "$iter"  in ''|0|*[!0-9]*) ;; *) note="$note · iter $iter"   ;; esac
-  case "$stall" in ''|0|*[!0-9]*) ;; *) note="$note · stall $stall" ;; esac
+  # NO PROGRESS LAST ITERATION vs NOT DOING ANYTHING — two findings an operator acts
+  # on differently, and until now both wore the word 'stall'. This is the first: the
+  # agent loop's budget counter, a fact about the boundary that has already passed. It
+  # is NORMAL (an iteration that only re-read the tree spends one) and the run is
+  # working while it shows. The second is the ⚠ flag below — silence past what this
+  # phase is allowed — and that is the one worth stopping. The budget is rendered with
+  # the count when the record carries it: '2/2' is one iteration from the end of the
+  # run and '1/5' is a shrug, and 'stall 2' could not tell them apart.
+  case "$stall" in ''|0|*[!0-9]*) ;; *)
+    case "$slimit" in
+      ''|0|*[!0-9]*) note="$note · no progress last iter ($stall)" ;;
+      *)             note="$note · no progress last iter ($stall/$slimit)" ;;
+    esac ;;
+  esac
   # The caller asks for the flag; this asks the POLICY whether this phase has earned
   # it. Same predicate the row's glyph uses, so the two halves of the line always
   # agree — and a caller that has not consulted the policy cannot reintroduce
