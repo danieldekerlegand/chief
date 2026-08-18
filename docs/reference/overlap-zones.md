@@ -37,7 +37,7 @@ serialize  path:docs/             documented, scheduled apart, merged as usual
 
 | policy | what it does |
 |---|---|
-| `serialize` | Today's behaviour, exactly. The scheduler already refuses to co-run two tasklists that share a `touches` domain; declaring a `serialize` zone documents the domain and makes it visible in the run log. **The merge phase is unchanged.** |
+| `serialize` | Today's behaviour, exactly. The scheduler already refuses to co-run two tasklists that share a `touches` domain; declaring a `serialize` zone records the domain in a file a human reviews, next to the ones that do hold a merge. It prints nothing and changes nothing at run time — **the merge phase is unchanged**, which is what `test/overlap-zones.sh` PART A asserts. |
 | `review` | Serialize *and* require an explicit human approval before the merge — however green the gate came back. The branch lands in the `awaiting-approval` state and merges only on `chief approve`. |
 
 ### Matchers

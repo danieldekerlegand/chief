@@ -122,6 +122,9 @@ jobs:
       - name: Code-quality ratchet (slop BLOCKED, refactor ALLOWED, unmeasurable languages skipped not zeroed)
         run: bash test/quality-ratchet.sh
 
+      - name: Merge policy layer (a review zone / oversized story holds a GREEN branch for one durable approval)
+        run: bash test/overlap-zones.sh
+
       - name: Roadmap -> tasklists generator (contract enforced, conventions correct)
         run: bash test/gen.sh
 

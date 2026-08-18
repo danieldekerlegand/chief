@@ -183,6 +183,81 @@ Terminal per-tasklist statuses: `MERGED @<sha>`, `COMPLETE-UNMERGED`, `INCOMPLET
 `EMPTY-NO-WORK`, `UNVERIFIED`, `UNSATISFIABLE`, `WORKTREE-FAILED`, `CHECKOUT-FAILED`, `REBASE-CONFLICT`,
 `REBASE-REFUSED`, `VERIFY-FAILED`, `MERGE-CONFLICT`.
 
+## The policy layer above the floor (overlap zones · the diff-size budget)
+
+Everything above this line is unchanged, and the sentences it is built on still
+hold exactly as written: **the merge floor is the correctness guarantee**, and
+**`touches` is a scheduling hint** — coarse, cheap, advisory, costing at worst a
+wasted rebase. Nothing on this page can let something merge that the floor would
+have stopped. Its only power is to *withhold*.
+
+It exists because the floor is blind to one specific thing. Rebase catches textual
+interference; verify catches staleness. Neither says anything about two parallel
+branches whose code does not collide and whose **designs disagree** — one adds a
+queue, the other a second queue for the same events; one widens a schema column,
+the other adds a parallel table. Both rebase clean. Both verify green. The result
+is still wrong, and it is wrong at the level of *intent*, which is where a person
+has standing and a test does not. No automated gate chief could add detects it, so
+chief does not pretend to: it asks a human, in the places a repo says to ask.
+
+**Overlap zones.** A repo declares its high-impact domains in `.chief/zones.conf`
+(scaffolded fully commented by `chief init`; full contract in
+[`../reference/overlap-zones.md`](../reference/overlap-zones.md)):
+
+```
+review     path:src/schema/     the data model two agents must not diverge on
+serialize  path:docs/           documented, scheduled apart, merged as usual
+```
+
+- `serialize` is **today's behaviour, unchanged** — the scheduler already refuses to
+  co-run tasklists sharing a `touches` domain, and declaring the zone only records
+  the domain in a reviewable file. The merge phase does not change.
+- `review` means a green gate is *not sufficient authority* to merge. The branch is
+  rebased and verified **first**, and only then held in `awaiting-approval` until
+  `chief approve <name>` releases it — so a person is asked about a branch that has
+  already cleared every automated bar, never instead of the bar.
+
+Matching keys on the branch's **real changed files** (`git diff --name-only
+<base>...HEAD`), not on `touches`, because `touches` entries are often conceptual
+tags — a real tasklist declared `cuneiform-engine` and `render-goldens`, neither of
+which is a path — so a registry keyed on tags alone would be invisible in exactly
+the case it exists for. `touches:<domain>` is offered as a secondary matcher.
+
+**The diff-size budget.** The same layer's second rule, from the same research: in
+the AgenticFlict dataset larger diffs correlate with higher conflict probability, so
+change size is the lever an orchestrator actually controls. Chief measures each
+branch's diff against the base *decomposed by story* and reports it; the default
+enforcement is `warn` (reported in the worker log, in `ps`/`monitor` and in the
+story's permanent record, and merged anyway), because a hard block would stop
+legitimate rename sweeps and codemods and a gate people switch off reports nothing.
+`CHIEF_DIFF_BUDGET=block` turns it into the same hold a `review` zone uses. Details
+and the vertical-slice guidance it is meant to encourage:
+[`../reference/diff-budget.md`](../reference/diff-budget.md).
+
+**One gate, one approval.** The two rules are asked as a single question at the end
+of the merge phase — one request file, one checksum-bound verdict, one
+`chief approve` — so a branch that trips a declared zone *and* an oversized story is
+asked about once. The verdict is a file in the driver's state dir, bound by checksum
+to the changed-file list plus the zones matched, so it survives process death and a
+rebuilt worktree, is never re-asked, and never carries over to a later change.
+
+`awaiting-approval` is **non-terminal and not a failure**: dependents stay `pending`
+instead of cascading to `blocked`, siblings keep running, and the run summary reports
+it apart from the failures. `chief ps` shows it as `zone-hold`.
+
+**Which checkpoint asks when.** Chief's other human gate, the opt-in
+[plan review](../plan-review.md) (`"review": "plan"`), is a different decision at a
+different time: *before* any code exists it asks "is this the right plan?" and parks
+in `awaiting-review`; this one asks, *after* the floor has run on a finished branch,
+"does this green change agree with what else landed?" and parks in
+`awaiting-approval`. With both enabled you are asked twice over a tasklist's
+lifetime and never twice about the same thing.
+
+The whole layer is pinned by [`test/overlap-zones.sh`](../../test/overlap-zones.sh):
+a `serialize` zone merges exactly as before, a `review` zone and an over-budget story
+each hold a rebased, verified-green branch, an approval survives a restart in a
+separate process, and `warn` reports without blocking.
+
 ## Interruptions & resume
 
 A run stopped partway — Ctrl-C, token/quota exhaustion, lost connectivity, a crash
