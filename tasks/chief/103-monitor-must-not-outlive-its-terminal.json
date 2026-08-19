@@ -1,0 +1,51 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/103-monitor-must-not-outlive-its-terminal",
+  "description": "`chief monitor` outlives the terminal that started it. Close the window without Ctrl-C and the watcher reparents to PID 1 and keeps looping on its refresh interval — forever, on a machine nobody is watching.\n\nMeasured 2026-08-19 on this host: NINE orphaned `monitor.sh watch 1` processes, every one with PPID 1, in three cohorts — three started 14:38, three at 15:09, three at 23:31, the oldest 11.5 hours old. Each spawns a `sleep` per tick, so the nine were also the machine's nine `sleep` processes: eighteen processes from three abandoned views. They were found by hand, by someone noticing the machine looked busy.\n\nTwo separate defects sit underneath that.\n\nFIRST, the watcher has no reason to keep running once its terminal is gone, and nothing tells it to stop. `chief ps` is fine — bin/chief runs it as `monitor.sh once`, which exits on its own. Only the `watch` arm loops.\n\nSECOND, `chief reap` does not see them. Run against those nine live orphans it printed 'no orphaned chief processes'. Its scope is orphaned AGENT WORK — agent trees under a dead run, worktrees, run records — so a viewer that outlived its terminal falls straight through the one tool built for exactly this. A cleanup command that reports clean while nine orphans run is worse than no cleanup command, because it answers the question the operator actually asked.\n\nThe third cohort is the tell: they accumulate silently and nobody notices until the process list is read directly.",
+  "dependsOn": [],
+  "touches": ["engine", "cli"],
+  "iters": 6,
+  "warmup": [
+    "grep -n 'watch\\|once' bin/chief | head",
+    "sed -n '780,800p' engine/monitor.sh",
+    "sed -n '/^stop_reap_tree()/,/^}/p' engine/driver.sh",
+    "grep -n 'chief_scan_descendants\\|orphan' engine/reap.sh | head"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "The watcher dies with the terminal that started it",
+      "acceptanceCriteria": [
+        "A `monitor.sh watch` whose terminal goes away exits by itself rather than reparenting to PID 1 and looping. Whether that is a SIGHUP trap, a check that its parent has become PID 1, or both, the observable bar is the same.",
+        "Measured: start a watcher, kill its terminal, wait one refresh interval, and 0 monitor processes and 0 of its sleeps survive. That is the exact shape of the nine found on 2026-08-19.",
+        "Ctrl-C is unchanged and still exits cleanly, and `chief ps` — the `once` arm — is untouched, because it was never the defect.",
+        "One invocation leaves ONE process while running. The nine orphans arrived in threes, so a single `chief monitor` was leaving three; if that nesting is load-bearing it is documented, and if it is not it goes.",
+        "GATES: bash -n clean, shellcheck -S error clean, behavioural core green."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "chief reap sees an orphaned viewer, and says which kind it is",
+      "acceptanceCriteria": [
+        "`chief reap -n` reports an orphaned monitor watcher. Run against the real case it would have found 9, where it found 0.",
+        "Viewer orphans are reported DISTINCTLY from agent-work orphans, because the two cost different things to kill: a viewer is free, an agent tree is a run's worth of work. A single undifferentiated list makes the safe case and the expensive case look alike.",
+        "A watcher with a live parent is never touched, and neither is another user's process or a live registered run — the existing reap guarantees hold unchanged, asserted rather than assumed.",
+        "The scope change is stated where reap describes itself, so 'no orphaned chief processes' means no orphans of any kind rather than none of one kind."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "A hermetic test that reproduces the orphan first",
+      "acceptanceCriteria": [
+        "A test spawns a real watcher, orphans it by killing its parent, and asserts BOTH halves: the watcher self-exits (US-1), and while it is still alive reap identifies it as an orphaned viewer (US-2).",
+        "The test fails against the unfixed engine — it must reproduce the leak, not restate behaviour that already worked. Asserted by checking the watcher is still alive after the interval without the fix.",
+        "The negative cases ride along: a live watcher with a real parent survives both the self-exit path and reap, 0 false kills.",
+        "The suite is hermetic — its own prefix, its own runs dir, no reliance on the operator's real ~/.chief — and is registered in test/all.sh."
+      ],
+      "notes": null
+    }
+  ]
+}
