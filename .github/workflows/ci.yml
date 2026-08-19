@@ -44,6 +44,9 @@ jobs:
       - name: End-to-end smoke test (offline, deterministic)
         run: bash test/smoke.sh
 
+      - name: Usage/help (prints, never executes; exit codes)
+        run: bash test/usage.sh
+
       - name: Provider/model selection
         run: bash test/provider.sh
 

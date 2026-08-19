@@ -113,14 +113,14 @@ Usage:
                               --disk-age (default 1h). --no-disk / --disk-only pick
                               one half; a shared cache or a symlink out is refused.
   chief quality SUB [opts]    the code-quality RATCHET — the merge gate's second, MEASURED axis.
-                              `measure` emits a deterministic metric record (size · complexity ·
+                              \`measure\` emits a deterministic metric record (size · complexity ·
                               duplication · decomposition · lint violations) for a file set;
-                              `ratchet` compares the branch against $CHIEF_BASE_BRANCH and exits
+                              \`ratchet\` compares the branch against \$CHIEF_BASE_BRANCH and exits
                               non-zero when a tracked metric regressed past its tolerance, so a
                               verify hook can BLOCK a merge that made the codebase measurably
                               worse even with every test green. No model judgment anywhere in it
                               — awk over text, offline, byte-identical output. Configure per repo
-                              in .chief/quality.conf; `--write-baseline` is the reviewable
+                              in .chief/quality.conf; \`--write-baseline\` is the reviewable
                               re-baseline hatch; CHIEF_VERIFY_QUALITY=0 skips it.
                               See docs/reference/verify-hook.md
   chief approve [names…]      release a branch HELD AT AN OVERLAP ZONE — a domain this repo
@@ -147,14 +147,14 @@ run flags:
   -p, --parallel N   run up to N tasklists at once (default 1) — also settable as PARALLEL=N
                      in the environment; the flag wins, and omitting it leaves PARALLEL alone
   -n, --dry-run      print the schedule and exit (no git, no agents) — also settable as
-                     DRY_RUN=1 in the environment, which `chief run` honours rather than
+                     DRY_RUN=1 in the environment, which \`chief run\` honours rather than
                      overriding it with a real run
   -V, --verbose      trace each provider invocation into the log (provider · model · prompt) —
                      also settable as CHIEF_VERBOSE=1 in the environment or .chief/config
       --headless     non-interactive/programmatic mode for a host app embedding chief: no ANSI
                      colour, no interactive step, line-oriented output, and the run announces its
-                     id on a greppable `chief: run-id=<id>` line before the loop starts, ends with
-                     a one-line JSON `chief: summary=…`, and EXITS with a code that names the
+                     id on a greppable \`chief: run-id=<id>\` line before the loop starts, ends with
+                     a one-line JSON \`chief: summary=…\`, and EXITS with a code that names the
                      outcome (0 merged · 2 config · 3 no-work · 4 verify-failed · 5 conflict ·
                      6 failed · 7 held). Takes all the flags/env above unchanged. Also settable as
                      CHIEF_HEADLESS=1. Never inferred from stdout being a pipe — the whole
@@ -168,7 +168,7 @@ run flags:
                      inherited account. Also settable as CHIEF_ACCOUNT_ENV_FILE (environment or
                      .chief/config). Chief designates ONE account per run and does no pooling.
       --account-label NAME
-                     the name this run's account is REPORTED under — in `chief ps`/`chief monitor`,
+                     the name this run's account is REPORTED under — in \`chief ps\`/\`chief monitor\`,
                      the run registry and the run.started event — so an operator can see which
                      account a run spends without any surface carrying its secrets. Defaults to the
                      --account-env file's basename. Also settable as CHIEF_ACCOUNT_LABEL.
@@ -180,7 +180,7 @@ run flags:
                      floor it has always been, which stays chief's correctness guarantee.
                      Merges are still --no-ff, one commit per tasklist, still serialized against
                      the base; only the VERIFICATION is amortized. A branch that carries its own
-                     "verify" array, or that changes a `review` overlap zone, is never batched.
+                     "verify" array, or that changes a \`review\` overlap zone, is never batched.
                      A RED batch tip names no culprit, so it is BISECTED: binary-search the
                      stacked prefixes for the smallest failing one, confirm that branch by
                      re-verifying it ALONE, blame it (VERIFY-FAILED, exactly as a serialized
