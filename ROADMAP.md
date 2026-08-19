@@ -35,9 +35,9 @@ implements their work) and contract definitions (those live in `koine`).
 - **Engine** (`engine/driver.sh` · `agent.sh` · `monitor.sh` · `lib.sh` · `live.sh` · `reap.sh`) +
   **CLI** (`bin/chief`): `init · run · list · ps · monitor · logs · models · reap · pause · resume
   · version · update`.
-- **Multi-provider:** Claude Code (default), Devin, OpenCode, and Amp via `--provider`/`--model`
+- **Multi-provider:** Claude Code (default), Devin, OpenCode, Amp, and Codex via `--provider`/`--model`
   (or `CHIEF_PROVIDER`/`CHIEF_MODEL` in `.chief/config`, or the `--claude`/`--devin`/`--opencode`/
-  `--amp` shortcuts); legacy `CHIEF_TOOL`/`--tool` still accepted. All four are **first-class**:
+  `--amp`/`--codex` shortcuts); legacy `CHIEF_TOOL`/`--tool` still accepted. All five are **first-class**:
   one `_run_provider` dispatch case each, both validator lists in lockstep, a `chief models` case,
   and a conformance fixture. Amp is its own dispatch case (never an alias); its CLI has no model
   selector, so `--model` is **refused** for it rather than ignored. Onboarding recipe:

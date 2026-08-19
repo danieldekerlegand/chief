@@ -1,7 +1,7 @@
 # .chief/config — Chief project configuration (sourced as bash by the engine).
 # Uncomment/edit to override the defaults shown.
 
-CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode | amp
+CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode | amp | codex
 # CHIEF_MODEL=                    # optional provider-specific model override (not amp: it has
 #                                # no model selector, so --model is refused for it)
 # CHIEF_TOOL=claude               # legacy alias; use CHIEF_PROVIDER instead

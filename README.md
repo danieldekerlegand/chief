@@ -58,7 +58,7 @@ Installer environment overrides: `CHIEF_REPO`, `CHIEF_VERSION` (branch/tag),
 
 **Dependencies:** `git` and `jq` are required; `node` is used opportunistically
 (there's a `jq` fallback for everything). `claude` (Claude Code), `devin`,
-`opencode`, or `amp` provides the actual agent.
+`opencode`, `amp`, or `codex` provides the actual agent.
 
 ## Quickstart
 
@@ -78,8 +78,8 @@ chief run --devin --model opus  # use Devin with a model override
 chief run --provider opencode --model opencode/glm-4.7-free
 ```
 
-Claude Code remains the default provider. Use `--provider claude|devin|opencode|amp`
-(or the `--claude`, `--devin`, `--opencode`, and `--amp` shortcuts) and optionally
+Claude Code remains the default provider. Use `--provider claude|devin|opencode|amp|codex`
+(or the `--claude`, `--devin`, `--opencode`, `--amp`, and `--codex` shortcuts) and optionally
 `--model MODEL`; the same settings can be persisted as `CHIEF_PROVIDER` and
 `CHIEF_MODEL` in `.chief/config`. Amp has no model selector — it picks its own
 model — so `--model` is refused for it rather than silently ignored
@@ -236,7 +236,7 @@ the run will look.
 | `chief init` | Scaffold `.chief/` + `tasks/chief/` in the current repo. |
 | `chief gen <roadmap.json>` | Generate one schema-valid `tasks/chief/NN-slug.json` per roadmap item — the programmatic way to author tasklists (`-n` emits NDJSON and writes nothing; input contract: [`docs/reference/roadmap-input.md`](docs/reference/roadmap-input.md)). |
 | `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = concurrency (default 1). |
-| `chief run --provider P --model M` | Select Claude (default), Devin, OpenCode, or Amp (shortcuts: `--claude`, `--devin`, `--opencode`, `--amp`) and optionally override its model. Amp has no model selector, so `--model` is refused for it. |
+| `chief run --provider P --model M` | Select Claude (default), Devin, OpenCode, Amp, or Codex (shortcuts: `--claude`, `--devin`, `--opencode`, `--amp`, `--codex`) and optionally override its model. Amp has no model selector, so `--model` is refused for it. |
 | `chief run --local` | Cost-avoidance preset: every agent turn on a LOCAL/self-hosted endpoint via OpenCode — zero API cost, materially lower coding quality, and an error rather than a paid fallback when unconfigured ([`docs/guides/local-inference-preset.md`](docs/guides/local-inference-preset.md)). |
 | `chief run -n` | Dry run: print the schedule waves and exit (no git, no agents). |
 | `chief run --no-merge` | Complete branches but don't merge into the base. |
@@ -249,7 +249,7 @@ the run will look.
 | `chief monitor [interval]` | Live-refreshing run view (default 2s; Ctrl-C to exit). |
 | `chief logs [name] [-f]` | Tail a tasklist's per-iteration log from a live run (`-f` follows; `-n N` sets the tail size). |
 | `chief events [id] [-f]` | Subscribe to a run's machine-readable NDJSON event stream — run/tasklist/story transitions as they happen, stdout is pure NDJSON (`-l` lists the logs on this host). The contract chief-cloud and embedding hosts read ([`docs/reference/events.md`](docs/reference/events.md)). |
-| `chief models [provider]` | List the models you can pass to `--model` (live from devin/opencode; stable aliases for claude; none for amp). |
+| `chief models [provider]` | List the models you can pass to `--model` (live from devin/opencode; stable aliases for claude; no listing for amp/codex). |
 | `chief quality ratchet` | The merge gate's second, MEASURED axis: deterministic code-quality metrics (duplication, function length, nesting depth, single-use helpers, lint counts) compared branch-vs-base, exiting non-zero when one regressed past its tolerance — so `verify.sh` can BLOCK a merge that made the codebase worse with every test still green. No model judgment anywhere; `measure` emits the raw record, `--write-baseline` is the reviewable re-baseline hatch ([`docs/reference/verify-hook.md`](docs/reference/verify-hook.md)). |
 | `chief reap [-n] [--grace N] [--scope P]` | Stop orphaned chief work — agent trees with no live, registered run behind them (`-n` reports only). **Host-wide**: every repo on the box, not just the current one; `--scope <repo>-<cksum>-` narrows it to one repo's runs. |
 | `chief approve [names…]` | Release a branch **held at an overlap zone** — a domain this repo declared in `.chief/zones.conf` as one where a green gate is not sufficient authority to merge. The branch is already rebased and verified GREEN; the approval is durable, bound by checksum to the change it approved, and never re-asked after a restart (no name = report what is waiting) ([`docs/reference/overlap-zones.md`](docs/reference/overlap-zones.md)). |
@@ -333,7 +333,7 @@ tree at once.
 
 ## Status
 
-**v0.8.62** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.63** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the
