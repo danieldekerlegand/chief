@@ -85,7 +85,7 @@ Chief always pipes the composed prompt on **stdin** and always writes it to
 
 | Channel | Providers | Shape |
 |---|---|---|
-| stdin | `claude`, `opencode`, `amp` | nothing extra — the case just reads what's piped |
+| stdin | `claude`, `opencode`, `amp`, `codex` | nothing extra — the case just reads what's piped (`codex` takes a trailing `-`) |
 | prompt file | `devin` | `--prompt-file "$PROMPT_FILE"` |
 
 `devin`'s `--print` mode does **not** read stdin; without `--prompt-file` it panics
@@ -99,7 +99,7 @@ There are **two**, in different files, and they must accept the same set:
 
 - [`engine/agent.sh`](../../engine/agent.sh) — the `if [[ "$PROVIDER" != … ]]` guard
   just above the state-dir setup (`Error: Invalid provider '…'`, exit 1).
-- [`bin/chief`](../../bin/chief) — the `case "$provider" in claude|devin|opencode|amp)`
+- [`bin/chief`](../../bin/chief) — the `case "$provider" in claude|devin|opencode|amp|codex)`
   in `cmd_run` (`invalid provider '…'`, exit 2).
 
 Add the name to both, **and update both error strings to name the full roster.**
@@ -133,12 +133,12 @@ points at the [model-override](#model-overrides) stance so the two can't disagre
 
 ### 6. `chief run --help`
 
-The `--provider claude|devin|opencode|amp` line and the shortcuts line in
+The `--provider claude|devin|opencode|amp|codex` line and the shortcuts line in
 `bin/chief`'s usage block.
 
 ### 7. `templates/config`
 
-The roster comment on `CHIEF_PROVIDER` (`# AI provider: claude | devin | opencode | amp`).
+The roster comment on `CHIEF_PROVIDER` (`# AI provider: claude | devin | opencode | amp | codex`).
 This is what every new project scaffolded by `chief init` reads as the supported set.
 
 ### 8. README
@@ -258,6 +258,7 @@ day.
 | `devin` | `--print` | `--permission-mode bypass` (+ `--respect-workspace-trust false`) | `--prompt-file` | supported | `devin models list` |
 | `opencode` | `run` | *(none needed)* | stdin | supported | `opencode models [provider]` |
 | `amp` | *(default)* | `--dangerously-allow-all` | stdin | **unsupported** — refused, see [model overrides](#model-overrides) | none (amp has no selector) |
+| `codex` | `exec` | `--dangerously-bypass-approvals-and-sandbox` | stdin (trailing `-`) | supported | none (no listing command) |
 
 `amp` is a genuine dispatch case, not an alias of anything: `CHIEF_PROVIDER=amp`
 (or `--amp`) runs `amp --dangerously-allow-all` with the prompt on stdin. Tasklist

@@ -55,6 +55,7 @@ ROSTER=(
 "devin|prompt-file|wired|--permission-mode bypass --respect-workspace-trust false --print --model %MODEL% --prompt-file %PROMPT_FILE%|--permission-mode bypass --respect-workspace-trust false --print --prompt-file %PROMPT_FILE%"
 "opencode|stdin|wired|run --model %MODEL%|run"
 "amp|stdin|unwired|--dangerously-allow-all|--dangerously-allow-all"
+"codex|stdin|wired|exec --dangerously-bypass-approvals-and-sandbox --color never --model %MODEL% -|exec --dangerously-bypass-approvals-and-sandbox --color never -"
 )
 
 roster_names() { for r in "${ROSTER[@]}"; do printf '%s\n' "${r%%|*}"; done | sort -u; }

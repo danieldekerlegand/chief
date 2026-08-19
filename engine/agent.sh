@@ -1,6 +1,6 @@
 #!/bin/bash
 # Chief Wiggum - Long-running AI agent loop
-# Usage: ./agent.sh [--provider claude|devin|opencode|amp] [--model MODEL] [max_iterations]
+# Usage: ./agent.sh [--provider claude|devin|opencode|amp|codex] [--model MODEL] [max_iterations]
 #
 # EXIT CODES — engine/driver.sh keys off these; keep them stable.
 #   0  the PRD completed: the agent emitted <promise>COMPLETE</promise>.
@@ -135,8 +135,8 @@ if [ -n "${CHIEF_PRESET:-}" ]; then
 fi
 
 # Validate provider choice
-if [[ "$PROVIDER" != "claude" && "$PROVIDER" != "devin" && "$PROVIDER" != "opencode" && "$PROVIDER" != "amp" ]]; then
-  echo "Error: Invalid provider '$PROVIDER'. Must be 'claude', 'devin', 'opencode', or 'amp'."
+if [[ "$PROVIDER" != "claude" && "$PROVIDER" != "devin" && "$PROVIDER" != "opencode" && "$PROVIDER" != "amp" && "$PROVIDER" != "codex" ]]; then
+  echo "Error: Invalid provider '$PROVIDER'. Must be 'claude', 'devin', 'opencode', 'amp', or 'codex'."
   exit 1
 fi
 
@@ -1097,6 +1097,18 @@ _provider_exec() {
       # No model branch by design: amp's CLI has no model selector (it picks its
       # own), so $MODEL is refused/dropped above rather than passed here.
       amp --dangerously-allow-all
+      ;;
+    codex)
+      # `exec` is codex's non-interactive arm; the trailing `-` makes it read the
+      # prompt from stdin, which is the channel chief already pipes on.
+      # `--color never` is not cosmetic: the completion token is matched against a
+      # WHOLE LINE (`^[[:space:]]*`?<promise>COMPLETE</promise>`?$`), so a colour
+      # escape wrapped around it would read as no completion at all and the
+      # tasklist would run to its budget having actually finished. codex defaults
+      # to `auto`, which already drops colour on a pipe — this pins it.
+      if [ -n "$MODEL" ]; then codex exec --dangerously-bypass-approvals-and-sandbox --color never --model "$MODEL" -
+      else codex exec --dangerously-bypass-approvals-and-sandbox --color never -
+      fi
       ;;
   esac
 }

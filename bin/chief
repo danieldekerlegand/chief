@@ -72,10 +72,10 @@ Usage:
                               it with "crossRepo":["<repo>"] when the coordination is real).
                               No args = every tasklist in the tasks dir. Non-zero on any finding.
   chief run [-p N] [names…]   run pending tasklists (default sequential; -p N = concurrency)
-                              --provider claude|devin|opencode|amp (default claude)
+                              --provider claude|devin|opencode|amp|codex (default claude)
                               --model MODEL (provider-specific model override; amp has no
                               model selector, so --model is refused for it)
-                              --claude, --devin, --opencode, --amp provider shortcuts
+                              --claude, --devin, --opencode, --amp, --codex provider shortcuts
                               --preset local (= --local) cost-avoidance mode: run every agent
                               turn on a LOCAL/self-hosted endpoint via opencode, at zero API
                               cost and materially lower coding quality. Configure it with
@@ -99,7 +99,7 @@ Usage:
                               pure NDJSON (pipe it to jq) — notes go to stderr. This is the contract
                               chief-cloud and embedding hosts read: docs/reference/events.md
   chief models [provider]     list the models you can pass to --model: live from the provider for
-                              devin/opencode, the stable family aliases for claude, none for amp
+                              devin/opencode, the stable family aliases for claude, none for amp/codex
                               (no arg = all)
   chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
        [--scope PREFIX]       still spending quota) with no live, registered run behind
@@ -379,6 +379,7 @@ cmd_run() {
     --devin)       provider=devin; shift ;;
     --opencode)    provider=opencode; shift ;;
     --amp)         provider=amp; shift ;;
+    --codex)       provider=codex; shift ;;
     --account-env)   account_env="$2"; shift 2 ;;
     --account-env=*) account_env="${1#*=}"; shift ;;
     --account-label)   account_label="$2"; shift 2 ;;
@@ -416,8 +417,8 @@ cmd_run() {
   # --model are the per-invocation override; .chief/config is the project setting.
   provider="${provider:-$CHIEF_PROVIDER}"; model="${model:-$CHIEF_MODEL}"
   case "$provider" in
-    claude|devin|opencode|amp) ;;
-    *) echo "invalid provider '$provider' (choose claude, devin, opencode, or amp)" >&2; exit 2 ;;
+    claude|devin|opencode|amp|codex) ;;
+    *) echo "invalid provider '$provider' (choose claude, devin, opencode, amp, or codex)" >&2; exit 2 ;;
   esac
   # amp has no model selector — it picks its own (docs/guides/providers.md#model-overrides).
   # Accept-and-ignore is barred, so an EXPLICIT --model is a bad invocation. A model
@@ -709,14 +710,18 @@ cmd_models() {
     opencode) if command -v opencode >/dev/null 2>&1; then opencode models ${2:+"$2"};   else echo "opencode CLI not on PATH"; return 1; fi ;;
     amp)      echo "amp — no model selector: the CLI chooses its own model, so there is nothing to pass to --model."
               echo "      chief refuses an explicit '--model' for amp rather than ignoring it (docs/guides/providers.md#model-overrides)." ;;
+    codex)    echo "codex — takes --model (wired to 'codex exec --model'), but the CLI has NO listing command:"
+              echo "      'codex --help' exposes no 'models' subcommand, so there is nothing to enumerate."
+              echo "      Pass a model id straight through, e.g. chief run --codex --model gpt-5.6-terra." ;;
     ""|all|help)
       _models_claude
       echo
       echo "devin    — live, per-account list:  chief models devin        (= devin models list)"
       echo "opencode — live list:               chief models opencode     (= opencode models [provider])"
       echo "amp      — none: amp has no model selector; --model is refused for it"
+      echo "codex    — no listing command; --model is wired and passed through as given"
       ;;
-    *) echo "chief models: unknown provider '$1' (claude | devin | opencode | amp)" >&2; return 2 ;;
+    *) echo "chief models: unknown provider '$1' (claude | devin | opencode | amp | codex)" >&2; return 2 ;;
   esac
 }
 # Host-wide orphan sweep. Deliberately NOT gated on load_project: the whole point is
