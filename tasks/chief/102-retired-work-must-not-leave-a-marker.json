@@ -1,0 +1,50 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/102-retired-work-must-not-leave-a-marker",
+  "description": "A tasklist in one repo can be a MARKER for work that belongs in another. koine carries ten of them, each saying so in its own first line — 'CROSS-REPO, owned and built in AGORA, not koine' — because ADR-0001 puts implementation downstream of the spec.\n\nNothing connects the two ends. `supersededBy` appears NOWHERE in the engine: it is hand-authored metadata that chief reads never. So when the downstream tasklist merges, the marker upstream keeps sitting in the backlog, indistinguishable from work that still needs doing.\n\nMeasured 2026-08-18/19 on this host. Five of koine's ten markers had already shipped — 57 in agora, 58 in lugh, 60 in agora, 61 in formant, 59 in cuneiform — and every one was still listed as pending. `chief list` counted them. The queue reported work that was finished. Finding them took a content-level search across fourteen repos, because one of the five (59) led its park sentence with a dependency rather than the word placeholder and was missed on the first pass.\n\nThis is not koine's problem. Any repo can hold a marker for another repo's work, and the same silence applies. The forward pointer now exists in koine (`DOWNSTREAM COUNTERPART: agora:75-...`), which makes the link readable — but readable is not checkable, and the whole point of a marker is that nobody is looking at it.",
+  "dependsOn": [],
+  "touches": ["engine", "cli"],
+  "iters": 6,
+  "warmup": [
+    "grep -rn 'supersededBy' engine/ bin/ | head",
+    "sed -n '/^criteria_scope_report()/,/^}/p' engine/criteria.sh",
+    "grep -n 'is_merged\\|deps_of' engine/driver.sh | head",
+    "ls ../koine/tasks/chief/completed | head"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A marker declares its counterpart in a field, not in prose",
+      "acceptanceCriteria": [
+        "A tasklist may declare the downstream tasklist that will complete it, in the cross-repo notation chief already resolves for dependsOn (repo:stem). The field is documented in the tasklist schema next to supersededBy, which it is the forward half of.",
+        "A declaration naming a repo or stem that does not resolve fails the lint, with the same message shape a bad dependsOn edge gets — a pointer to nothing is worse than no pointer, because it reads as checked.",
+        "Prose in a description is NOT the mechanism. A marker whose counterpart is only mentioned in text is not detected and is not claimed to be — the gate reports what it can see, and says so.",
+        "GATES: bash -n clean, shellcheck -S error clean, behavioural core green."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "A merged counterpart with a live marker is reported, by name",
+      "acceptanceCriteria": [
+        "A check resolves each declared counterpart across repos using the driver's own helpers rather than a second implementation of the same lookup, and reports every marker whose counterpart carries mergedToMain while the marker is still live in tasks/chief/.",
+        "The report names the marker, the counterpart, and the merge sha, so acting on it needs no further investigation. Reproduced against the real case: seeded with koine's five shipped markers it finds 5, and with them retired it finds 0.",
+        "A counterpart that has NOT merged is silent. A marker whose counterpart is still active is the normal state for four of koine's five right now and must not be reported as a finding.",
+        "Cross-repo resolution degrades rather than aborts: a counterpart in a repo that is not checked out here is reported as unresolvable and the rest of the check still runs, because a laptop with a partial checkout is the common case."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "It reports, and it is wired where someone will see it",
+      "acceptanceCriteria": [
+        "The check reports and does not fail a run. Retiring a marker is a judgement — it needs a supersededBy value and sometimes dependents repointed first — and gating a run on somebody else's merge would block work that is otherwise fine.",
+        "It surfaces where the backlog is read rather than only on demand, so a finished marker is visible without anyone running an extra command.",
+        "The retirement trap is named in the same breath: a completed record with no mergedToMain can never satisfy a dependency edge, so any dependents must be repointed BEFORE the marker is filed. The output says this where a reader will act on it, because that ordering is the part that silently breaks a queue.",
+        "A hermetic test covers the three states — counterpart merged and marker live (reported), counterpart merged and marker retired (silent), counterpart unmerged (silent) — plus the unresolvable-repo case. 4 states, 0 false findings."
+      ],
+      "notes": null
+    }
+  ]
+}
