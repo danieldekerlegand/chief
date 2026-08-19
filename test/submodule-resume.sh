@@ -43,6 +43,11 @@
 #      `... complete @sha — bump sub + record + retire`, with the tasklist retired to
 #      completed/ carrying mergedToMain. Nothing downstream that reads completed/ moves.
 #
+#   D. A TORN snapshot is refused, not seeded — the file is planted truncated (the
+#      shape a kill mid-write leaves: non-empty, so a `-s` test accepts it, but not
+#      JSON) and the run must fall back to the pristine template and complete, rather
+#      than seeding garbage and reporting a tasklist with no stories at all.
+#
 #   C. A NON-SUBMODULE tasklist is unperturbed — the same kill/restart against a
 #      project tasklist resumes at the same 2 of 3 it always did, AND does so from the
 #      BRANCH's committed tasklist rather than the snapshot: the test deliberately
@@ -336,5 +341,67 @@ git -C "$REPO" checkout -q main
 [ -f "$REPO/tasks/chief/completed/resume-demo.json" ] || fail "C: tasklist not retired to completed/"
 for s in US-1 US-2 US-3; do [ -f "$REPO/src/$s.txt" ] || fail "C: $s missing from main after merge"; done
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ARM D — a TORN snapshot must not poison the resume.
+#
+# The snapshot is host state written while a run is being killed, so the file this
+# mechanism can actually present to the next run is a TRUNCATED one. That is the
+# nastiest shape: it is non-empty, so a `-s` test waves it through, but it is not
+# JSON — and seeding it as the runtime prd.json makes every downstream jq read
+# return nothing, reporting a tasklist with NO stories at all. That resume is
+# strictly worse than the 0-of-3 this tasklist set out to fix.
+#
+# agent.sh now writes the snapshot atomically (temp + rename), so a torn file should
+# be unreachable; this arm pins the FLOOR under that — the driver seeds only what
+# parses, and falls back to the pristine template otherwise. Planted directly rather
+# than raced for, because a race is not a test.
+# ═════════════════════════════════════════════════════════════════════════════
+ARM=D
+mkdir -p "$WORK/D"
+SUBSRC_D="$WORK/D/subsrc"; mkdir -p "$SUBSRC_D"
+git -C "$SUBSRC_D" init -q -b main 2>/dev/null || { git -C "$SUBSRC_D" init -q; git -C "$SUBSRC_D" checkout -q -b main; }
+printf 'lib\n' > "$SUBSRC_D/README.md"; git -C "$SUBSRC_D" add -A; git -C "$SUBSRC_D" commit -q -m "sub base"
+
+REPO="$WORK/D/repo"; mkdir -p "$REPO"
+git -C "$REPO" init -q -b main 2>/dev/null || { git -C "$REPO" init -q; git -C "$REPO" checkout -q -b main; }
+git -C "$REPO" commit -q --allow-empty -m init
+git -C "$REPO" -c protocol.file.allow=always submodule add "file://$SUBSRC_D" sub >/dev/null 2>&1 \
+  || fail "D: submodule add failed"
+git -C "$REPO" commit -q -m "add submodule sub"
+cd "$REPO"
+"$CHIEF" init >/dev/null || fail "D: chief init failed"
+rm -f tasks/chief/example.json
+three_stories '"repo":"sub",' > tasks/chief/resume-demo.json
+cat > .chief/verify.sh <<'SH'
+#!/usr/bin/env bash
+set -eu
+for s in US-1 US-2 US-3; do [ -f "src/$s.txt" ] || { echo "verify: missing src/$s.txt"; exit 1; }; done
+echo "verify: all three artifacts present"
+SH
+chmod +x .chief/verify.sh
+git add -A && git commit -q -m "resume-demo tasklist + verify hook"
+
+# PLANT THE TEAR: a snapshot claiming 2 of 3, cut off mid-object. Non-empty (so the
+# old `-s` guard would have accepted it) and unparseable (so seeding it would lie).
+mkdir -p "$REPO/.chief/state/snapshots"
+SNAPFILE_D="$REPO/.chief/state/snapshots/resume-demo.json"
+three_stories '"repo":"sub",' | jq '.userStories |= map(if .id=="US-3" then . else .passes=true end)' \
+  | head -c 120 > "$SNAPFILE_D"
+[ -s "$SNAPFILE_D" ] || fail "D: the planted snapshot is empty — it must be non-empty to test the guard"
+jq -e . "$SNAPFILE_D" >/dev/null 2>&1 && fail "D: the planted snapshot still parses — it is not torn"
+
+rm -f "$CHIEF_TEST_RESUMEFILE"
+CHIEF_TEST_HANG_ON=none PATH="$WORK/fake2:$PATH" "$CHIEF" run >"$WORK/D/run1.log" 2>&1 \
+  || { cat "$WORK/D/run1.log" >&2; fail "D: the run exited non-zero on a torn snapshot"; }
+[ -f "$CHIEF_TEST_RESUMEFILE" ] || fail "D: the run never invoked the agent — a torn snapshot killed the tasklist"
+read -r d_passing d_next < "$CHIEF_TEST_RESUMEFILE"
+[ "$d_passing" = "0" ] || fail "D: agent handed $d_passing passing from a torn snapshot, not 0"
+[ "$d_next" = "US-1" ] || fail "D: agent handed story $d_next, not US-1 — the torn file was seeded"
+
+git -C "$REPO" checkout -q main
+for s in US-1 US-2 US-3; do [ -f "$REPO/src/$s.txt" ] || fail "D: $s missing from main after merge"; done
+[ -f "$REPO/tasks/chief/completed/resume-demo.json" ] || fail "D: tasklist not retired to completed/"
+
 echo "SUBMODULE-RESUME PASS — submodule progress survived a SIGKILL (2/3 -> resumed at US-3),"
+echo "                        a TORN snapshot fell back to the template instead of seeding garbage,"
 echo "                        the terminal record kept its shape, and the project arm was unmoved"

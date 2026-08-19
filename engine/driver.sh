@@ -2335,7 +2335,16 @@ run_worker() {
     # tasklist — carries the passes-state on a resume; equals the pristine template
     # on a fresh branch (which is at the base-branch tip).
     mkdir -p "$wtstate"
-    prd_state_source > "$wtstate/prd.json" 2>/dev/null; [ -s "$wtstate/prd.json" ] || cp "$SRC/$name.json" "$wtstate/prd.json"
+    # The fallback tests for PARSEABLE, not merely non-empty. The snapshot arm above
+    # is host state written while a run is being killed, so the failure it can present
+    # is a TRUNCATED file — non-empty, and therefore invisible to a `-s` test, but not
+    # JSON. Seeding that as the runtime prd.json fails every jq read downstream and
+    # reports the tasklist as having no stories at all, which is a worse resume than
+    # the 0-of-3 this tasklist set out to fix. agent.sh writes the snapshot atomically
+    # (_prd_promote) so this should be unreachable; it is the floor under that, and it
+    # costs one jq per worker.
+    prd_state_source > "$wtstate/prd.json" 2>/dev/null
+    jq -e . "$wtstate/prd.json" >/dev/null 2>&1 || cp "$SRC/$name.json" "$wtstate/prd.json"
     echo "$branch" > "$wtstate/.last-branch"
     # SCOPE GATE (engine/criteria.sh): a criterion naming another repo cannot be met
     # from this worktree, so it is caught HERE — before the first agent turn, rather

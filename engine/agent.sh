@@ -506,11 +506,25 @@ _passed_ids() { jq -r '[.userStories[]? | select(.passes==true) | .id] | join(" 
 # Never fatal. Losing a run over a bookkeeping copy is not a trade worth making —
 # the branch's commits are the ground truth, exactly as before.
 _prd_promote() {
+  local _tmp
   [ -n "$PRD_STORE" ] || return 0
   [ -s "$PRD_FILE" ] || return 0
   jq -e . "$PRD_FILE" >/dev/null 2>&1 || return 0   # never bank a half-written edit
   mkdir -p "$(dirname "$PRD_STORE")" 2>/dev/null || true
-  cp "$PRD_FILE" "$PRD_STORE" 2>/dev/null || true
+  # ATOMIC, because the kill this store exists to survive can land DURING the write.
+  # A plain `cp` truncates in place, and a torn snapshot is worse than no snapshot:
+  # the driver seeds the runtime prd.json from it and falls back only when the result
+  # is EMPTY, so a half-written file is non-empty, defeats that guard, and is seeded
+  # as invalid JSON. Write a sibling temp (same directory, so same filesystem) and
+  # rename — rename is atomic, so a reader sees either the old snapshot or the new
+  # one, never half of either. The temp is pid-qualified because the heartbeat child
+  # (_beat_start) promotes concurrently with this loop.
+  _tmp="$PRD_STORE.$$.tmp"
+  if cp "$PRD_FILE" "$_tmp" 2>/dev/null && mv -f "$_tmp" "$PRD_STORE" 2>/dev/null; then
+    :
+  else
+    rm -f "$_tmp" 2>/dev/null || true
+  fi
   return 0
 }
 
