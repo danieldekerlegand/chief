@@ -1,0 +1,52 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/101-unverified-survives-the-resume",
+  "description": "An UNVERIFIED stop does not survive the run that produced it, so the tasklist it stopped re-fails forever without ever spending an agent turn.\n\nThe merge gate demotes a passing story whose criteria state a bar and whose notes carry no observed value, and the run ends UNVERIFIED. The demotion is written to the RUNTIME prd.json in the worktree. The branch's committed tasklist still reads passes:true. On the next run, run_worker computes `left` from the branch's committed tasklist, sees 0 stories remaining, prints 'all stories already pass — skip agent, go to verify+merge' and sets skip_agent=1 (engine/driver.sh, the arm after the vfail and no-commits guards). No agent runs. The merge gate demotes the same story again. The run ends UNVERIFIED again, identically, and every subsequent resume repeats it.\n\nThe resume block ALREADY guards the two neighbouring cases: a prior post-rebase verify failure persists a marker so an all-pass branch re-engages the agent rather than re-failing, and a branch with no commits vs base re-runs rather than merging a false all-pass. The unmeasured-bar case is the third of exactly this shape and is the only one without a guard.\n\nThis is not theoretical. insimul 261-slice-corpus-babylon-reference reproduced it: three runs, each ending UNVERIFIED 2/3, always the same story, because US-1 was the only one of its three whose criteria state a bar. It was then repaired by hand — the pass flag flipped back so the resume would engage the agent at all. The boundary demotion added in 100 does not reach this case either: it fires between an agent's iterations, and this path spends no iterations.",
+  "dependsOn": [],
+  "touches": ["engine"],
+  "iters": 6,
+  "warmup": [
+    "grep -n 'skip_agent=1' engine/driver.sh",
+    "sed -n '2185,2210p' engine/driver.sh",
+    "grep -n 'verify-failed.log' engine/driver.sh",
+    "sed -n '/^unverified_stop()/,/^}/p' engine/driver.sh",
+    "sed -n '/^measure_gate()/,/^}/p' engine/measure.sh"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "An UNVERIFIED stop is recorded where the resume can read it",
+      "acceptanceCriteria": [
+        "unverified_stop persists a marker for the tasklist on the same terms as the post-rebase verify failure it mirrors, naming the stories whose bars went unmeasured. Same location convention, same lifetime, so the two read as one mechanism rather than two.",
+        "The marker is cleared the moment those stories record their observed values and the tasklist merges — a satisfied tasklist must not re-engage the agent on every future resume. Both transitions are asserted: present after the stop, gone after the merge.",
+        "A stop for any OTHER reason (INCOMPLETE, EMPTY-NO-WORK, a usage limit, an operator pause) writes no such marker. Asserted, because a marker that over-fires turns every park into a forced agent turn.",
+        "GATES: bash -n clean, shellcheck -S error clean, and the behavioural core stays green."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "A resumed all-pass branch carrying that marker re-engages the agent",
+      "acceptanceCriteria": [
+        "The resume block gains a third arm beside the vfail and no-commits guards: an all-pass branch whose marker is present says so in one line and does NOT set skip_agent. The two existing arms are untouched.",
+        "Measured both ways in one run: with the marker present and every story reading passes:true, the tasklist spends at least 1 agent turn; with no marker and the same all-pass branch, it spends exactly 0 and still merges. The second half is the regression this must not cause — a fix that spends a turn on every resume is worse than the defect.",
+        "The re-engaged agent is pointed at the specific stories and their bars, quoted in the words measure.sh already prints, not generic advice to check its work. An agent told only that something is unverified will re-mark the same story unchanged, which is the loop this closes.",
+        "The demoted story reads passes:false to the agent that resumes it, so the loop picks it as work rather than seeing a finished tasklist."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "The loop cannot come back — a hermetic test that reproduces it first",
+      "acceptanceCriteria": [
+        "A behavioural test drives the whole shape offline: turn 1 marks a bar-stating story passing with no observed value, the run ends UNVERIFIED, and the SAME tasklist is re-run — the agent is engaged, records the value, and the tasklist MERGES. Exit 0.",
+        "The test fails against the unfixed engine. It is a real reproduction, not a restatement of behaviour that already worked: assert that without the fix the re-run spends 0 agent turns and ends UNVERIFIED a second time.",
+        "The negative case rides in the same test: a genuinely complete all-pass branch with no marker still skips the agent and merges, 0 turns spent.",
+        "The pathological case is bounded: a story whose value is never recorded must not re-engage forever. It stops on the existing demote limit rather than spinning, and the test asserts the run terminates.",
+        "The test is registered in test/all.sh and .chief/verify.sh passes."
+      ],
+      "notes": null
+    }
+  ]
+}
