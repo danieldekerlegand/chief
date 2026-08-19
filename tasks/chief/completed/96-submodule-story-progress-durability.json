@@ -26,7 +26,17 @@
         "A NON-submodule tasklist's behaviour is byte-identical — asserted, since this is a fix to a special case and must not perturb the common one."
       ],
       "passes": true,
-      "notes": "test/submodule-resume.sh PASS — arm A: SIGKILLed the run's whole process group mid-turn, branch carried 2 story commits, durable snapshot banked 2, restart handed the agent 2/3 with US-3 next and worker logged \"RESUMING chief/resume-demo (1 story left)\"; arm C (non-submodule): identical kill/restart still resumed 2/3 at US-3 from the BRANCH's committed tasklist with the snapshot deliberately poisoned to 0. Counter-proof: with the promotion disabled on a temp commit the same test FAILS \"no durable snapshot after the kill\". Terminal record unmoved — exactly 2 commits touch tasks/chief (add + \"resume-demo complete @sha — bump sub + record + retire\"), completed/ record carries mergedToMain. Mechanism + rejected alternatives recorded in driver.sh prd_state_source. Also green: bash -n clean (agent.sh, driver.sh, new test); smoke, ratelimit, noworkguard, submodule, stale-resume, nested-submodule, liveliness, measured-bars, boundary-demotion, evidence-gate; version-bump PASS (0.8.60), doc-sync PASS; bystander PASS with the new test in the block. shellcheck not installed locally — CI enforces it.  FULL MERGE GATE GREEN on HEAD (48f1b90): ./.chief/verify.sh exit 0 — \"verify: OK (allowing merge)\". doc-links 4 dead vs 4 on main (no regression); quality ratchet OK (no tracked metric regressed); bash -n clean; VERSION-BUMP PASS (0.8.62); DOC-SYNC PASS (README v0.8.62); BYSTANDER PASS over the full 36-test behavioural block, including limitresume PASS (the prior blocker, fixed by the RATE_LIMIT_REDISPATCH_MAX_WAIT clamp) and submodule-resume PASS (arms A/A2/B/C/D). shellcheck not installed locally — CI enforces it."
+      "notes": "test/submodule-resume.sh PASS — arm A: SIGKILLed the run's whole process group mid-turn, branch carried 2 story commits, durable snapshot banked 2, restart handed the agent 2/3 with US-3 next and worker logged \"RESUMING chief/resume-demo (1 story left)\"; arm C (non-submodule): identical kill/restart still resumed 2/3 at US-3 from the BRANCH's committed tasklist with the snapshot deliberately poisoned to 0. Counter-proof: with the promotion disabled on a temp commit the same test FAILS \"no durable snapshot after the kill\". Terminal record unmoved — exactly 2 commits touch tasks/chief (add + \"resume-demo complete @sha — bump sub + record + retire\"), completed/ record carries mergedToMain. Mechanism + rejected alternatives recorded in driver.sh prd_state_source. Also green: bash -n clean (agent.sh, driver.sh, new test); smoke, ratelimit, noworkguard, submodule, stale-resume, nested-submodule, liveliness, measured-bars, boundary-demotion, evidence-gate; version-bump PASS (0.8.60), doc-sync PASS; bystander PASS with the new test in the block. shellcheck not installed locally — CI enforces it.  FULL MERGE GATE GREEN on HEAD (48f1b90): ./.chief/verify.sh exit 0 — \"verify: OK (allowing merge)\". doc-links 4 dead vs 4 on main (no regression); quality ratchet OK (no tracked metric regressed); bash -n clean; VERSION-BUMP PASS (0.8.62); DOC-SYNC PASS (README v0.8.62); BYSTANDER PASS over the full 36-test behavioural block, including limitresume PASS (the prior blocker, fixed by the RATE_LIMIT_REDISPATCH_MAX_WAIT clamp) and submodule-resume PASS (arms A/A2/B/C/D). shellcheck not installed locally — CI enforces it.",
+      "diffSize": {
+        "files": 10,
+        "lines": 422,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-2",
@@ -38,10 +48,21 @@
         "Demonstrated on the real case: a fixture reproducing `insimul:164`'s shape (2 of 3 stories committed in a submodule, run restarted) resumes at story 3."
       ],
       "passes": true,
-      "notes": "test/submodule-resume.sh PASS — arm A now also asserts the PROMPT the resumed agent was handed (banked from the fake agent's stdin on its first turn): it carries the `# ALREADY DONE — work that is already committed on this branch` section, names `US-1 — one` and `US-2 — two`, does NOT list the unfinished `US-3 — three` among them, states `RE-IMPLEMENTING ONE OF THOSE STORIES IS A DEFECT`, and points at `Your work this turn is US-3`. Counterpart asserted too: the FIRST turn of the fresh (0-done) run carries no such section. Counter-proof — with the section gutted on a throwaway commit the same test FAILS \"A: the resumed prompt never told the agent what is already done\". Fixture is insimul:164's shape (2 of 3 committed in a submodule, SIGKILLed, restarted). Also green: bash -n clean over bin/ engine/ test/ (0 failures); version-bump PASS (0.8.61); doc-sync PASS; doc-links 4 dead vs 4 on main; quality ratchet OK (no metric regressed); behavioral — smoke, provider-conformance, ratelimit, limitstate, noworkguard, plan-review, research, liveliness, evidence-gate, measured-bars, boundary-demotion, criteria-scope, five-cases, stall-flag, headless, events, stale-resume, submodule-gitlink, submodule-resume all PASS (19). KNOWN FLAKE, not from this change: test/limitresume.sh fails here and fails IDENTICALLY on main (3 of 3 vs 1 pass / 2 fails) — it asserts inside a 3-second limit window and this host is at load average 33 on 14 cores. shellcheck not installed locally — CI enforces it."
+      "notes": "test/submodule-resume.sh PASS — arm A now also asserts the PROMPT the resumed agent was handed (banked from the fake agent's stdin on its first turn): it carries the `# ALREADY DONE — work that is already committed on this branch` section, names `US-1 — one` and `US-2 — two`, does NOT list the unfinished `US-3 — three` among them, states `RE-IMPLEMENTING ONE OF THOSE STORIES IS A DEFECT`, and points at `Your work this turn is US-3`. Counterpart asserted too: the FIRST turn of the fresh (0-done) run carries no such section. Counter-proof — with the section gutted on a throwaway commit the same test FAILS \"A: the resumed prompt never told the agent what is already done\". Fixture is insimul:164's shape (2 of 3 committed in a submodule, SIGKILLed, restarted). Also green: bash -n clean over bin/ engine/ test/ (0 failures); version-bump PASS (0.8.61); doc-sync PASS; doc-links 4 dead vs 4 on main; quality ratchet OK (no metric regressed); behavioral — smoke, provider-conformance, ratelimit, limitstate, noworkguard, plan-review, research, liveliness, evidence-gate, measured-bars, boundary-demotion, criteria-scope, five-cases, stall-flag, headless, events, stale-resume, submodule-gitlink, submodule-resume all PASS (19). KNOWN FLAKE, not from this change: test/limitresume.sh fails here and fails IDENTICALLY on main (3 of 3 vs 1 pass / 2 fails) — it asserts inside a 3-second limit window and this host is at load average 33 on 14 cores. shellcheck not installed locally — CI enforces it.",
+      "diffSize": {
+        "files": 5,
+        "lines": 113,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
   ],
   "crossRepo": [
     "insimul"
-  ]
+  ],
+  "mergedToMain": "459767d"
 }
