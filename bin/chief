@@ -58,11 +58,14 @@ Usage:
   chief init                  scaffold .chief/ + tasks/chief/ in the current repo
   chief status [--blocked]    what is LEFT and what can START NOW — remaining (live/parked),
         [--all]               runnable vs blocked on an unmerged dependency, completed, problems.
-                              --blocked names the edge holding each one. Run inside a repo it
+        [--enforce-order]     --blocked names the edge holding each one. Run inside a repo it
                               reports that repo; run ABOVE several it walks the tree and reports
                               a per-repo table plus portfolio totals; --all reports every repo in
                               the known-repos registry regardless of cwd. The header always states
-                              which scope produced the numbers. Always exits 0
+                              which scope produced the numbers. Breaks the totals down by the
+                              tasklist's "category" — an OPAQUE string chief reports and never
+                              ranks, unless the project declared its own ordering in .chief/config.
+                              Always exits 0; only --enforce-order, opt-in for CI, can exit non-zero
   chief gen ROADMAP.json      generate tasklists from a roadmap document — one schema-valid
                               tasks/chief/NN-slug.json per roadmap item, numbered in the next
                               free band, with branchName/dependsOn/touches per the conventions.

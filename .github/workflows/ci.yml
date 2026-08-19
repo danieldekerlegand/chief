@@ -152,6 +152,9 @@ jobs:
       - name: `chief status` portfolio scope (repo ROOTS, registry reconciled by resolved path, no double-count)
         run: bash test/status-scope.sh
 
+      - name: `chief status` categories are opaque (no vocabulary in chief; only --enforce-order can fail)
+        run: bash test/status-categories.sh
+
       - name: Code-quality ratchet (slop BLOCKED, refactor ALLOWED, unmeasurable languages skipped not zeroed)
         run: bash test/quality-ratchet.sh
 

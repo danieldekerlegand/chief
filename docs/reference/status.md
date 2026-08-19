@@ -8,12 +8,15 @@ how much remains, how it splits into live and parked, how much of it could start
 and what is holding the rest.
 
 ```
-chief status              this repo (or the one above cwd)
-chief status --blocked    only what is waiting, naming the edge that holds it
-chief status --all        every repo in the known-repos registry, regardless of cwd
+chief status                  this repo (or the one above cwd)
+chief status --blocked        only what is waiting, naming the edge that holds it
+chief status --all            every repo in the known-repos registry, regardless of cwd
+chief status --enforce-order  exit non-zero if the project's OWN declared category
+                              ordering is violated — for a CI job that asked for it
 ```
 
-It **always exits 0**. This reports state; it does not grade it.
+It **always exits 0** — unless `--enforce-order` was asked for and the project's own
+declared ordering is violated. This reports state; it does not grade it.
 
 ## Runnable means what it means to the scheduler
 
@@ -92,6 +95,91 @@ recommended; a relative entry resolves against cwd. An entry containing `*`, `?`
 matched as a glob against the repo's absolute path. Excluded repos are reported in an
 `excluded` section with the file that excluded them — never silently dropped.
 
+## Categories — reported, never adopted
+
+A tasklist may carry a `category`. `chief status` breaks its totals down by it, **live
+and parked separately**:
+
+```
+  categories     9    tasklist(s) carry one; the value is theirs, and chief holds no vocabulary of its own
+      category                   live  parked
+      fix                           1       0
+      unblock                       1       0
+      replace                       2       0
+      feature                       3       1
+      chore                         1       0   *
+      (uncategorized)               1       0   *
+      * outside the declared vocabulary — reported, never dropped
+      ordering  fix › unblock › replace › feature   — declared in .chief/config (CHIEF_CATEGORIES)
+                4 live tasklist(s) precede "feature", the last category
+                2 live tasklist(s) carry a category the ordering does not name — unranked, not dropped
+```
+
+**`category` is not chief's concept.** It is a convention of the repos a given host
+builds, and chief holds no vocabulary of its own. The value is an **opaque string**:
+
+- Any set of values renders. `banana`, `réview needed`, `P0` — chief neither validates
+  a category nor knows what one means.
+- A tasklist with no category is reported as `(uncategorized)`, which is a description,
+  not an error. One chief cannot parse at all is `(unreadable)`; it is still counted.
+- No chief source file names a category. `test/status-categories.sh` asserts both the
+  behaviour (given the four words this host happens to use and no declared vocabulary,
+  the rows come out in **count** order, not that one) and the source discipline.
+- The live and parked columns **sum to** the live and parked totals of the report they
+  break down. A category is never dropped, so the arithmetic always closes.
+
+### Declaring an ordering
+
+A project that works its backlog in an order says so itself, in its own `.chief/config`:
+
+```sh
+CHIEF_CATEGORIES="fix unblock replace feature"   # earliest first
+```
+
+Then the rows render in that order — every declared category shown, even at zero — and
+the report states **how much live work precedes the last category**: the project's
+ordering rule, made visible. A category outside the vocabulary is marked `*` and kept.
+Without a declaration, rows are ordered by count then name and **no ordering is
+claimed**.
+
+Two details worth knowing:
+
+- The declaration is **read as a line, not sourced.** This command reports a portfolio
+  of repos it discovered rather than chose, and sourcing each one's `.chief/config`
+  would execute arbitrary shell from every repo on the host inside the reporting
+  process. Only a **literal** value is honoured — no `$VAR`, no command substitution.
+  Entries are separated by spaces or commas.
+- Across a **portfolio**, one repo's declaration is not the portfolio's. If every
+  declaring repo in scope agrees, that ordering is used; if they disagree, none is in
+  force and the report says so rather than picking a winner. `CHIEF_CATEGORIES` in the
+  **environment** overrides every repo's declaration for one report.
+
+### `--enforce-order`, and why it is separate
+
+`chief status` **always exits 0** over a category, whatever the backlog looks like. A
+category is a statement *about* a tasklist, and the decision to run one out of order is
+the operator's — chief reports it and stops there.
+
+A CI job that wants the rule enforced opts in:
+
+```sh
+chief status --enforce-order    # exit 1 iff live work in the LAST declared category
+                                # while live work in earlier categories remains
+```
+
+It enforces the **project's** declared ordering and nothing else. With no vocabulary in
+scope — or with repos that declare conflicting ones — there is nothing to enforce: it
+says so on stderr and exits 0. Uncategorized and out-of-vocabulary work is never a
+violation, because chief has no opinion about where it belongs.
+
+**If you vendored a per-repo category guard** (a `check-tasklist-categories.mjs` or
+similar), this is what replaces it and what does not. Chief computes the distribution
+and the ordering statement for every repo, from one implementation. Chief does **not**
+decide which vocabulary is right, does not fail a build on its own, and does not rank
+a category it was not given an ordering for. A repo consolidating onto this keeps its
+vocabulary — in `.chief/config`, where it is now declared once and read by the report —
+and keeps its build failure, as `chief status --enforce-order` in the same CI step.
+
 ## Environment
 
 | Variable | Default | Effect |
@@ -100,6 +188,7 @@ matched as a glob against the repo's absolute path. Excluded repos are reported 
 | `CHIEF_IGNORE` | `$CHIEF_PREFIX/ignore` | the ignore list described above |
 | `CHIEF_REPOS` | `$CHIEF_PREFIX/repos` | the known-repos registry (`--all`'s scope) |
 | `CHIEF_WORKTREE_ROOT` | `$CHIEF_PREFIX/worktrees` | the tree the worktree guard excludes |
+| `CHIEF_CATEGORIES` | *(unset)* | the ordered category vocabulary for one report, overriding what the repos in scope declare |
 
 ## Related
 

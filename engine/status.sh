@@ -48,10 +48,27 @@
 #               editing this walk — and an excluded repo is REPORTED as excluded,
 #               because a repo that silently vanishes reads as a repo with no work.
 #
-# Exit status is 0 whatever the backlog looks like. This reports state; it does not
-# grade it. Full reference: docs/reference/status.md
+# CATEGORIES ARE OPAQUE STRINGS. A tasklist may carry a `category`, and the report
+# breaks its totals down by one — live and parked separately. Chief does not know
+# what a category means and holds NO vocabulary of its own: whatever string is there
+# renders, an absent one reads as (uncategorized), and no value is special. A project
+# that works its backlog in a declared order says so ITSELF, in its own .chief/config
+# (CHIEF_CATEGORIES); chief then renders in that order and states how much work
+# precedes the last category — the project's rule, made visible.
+#
+# Making it visible is as far as chief goes. `chief status` exits 0 whatever the
+# backlog looks like, and only the opt-in --enforce-order turns a violation into a
+# non-zero exit, for a CI job that asked for one. The distinction is deliberate: a
+# category is a statement ABOUT a tasklist, and the decision to run one out of order
+# is the operator's. A harness with users beyond one host cannot make it for them,
+# and a hard-coded enum would make somebody else's backlog unreportable.
+#
+# Exit status is therefore 0 whatever the backlog looks like, unless --enforce-order
+# was asked for and the project's own declared ordering is violated. This reports
+# state; it does not grade it. Full reference: docs/reference/status.md
 set -uo pipefail
 
+TAB="$(printf '\t')"
 ENGINE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=engine/paths.sh
 . "$ENGINE/paths.sh"
@@ -59,6 +76,7 @@ ENGINE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$ENGINE/deps.sh"
 
 : "${CHIEF_REPOS:=}"
+: "${CHIEF_CATEGORIES:=}"
 REPO=""; TASKS_REL=""; SRC=""; COMPLETED=""     # deps.sh's contract; set by deps_scope
 
 # How deep beneath the walk base a repo ROOT may sit. Bounded because the walk runs
@@ -68,10 +86,12 @@ DEPTH="${CHIEF_STATUS_DEPTH:-4}"
 
 BLOCKED_ONLY=0
 ALL=0
+ENFORCE_ORDER=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --blocked)   BLOCKED_ONLY=1; shift ;;
-    --all)       ALL=1; shift ;;
+    --blocked)        BLOCKED_ONLY=1; shift ;;
+    --all)            ALL=1; shift ;;
+    --enforce-order)  ENFORCE_ORDER=1; shift ;;
     -h|--help)
       cat <<'USAGE'
 chief status — what is left in the backlog, and what can start now.
@@ -80,6 +100,9 @@ chief status — what is left in the backlog, and what can start now.
                             runnable vs blocked, completed, and any problems
   chief status --blocked    only what is waiting, naming the edge that holds it
   chief status --all        every repo in the known-repos registry, regardless of cwd
+  chief status --enforce-order
+                            exit non-zero if the project's OWN declared category
+                            ordering is violated — for a CI job that asked for it
 
 Run from a directory that is NOT a chief project, it walks the tree beneath you and
 reports every chief-initialized repo it finds, per repo and in total. The header
@@ -89,9 +112,17 @@ Environment:
   CHIEF_STATUS_DEPTH   how deep beneath the walk base a repo root may sit (default 4)
   CHIEF_IGNORE         ignore-list file; an entry excludes that path and everything
                        beneath it (default $CHIEF_PREFIX/ignore)
+  CHIEF_CATEGORIES     the ordered category vocabulary for this report, overriding
+                       what the repos in scope declare in their .chief/config
+
+Categories are reported as OPAQUE STRINGS — chief holds no vocabulary of its own,
+any set of values renders, and a tasklist with no category reads as (uncategorized).
+A project declares its own ordering with CHIEF_CATEGORIES in .chief/config; without
+one, categories are ordered by count and no ordering is claimed.
 
 Runnable means what it means to the scheduler: every dependsOn edge resolves to a
-completed record carrying mergedToMain. Always exits 0 — this reports state.
+completed record carrying mergedToMain. Exits 0 whatever the backlog looks like —
+this reports state. Only --enforce-order can make it exit non-zero.
 USAGE
       exit 0 ;;
     *) echo "chief status: unknown flag: $1" >&2; exit 2 ;;
@@ -216,6 +247,45 @@ EOF
   return 1
 }
 
+# ── the category vocabulary (opt-in, declared by the project) ────────────────
+# READ AS A LINE, NEVER SOURCED. `.chief/config` is bash and load_project sources it,
+# which is right for `run` — one project, chosen by the operator standing in it. This
+# command reports a PORTFOLIO of repos it discovered rather than chose, and sourcing
+# every one of their configs would both execute arbitrary shell from each of them
+# inside the reporting process and leak one repo's settings into the next repo's
+# scan. So the declaration is read as a literal line and nothing else happens. The
+# cost is that only a literal value is honoured — no $VAR, no command substitution —
+# which is the documented deal (docs/reference/status.md).
+#
+# The value is a LIST, not a set of known names: chief neither validates the entries
+# nor requires a tasklist to use one. It is an ORDERING, supplied by the project, and
+# that is the only meaning chief assigns to it.
+VOCAB=""            # the ordering in force for this report, space-separated
+VOCAB_SRC=""        # where it came from — named in the render, never assumed
+VOCAB_DECLS=""      # "<label>\t<vocab>" per declaring repo; reconciled after the scan
+VOCAB_CONFLICT=0
+
+normalize_vocab() { printf '%s' "$1" | LC_ALL=C tr ',' ' ' | LC_ALL=C tr -s '[:space:]' ' ' | LC_ALL=C sed 's/^ //; s/ $//'; }
+
+vocab_of() {   # $1 = repo root -> its declared vocabulary, or nothing
+  local f="$1/.chief/config" line
+  [ -f "$f" ] || return 0
+  line="$(LC_ALL=C sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}CHIEF_CATEGORIES=//p' "$f" 2>/dev/null | tail -1)"
+  [ -n "$line" ] || return 0
+  # One layer of quoting, then whatever follows it (a trailing comment) is not ours.
+  case "$line" in
+    \"*) line="${line#\"}"; line="${line%%\"*}" ;;
+    \'*) line="${line#\'}"; line="${line%%\'*}" ;;
+    *)   line="${line%%#*}" ;;
+  esac
+  normalize_vocab "$line"
+}
+
+if [ -n "$CHIEF_CATEGORIES" ]; then
+  VOCAB="$(normalize_vocab "$CHIEF_CATEGORIES")"
+  VOCAB_SRC="the environment (CHIEF_CATEGORIES)"
+fi
+
 # ── scope resolution ─────────────────────────────────────────────────────────
 # Deliberately NOT load_project: that hard-exits with "no .chief/config found"
 # (bin/chief), which is the right answer for `run` and the wrong one for a report.
@@ -324,6 +394,15 @@ parked=""        # names
 unreadable=""    # names — counted as remaining, but no verdict is honest
 problems=""      # "name<TAB>message"
 rows=""          # "label<TAB>remaining<TAB>live<TAB>parked<TAB>runnable<TAB>blocked<TAB>completed"
+# The category breakdown, accumulated RAW — one "<category><TAB>live|parked" line per
+# counted tasklist, aggregated once at render time. Raw rather than a counter per
+# category because the set of categories is not known in advance and bash 3.2 has no
+# associative arrays: rewriting a "<cat> <n>" string per tasklist is quadratic, and a
+# fixed set of counters would be exactly the hard-coded vocabulary this must not have.
+cats=""
+CAT_NONE='(uncategorized)'        # chief's label for an ABSENT category, not a value
+CAT_UNREADABLE='(unreadable)'     # ...and for one that cannot be read at all
+n_categorized=0  # tasklists that actually carried a category — the breakdown's trigger
 n_live=0 n_parked=0 n_runnable=0 n_blocked=0 n_unreadable=0 n_completed=0 n_repos=0
 
 add_problem() { problems="$problems$1	$2
@@ -334,9 +413,17 @@ add_problem() { problems="$problems$1	$2
 # is exactly what deps.sh's four-globals contract exists for) and names are
 # qualified with the repo label whenever more than one repo is in scope.
 scan_repo() {
-  local root="$1" label="$2" source="$3" f name q d v unmet ucls udet
+  local root="$1" label="$2" source="$3" f name q d v unmet ucls udet meta catv voc
   local r_live=0 r_parked=0 r_runnable=0 r_blocked=0 r_completed=0
   deps_scope "$root"
+
+  # A vocabulary is the PROJECT's, so it is read per repo, from the repo. The env
+  # override wins outright and skips the read entirely.
+  if [ -z "$CHIEF_CATEGORIES" ]; then
+    voc="$(vocab_of "$root")"
+    [ -n "$voc" ] && VOCAB_DECLS="$VOCAB_DECLS$label$TAB$voc
+"
+  fi
 
   for f in "$SRC"/*.json; do
     [ -e "$f" ] || continue
@@ -351,16 +438,32 @@ scan_repo() {
       r_live=$((r_live + 1)); n_unreadable=$((n_unreadable + 1))
       unreadable="$unreadable$q
 "
+      cats="$cats$CAT_UNREADABLE${TAB}live
+"
       add_problem "$q" "not valid JSON (jq cannot parse it) — no runnable/blocked verdict is possible"
       continue
     fi
 
-    if [ "$(jq -r '.parked // false' "$f" 2>/dev/null)" = "true" ]; then
+    # ONE jq for both fields the splits need. `category` is read as an OPAQUE STRING
+    # — trimmed, with tabs and newlines flattened so that whatever an author wrote
+    # cannot break the TSV it is accumulated in, and otherwise untouched. Nothing here
+    # knows any category name; the only value chief recognizes is the ABSENCE of one.
+    meta="$(jq -r '[(.parked // false | tostring),
+                    ((.category // "") | tostring | gsub("[\t\n\r]"; " ")
+                       | sub("^ +"; "") | sub(" +$"; ""))] | join("\t")' "$f" 2>/dev/null)"
+    catv="${meta#*$TAB}"
+    if [ -n "$catv" ]; then n_categorized=$((n_categorized + 1)); else catv="$CAT_NONE"; fi
+
+    if [ "${meta%%$TAB*}" = "true" ]; then
       r_parked=$((r_parked + 1)); parked="$parked$q
+"
+      cats="$cats$catv${TAB}parked
 "
       continue
     fi
     r_live=$((r_live + 1))
+    cats="$cats$catv${TAB}live
+"
 
     jq -e 'has("dependsOn")' "$f" >/dev/null 2>&1 \
       || add_problem "$q" "no \"dependsOn\" field — read as no dependencies (the schema expects the key, even empty)"
@@ -421,6 +524,53 @@ EOF
 
 n_remaining=$((n_live + n_parked))
 
+# ── the ordering in force, reconciled across the repos in scope ──────────────
+# One repo's declaration is that repo's. A PORTFOLIO has as many declarations as it
+# has repos, and they need not agree — so the only honest answers are "they all say
+# the same thing, and that is the ordering" or "they disagree, so no ordering is in
+# force here". Guessing a winner would render a table in an order no project asked
+# for, which is precisely the failure of adopting a vocabulary, arrived at sideways.
+if [ -z "$VOCAB" ] && [ -n "$VOCAB_DECLS" ]; then
+  vocab_distinct="$(printf '%s' "$VOCAB_DECLS" | cut -f2- | LC_ALL=C sort -u | grep -c .)"
+  if [ "$vocab_distinct" = 1 ]; then
+    VOCAB="$(printf '%s' "$VOCAB_DECLS" | cut -f2- | LC_ALL=C sort -u | grep .)"
+    VOCAB_SRC=".chief/config (CHIEF_CATEGORIES)"
+  else
+    VOCAB_CONFLICT="$vocab_distinct"
+  fi
+fi
+
+# THE ORDERING RULE, made visible: how much LIVE work precedes the last category in
+# the declared ordering. It is the project's rule, so chief computes the number and
+# prints it; only --enforce-order attaches a consequence to it.
+cat_counts() {   # -> "<live><TAB><parked><TAB><category>" per category, aggregated
+  printf '%s' "$cats" | LC_ALL=C awk -F'\t' '
+    $1 == "" { next }
+    { if ($2 == "parked") p[$1]++; else l[$1]++; seen[$1] = 1 }
+    END { for (k in seen) printf "%d\t%d\t%s\n", l[k] + 0, p[k] + 0, k }'
+}
+cat_cell() {   # $1 = counts, $2 = category, $3 = 1 live | 2 parked -> a number, always
+  printf '%s' "$1" | LC_ALL=C awk -F'\t' -v c="$2" -v f="$3" \
+    '$3 == c { print $f; hit = 1 } END { if (!hit) print 0 }'
+}
+
+COUNTS="$(cat_counts)"
+ORD_LAST=""; ORD_PRECEDE=0; ORD_LAST_LIVE=0
+if [ -n "$VOCAB" ]; then
+  set -f                        # a category is an opaque string; never a glob
+  vocab_n=0; for c in $VOCAB; do vocab_n=$((vocab_n + 1)); done
+  vocab_i=0
+  for c in $VOCAB; do
+    vocab_i=$((vocab_i + 1))
+    if [ "$vocab_i" -lt "$vocab_n" ]; then
+      ORD_PRECEDE=$((ORD_PRECEDE + $(cat_cell "$COUNTS" "$c" 1)))
+    else
+      ORD_LAST="$c"; ORD_LAST_LIVE="$(cat_cell "$COUNTS" "$c" 1)"
+    fi
+  done
+  set +f
+fi
+
 # ── render ───────────────────────────────────────────────────────────────────
 list_names() { printf '%s' "$1" | while IFS= read -r n; do [ -n "$n" ] && printf '      %s\n' "$n"; done; }
 count_of()   { printf '%s' "$1" | grep -c . ; }
@@ -458,6 +608,107 @@ render_scope_notes() {
   fi
 }
 
+# ── the category breakdown ───────────────────────────────────────────────────
+# Rendered only when there is something to break down: a tasklist that carried a
+# category, or a vocabulary declared to render against. An all-(uncategorized) table
+# tells a project that does not use categories nothing it did not already know.
+#
+# ORDER is the whole subtlety. With a declared vocabulary: that order, every declared
+# category shown even at zero, because the ordering is what is being made visible.
+# Without one: count then name — STABLE, and pointedly not a claim. A category the
+# vocabulary does not name is marked and kept; dropping it would silently delete work
+# from a report whose purpose is that the numbers add up.
+render_ordering() {
+  local arrows unranked
+  if [ -n "$VOCAB" ]; then
+    arrows="$(printf '%s' "$VOCAB" | LC_ALL=C sed 's/ / › /g')"
+    printf '      ordering  %s   — declared in %s\n' "$arrows" "$VOCAB_SRC"
+    printf '                %d live tasklist(s) precede "%s", the last category\n' "$ORD_PRECEDE" "$ORD_LAST"
+    unranked=$((n_live - ORD_PRECEDE - ORD_LAST_LIVE))
+    [ "$unranked" -gt 0 ] && \
+      printf '                %d live tasklist(s) carry a category the ordering does not name — unranked, not dropped\n' "$unranked"
+  elif [ "$VOCAB_CONFLICT" != 0 ]; then
+    printf '      ordering  none in force — the repos in scope declare %d different vocabularies\n' "$VOCAB_CONFLICT"
+    printf '                rows are ordered by count; no ordering is claimed\n'
+  else
+    printf '      ordering  none declared — rows are ordered by count, not by any rule chief holds\n'
+    printf '                a project declares its own with CHIEF_CATEGORIES in .chief/config\n'
+  fi
+  return 0
+}
+
+render_categories() {
+  [ "$n_categorized" -gt 0 ] || [ -n "$VOCAB" ] || return 0
+  local c rest known=""
+  printf '\n  categories  %4d    tasklist(s) carry one; the value is theirs, and chief holds no vocabulary of its own\n' "$n_categorized"
+  printf '      %-24s %6s %7s\n' category live parked
+  if [ -n "$VOCAB" ]; then
+    set -f                      # a category is an opaque string; never a glob
+    for c in $VOCAB; do
+      printf '      %-24s %6s %7s\n' "$c" "$(cat_cell "$COUNTS" "$c" 1)" "$(cat_cell "$COUNTS" "$c" 2)"
+      known="$known$c
+"
+    done
+    set +f
+  fi
+  # The membership test is done in SHELL, not by handing the vocabulary to awk in a
+  # -v assignment: the list is newline-delimited and BSD awk rejects a newline inside
+  # one ("awk: newline in string"), silently costing exactly the rows it selects.
+  rest=""
+  while IFS="$TAB" read -r c_live c_parked c; do
+    [ -n "$c" ] || continue
+    in_list "$c" "$known" && continue
+    rest="$rest$((c_live + c_parked))$TAB$c_live$TAB$c_parked$TAB$c
+"
+  done <<EOF
+$COUNTS
+EOF
+  rest="$(printf '%s' "$rest" | LC_ALL=C sort -t"$TAB" -k1,1nr -k4,4 | cut -f2-)"
+  # printf with a trailing newline, not without: a command substitution strips the
+  # final one, and `read` returns non-zero on an unterminated last line — which drops
+  # exactly one category from the bottom of the table.
+  printf '%s\n' "$rest" | while IFS="$TAB" read -r c_live c_parked c; do
+    [ -n "$c" ] || continue
+    if [ -n "$VOCAB" ]; then printf '      %-24s %6s %7s   *\n' "$c" "$c_live" "$c_parked"
+    else                     printf '      %-24s %6s %7s\n'     "$c" "$c_live" "$c_parked"
+    fi
+  done
+  [ -n "$VOCAB" ] && [ -n "$rest" ] && \
+    printf '      * outside the declared vocabulary — reported, never dropped\n'
+  render_ordering
+}
+
+# --enforce-order — the only thing in this file that can produce a non-zero exit, and
+# it enforces the PROJECT'S rule, not one of chief's: work in the last declared
+# category while work in earlier ones remains. With no vocabulary in scope there is
+# nothing to enforce, which is said out loud on stderr rather than passing quietly.
+ORDER_RC=0
+order_check() {
+  [ "$ENFORCE_ORDER" = 1 ] || return 0
+  if [ -z "$VOCAB" ]; then
+    if [ "$VOCAB_CONFLICT" != 0 ]; then
+      echo "chief status --enforce-order: the repos in scope declare $VOCAB_CONFLICT different category vocabularies — there is no single ordering to enforce." >&2
+    else
+      echo "chief status --enforce-order: no category vocabulary is declared in scope (CHIEF_CATEGORIES in .chief/config) — there is no ordering to enforce." >&2
+    fi
+    return 0
+  fi
+  if [ "$ORD_LAST_LIVE" -gt 0 ] && [ "$ORD_PRECEDE" -gt 0 ]; then
+    printf '\n  order check FAIL — %d live tasklist(s) in earlier categories precede the %d in "%s", the last category in the declared ordering\n' \
+      "$ORD_PRECEDE" "$ORD_LAST_LIVE" "$ORD_LAST"
+    ORDER_RC=1
+  elif [ "$ORD_LAST_LIVE" = 0 ]; then
+    printf '\n  order check PASS — no live work in "%s", the last category in the declared ordering\n' "$ORD_LAST"
+  else
+    printf '\n  order check PASS — nothing precedes "%s", the last category in the declared ordering\n' "$ORD_LAST"
+  fi
+  return 0
+}
+
+# Every render path leaves through here, so the enforcement verdict is printed once
+# and the exit status is decided in exactly one place.
+finish() { order_check; exit "$ORDER_RC"; }
+
 render_problems() {
   [ -n "$problems" ] || return 0
   printf '\n  problems    %4d\n' "$(count_of "$problems")"
@@ -483,7 +734,7 @@ if [ "$BLOCKED_ONLY" = 1 ]; then
     render_blocked
   fi
   render_scope_notes
-  exit 0
+  finish
 fi
 
 printf 'chief status — %s (scope: %s)\n\n' "$header" "$SCOPE_LINE"
@@ -495,7 +746,7 @@ if [ "$n_repos" = 0 ]; then
               echo "  Run it inside a repo that has been through 'chief init', or from a directory above several." ;;
   esac
   render_scope_notes
-  exit 0
+  finish
 fi
 
 if [ "$MULTI" = 1 ]; then
@@ -515,9 +766,10 @@ if [ "$MULTI" = 1 ]; then
     printf '  unreadable  %4d    counted as remaining; no verdict possible\n' "$n_unreadable"
     list_names "$unreadable"
   fi
+  render_categories
   render_scope_notes
   render_problems
-  exit 0
+  finish
 fi
 
 printf '  remaining   %4d    live %d · parked %d\n' "$n_remaining" "$n_live" "$n_parked"
@@ -534,6 +786,7 @@ if [ "$n_parked" -gt 0 ]; then
   list_names "$parked"
 fi
 printf '  completed   %4d    history, not backlog (%s/completed)\n' "$n_completed" "$TASKS_REL"
+render_categories
 render_scope_notes
 render_problems
-exit 0
+finish

@@ -69,7 +69,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] · ps · monitor · logs · models · reap · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] [--all] [--enforce-order] · ps · monitor · logs · models · reap · pause · resume · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
@@ -132,7 +132,14 @@ engine/
                      #   are reconciled by RESOLVED ABSOLUTE PATH so a symlink or trailing slash
                      #   cannot mint a phantom; worktrees, ignore-listed subtrees ($CHIEF_PREFIX/
                      #   ignore) and stale registry entries are REPORTED, never silently dropped —
-                     #   a repo missing from a total reads exactly like a repo with no work
+                     #   a repo missing from a total reads exactly like a repo with no work.
+                     #   CATEGORIES are REPORTED, never adopted: `category` is an OPAQUE
+                     #   string chief holds no vocabulary for. A project declares its own
+                     #   ordering (CHIEF_CATEGORIES in .chief/config, READ AS A LINE — a
+                     #   portfolio report must not SOURCE N repos' bash); without one rows
+                     #   order by count and no ordering is claimed. Plain status always
+                     #   exits 0 — only the opt-in --enforce-order can fail, and only on
+                     #   the project's OWN declared rule
   measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
