@@ -398,8 +398,14 @@ read -r d_passing d_next < "$CHIEF_TEST_RESUMEFILE"
 [ "$d_passing" = "0" ] || fail "D: agent handed $d_passing passing from a torn snapshot, not 0"
 [ "$d_next" = "US-1" ] || fail "D: agent handed story $d_next, not US-1 — the torn file was seeded"
 
+# The work of a `repo:sub` tasklist lands in the SUBMODULE, exactly as arm A asserts —
+# the parent only ever receives the gitlink bump. Look for it where it is.
+SUB_D="$REPO/sub"
+git -C "$SUB_D" checkout -q main
+for s in US-1 US-2 US-3; do
+  [ -f "$SUB_D/src/$s.txt" ] || fail "D: $s missing from the submodule's main after merge"
+done
 git -C "$REPO" checkout -q main
-for s in US-1 US-2 US-3; do [ -f "$REPO/src/$s.txt" ] || fail "D: $s missing from main after merge"; done
 [ -f "$REPO/tasks/chief/completed/resume-demo.json" ] || fail "D: tasklist not retired to completed/"
 
 echo "SUBMODULE-RESUME PASS — submodule progress survived a SIGKILL (2/3 -> resumed at US-3),"
