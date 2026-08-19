@@ -149,6 +149,9 @@ jobs:
       - name: `chief status` agrees with the scheduler (runnable == what the driver would launch)
         run: bash test/status-deps.sh
 
+      - name: `chief status` portfolio scope (repo ROOTS, registry reconciled by resolved path, no double-count)
+        run: bash test/status-scope.sh
+
       - name: Code-quality ratchet (slop BLOCKED, refactor ALLOWED, unmeasurable languages skipped not zeroed)
         run: bash test/quality-ratchet.sh
 

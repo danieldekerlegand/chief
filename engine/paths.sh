@@ -65,3 +65,13 @@ chief_worktree_root() {
   if [ -n "${CHIEF_WORKTREE_ROOT:-}" ]; then printf '%s\n' "${CHIEF_WORKTREE_ROOT%/}"; return 0; fi
   printf '%s\n' "$(chief_prefix)/worktrees"
 }
+
+# The IGNORE list `chief status` consults when it WALKS a tree for repos. One entry
+# per line — an absolute path, a ~/… path, a path relative to cwd, or a glob — and
+# an entry excludes that path and everything beneath it. Host-wide and separate from
+# the registry on purpose: "do not count this subtree in my portfolio totals" is an
+# operator's standing preference about a machine, not a property of any repo, and no
+# repo under an out-of-scope parent should have to be edited to express it. An
+# excluded repo is REPORTED as excluded rather than dropped, so a missing repo is
+# never mistaken for an empty one. See docs/reference/status.md.
+chief_ignore_file() { printf '%s\n' "${CHIEF_IGNORE:-$(chief_prefix)/ignore}"; }

@@ -123,7 +123,16 @@ engine/
                      #   counted separately as history. Runnable means what it means to the driver,
                      #   because it IS deps.sh — a private copy would drift and then name work as
                      #   startable that a run would refuse to start. Degrades on malformed input into
-                     #   a `problems` section rather than aborting, and always exits 0
+                     #   a `problems` section rather than aborting, and always exits 0.
+                     #   SCOPE is resolved WITHOUT load_project (whose hard exit is right for `run`
+                     #   and wrong for a report): inside a repo -> that repo; above several -> a
+                     #   depth-limited WALK of the tree, unioned with the registry entries under it;
+                     #   --all -> the registry. A repo is one whose ROOT the walk finds, so a nested
+                     #   tasks/chief (examples/minimal) is never a second backlog; walk and registry
+                     #   are reconciled by RESOLVED ABSOLUTE PATH so a symlink or trailing slash
+                     #   cannot mint a phantom; worktrees, ignore-listed subtrees ($CHIEF_PREFIX/
+                     #   ignore) and stale registry entries are REPORTED, never silently dropped —
+                     #   a repo missing from a total reads exactly like a repo with no work
   measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
@@ -199,7 +208,8 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   watcher survives, so the file cannot pass by restating behaviour that
                      #   always worked. In all.sh + CI but NOT the merge gate, like monitor.sh:
                      #   it asserts on refresh intervals and verify runs under parallel load
-docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
+docs/                # tasklist schema · roadmap-input contract (chief gen) · chief status (scope + ignore list) ·
+                     # verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace) ·
                      # research-phase.md + plan-review.md (the two opt-in review checkpoints)
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)

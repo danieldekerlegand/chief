@@ -148,9 +148,17 @@ printf '%s\n' "$BLK" | grep '11-on-live' | grep -q 'PERMANENTLY' \
 ( cd "$REPO" && "$CHIEF" status >/dev/null 2>&1 ) || fail "chief status exited non-zero on a backlog with problems in it"
 
 # ── 6. Outside a chief repo it explains itself instead of dying ─────────────
-out="$( cd "$WORK" && "$CHIEF" status 2>&1 )"; rc=$?
+# "Outside" now means outside ANY repo the walk can reach: from a directory with a
+# chief repo beneath it, status reports that repo's backlog (test/status-scope.sh
+# owns that behaviour). What must never happen in either case is load_project's hard
+# exit, which is why both are checked here rather than only the empty one.
+mkdir -p "$WORK/empty"
+out="$( cd "$WORK/empty" && "$CHIEF" status 2>&1 )"; rc=$?
 [ "$rc" = 0 ]                      || fail "chief status outside a repo exited $rc"
 has "chief init" "$out"            || fail "chief status outside a repo gave no usable message: $out"
+case "$out" in *"no .chief/config found"*) fail "chief status went through load_project's hard exit: $out" ;; esac
+out="$( cd "$WORK" && "$CHIEF" status 2>&1 )"; rc=$?
+[ "$rc" = 0 ]                      || fail "chief status above a repo exited $rc"
 case "$out" in *"no .chief/config found"*) fail "chief status went through load_project's hard exit: $out" ;; esac
 
 # ── 7. `chief list` is untouched ────────────────────────────────────────────
