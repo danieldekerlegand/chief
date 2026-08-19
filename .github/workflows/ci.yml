@@ -131,6 +131,9 @@ jobs:
       - name: Submodule gitlink bump (a pin bump merges; work inside a submodule still blocks)
         run: bash test/submodule-gitlink.sh
 
+      - name: Submodule story progress survives a kill (2/3 resumes at US-3; the project arm is unmoved)
+        run: bash test/submodule-resume.sh
+
       - name: Under-tagged touches audit (co-scheduled tasklists that edited the same file are reported)
         run: bash test/touches-audit.sh
 

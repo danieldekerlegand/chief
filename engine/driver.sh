@@ -672,6 +672,36 @@ unverified_stop() {
 # (survives across resumes in-repo). A submodule branch carries no tasklist JSON, so
 # fall back to the last snapshot, then the pristine template. $name/$branch/$sub/
 # $work_repo/$TASKS_REL/$SNAP/$SRC are visible by dynamic scope.
+#
+# WHY THE SUBMODULE ARM IS THE ONE THAT NEEDED FIXING (tasklist 96). A project
+# tasklist records every story as it lands: the agent commits the tracked tasklist
+# with its pass-flag flipped, so the branch itself carries 2-of-3 and a run killed
+# mid-tasklist resumes at exactly that. A submodule branch cannot — the tasklist
+# lives in the PARENT and the work branch lives in the submodule, and the parent
+# gets ONE commit for the whole tasklist (the terminal `complete @sha — bump <sub>
+# + record + retire`). There is no per-story marker in between, so the snapshot IS
+# the record, and it used to be written only at the END of a worker. A run killed
+# mid-tasklist therefore resumed at 0-of-3 onto a branch already carrying the code
+# for two of them — wasting iterations at best, and at worst re-implementing a
+# story, which leaves TWO implementations of one story on one branch.
+#
+# THE MECHANISM CHOSEN, and its trade-off. The snapshot is promoted at every
+# ITERATION BOUNDARY instead of once at the end (agent.sh's $CHIEF_PRD_SNAPSHOT,
+# handed down below — the same "driver owns the durable path, agent promotes to it
+# the moment the artifact is valid" shape as $CHIEF_RESEARCH_FILE). It lives under
+# $STATE_ROOT, NOT in the worktree run_worker rm -rf's, so it survives both a
+# rebuilt worktree and a driver restart — which is the failure being fixed.
+#   · vs. a MARKER COMMIT on the submodule branch: that branch is merged verbatim
+#     into the submodule's own history, so per-story bookkeeping commits would be
+#     chief litter in a consumer's repo forever.
+#   · vs. a PARENT-SIDE BRANCH: the parent deliberately has no chief/* branches at
+#     all, and inventing one changes the terminal record's shape — the very thing
+#     downstream readers of completed/ depend on not moving.
+#   · the COST accepted: the snapshot is host state, not git. Deleting
+#     .chief/state/ still loses the per-story record (RESET=1's behaviour, on
+#     purpose), and the branch's commits remain the ground truth either way.
+# Nothing here changes a PROJECT tasklist: this arm is not reached for one, so its
+# resume still reads the committed tasklist and a fresher snapshot is inert.
 prd_state_source() {
   if [ -z "${sub:-}" ]; then
     git -C "${work_repo:-$REPO}" show "$branch:$TASKS_REL/$name.json" 2>/dev/null
@@ -2305,7 +2335,16 @@ run_worker() {
     # tasklist — carries the passes-state on a resume; equals the pristine template
     # on a fresh branch (which is at the base-branch tip).
     mkdir -p "$wtstate"
-    prd_state_source > "$wtstate/prd.json" 2>/dev/null; [ -s "$wtstate/prd.json" ] || cp "$SRC/$name.json" "$wtstate/prd.json"
+    # The fallback tests for PARSEABLE, not merely non-empty. The snapshot arm above
+    # is host state written while a run is being killed, so the failure it can present
+    # is a TRUNCATED file — non-empty, and therefore invisible to a `-s` test, but not
+    # JSON. Seeding that as the runtime prd.json fails every jq read downstream and
+    # reports the tasklist as having no stories at all, which is a worse resume than
+    # the 0-of-3 this tasklist set out to fix. agent.sh writes the snapshot atomically
+    # (_prd_promote) so this should be unreachable; it is the floor under that, and it
+    # costs one jq per worker.
+    prd_state_source > "$wtstate/prd.json" 2>/dev/null
+    jq -e . "$wtstate/prd.json" >/dev/null 2>&1 || cp "$SRC/$name.json" "$wtstate/prd.json"
     echo "$branch" > "$wtstate/.last-branch"
     # SCOPE GATE (engine/criteria.sh): a criterion naming another repo cannot be met
     # from this worktree, so it is caught HERE — before the first agent turn, rather
@@ -2375,6 +2414,7 @@ run_worker() {
           CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" CHIEF_VERBOSE="${CHIEF_VERBOSE:-}" \
           CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" CHIEF_ACCOUNT_LABEL="$ACCOUNT_LABEL" \
           CHIEF_RESEARCH="${CHIEF_RESEARCH:-}" CHIEF_RESEARCH_FILE="$RESEARCH_DIR/$name.md" \
+          CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a

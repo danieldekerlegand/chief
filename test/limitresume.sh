@@ -42,8 +42,22 @@ mkdir -p "$WORK/fakebin"
 #   always-limit   : never does anything but hit the wall
 #   work-then-limit: implement one story per call; hit the wall AFTER call 1's
 #                    commit, so the pause leaves REAL passes-state to resume from
-# The limit line carries NO parseable reset time on purpose, so the ETA comes
-# from RATE_LIMIT_WAIT — a knob the test can make ~seconds instead of hours.
+# The limit line carries NO parseable reset time on purpose, so the ETA comes from
+# RATE_LIMIT_WAIT.
+#
+# WHICH KNOB SHRINKS THE WINDOW, and why it is NOT RATE_LIMIT_WAIT. The obvious
+# lever — RATE_LIMIT_WAIT=3, a three-second "hour" — is a RACE, and it lost on a
+# loaded host: the worker stamps retry-at = <its exit> + 3s, but the scheduler only
+# reads it after that worker has torn down (worktree sweep + removal + status), so
+# under load the window has ALREADY elapsed by the time limit_resume() looks and the
+# run correctly re-dispatches without ever printing the pause it never had to take.
+# The deterministic lever is the driver's CEILING, RATE_LIMIT_REDISPATCH_MAX_WAIT:
+# limit_pause() clamps to `now + ceiling` where `now` is the SCHEDULER's clock at
+# arming time, so a far-future ETA (an hour, as a real limit would be) becomes a
+# window that is guaranteed still open when the pause is evaluated — no matter how
+# long teardown took. Cost: the ~4s the run genuinely sleeps. Bonus: the clamp
+# itself, the thing that keeps a bogus six-hour ETA from stranding a run, is now
+# covered too.
 cat > "$WORK/fakebin/claude" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
@@ -101,7 +115,7 @@ LOG="$WORK/a.log"
 export LR_COUNTER="$WORK/a-calls" LR_MODE=work-then-limit
 t0=$(date +%s)
 ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" \
-    RATE_LIMIT_RETRY=0 RATE_LIMIT_WAIT=3 POLL_SECONDS=1 \
+    RATE_LIMIT_RETRY=0 RATE_LIMIT_WAIT=3600 RATE_LIMIT_REDISPATCH_MAX_WAIT=4 POLL_SECONDS=1 \
     "$CHIEF" run ) >"$LOG" 2>&1 || fail "run exited non-zero (a self-healed run is a successful run)"
 elapsed=$(( $(date +%s) - t0 ))
 
@@ -109,6 +123,7 @@ S="$REPO/.chief/state/parallel"
 state() { cat "$S/$1.state" 2>/dev/null || echo MISSING; }
 
 grep -q 'the run is PAUSED until' "$LOG" || fail "the scheduler did not wait out the limit window"
+[ "$elapsed" -ge 4 ] || fail "the run finished in ${elapsed}s — it re-dispatched without waiting out the limit window"
 grep -q 're-dispatching lr' "$LOG" || fail "the scheduler never re-dispatched the paused tasklist"
 [ "$(cat "$S/lr.retries" 2>/dev/null || echo 0)" = "1" ] || fail "re-dispatch count is '$(cat "$S/lr.retries" 2>/dev/null)', want 1"
 # Branch REUSED, not rebuilt: the second dispatch found story 1 already passing.
@@ -135,7 +150,8 @@ LOG="$WORK/b.log"
 export LR_COUNTER="$WORK/b-calls" LR_MODE=always-limit
 t0=$(date +%s)
 ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" \
-    RATE_LIMIT_RETRY=0 RATE_LIMIT_WAIT=4 POLL_SECONDS=1 RATE_LIMIT_REDISPATCH_MAX=1 \
+    RATE_LIMIT_RETRY=0 RATE_LIMIT_WAIT=3600 RATE_LIMIT_REDISPATCH_MAX_WAIT=4 POLL_SECONDS=1 \
+    RATE_LIMIT_REDISPATCH_MAX=1 \
     "$CHIEF" run -p 2 ) >"$LOG" 2>&1 || fail "run exited non-zero (a usage-limit pause is not a run failure)"
 elapsed=$(( $(date +%s) - t0 ))
 
