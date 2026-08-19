@@ -69,7 +69,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · logs · models · reap · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] · ps · monitor · logs · models · reap · pause · resume · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
@@ -112,6 +112,18 @@ engine/
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
                      #   UNSATISFIABLE before the first agent turn unless "crossRepo" declares it
+  deps.sh            #   DEPENDENCY RESOLUTION, extracted from driver.sh so there is exactly ONE
+                     #   answer to "is this tasklist's dependsOn satisfied": deps_of · dep_record ·
+                     #   is_recorded_done · the cross-repo <repo>:<stem> resolution. Functions over
+                     #   four globals the CALLER owns ($REPO/$TASKS_REL/$SRC/$COMPLETED — deps_scope
+                     #   sets them per repo); it establishes no environment of its own. driver.sh
+                     #   sources it to decide what to LAUNCH, status.sh to decide what to REPORT
+  status.sh          #   `chief status` — what is LEFT and what can START NOW. The scheduler's gate
+                     #   run in REPORT mode: remaining (live/parked), runnable vs blocked, completed
+                     #   counted separately as history. Runnable means what it means to the driver,
+                     #   because it IS deps.sh — a private copy would drift and then name work as
+                     #   startable that a run would refuse to start. Degrades on malformed input into
+                     #   a `problems` section rather than aborting, and always exits 0
   measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not

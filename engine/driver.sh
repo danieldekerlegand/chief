@@ -1392,7 +1392,6 @@ if [ "${1:-}" = "--integrate-base" ]; then
 fi
 
 iters_of()   { jq -r '.iters // 5' "$SRC/$1.json" 2>/dev/null || echo 5; }
-deps_of()    { jq -r '(.dependsOn // [])[]' "$SRC/$1.json" 2>/dev/null; }
 touches_of() { jq -r '(.touches // [])[]' "$SRC/$1.json" 2>/dev/null; }
 
 # --- cross-repo deps --------------------------------------------------------
@@ -1402,6 +1401,16 @@ touches_of() { jq -r '(.touches // [])[]' "$SRC/$1.json" 2>/dev/null; }
 # lookup: `chief lint` resolves a tasklist's declared downstream counterpart with
 # these exact functions, and a second implementation of "where does <repo>:<stem>
 # live" would drift from this one the first time either changed.
+#
+# DEPENDENCY RESOLUTION on top of it — deps_of · dep_verdict · deps_scope — is
+# engine/crossrepo.sh's other caller, engine/deps.sh. Sourced rather than defined
+# inline: `chief status` reports what is RUNNABLE, and it has to reach exactly the
+# verdict this scheduler LAUNCHES on. A second implementation would drift and then
+# lie, so there is one and both callers reach it there.
+# Sourced HERE, after $REPO/$TASKS_REL/$SRC/$COMPLETED are set — those globals are
+# the module's contract and it establishes none of them itself.
+# shellcheck source=engine/deps.sh
+source "$ENGINE/deps.sh"
 
 # Per-tasklist scheduler state lives in files so no associative array is needed.
 # Every lifecycle transition also lands in the liveliness record (and stamps its

@@ -26,7 +26,8 @@
         "A tasklist whose dependsOn names a completed record with NO mergedToMain is reported as blocked, not runnable — the retirement trap. Its blocker is named in `--blocked` output, because that record can never satisfy the edge and the tasklist is therefore blocked FOREVER until repointed. Silently reporting it as merely 'waiting' would hide a permanent stall behind a transient-looking status.",
         "Malformed input degrades, never aborts: a tasklist with unparseable JSON, an absent `dependsOn`, or a dependency naming a repo that does not exist is counted and flagged in a `problems` section, and the rest of the report still renders."
       ],
-      "notes": null
+      "notes": ".chief/verify.sh: green, exit 0. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck -S error CLEAN on the three new files (0.10.0 — the two SC1073/SC1072 errors it reports at bin/chief:159 and engine/quality.sh:60 are pre-existing and byte-identical on main). Bystander behavioural block 37/37 PASS, including the new test/status-deps.sh: \"STATUS PASS — chief status agrees with the scheduler (3 runnable, 3 blocked)\". Agreement is exact: status's runnable set == wave 1 of the driver's own `chief run -n -p 99` schedule. Negative check — reintroducing a private merge resolution in status.sh (`[ -f \"$(dep_record \"$d\")\" ]` in place of is_recorded_done) FAILS the test, status reporting 13-trap runnable where the driver would not launch it. Also green: quality ratchet, test/version-bump.sh, DOC-SYNC PASS (README states v0.8.63).",
+      "passes": true
     },
     {
       "id": "US-2",
