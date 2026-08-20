@@ -155,6 +155,12 @@ jobs:
       - name: `chief status` categories are opaque (no vocabulary in chief; only --enforce-order can fail)
         run: bash test/status-categories.sh
 
+      - name: `chief status --json` is one document on stdout, and --blocked ranks what to merge
+        run: bash test/status-json.sh
+
+      - name: `chief status` over a 1,000-record portfolio (jq per DIRECTORY, not per record)
+        run: bash test/status-perf.sh
+
       - name: Code-quality ratchet (slop BLOCKED, refactor ALLOWED, unmeasurable languages skipped not zeroed)
         run: bash test/quality-ratchet.sh
 

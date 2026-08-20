@@ -57,8 +57,10 @@ chief $VERSION — autonomous tasklist runner (worktree-isolated, dep/conflict-a
 Usage:
   chief init                  scaffold .chief/ + tasks/chief/ in the current repo
   chief status [--blocked]    what is LEFT and what can START NOW — remaining (live/parked),
-        [--all]               runnable vs blocked on an unmerged dependency, completed, problems.
-        [--enforce-order]     --blocked names the edge holding each one. Run inside a repo it
+        [--all] [--json]      runnable vs blocked on an unmerged dependency, completed, problems.
+        [--enforce-order]     --blocked names the edge holding each one, and ranks the merges
+                              that would release the most: a plan, not a number. --json emits the
+                              whole report as ONE document on stdout (notes on stderr). Run inside a repo it
                               reports that repo; run ABOVE several it walks the tree and reports
                               a per-repo table plus portfolio totals; --all reports every repo in
                               the known-repos registry regardless of cwd. The header always states

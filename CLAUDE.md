@@ -69,7 +69,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] [--all] [--enforce-order] · ps · monitor · logs · models · reap · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · models · reap · pause · resume · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
@@ -88,7 +88,14 @@ engine/
                      #   lookup every cross-repo dependsOn has always used, lifted out of the
                      #   driver so the AUTHORING-time gates run the same one. Chief reads exactly
                      #   one file across the boundary (the merged completed/<stem>.json) and never
-                     #   schedules, branches or merges in another repo
+                     #   schedules, branches or merges in another repo. Every helper a hot loop
+                     #   calls comes as a SET-A-GLOBAL / PRINT-IT pair (dep_record_set /
+                     #   dep_record): `$(f)` is a FORK, and a portfolio report resolving one edge
+                     #   per tasklist pays it thousands of times. The completed/ INDEX — one jq
+                     #   per directory behind is_recorded_done instead of one per edge — is
+                     #   opt-in for the reason it is not the default: a one-shot READER may cache
+                     #   the merge verdict, the SCHEDULER may not, because a run asks the same
+                     #   question over hours during which records are appearing
   counterpart.sh     #   the MARKER LINK: a tasklist that is a placeholder for work owned and built
                      #   in ANOTHER repo declares the tasklist that will complete it —
                      #   "downstreamCounterpart": ["agora:75-..."], the forward half of the
@@ -139,7 +146,17 @@ engine/
                      #   portfolio report must not SOURCE N repos' bash); without one rows
                      #   order by count and no ordering is claimed. Plain status always
                      #   exits 0 — only the opt-in --enforce-order can fail, and only on
-                     #   the project's OWN declared rule
+                     #   the project's OWN declared rule. TWO RENDERS, ONE SCAN: --json
+                     #   emits the whole report as one document on stdout with every note
+                     #   on stderr (`chief events`' discipline), serializing the same
+                     #   accumulators rather than re-counting. --blocked also aggregates
+                     #   by EDGE — holds / releases / cascade, three numbers kept apart,
+                     #   ranked highest first — because "82 blocked" is a number and
+                     #   "these merges release 82" is a plan. Reads one jq per DIRECTORY,
+                     #   not per record: 1,040 records went 2,576 forks and 23s -> 32 and
+                     #   2s (test/status-perf.sh asserts the FORK count as well as the
+                     #   clock, and is out of the merge gate like monitor.sh because only
+                     #   the clock half is load-sensitive)
   measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not

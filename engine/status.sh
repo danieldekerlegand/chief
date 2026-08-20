@@ -63,17 +63,40 @@
 # is the operator's. A harness with users beyond one host cannot make it for them,
 # and a hard-coded enum would make somebody else's backlog unreportable.
 #
+# TWO OUTPUTS, ONE PASS. `--json` emits the whole report as a single JSON document
+# on stdout and pushes every human-facing note to stderr, so it pipes to jq cleanly
+# — the stdout-is-data discipline `chief events` already keeps. It is the same
+# numbers rendered twice, never a second scan with its own arithmetic.
+#
+# AND THE COST OF ASKING. A portfolio is ~1,000 records, so a fork per record is the
+# difference between a command an operator runs casually and one they stop running.
+# Each record is read ONCE, by one jq per directory rather than one per file
+# (read_records below, and crossrepo.sh's completed/ index behind is_recorded_done),
+# which is what keeps the whole-tree run in the low seconds. test/status-perf.sh
+# guards it, and guards it by counting jq invocations as well as by the clock:
+# the fork count is the thing that regresses, and it is the half of the assertion
+# that does not depend on how loaded the machine is.
+#
 # Exit status is therefore 0 whatever the backlog looks like, unless --enforce-order
 # was asked for and the project's own declared ordering is violated. This reports
 # state; it does not grade it. Full reference: docs/reference/status.md
 set -uo pipefail
 
 TAB="$(printf '\t')"
+# The record reader's field separator is US (0x1f), NOT a tab. Tab is IFS WHITESPACE:
+# `IFS=$'\t' read` collapses a run of tabs into one delimiter, so an empty middle
+# field — a tasklist with no category, or with no dependencies — silently shifts every
+# field after it left. US is not whitespace, so empty fields survive `read` intact.
+US="$(printf '\037')"
 ENGINE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=engine/paths.sh
 . "$ENGINE/paths.sh"
 # shellcheck source=engine/deps.sh
 . "$ENGINE/deps.sh"
+# A ONE-SHOT READER may cache the merge verdict; the scheduler may not (crossrepo.sh).
+# This is the whole reason a portfolio scan is not a jq fork per dependency edge.
+chief_merged_index_on
+CHIEF_VERSION="$(cat "$ENGINE/../VERSION" 2>/dev/null || echo unknown)"
 
 : "${CHIEF_REPOS:=}"
 : "${CHIEF_CATEGORIES:=}"
@@ -87,19 +110,30 @@ DEPTH="${CHIEF_STATUS_DEPTH:-4}"
 BLOCKED_ONLY=0
 ALL=0
 ENFORCE_ORDER=0
+JSON=0
+# How many blockers get the CASCADE computed (see blocker_table). Bounded because
+# the closure is quadratic in the blocked set and the rows past the top of the list
+# are not a plan anybody acts on — and the cap is REPORTED when it bites, never
+# silently applied.
+CASCADE_CAP="${CHIEF_STATUS_CASCADE_CAP:-25}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --blocked)        BLOCKED_ONLY=1; shift ;;
     --all)            ALL=1; shift ;;
     --enforce-order)  ENFORCE_ORDER=1; shift ;;
+    --json)           JSON=1; shift ;;
     -h|--help)
       cat <<'USAGE'
 chief status — what is left in the backlog, and what can start now.
 
   chief status              totals for this repo: remaining (live/parked),
                             runnable vs blocked, completed, and any problems
-  chief status --blocked    only what is waiting, naming the edge that holds it
+  chief status --blocked    only what is waiting, naming the edge that holds it —
+                            and, aggregated the other way round, which merges would
+                            release the most: a plan rather than a number
   chief status --all        every repo in the known-repos registry, regardless of cwd
+  chief status --json       the whole report as ONE JSON document on stdout, notes and
+                            warnings on stderr, so it pipes to jq cleanly
   chief status --enforce-order
                             exit non-zero if the project's OWN declared category
                             ordering is violated — for a CI job that asked for it
@@ -110,6 +144,8 @@ always states which scope produced the numbers.
 
 Environment:
   CHIEF_STATUS_DEPTH   how deep beneath the walk base a repo root may sit (default 4)
+  CHIEF_STATUS_CASCADE_CAP
+                       how many blockers get the release CASCADE computed (default 25)
   CHIEF_IGNORE         ignore-list file; an entry excludes that path and everything
                        beneath it (default $CHIEF_PREFIX/ignore)
   CHIEF_CATEGORIES     the ordered category vocabulary for this report, overriding
@@ -390,10 +426,17 @@ EOF
 # compatibility floor and has no associative arrays (see driver.sh's header).
 runnable=""      # names, one per line
 blocked=""       # "name<TAB>dep<TAB>class<TAB>detail", one per line — first unmet edge
+edges=""         # EVERY unmet edge: "name<TAB>selfkey<TAB>dep<TAB>depkey<TAB>class<TAB>detail".
+                 # The first-edge line above is what a reader wants per tasklist; this is
+                 # the same information keyed the other way round, which is what makes the
+                 # "merge this and N others start" aggregation possible. Both keys are
+                 # RECORD PATHS — the completed/ file a tasklist would have once merged is
+                 # exactly what its dependents' edges resolve to — so the join is sound
+                 # across repos, where a bare stem would collide.
 parked=""        # names
 unreadable=""    # names — counted as remaining, but no verdict is honest
 problems=""      # "name<TAB>message"
-rows=""          # "label<TAB>remaining<TAB>live<TAB>parked<TAB>runnable<TAB>blocked<TAB>completed"
+rows=""          # "label<TAB>remaining<TAB>live<TAB>parked<TAB>runnable<TAB>blocked<TAB>completed<TAB>source<TAB>path"
 # The category breakdown, accumulated RAW — one "<category><TAB>live|parked" line per
 # counted tasklist, aggregated once at render time. Raw rather than a counter per
 # category because the set of categories is not known in advance and bash 3.2 has no
@@ -408,12 +451,62 @@ n_live=0 n_parked=0 n_runnable=0 n_blocked=0 n_unreadable=0 n_completed=0 n_repo
 add_problem() { problems="$problems$1	$2
 "; }
 
+# ── reading a directory of records ───────────────────────────────────────────
+# ONE jq for the whole directory, not one per file. The fields are exactly what the
+# splits and the verdict need, read in a single pass over each record: chief status
+# on a portfolio asks this of ~1,000 files, and at a fork apiece the report costs
+# more than the question is worth.
+#
+# `category` is an OPAQUE STRING (US-3) — flattened so that whatever an author wrote
+# cannot break the record separator, and otherwise untouched. `dependsOn` is read
+# defensively: a non-array there is not an array of edges, and reading it as one
+# would abort the whole directory over a single malformed field.
+RECORD_JQ='
+  def flat: tostring | gsub("[\t\n\r\u001f]"; " ") | sub("^ +"; "") | sub(" +$"; "");
+  input_filename as $p
+  | ($p | split("/") | last | sub("\\.json$"; "")) as $n
+  | if type == "object" then
+      [$p, $n, "object", ((.parked // false) | tostring), ((.category // "") | flat),
+       (has("dependsOn") | tostring),
+       (if (.dependsOn | type) == "array" then (.dependsOn | map(flat)) else [] end | join(" "))]
+    else
+      [$p, $n, "other", "false", "", "false", ""]
+    end
+  | join("\u001f")'
+
+# read_records DIR -> one US-separated line per record, in filename order.
+#
+# A record jq cannot parse aborts the read at that file, having already emitted a
+# line for every file before it. That is enough to NAME the culprit — it is the next
+# file in the list — so the reader reports it and resumes after it. The cost of a
+# malformed record is therefore one extra fork, not a fallback to one fork per
+# record; and it is reported rather than dropped, which is US-1's rule.
+read_records() {
+  local dir="$1" out rc n i f
+  local files=() rest=()
+  for f in "$dir"/*.json; do [ -e "$f" ] && files+=("$f"); done
+  while [ "${#files[@]}" -gt 0 ]; do
+    out="$(jq -r "$RECORD_JQ" "${files[@]}" 2>/dev/null)"; rc=$?
+    [ -n "$out" ] && printf '%s\n' "$out"
+    [ "$rc" = 0 ] && return 0
+    n="$(printf '%s' "$out" | LC_ALL=C cut -d"$US" -f1 | LC_ALL=C sort -u | grep -c .)"
+    [ "$n" -ge "${#files[@]}" ] && return 0        # no progress possible; stop rather than spin
+    f="${files[$n]}"
+    printf '%s%s%s%sbad%sfalse%s%sfalse%s\n' \
+      "$f" "$US" "$(basename "$f" .json)" "$US" "$US" "$US" "$US" "$US"
+    rest=(); i=$((n + 1))
+    while [ "$i" -lt "${#files[@]}" ]; do rest+=("${files[$i]}"); i=$((i + 1)); done
+    files=(); [ "${#rest[@]}" -gt 0 ] && files=("${rest[@]}")
+  done
+}
+
 # scan_repo ROOT LABEL — one repo's records, folded into the totals above. The body
 # is US-1's pass, unchanged except that deps_scope() is re-pointed per repo (which
 # is exactly what deps.sh's four-globals contract exists for) and names are
 # qualified with the repo label whenever more than one repo is in scope.
 scan_repo() {
-  local root="$1" label="$2" source="$3" f name q d v unmet ucls udet meta catv voc
+  local root="$1" label="$2" source="$3" f name q d voc
+  local fpath kind parkedv catv hasdeps deplist prev="" selfkey depkey unmet ucls udet
   local r_live=0 r_parked=0 r_runnable=0 r_blocked=0 r_completed=0
   deps_scope "$root"
 
@@ -425,12 +518,21 @@ scan_repo() {
 "
   fi
 
-  for f in "$SRC"/*.json; do
-    [ -e "$f" ] || continue
-    name="$(basename "$f" .json)"
+  while IFS="$US" read -r fpath name kind parkedv catv hasdeps deplist; do
+    [ -n "$name" ] || continue
     q="$name"; [ "$MULTI" = 1 ] && q="$label/$name"
 
-    if ! jq -e . "$f" >/dev/null 2>&1; then
+    # jq applies the filter to every JSON VALUE in a file, so a file holding two of
+    # them would be counted twice. They arrive adjacent (jq reads a file through
+    # before moving on), so only the first is counted — and the file is named,
+    # because a record silently counted once out of two is arithmetic nobody can check.
+    if [ "$fpath" = "$prev" ]; then
+      add_problem "$q" "more than one JSON document in the file — only the first is counted"
+      continue
+    fi
+    prev="$fpath"
+
+    if [ "$kind" = bad ]; then
       # No verdict is possible and inventing one would be the lie this file exists to
       # avoid — it is remaining work, it is a problem, and it is neither runnable nor
       # blocked. The driver, whose jq also fails here, treats it as dependency-free and
@@ -443,18 +545,14 @@ scan_repo() {
       add_problem "$q" "not valid JSON (jq cannot parse it) — no runnable/blocked verdict is possible"
       continue
     fi
+    [ "$kind" = other ] && \
+      add_problem "$q" "not a JSON object at the top level — read as carrying no dependencies"
 
-    # ONE jq for both fields the splits need. `category` is read as an OPAQUE STRING
-    # — trimmed, with tabs and newlines flattened so that whatever an author wrote
-    # cannot break the TSV it is accumulated in, and otherwise untouched. Nothing here
-    # knows any category name; the only value chief recognizes is the ABSENCE of one.
-    meta="$(jq -r '[(.parked // false | tostring),
-                    ((.category // "") | tostring | gsub("[\t\n\r]"; " ")
-                       | sub("^ +"; "") | sub(" +$"; ""))] | join("\t")' "$f" 2>/dev/null)"
-    catv="${meta#*$TAB}"
+    # Nothing here knows any category name; the only value chief recognizes is the
+    # ABSENCE of one.
     if [ -n "$catv" ]; then n_categorized=$((n_categorized + 1)); else catv="$CAT_NONE"; fi
 
-    if [ "${meta%%$TAB*}" = "true" ]; then
+    if [ "$parkedv" = "true" ]; then
       r_parked=$((r_parked + 1)); parked="$parked$q
 "
       cats="$cats$catv${TAB}parked
@@ -465,17 +563,29 @@ scan_repo() {
     cats="$cats$catv${TAB}live
 "
 
-    jq -e 'has("dependsOn")' "$f" >/dev/null 2>&1 \
-      || add_problem "$q" "no \"dependsOn\" field — read as no dependencies (the schema expects the key, even empty)"
+    [ "$hasdeps" = "true" ] || \
+      add_problem "$q" "no \"dependsOn\" field — read as no dependencies (the schema expects the key, even empty)"
 
-    # THE VERDICT. deps_of + is_recorded_done are the scheduler's, unmodified.
+    # THE VERDICT. deps_of + is_recorded_done are the scheduler's, unmodified — the
+    # record just read is handed to deps.sh's memo rather than re-read, so the answer
+    # is still deps.sh's and the fork is not paid twice.
+    deps_memo "$name" "$deplist"
+    selfkey="$COMPLETED/$name.json"
     unmet="" ucls="" udet=""
-    for d in $(deps_of "$name"); do
+    deps_of_set "$name"
+    for d in $DEPS_LIST; do
       is_recorded_done "$d" && continue
-      unmet="$d"
-      v="$(dep_verdict "$d")"
-      ucls="${v%%	*}"; udet="${v#*	}"
-      break
+      dep_record_set "$d"; depkey="$DEP_RECORD"
+      [ -n "$depkey" ] || depkey="unresolved:$d"
+      dep_verdict_set "$d"
+      edges="$edges$q	$selfkey	$d	$depkey	$DEP_CLASS	$DEP_DETAIL
+"
+      # The FIRST unmet edge is what the per-tasklist line reports; the rest are
+      # collected because "what would this merge release" cannot be answered from
+      # one edge per tasklist.
+      if [ -z "$unmet" ]; then
+        unmet="$d"; ucls="$DEP_CLASS"; udet="$DEP_DETAIL"
+      fi
     done
 
     if [ -z "$unmet" ]; then
@@ -490,14 +600,16 @@ scan_repo() {
         retired) add_problem "$q" "dependsOn \"$unmet\" is PERMANENTLY unsatisfiable: $udet" ;;
       esac
     fi
-  done
+  done <<EOF
+$(read_records "$SRC")
+EOF
 
   for f in "$COMPLETED"/*.json; do [ -e "$f" ] || continue; r_completed=$((r_completed + 1)); done
 
   n_live=$((n_live + r_live)); n_parked=$((n_parked + r_parked))
   n_runnable=$((n_runnable + r_runnable)); n_blocked=$((n_blocked + r_blocked))
   n_completed=$((n_completed + r_completed)); n_repos=$((n_repos + 1))
-  rows="$rows$label	$((r_live + r_parked))	$r_live	$r_parked	$r_runnable	$r_blocked	$r_completed	$source
+  rows="$rows$label	$((r_live + r_parked))	$r_live	$r_parked	$r_runnable	$r_blocked	$r_completed	$source	$root
 "
 }
 
@@ -586,6 +698,125 @@ render_blocked() {
       *)       printf '      %-28s needs %s — %s\n'                      "$n" "$d" "$det" ;;
     esac
   done
+}
+
+# ── the aggregation that turns a number into a plan ──────────────────────────
+# "82 blocked" is a number. "these 9 merges release 82" is a plan, and only the
+# second is something an operator can act on — so the blocked set is also keyed by
+# the EDGE rather than by the waiter, and the edges are ranked by what merging each
+# one would start.
+#
+# Three counts, because they answer three different questions and conflating them
+# would overstate every row:
+#
+#   holds     how many blocked tasklists name this edge at all. The widest number,
+#             and on its own the misleading one: a tasklist with two unmet edges is
+#             not released by merging either one.
+#   releases  how many become runnable THE MOMENT this merges — those for which
+#             this is the only unmet edge. This is the honest direct answer.
+#   cascade   ...and how many in total, if each tasklist so released is then worked
+#             and merged in its turn. That is the chain an operator is actually
+#             planning, and it is stated as a separate number rather than folded
+#             into the first, because it assumes work that has not happened.
+#
+# The join key is the RECORD PATH on both sides (see `edges`), so a chain that
+# crosses a repo boundary is followed exactly like one inside a repo.
+#
+# The cascade closure is quadratic in the blocked set, so it is computed for the
+# top CASCADE_CAP rows only — and when that bites, the render says so. A silent cap
+# in a report about totals reads as "this is all of it".
+blocker_table() {   # -> "releases<TAB>cascade<TAB>holds<TAB>dep<TAB>class<TAB>depkey", best first
+  printf '%s' "$edges" | LC_ALL=C awk -F'\t' -v CAP="$CASCADE_CAP" '
+    $1 == "" { next }
+    {
+      t = $1; k = $4
+      if (!((t SUBSEP k) in seen)) {
+        seen[t SUBSEP k] = 1
+        unmet[t] = unmet[t] k "\n"; n[t]++
+        holds[k]++
+      }
+      selfk[t] = $2; label[k] = $3; cls[k] = $5
+    }
+    END {
+      T = 0; for (t in n) tl[++T] = t
+      D = 0; for (k in holds) { dl[++D] = k
+        direct[k] = 0 }
+      for (j = 1; j <= T; j++) {
+        t = tl[j]
+        if (n[t] == 1) { split(unmet[t], one, "\n"); direct[one[1]]++ }
+      }
+      # Insertion sort: releases desc, then holds desc, then the edge name. D is the
+      # number of distinct unmerged edges in the backlog — small, and sorting it here
+      # keeps the whole aggregation to ONE fork.
+      for (i = 2; i <= D; i++) {
+        v = dl[i]
+        for (j = i - 1; j >= 1 && worse(dl[j], v); j--) dl[j + 1] = dl[j]
+        dl[j + 1] = v
+      }
+      for (i = 1; i <= D; i++) {
+        k = dl[i]
+        casc = (i <= CAP) ? cascade(k) : -1
+        printf "%d\t%d\t%d\t%s\t%s\t%s\n", direct[k], casc, holds[k], label[k], cls[k], k
+      }
+    }
+    function worse(a, b) {
+      if (direct[a] != direct[b]) return direct[a] < direct[b]
+      if (holds[a]  != holds[b])  return holds[a]  < holds[b]
+      return a > b
+    }
+    # Merge k, then keep merging whatever that releases, until nothing more moves.
+    function cascade(k,   M, R, prog, j, t, m, parts, i2, ok, rel) {
+      split("", M); split("", R); rel = 0
+      M[k] = 1
+      do {
+        prog = 0
+        for (j = 1; j <= T; j++) {
+          t = tl[j]
+          if (t in R) continue
+          m = split(unmet[t], parts, "\n")
+          ok = 1
+          for (i2 = 1; i2 <= m; i2++) {
+            if (parts[i2] == "") continue
+            if (!(parts[i2] in M)) { ok = 0; break }
+          }
+          if (ok) { R[t] = 1; rel++; prog = 1; if (selfk[t] != "") M[selfk[t]] = 1 }
+        }
+      } while (prog)
+      return rel
+    }'
+}
+
+# The plan, rendered. Printed under --blocked (and carried whole in --json), because
+# that is the view whose entire purpose is "what do I do about it". Named for what it
+# RELEASES rather than for the obvious verb: `unblock` is a category word on this
+# host, and test/status-categories.sh reads any non-comment line naming one as chief
+# having quietly adopted a vocabulary.
+render_release_plan() {
+  local tbl rel casc holds dep cls key total plan rows hidden
+  tbl="$(blocker_table)"
+  [ -n "$tbl" ] || return 0
+  rows="$(printf '%s' "$tbl" | grep -c .)"
+  total="$(printf '%s' "$tbl" | LC_ALL=C awk -F"$TAB" '{ s += $1 } END { print s + 0 }')"
+  plan="$(printf '%s'  "$tbl" | LC_ALL=C awk -F"$TAB" '$1 > 0 { c++ } END { print c + 0 }')"
+  printf '\n  release   — merge these first; each row is what merging it starts\n'
+  printf '      %-28s %8s %9s %6s  %s\n' edge releases cascade holds state
+  printf '%s\n' "$tbl" | head -n "$CASCADE_CAP" | while IFS="$TAB" read -r rel casc holds dep cls key; do
+    [ -n "$dep" ] || continue
+    printf '      %-28s %8s %9s %6s  %s\n' "$dep" "$rel" "$casc" "$holds" "$cls"
+  done
+  if [ "$plan" -gt 0 ]; then
+    printf '      %d merge(s) would release %d of the %d blocked tasklist(s) the moment they land\n' \
+      "$plan" "$total" "$n_blocked"
+  else
+    printf '      no single merge releases anything on its own — every blocked tasklist waits on more than one edge\n'
+  fi
+  # The cap is the same one the cascade is computed under, and it is REPORTED: a
+  # truncated table in a report about totals otherwise reads as the whole of it.
+  hidden=$((rows - CASCADE_CAP))
+  [ "$hidden" -gt 0 ] && \
+    printf '      %d further edge(s) not shown, ranked below these (CHIEF_STATUS_CASCADE_CAP=%s; --json carries all %d)\n' \
+      "$hidden" "$CASCADE_CAP" "$rows"
+  return 0
 }
 
 # What the walk deliberately did NOT count. Printed in every render, including
@@ -678,17 +909,97 @@ EOF
   render_ordering
 }
 
+# ── the machine feed ─────────────────────────────────────────────────────────
+# ONE JSON document on stdout and nothing else, so `chief status --json | jq ...`
+# works without a filter to strip a header off first — the discipline `chief events`
+# already keeps. Every human-facing note (the scope notes, the --enforce-order
+# verdict) goes to stderr instead of being dropped: a warning that only exists in
+# the text render is a warning the machine consumer never sees.
+#
+# It is the SAME numbers, rendered a second way. Nothing below re-scans, re-counts or
+# re-decides anything; it serializes the accumulators the text render prints. A JSON
+# feed computed by its own pass would be a second implementation of the report, and
+# would disagree with it on the day one of them changed.
+#
+# Built by jq from the raw accumulators rather than by printf, so the escaping is
+# jq's problem and not this file's — a tasklist name or a dependency detail carrying
+# a quote cannot produce a document the consumer cannot parse.
+# Shape: docs/reference/status.md.
+json_report() {
+  jq -n \
+    --arg version "$CHIEF_VERSION" \
+    --arg mode "$MODE" --arg scope "$SCOPE_LINE" --arg base "$BASE" \
+    --argjson depth "$DEPTH" --argjson multi "$MULTI" \
+    --arg rows "$rows" --arg runnable "$runnable" --arg parkedl "$parked" \
+    --arg unreadable "$unreadable" --arg blocked "$blocked" --arg edges "$edges" \
+    --arg blockers "$(blocker_table)" --arg counts "$COUNTS" --arg problems "$problems" \
+    --arg excluded "$EXCLUDED" --arg stale "$STALE" --arg wt "$WT_SKIPPED" \
+    --arg vocab "$VOCAB" --arg vocabsrc "$VOCAB_SRC" --argjson vocabconflict "$VOCAB_CONFLICT" \
+    --argjson ordprecede "$ORD_PRECEDE" --arg ordlast "$ORD_LAST" --argjson ordlastlive "${ORD_LAST_LIVE:-0}" \
+    --argjson enforce "$ENFORCE_ORDER" --arg ordercheck "$1" \
+    --argjson repos "$n_repos" --argjson remaining "$n_remaining" --argjson live "$n_live" \
+    --argjson parkedn "$n_parked" --argjson runnablen "$n_runnable" --argjson blockedn "$n_blocked" \
+    --argjson unreadablen "$n_unreadable" --argjson completed "$n_completed" \
+    --argjson categorized "$n_categorized" \
+    '
+    def lines($s): $s | split("\n") | map(select(length > 0));
+    def cols($s):  lines($s) | map(split("\t"));
+    def num: if . == null or . == "" then 0 else tonumber end;
+    {
+      chief: $version,
+      report: "chief status",
+      scope: { mode: $mode, description: $scope, base: $base, depth: $depth,
+               multi_repo: ($multi == 1), repos: $repos },
+      totals: { repos: $repos, remaining: $remaining, live: $live, parked: $parkedn,
+                runnable: $runnablen, blocked: $blockedn, unreadable: $unreadablen,
+                completed: $completed },
+      repos: (cols($rows) | map({ label: .[0], remaining: (.[1]|num), live: (.[2]|num),
+                                  parked: (.[3]|num), runnable: (.[4]|num), blocked: (.[5]|num),
+                                  completed: (.[6]|num), source: .[7], path: .[8] })),
+      runnable: lines($runnable),
+      parked:   lines($parkedl),
+      unreadable: lines($unreadable),
+      blocked: (cols($blocked) | map({ tasklist: .[0], blocked_by: .[1], class: .[2], detail: .[3] })),
+      edges:   (cols($edges)   | map({ tasklist: .[0], record: .[1], dep: .[2],
+                                       dep_record: .[3], class: .[4], detail: .[5] })),
+      blockers: (cols($blockers) | map({ dep: .[3], dep_record: .[5], class: .[4],
+                                         holds: (.[2]|num), releases: (.[0]|num),
+                                         releases_with_cascade: (if (.[1]|num) < 0 then null else (.[1]|num) end) })),
+      categories: {
+        tasklists_with_category: $categorized,
+        vocabulary: ($vocab | split(" ") | map(select(length > 0))),
+        vocabulary_source: (if $vocabsrc == "" then null else $vocabsrc end),
+        vocabulary_conflict: $vocabconflict,
+        breakdown: (cols($counts) | map({ category: .[2], live: (.[0]|num), parked: (.[1]|num) })
+                    | sort_by(-(.live + .parked), .category)),
+        ordering: (if ($vocab | length) > 0
+                   then { declared: true, last: $ordlast, live_preceding: $ordprecede,
+                          live_in_last: $ordlastlive }
+                   else { declared: false, last: null, live_preceding: null, live_in_last: null }
+                   end)
+      },
+      problems: (cols($problems) | map({ tasklist: .[0], message: .[1] })),
+      excluded: lines($excluded),
+      stale:    lines($stale),
+      worktrees_skipped: lines($wt),
+      order_check: { enforced: ($enforce == 1), result: $ordercheck }
+    }'
+}
+
 # --enforce-order — the only thing in this file that can produce a non-zero exit, and
 # it enforces the PROJECT'S rule, not one of chief's: work in the last declared
 # category while work in earlier ones remains. With no vocabulary in scope there is
 # nothing to enforce, which is said out loud on stderr rather than passing quietly.
 ORDER_RC=0
+ORDER_RESULT=not-enforced     # ...and the same verdict as a token, for --json
 order_check() {
   [ "$ENFORCE_ORDER" = 1 ] || return 0
   if [ -z "$VOCAB" ]; then
     if [ "$VOCAB_CONFLICT" != 0 ]; then
+      ORDER_RESULT=conflict
       echo "chief status --enforce-order: the repos in scope declare $VOCAB_CONFLICT different category vocabularies — there is no single ordering to enforce." >&2
     else
+      ORDER_RESULT=no-vocabulary
       echo "chief status --enforce-order: no category vocabulary is declared in scope (CHIEF_CATEGORIES in .chief/config) — there is no ordering to enforce." >&2
     fi
     return 0
@@ -696,18 +1007,31 @@ order_check() {
   if [ "$ORD_LAST_LIVE" -gt 0 ] && [ "$ORD_PRECEDE" -gt 0 ]; then
     printf '\n  order check FAIL — %d live tasklist(s) in earlier categories precede the %d in "%s", the last category in the declared ordering\n' \
       "$ORD_PRECEDE" "$ORD_LAST_LIVE" "$ORD_LAST"
-    ORDER_RC=1
+    ORDER_RESULT=fail; ORDER_RC=1
   elif [ "$ORD_LAST_LIVE" = 0 ]; then
+    ORDER_RESULT=pass
     printf '\n  order check PASS — no live work in "%s", the last category in the declared ordering\n' "$ORD_LAST"
   else
+    ORDER_RESULT=pass
     printf '\n  order check PASS — nothing precedes "%s", the last category in the declared ordering\n' "$ORD_LAST"
   fi
   return 0
 }
 
 # Every render path leaves through here, so the enforcement verdict is printed once
-# and the exit status is decided in exactly one place.
-finish() { order_check; exit "$ORDER_RC"; }
+# and the exit status is decided in exactly one place. Under --json the verdict is a
+# FIELD of the document and its prose goes to stderr, so stdout stays parseable — the
+# exit status is the same either way, since it is the report's answer and not its
+# rendering.
+finish() {
+  if [ "$JSON" = 1 ]; then
+    order_check >&2
+    json_report "$ORDER_RESULT"
+    exit "$ORDER_RC"
+  fi
+  order_check
+  exit "$ORDER_RC"
+}
 
 render_problems() {
   [ -n "$problems" ] || return 0
@@ -723,6 +1047,14 @@ else
   header="$(printf '%s' "$REPOS" | cut -f1 | head -1)"
 fi
 
+# --json leaves HERE, before any human render: every note the text report would have
+# printed goes to stderr, and stdout carries the document and nothing else. Placed
+# after the totals and before the first printf, so the two renders cannot disagree.
+if [ "$JSON" = 1 ]; then
+  { render_scope_notes; render_problems; } >&2
+  finish
+fi
+
 if [ "$BLOCKED_ONLY" = 1 ]; then
   printf 'chief status --blocked — %s (scope: %s)\n\n' "$header" "$SCOPE_LINE"
   if [ "$n_repos" = 0 ]; then
@@ -732,6 +1064,7 @@ if [ "$BLOCKED_ONLY" = 1 ]; then
   else
     printf '  blocked  %d of %d live\n' "$n_blocked" "$n_live"
     render_blocked
+    render_release_plan
   fi
   render_scope_notes
   finish
@@ -756,7 +1089,7 @@ if [ "$MULTI" = 1 ]; then
   # deeper than CHIEF_STATUS_DEPTH), `both` is one repo the two agreed on — counted
   # once, because the union was taken over RESOLVED ABSOLUTE PATHS.
   printf '  %-32s %9s %5s %6s %8s %7s %9s  %s\n' repo remaining live parked runnable blocked completed source
-  printf '%s' "$rows" | while IFS='	' read -r l rem lv pk rn bl cp sc; do
+  printf '%s' "$rows" | while IFS='	' read -r l rem lv pk rn bl cp sc _path; do
     [ -n "$l" ] && printf '  %-32s %9s %5s %6s %8s %7s %9s  %s\n' "$l" "$rem" "$lv" "$pk" "$rn" "$bl" "$cp" "$sc"
   done
   printf '  %-32s %9s %5s %6s %8s %7s %9s\n' '' --------- ----- ------ -------- ------- ---------

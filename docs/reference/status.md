@@ -1,6 +1,6 @@
 # `chief status` — what is left, and what can start now
 
-> **Status:** Current · **Updated:** 2026-08-19 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-20 · **Owner:** chief
 
 `chief list` prints one line per tasklist with a story count. It answers *how far along is
 each one*. `chief status` answers the other question — **what is the state of the backlog**:
@@ -9,8 +9,10 @@ and what is holding the rest.
 
 ```
 chief status                  this repo (or the one above cwd)
-chief status --blocked        only what is waiting, naming the edge that holds it
+chief status --blocked        only what is waiting, naming the edge that holds it,
+                              and ranking the merges that would release the most
 chief status --all            every repo in the known-repos registry, regardless of cwd
+chief status --json           the whole report as ONE JSON document on stdout
 chief status --enforce-order  exit non-zero if the project's OWN declared category
                               ordering is violated — for a CI job that asked for it
 ```
@@ -37,6 +39,124 @@ Three consequences worth knowing:
 - **Malformed input degrades, it never aborts.** An unparseable tasklist, a missing
   `dependsOn`, a dependency naming a repo that does not exist: each is counted, named in a
   `problems` section, and the rest of the report still renders.
+
+## `--blocked` — from a number to a plan
+
+"82 blocked" is a number. It tells an operator that something is wrong and nothing about
+what to do, because the thing to do is a **merge**, and the report is keyed by the
+tasklist that is waiting. So `--blocked` also aggregates the other way round — by the
+**edge** — and ranks the edges by what merging each one would start:
+
+```
+  blocked  4 of 6 live
+      11-a           needs 10-root — no merged record yet (…/completed/10-root.json)
+      12-b           needs 10-root — no merged record yet (…/completed/10-root.json)
+      13-c           needs 10-root — no merged record yet (…/completed/10-root.json)
+      14-trap        needs 06-unstamped — PERMANENTLY BLOCKED: its record … has no "mergedToMain"
+
+  release   — merge these first; each row is what merging it starts
+      edge                         releases   cascade  holds  state
+      10-root                             2         3      3  unmerged
+      06-unstamped                        1         1      1  retired
+      2 merge(s) would release 3 of the 4 blocked tasklist(s) the moment they land
+```
+
+Three columns, because they are three different numbers and conflating them overstates
+every row:
+
+| column | means |
+|---|---|
+| `holds` | how many blocked tasklists name this edge **at all**. The widest number, and on its own misleading: a tasklist with two unmet edges is not started by merging either one. |
+| `releases` | how many become runnable **the moment this merges** — those for which it is the only unmet edge. The honest direct answer. |
+| `cascade` | ...and how many in total if each tasklist so released is then worked and merged in its turn. The chain an operator is planning — stated separately because it assumes work that has not happened. |
+
+The join key is the **record path** on both sides: the `completed/<stem>.json` a tasklist
+would have once merged is exactly what its dependents' edges resolve to, so a chain that
+crosses a repo boundary is followed like one inside a repo.
+
+The table shows the top `CHIEF_STATUS_CASCADE_CAP` edges (default 25) and **says how many
+it did not show** — the cascade closure is quadratic in the blocked set, and a truncated
+table in a report about totals would otherwise read as the whole of it. `--json` carries
+every edge, with `releases_with_cascade: null` on the ones past the cap.
+
+## `--json` — the machine feed
+
+`chief status --json` emits **one JSON document on stdout and nothing else**; every
+human-facing note — the scope notes, the problems section, the `--enforce-order` verdict
+— goes to **stderr**. That is the same stdout-is-data discipline `chief events` keeps, and
+it means `chief status --json | jq …` needs no filter to strip a header first. The exit
+status is unchanged: 0, unless `--enforce-order` was asked for and the project's own
+ordering is violated.
+
+It is the same scan rendered a second way. Nothing in the JSON path re-counts or
+re-decides anything, so the two renders cannot disagree — `test/status-json.sh` asserts
+the totals match field by field.
+
+```jsonc
+{
+  "chief": "0.8.74",
+  "report": "chief status",
+  "scope":  { "mode": "walk|repo|registry", "description": "…as printed in the header",
+              "base": "/abs/path", "depth": 4, "multi_repo": true, "repos": 16 },
+  "totals": { "repos": 16, "remaining": 312, "live": 219, "parked": 93,
+              "runnable": 137, "blocked": 82, "unreadable": 0, "completed": 703 },
+  "repos":  [ { "label": "koine", "path": "/abs/path", "source": "walk|registry|both|cwd",
+                "remaining": 12, "live": 9, "parked": 3,
+                "runnable": 4, "blocked": 5, "completed": 41 } ],
+  "runnable":   [ "koine/31-x" ],          // qualified with the repo label when multi-repo
+  "parked":     [ "koine/44-y" ],
+  "unreadable": [ "koine/17-broken" ],     // counted as remaining; no verdict is possible
+
+  // one entry per blocked tasklist — the FIRST unmet edge, as the text render shows it
+  "blocked": [ { "tasklist": "koine/13-c", "blocked_by": "10-root",
+                 "class": "unmerged|retired|norepo", "detail": "…" } ],
+  // ...and EVERY unmet edge, which is what the aggregation below is computed from
+  "edges":   [ { "tasklist": "koine/13-c", "record": "/abs/…/completed/13-c.json",
+                 "dep": "10-root", "dep_record": "/abs/…/completed/10-root.json",
+                 "class": "unmerged", "detail": "…" } ],
+  "blockers": [ { "dep": "10-root", "dep_record": "/abs/…/completed/10-root.json",
+                  "class": "unmerged", "holds": 3, "releases": 2,
+                  "releases_with_cascade": 3 } ],   // null past CHIEF_STATUS_CASCADE_CAP
+
+  "categories": { "tasklists_with_category": 9,
+                  "vocabulary": [ "fix", "unblock", "replace", "feature" ],
+                  "vocabulary_source": ".chief/config (CHIEF_CATEGORIES)",  // null if none
+                  "vocabulary_conflict": 0,   // >0 = that many different vocabularies in scope
+                  "breakdown": [ { "category": "feature", "live": 3, "parked": 1 } ],
+                  "ordering": { "declared": true, "last": "feature",
+                                "live_preceding": 4, "live_in_last": 3 } },
+
+  "problems": [ { "tasklist": "koine/17-broken", "message": "…" } ],
+  "excluded": [ "/abs/path" ], "stale": [ "/abs/path" ], "worktrees_skipped": [ "/abs/path" ],
+  "order_check": { "enforced": false,
+                   "result": "not-enforced|no-vocabulary|conflict|pass|fail" }
+}
+```
+
+Stable points a consumer can rely on: every count is a number, never a string; every list
+is present even when empty; `(uncategorized)` and `(unreadable)` are chief's labels for an
+absent and an unparseable category and are the only category values chief itself produces.
+
+`chief list` is untouched by all of this. It is a different tool — per-tasklist story
+progress, not aggregate state — and `test/status-json.sh` pins its output byte for byte.
+
+## Cost, and why it is a fixed number of forks
+
+A portfolio is ~1,000 records. `chief list` runs `jq` once per tasklist, which is fine for
+one repo's listing and does not survive that scale; a report nobody runs casually is a
+report nobody runs. So `chief status` reads each **directory** in one `jq` — the live
+tasklists in one pass, and each `completed/` directory as a single merged-record index
+behind `is_recorded_done` — and resolves edges without a subshell apiece.
+
+Measured on this host, 1,040 records across 16 repos: **2,576 jq invocations and 23s**
+before, **32 invocations and 2s** after. `test/status-perf.sh` guards it and asserts the
+**fork count** as well as the clock, because the fork count is what regresses and it does
+not depend on how loaded the machine is.
+
+The one thing the index changes is who may cache: a one-shot reader may, and the
+**scheduler may not**. A run asks "is this dep merged?" repeatedly over hours during which
+records are appearing, so `engine/crossrepo.sh` keeps the index opt-in and `chief status`
+is the only caller that turns it on. The driver's behaviour is byte-for-byte what it was.
 
 ## Scope — and why the header always states it
 
@@ -206,6 +326,7 @@ and keeps its build failure, as `chief status --enforce-order` in the same CI st
 | `CHIEF_REPOS` | `$CHIEF_PREFIX/repos` | the known-repos registry (`--all`'s scope) |
 | `CHIEF_WORKTREE_ROOT` | `$CHIEF_PREFIX/worktrees` | the tree the worktree guard excludes |
 | `CHIEF_CATEGORIES` | *(unset)* | the ordered category vocabulary for one report, overriding what the repos in scope declare |
+| `CHIEF_STATUS_CASCADE_CAP` | `25` | how many blocked edges get the release cascade computed, and how many rows `--blocked` prints |
 
 ## Related
 
