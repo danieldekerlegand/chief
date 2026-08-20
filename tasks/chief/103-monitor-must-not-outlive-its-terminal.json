@@ -4,7 +4,10 @@
   "branchName": "chief/103-monitor-must-not-outlive-its-terminal",
   "description": "`chief monitor` outlives the terminal that started it. Close the window without Ctrl-C and the watcher reparents to PID 1 and keeps looping on its refresh interval — forever, on a machine nobody is watching.\n\nMeasured 2026-08-19 on this host: NINE orphaned `monitor.sh watch 1` processes, every one with PPID 1, in three cohorts — three started 14:38, three at 15:09, three at 23:31, the oldest 11.5 hours old. Each spawns a `sleep` per tick, so the nine were also the machine's nine `sleep` processes: eighteen processes from three abandoned views. They were found by hand, by someone noticing the machine looked busy.\n\nTwo separate defects sit underneath that.\n\nFIRST, the watcher has no reason to keep running once its terminal is gone, and nothing tells it to stop. `chief ps` is fine — bin/chief runs it as `monitor.sh once`, which exits on its own. Only the `watch` arm loops.\n\nSECOND, `chief reap` does not see them. Run against those nine live orphans it printed 'no orphaned chief processes'. Its scope is orphaned AGENT WORK — agent trees under a dead run, worktrees, run records — so a viewer that outlived its terminal falls straight through the one tool built for exactly this. A cleanup command that reports clean while nine orphans run is worse than no cleanup command, because it answers the question the operator actually asked.\n\nThe third cohort is the tell: they accumulate silently and nobody notices until the process list is read directly.",
   "dependsOn": [],
-  "touches": ["engine", "cli"],
+  "touches": [
+    "engine",
+    "cli"
+  ],
   "iters": 6,
   "warmup": [
     "grep -n 'watch\\|once' bin/chief | head",
@@ -23,7 +26,8 @@
         "One invocation leaves ONE process while running. The nine orphans arrived in threes, so a single `chief monitor` was leaving three; if that nesting is load-bearing it is documented, and if it is not it goes.",
         "GATES: bash -n clean, shellcheck -S error clean, behavioural core green."
       ],
-      "notes": null
+      "notes": "Measured on this host, same harness both sides (a shell owning the watcher, then killed -9). PRE-FIX(HEAD~1): 2 persistent chief processes while running -> 2 survivors with PPID 1 after the terminal died (bin/chief + monitor.sh; plus a transient render fork = the 'threes'). POST-FIX: 1 process while running -> 0 survivors at t+4s, 0 sleeps. Negative case: live parent, 8 refresh intervals -> 1 watcher alive, 0 false kills. Interactive pty path: 0 forked sleeps across 8 samples, 0 bin/chief wrapper processes. Ctrl-C identical pre and post -- both 'exited cleanly on SIGINT', cursor-restore sequence present once in the pty log. chief ps (once arm) untouched, rc=0. GATES: bash -n clean on bin/chief + engine/monitor.sh; shellcheck NOT installed on this host (CI enforces it); behavioural core green -- smoke rc=0, ratelimit rc=0, noworkguard rc=0; also doc-sync rc=0 (README v0.8.70), version-bump rc=0, monitor rc=0, limitmonitor rc=0, liveliness rc=0. test/stall-flag.sh is FLAKY on this loaded host, 3 passed / 1 failed out of 4 -- identical 3/1 at HEAD~1, so pre-existing and not from this change.",
+      "passes": true
     },
     {
       "id": "US-2",
@@ -34,7 +38,8 @@
         "A watcher with a live parent is never touched, and neither is another user's process or a live registered run — the existing reap guarantees hold unchanged, asserted rather than assumed.",
         "The scope change is stated where reap describes itself, so 'no orphaned chief processes' means no orphans of any kind rather than none of one kind."
       ],
-      "notes": null
+      "notes": "Measured on this host, same harness both sides (pre-fix = engine/reap.sh at HEAD~1 via `git archive`, post-fix = this worktree), with a PRE-US-1 monitor.sh so an orphaned watcher cannot self-exit -- the exact shape of the nine. FOUND: pre-fix `chief reap -n` printed \"no orphaned chief processes\" with 1 planted orphan AND 28 real ones alive on the host; post-fix the same command reported 28 orphaned monitor view(s), each ppid 1. REAPED: the non-dry sweep ended 29, every one on TERM, no KILL escalation; `pgrep -f 'engine/monitor.sh watch'` 38 -> 0. DISTINCT: viewers print under their own headline and their own [view] key, separate from the agent-work list. NEGATIVE (0 false kills): a watcher with a live parent -> 0 listed, alive after both the dry run and the real reap (final run: 2 orphans listed + reaped, live-parent watcher listed 0 times and still alive). NEW GUARANTEE asserted: a LIVE viewer whose cwd is inside a worktree was reported pre-fix as \"[cwd] working in demo . tl\" and would have been reaped as agent work; post-fix it appears 0 times in any list. Clean-host line now reads \"no orphaned chief processes of any kind -- no agent work, no abandoned monitor views\". Scope stated in reap.sh's header, chief_reap_usage, bin/chief help and README's command table. GATES: bash -n clean on engine/reap.sh + bin/chief; shellcheck NOT installed on this host (CI enforces it); smoke rc=0, ratelimit rc=0, noworkguard rc=0 (behavioural core); reapscope rc=0, reapenv rc=0, teardown rc=0, sweep rc=0, monitor rc=0, limitmonitor rc=0, liveliness rc=0, doc-sync rc=0 (README v0.8.71), version-bump rc=0.",
+      "passes": true
     },
     {
       "id": "US-3",
@@ -45,7 +50,8 @@
         "The negative cases ride along: a live watcher with a real parent survives both the self-exit path and reap, 0 false kills.",
         "The suite is hermetic — its own prefix, its own runs dir, no reliance on the operator's real ~/.chief — and is registered in test/all.sh."
       ],
-      "notes": null
+      "notes": "Measured on this host, both arms of the same file. REPRODUCES: copied into a PRE-FIX tree (`git archive 6d6d29e | tar -x -C $(mktemp -d)`) it FAILS rc=1 -- section 1 reproduced the leak (\"an unfixed watcher survives its terminal, PPID 1 (pid 93959)\") and section 2 then failed with \"the orphaned view (pid 93959, ppid 1) was not reported\"; that same pre-fix report also listed the LIVE-parent control as \"[cwd] working in zz-demo . tl\", the false positive US-2 removed. Against this worktree it PASSES rc=0, 3 runs of 3, ~27s each. BOTH HALVES on ONE real current-engine watcher: reap -n reports it under [view] while it is still blocked in its 20s tick, then it self-exits and its forked sleep goes with it (sleep pids observed 2023 / 11572 / 20309, all gone). NEGATIVE, 0 false kills: the live-parent control (cwd deliberately inside a chief worktree) self-exited 0 times, appeared 0 times in EITHER list across the dry run and the real reap, and was alive at the end of all 3 runs. HERMETIC: its own $CHIEF_PREFIX/$CHIEF_RUNS/$CHIEF_REPOS under mktemp -d; the unfixed arm is a neutered COPY of the engine rather than `git show HEAD~N`, because CI clones shallow. Registered in test/all.sh (BASH_SUITE, after `monitor`) and .github/workflows/ci.yml; deliberately NOT in .chief/verify.sh's CHIEF_BYSTANDER_TESTS, for test/monitor.sh's reason -- it asserts on wall-clock refresh intervals and the merge gate runs under parallel load. ALSO FIXED HERE (it blocks this branch's merge): the code-quality ratchet BLOCKED on US-2's engine/reap.sh, single_use_functions base 46 -> branch 50, delta +4, tolerance 2; inlining chief_is_viewer and chief_report_viewers_declined at their one call site each gives 46 -> 48, delta +2 tol 2, \"quality: OK -- no tracked metric regressed (allowing)\". VERSION 0.8.71 -> 0.8.72 + README bold version with it. GATES (all against the COMMITTED tree): bash -n clean on every bin/engine/test/template script; shellcheck NOT installed on this host (CI enforces it); behavioural core green -- smoke rc=0, ratelimit rc=0, noworkguard rc=0; monitor rc=0, liveliness rc=0, limitmonitor rc=0; reapscope rc=0, reapenv rc=0, sweep rc=0, teardown rc=0, container rc=0; monitor-orphan rc=0; doc-sync rc=0 (README v0.8.72); version-bump rc=0; quality ratchet OK.",
+      "passes": true
     }
   ]
 }

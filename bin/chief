@@ -101,13 +101,19 @@ Usage:
   chief models [provider]     list the models you can pass to --model: live from the provider for
                               devin/opencode, the stable family aliases for claude, none for amp/codex
                               (no arg = all)
-  chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
-       [--scope PREFIX]       still spending quota) with no live, registered run behind
-                              them. -n reports without signalling. HOST-WIDE by default:
+  chief reap [-n] [--grace N] stop ORPHANED chief processes, of BOTH kinds. First agent
+       [--scope PREFIX]       WORK — agent trees still running (and still spending quota)
+                              with no live, registered run behind them. Then abandoned
+                              VIEWS — \`chief monitor\` watchers that outlived the terminal
+                              that asked for them; reported SEPARATELY, because ending a
+                              view costs a redraw and ending an agent tree costs a run.
+                              -n reports without signalling. HOST-WIDE by default:
                               every repo on this box, not just the one you are in —
-                              --scope <repo>-<cksum>- narrows it to one repo's runs.
-                              Never touches a live run, another user's processes, or
-                              your own claude sessions. Then the DISK half: build
+                              --scope <repo>-<cksum>- narrows it to one repo's runs (a
+                              view belongs to no run, so it is never narrowed).
+                              Never touches a live run, a watcher whose terminal is
+                              still open, another user's processes, or your own claude
+                              sessions. Then the DISK half: build
                               directories (target/ node_modules/ .venv/ build/) left
                               behind in worktrees with no live run and idle past
                               --disk-age (default 1h). --no-disk / --disk-only pick
@@ -564,7 +570,12 @@ cmd_run() {
 }
 
 cmd_ps()      { bash "$ENGINE/monitor.sh" once ; }
-cmd_monitor() { bash "$ENGINE/monitor.sh" watch "${1:-2}" ; }
+# EXEC, not fork: `chief monitor` is a view, and a view is one process. Forking left
+# this wrapper blocked in wait() for the whole session — a second process per watcher,
+# and the one whose death re-parented the watcher to init instead of ending it (see
+# monitor.sh's THE WATCH LOOP'S STOP CONDITION). `chief ps` returns, so it stays a
+# plain call.
+cmd_monitor() { exec bash "$ENGINE/monitor.sh" watch "${1:-2}" ; }
 
 # chief logs [name] [-f] [-n N] — hook into a live run's output. Each tasklist's
 # per-iteration output is teed to <state>/parallel/<name>.log; this tails it so you

@@ -57,6 +57,10 @@
 #   chief ps                 -> monitor.sh once
 #   chief monitor [interval] -> monitor.sh watch [interval]   (refresh in place)
 #
+# `once` renders and returns. `watch` loops, and a looping viewer MUST NOT outlive
+# the terminal that asked for it — see THE WATCH LOOP'S STOP CONDITION at the foot of
+# this file for what ends it and why one check was not enough.
+#
 # Bash 3.2 compatible (no associative arrays). jq is used opportunistically for
 # story counts; absent jq just yields "?/?".
 set -uo pipefail
@@ -787,17 +791,77 @@ render() {
 # a synthetic record — which is how "which phases are exempt from the stall flag" stays
 # a checkable table instead of a reading of the shell. Unreachable from the CLI:
 # bin/chief only ever passes `once` (chief ps) or `watch` (chief monitor).
+# ── THE WATCH LOOP'S STOP CONDITION ──────────────────────────────────────────
+#
+# `watch` is the only arm that loops, and until this existed nothing could end that
+# loop except a human pressing Ctrl-C. Close the window instead and the watcher was
+# simply re-parented to init and kept rendering, on its refresh interval, into a
+# terminal that no longer existed. Measured on this host 2026-08-19: NINE
+# `monitor.sh watch 1` processes, every one with PPID 1, from three abandoned views
+# — the oldest 11.5 hours old — found only because someone read the process list by
+# hand. `once` (chief ps) was never the defect: it renders and returns.
+#
+# The stop condition is asked once per tick, and it is deliberately two questions,
+# because either one alone misses a real case:
+#
+#   THE TTY.  The terminal we render to was there when we started and is not there
+#   now. This is the direct reading of "the terminal went away", and it is also what
+#   keeps the tick below from spinning: a `read` against a hung-up tty returns
+#   instantly, so without this the wait could degrade into a busy loop.
+#
+#   THE PARENT.  We have been re-parented to init. SIGHUP — trapped below — is what
+#   a dying terminal sends its FOREGROUND process group, so a watcher started in the
+#   background, or one whose parent dies first, never receives it. That is exactly
+#   the shape of the nine: no signal ever arrived, and none was ever going to.
+#   Skipped when init was ALREADY our parent, which is the normal state under a
+#   container entrypoint and a symptom of nothing.
+#
+# PID reuse could in principle make a dead parent look alive. The failure mode of
+# that race is one more tick of a view nobody is reading, never a killed process, so
+# it is left alone.
+WATCH_PPID="$PPID"
+WATCH_TTY=0; [ -t 1 ] && WATCH_TTY=1
+
+watch_should_stop() {
+  [ "${WATCH_TTY:-0}" = 1 ] && [ ! -t 1 ] && return 0
+  [ "${WATCH_PPID:-1}" = 1 ] && return 1
+  ps -o pid= -p "$WATCH_PPID" >/dev/null 2>&1 && return 1
+  return 0
+}
+
+# ONE PROCESS PER VIEW, not three. `chief monitor` used to leave bin/chief, the
+# monitor.sh it forked, and a `sleep` per tick — which is why the nine orphans were
+# also the machine's nine `sleep` processes. bin/chief now EXECs into this file, so
+# the wrapper is gone; the tick below is bash's own `read` timeout, so the sleep is
+# too. `read` needs something to block on: with stdin redirected or closed it returns
+# at EOF immediately, and bash 3.2 (macOS) rejects a fractional -t, so both of those
+# keep the forked `sleep`. A keypress ending the wait early just refreshes sooner.
+WATCH_READ_TICK=0
+case "$INTERVAL" in ''|*[!0-9]*) : ;; *) [ -t 0 ] && WATCH_READ_TICK=1 ;; esac
+
+watch_tick() {
+  if [ "${WATCH_READ_TICK:-0}" = 1 ]; then
+    read -r -t "$INTERVAL" _ 2>/dev/null || :
+  else
+    sleep "$INTERVAL"
+  fi
+}
+
 if [ "$MODE" = lib ]; then
   :
 elif [ "$MODE" = watch ]; then
   trap 'printf "\033[?25h"' EXIT                  # always restore the cursor
-  trap 'exit 0' INT TERM                          # clean exit on Ctrl-C (EXIT trap runs)
+  # Ctrl-C is unchanged. HUP joins it so the terminal-sent signal ALSO runs the EXIT
+  # trap above, instead of taking bash's default terminate and leaving the cursor
+  # hidden in whatever shell inherits the tty.
+  trap 'exit 0' INT TERM HUP                      # clean exit on Ctrl-C (EXIT trap runs)
   printf '\033[?25l'                              # hide cursor while watching
   while :; do
+    watch_should_stop && exit 0
     printf '\033[2J\033[H'                        # clear + home
     render
     printf '\n%s(refresh %ss · Ctrl-C to exit)%s\n' "$DIM" "$INTERVAL" "$RST"
-    sleep "$INTERVAL"
+    watch_tick
   done
 else
   render

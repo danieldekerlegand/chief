@@ -73,7 +73,12 @@ bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
-  monitor.sh         #   active-run registry view  (chief ps / chief monitor)
+  monitor.sh         #   active-run registry view  (chief ps / chief monitor). `once` renders and
+                     #   returns; `watch` LOOPS, and a looping viewer must not outlive the terminal
+                     #   that asked for it — it checks its tty and its parent once per tick and exits
+                     #   when either is gone. bin/chief EXECs into it, and the tick is bash's own
+                     #   `read` timeout, so one view is ONE process instead of wrapper + watcher + a
+                     #   forked `sleep` per second
   lib.sh             #   shared helpers: run_verify / verify_branch, locks, state I/O
   paths.sh           #   host-wide state paths (prefix · runs · repos · worktree root), resolved
                      #   in one place — container-safe when $HOME is unset/read-only
@@ -152,8 +157,18 @@ engine/
                      #   module's. Liveness AND an idle-age floor, so a run between iterations
                      #   is safe; an unanswerable mtime reads as "leave it alone", never as old.
                      #   CHIEF_SWEEP=0 opts out
-  reap.sh            #   find + reap ORPHANED chief process trees (agent work with no live, registered run behind it);
-                     #   also the PID-NAMESPACE token every pid-keyed record carries, so a shared prefix
+  reap.sh            #   find + reap ORPHANED chief processes, in TWO KINDS reported separately
+                     #   because they cost different things to end: agent WORK (a process tree with
+                     #   no live, registered run behind it) and an abandoned VIEW (a `chief monitor`
+                     #   watcher that outlived its terminal). A view matches NONE of the work keys
+                     #   — no run marker, no inherited id, a cwd wherever the operator stood — so
+                     #   the sweep reported "no orphaned chief processes" with nine of them running.
+                     #   It gets its OWN key (chief's `monitor.sh watch` argv, re-parented to PID 1),
+                     #   is never narrowed by --scope (it belongs to no run) and never consults the
+                     #   registry; a watcher whose parent is still alive is not touched by EITHER
+                     #   half, which is also new — the cwd key used to claim one started inside a
+                     #   worktree. PID 1 that is not a system init DECLINES rather than guesses.
+                     #   Also the PID-NAMESPACE token every pid-keyed record carries, so a shared prefix
                      #   across containers is never read as "that pid is dead". `chief reap` runs the
                      #   DISK pass too (--no-disk / --disk-only / --disk-age), under the same
                      #   foreign-registry refusal — misreading a live run there deletes a build
@@ -164,6 +179,14 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   bystander.sh — runs the behavioural block with a decoy run from ANOTHER
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
+                     #   monitor-orphan.sh — the abandoned VIEW, both halves against a real
+                     #   watcher: it self-exits when its terminal dies, and while it is still
+                     #   alive `chief reap` reports it under [view] and never as agent work.
+                     #   REPRODUCES first — it neuters watch_should_stop in a copy of the
+                     #   engine (not `git show HEAD~N`: CI clones shallow) and asserts THAT
+                     #   watcher survives, so the file cannot pass by restating behaviour that
+                     #   always worked. In all.sh + CI but NOT the merge gate, like monitor.sh:
+                     #   it asserts on refresh intervals and verify runs under parallel load
 docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace) ·
                      # research-phase.md + plan-review.md (the two opt-in review checkpoints)
@@ -203,6 +226,13 @@ VERSION              # engine version — bump on any engine/bin/install change
   quotes the engine's injected headings verbatim while explaining them, so grepping a
   prompt for one matches even when nothing was injected. Assert on a string only the
   engine emits, plus a marker your own fixture planted.
+- **A backtick in an unquoted heredoc RUNS.** Every usage/help block in the engine is a
+  `cat <<EOF` (it interpolates `$VERSION`, `${CHIEF_REAP_GRACE:-5}`, `$CHIEF_WT_ROOT_ALL`), and
+  chief's prose is full of `` `chief monitor` ``-style backticks. Unescaped, that is command
+  substitution: writing `` `chief monitor` `` into `chief_reap_usage` made `chief reap --help`
+  start a watcher and hang forever. `bash -n` is clean on it, no test renders `--help`, and the
+  hang looks like a slow scan — escape them `\`` (as `bin/chief`'s own usage already does), and
+  check with `awk '/^name\(\)/,/^EOF$/' file | grep -n '[^\\]`'`.
 - **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
   "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
   locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when
