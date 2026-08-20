@@ -28,6 +28,7 @@ The map. Structured per the ecosystem
 - [The event stream — chief's machine-readable status contract](reference/events.md)
 - [Overlap zones — where a green gate is not enough authority to merge](reference/overlap-zones.md)
 - [Roadmap input contract (`chief gen`)](reference/roadmap-input.md)
+- [`chief status` — what is left, and what can start now](reference/status.md)
 - [Tasklist schema](reference/tasklist-schema.md)
 - [The verify hook (`.chief/verify.sh`)](reference/verify-hook.md)
 

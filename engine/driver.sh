@@ -1392,7 +1392,6 @@ if [ "${1:-}" = "--integrate-base" ]; then
 fi
 
 iters_of()   { jq -r '.iters // 5' "$SRC/$1.json" 2>/dev/null || echo 5; }
-deps_of()    { jq -r '(.dependsOn // [])[]' "$SRC/$1.json" 2>/dev/null; }
 touches_of() { jq -r '(.touches // [])[]' "$SRC/$1.json" 2>/dev/null; }
 
 # --- cross-repo deps --------------------------------------------------------
@@ -1402,6 +1401,16 @@ touches_of() { jq -r '(.touches // [])[]' "$SRC/$1.json" 2>/dev/null; }
 # lookup: `chief lint` resolves a tasklist's declared downstream counterpart with
 # these exact functions, and a second implementation of "where does <repo>:<stem>
 # live" would drift from this one the first time either changed.
+#
+# DEPENDENCY RESOLUTION on top of it — deps_of · dep_verdict · deps_scope — is
+# engine/crossrepo.sh's other caller, engine/deps.sh. Sourced rather than defined
+# inline: `chief status` reports what is RUNNABLE, and it has to reach exactly the
+# verdict this scheduler LAUNCHES on. A second implementation would drift and then
+# lie, so there is one and both callers reach it there.
+# Sourced HERE, after $REPO/$TASKS_REL/$SRC/$COMPLETED are set — those globals are
+# the module's contract and it establishes none of them itself.
+# shellcheck source=engine/deps.sh
+source "$ENGINE/deps.sh"
 
 # Per-tasklist scheduler state lives in files so no associative array is needed.
 # Every lifecycle transition also lands in the liveliness record (and stamps its
@@ -1429,9 +1438,49 @@ dep_key() {   # scheduler key for a dep: one qualified with THIS repo is just a 
 # ---------------------------------------------------------------------------
 # Build the program: pending tasklists (or the names passed as args)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# THE PARK, MET WHERE AN OPERATOR ACTUALLY MEETS IT
+#
+# A park is a decision somebody made — "not now, and here is why". The single most
+# common way to meet one is to try to run it, and until this existed that was the one
+# place chief said nothing: naming a parked tasklist scheduled it silently, and a bare
+# run in an all-parked repo answered with a cheerful sentence about everything being
+# complete. Both read as "there is no work" when the truth is "there is work nobody
+# has unblocked".
+#
+# So a named park PRINTS ITS REASON AND STOPS, and the same message names the way past
+# it. The override is kept because it was a real capability (`chief run example` is how
+# the scaffolded demo is run) — it is now explicit rather than the silent default.
+# `parkedReason` is an OPAQUE STRING: chief prints whatever is there and holds no
+# vocabulary of its own (engine/status.sh's header).
+RUN_PARKED="${CHIEF_RUN_PARKED:-0}"
+is_parked()      { [ "$(jq -r '.parked // false' "$SRC/$1.json" 2>/dev/null)" = "true" ]; }
+park_reason_of() { jq -r '((.parkedReason // "") | tostring) | gsub("[\n\r\t]"; " ")' "$SRC/$1.json" 2>/dev/null; }
+park_line() {   # $1 = tasklist name -> one line saying it is parked, and why if it says
+  local r; r="$(park_reason_of "$1")"
+  if [ -n "$r" ]; then echo "   ⏸ $1 — parked: $r"
+  else                 echo "   ⏸ $1 — parked, with no \"parkedReason\" recorded: the tasklist does not say why"
+  fi
+}
+
 REQUESTED=""
 if [ "$#" -gt 0 ]; then
-  REQUESTED="$*"                          # explicit names run even if parked
+  REQUESTED="$*"                          # explicit names, parked or not — see below
+  PARKED_NAMED=""
+  for n in $REQUESTED; do
+    [ -f "$SRC/$n.json" ] || continue
+    is_parked "$n" && PARKED_NAMED="$PARKED_NAMED $n"
+  done
+  if [ -n "$PARKED_NAMED" ] && [ "$RUN_PARKED" != 1 ]; then
+    echo "Nothing was scheduled — $(set -- $PARKED_NAMED; echo $#) of the tasklist(s) you named is parked:"
+    for n in $PARKED_NAMED; do park_line "$n"; done
+    echo "   A park is a decision, not a failure. Drop \"parked\" in $TASKS_REL/<name>.json to work it for good,"
+    echo "   or run it once without unparking it:  chief run --parked$PARKED_NAMED"
+    # NOWORK, exactly as the all-parked path below: nothing ran, and nothing is broken.
+    headless_announce
+    headless_summary no-work "$HL_RC_NOWORK"
+    exit "$(hl_rc "$HL_RC_NOWORK" 0)"
+  fi
 else
   for f in "$SRC"/*.json; do              # auto-discovery skips "parked":true (e.g. rust-engine-*)
     [ -e "$f" ] || continue
@@ -1453,6 +1502,16 @@ if [ -z "$NAMES" ]; then
   # and never silently run/merge a scaffolded example just to have something.
   if ls "$SRC"/*.json >/dev/null 2>&1; then
     echo "No runnable tasklists in $TASKS_REL/ — every one is complete or parked."
+    # ...and WHICH are parked, with the reason each one carries. "Every one is complete
+    # or parked" on its own reads as an empty backlog; the parks are the backlog.
+    parked_any=""
+    for f in "$SRC"/*.json; do
+      [ -e "$f" ] || continue
+      n="$(basename "$f" .json)"
+      is_parked "$n" || continue
+      [ -n "$parked_any" ] || echo "Parked (never auto-scheduled; name one with 'chief run --parked <name>' to run it once):"
+      parked_any=1; park_line "$n"
+    done
     echo "To get started, add a tasklist JSON (copy the parked example.json and drop its \"parked\" flag), then: chief run"
   else
     echo "No tasklists in $TASKS_REL/ yet."
@@ -1521,8 +1580,11 @@ dep_why() {
   if [ ! -f "$SRC/$d.json" ]; then
     echo "no $TASKS_REL/$d.json and no $TASKS_REL/completed/$d.json in this repo — a bare dep is resolved against THIS repo (if it lives elsewhere, qualify it: \"<repo>:$d\"; if that is a branch name, drop the \"chief/\" prefix)"; return
   fi
-  [ "$(jq -r '.parked // false' "$SRC/$d.json" 2>/dev/null)" = "true" ] \
-    && { echo "$TASKS_REL/$d.json is parked, so it is never scheduled"; return; }
+  if is_parked "$d"; then
+    rec="$(park_reason_of "$d")"
+    [ -n "$rec" ] && { echo "$TASKS_REL/$d.json is parked ($rec), so it is never scheduled"; return; }
+    echo "$TASKS_REL/$d.json is parked, so it is never scheduled"; return
+  fi
   echo "$TASKS_REL/$d.json was not selected for this run — name it too, or run 'chief run' with no names"
 }
 running_names() { local n; for n in $NAMES; do [ "$(get_state "$n")" = "running" ] && printf '%s ' "$n"; done; }

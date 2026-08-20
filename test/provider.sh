@@ -4,6 +4,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
+
+# HERMETIC IN STATE IS NOT HERMETIC IN ENV. This suite may itself be running inside a
+# chief worktree, whose driver exports CHIEF_PAUSE_FILE pointing at the REAL project's
+# operator-pause flag (driver.sh's OPERATOR_PAUSE_FILE). agent.sh reads that path out of
+# the environment and drains at the TOP of its loop, so an operator pause armed on the
+# host mid-suite makes every agent.sh below exit 3 before running a single turn — a
+# fixture-independent failure that reads as a regression in whatever happened to run
+# after the flag appeared. No test here ever wants to inherit one.
+unset CHIEF_PAUSE_FILE
 trap 'rm -rf "$WORK"' EXIT
 export CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos"
 export GIT_AUTHOR_NAME=provider GIT_AUTHOR_EMAIL=provider@test

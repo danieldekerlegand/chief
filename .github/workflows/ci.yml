@@ -146,6 +146,24 @@ jobs:
       - name: Under-tagged touches audit (co-scheduled tasklists that edited the same file are reported)
         run: bash test/touches-audit.sh
 
+      - name: `chief status` agrees with the scheduler (runnable == what the driver would launch)
+        run: bash test/status-deps.sh
+
+      - name: `chief status` portfolio scope (repo ROOTS, registry reconciled by resolved path, no double-count)
+        run: bash test/status-scope.sh
+
+      - name: `chief status` categories are opaque (no vocabulary in chief; only --enforce-order can fail)
+        run: bash test/status-categories.sh
+
+      - name: `chief status --json` is one document on stdout, and --blocked ranks what to merge
+        run: bash test/status-json.sh
+
+      - name: `chief status` over a 1,000-record portfolio (jq per DIRECTORY, not per record)
+        run: bash test/status-perf.sh
+
+      - name: A park carries a REASON (opaque string, the project's vocabulary or none, `chief run` stops on one)
+        run: bash test/park-reasons.sh
+
       - name: Code-quality ratchet (slop BLOCKED, refactor ALLOWED, unmeasurable languages skipped not zeroed)
         run: bash test/quality-ratchet.sh
 

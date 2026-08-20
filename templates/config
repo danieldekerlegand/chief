@@ -20,6 +20,24 @@ CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode | amp 
 # CHIEF_LOCAL_ENDPOINT_ENV=OPENAI_BASE_URL   # env var the endpoint is published as
 # CHIEF_LOCAL_API_KEY=local                  # placeholder credential local servers accept
 # CHIEF_LOCAL_API_KEY_ENV=OPENAI_API_KEY     # env var that credential is published as
+# --- the CATEGORY ORDERING this project works in (docs/reference/status.md) --------
+# A tasklist may carry a "category". Chief treats it as an OPAQUE STRING — it holds no
+# vocabulary of its own, and `chief status` reports whatever values it finds. Declare
+# an ordering here and the report renders in it and states how much live work precedes
+# the last category; `chief status --enforce-order` (opt-in, for CI) exits non-zero
+# when that rule is violated. Plain `chief status` never fails over a category.
+# Read as a LITERAL LINE, not sourced: no $VAR, no command substitution. Space- or
+# comma-separated, earliest first.
+# CHIEF_CATEGORIES="fix unblock replace feature"
+# --- the PARK REASONS this project uses (docs/reference/status.md) -----------------
+# A tasklist may carry "parkedReason": WHY it is parked, in a field rather than in
+# prose. `"parked": true` keeps working unchanged and reads as a park that does not say
+# why — this adds a reason, it never makes one mandatory. Chief treats the value as an
+# OPAQUE STRING on exactly the terms above: declare the set your repos use and `chief
+# status` renders in it; a reason outside it is reported, never dropped. Naming a
+# parked tasklist in `chief run` prints its reason and stops (`--parked` runs it once
+# anyway). Same literal-line reading as CHIEF_CATEGORIES; space- or comma-separated.
+# CHIEF_PARK_REASONS="owned-elsewhere awaiting-evidence awaiting-decision"
 # --- the per-story DIFF-SIZE BUDGET (docs/reference/diff-budget.md) -----------------
 # Larger diffs carry higher conflict probability, so change size is the lever. Chief
 # measures every branch's diff against the base, DECOMPOSED BY STORY, and reports any

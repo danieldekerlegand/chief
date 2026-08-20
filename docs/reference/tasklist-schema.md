@@ -59,7 +59,17 @@ work run to completion by a chain of agent iterations.
     "agora:75-encode-scenarios",         //   RETIRED: what replaced it. Metadata for a
                                          //   human reader; chief does not read it.
 
-  "parked": false,                       // true = skipped by auto-discovery
+  "parked": false,                       // true = skipped by auto-discovery. Naming one in
+                                         //   `chief run` prints its reason and stops
+                                         //   (`--parked` runs it anyway).
+  "parkedReason": "",                    // WHY it is parked, in a field rather than in
+                                         //   prose. Optional and additive: `parked` alone
+                                         //   still parks and reads as a park that does
+                                         //   not say why. An OPAQUE STRING — chief holds
+                                         //   no vocabulary; a project declares its own
+                                         //   with CHIEF_PARK_REASONS in .chief/config, and
+                                         //   `chief status` breaks the parked total down
+                                         //   by it. See status.md.
   "review": "none",                      // "plan" = a HUMAN approves the agent's plan
                                          //   before it writes any code (one extra turn
                                          //   per story). "none" (default) is the

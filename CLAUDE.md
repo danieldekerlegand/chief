@@ -69,7 +69,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · ps · monitor · logs · models · reap · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · models · reap · pause · resume · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
@@ -88,7 +88,14 @@ engine/
                      #   lookup every cross-repo dependsOn has always used, lifted out of the
                      #   driver so the AUTHORING-time gates run the same one. Chief reads exactly
                      #   one file across the boundary (the merged completed/<stem>.json) and never
-                     #   schedules, branches or merges in another repo
+                     #   schedules, branches or merges in another repo. Every helper a hot loop
+                     #   calls comes as a SET-A-GLOBAL / PRINT-IT pair (dep_record_set /
+                     #   dep_record): `$(f)` is a FORK, and a portfolio report resolving one edge
+                     #   per tasklist pays it thousands of times. The completed/ INDEX — one jq
+                     #   per directory behind is_recorded_done instead of one per edge — is
+                     #   opt-in for the reason it is not the default: a one-shot READER may cache
+                     #   the merge verdict, the SCHEDULER may not, because a run asks the same
+                     #   question over hours during which records are appearing
   counterpart.sh     #   the MARKER LINK: a tasklist that is a placeholder for work owned and built
                      #   in ANOTHER repo declares the tasklist that will complete it —
                      #   "downstreamCounterpart": ["agora:75-..."], the forward half of the
@@ -112,6 +119,57 @@ engine/
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
                      #   UNSATISFIABLE before the first agent turn unless "crossRepo" declares it
+  deps.sh            #   DEPENDENCY RESOLUTION, extracted from driver.sh so there is exactly ONE
+                     #   answer to "is this tasklist's dependsOn satisfied": deps_of · dep_record ·
+                     #   is_recorded_done · the cross-repo <repo>:<stem> resolution. Functions over
+                     #   four globals the CALLER owns ($REPO/$TASKS_REL/$SRC/$COMPLETED — deps_scope
+                     #   sets them per repo); it establishes no environment of its own. driver.sh
+                     #   sources it to decide what to LAUNCH, status.sh to decide what to REPORT
+  status.sh          #   `chief status` — what is LEFT and what can START NOW. The scheduler's gate
+                     #   run in REPORT mode: remaining (live/parked), runnable vs blocked, completed
+                     #   counted separately as history. Runnable means what it means to the driver,
+                     #   because it IS deps.sh — a private copy would drift and then name work as
+                     #   startable that a run would refuse to start. Degrades on malformed input into
+                     #   a `problems` section rather than aborting, and always exits 0.
+                     #   SCOPE is resolved WITHOUT load_project (whose hard exit is right for `run`
+                     #   and wrong for a report): inside a repo -> that repo; above several -> a
+                     #   depth-limited WALK of the tree, unioned with the registry entries under it;
+                     #   --all -> the registry. A repo is one whose ROOT the walk finds, so a nested
+                     #   tasks/chief (examples/minimal) is never a second backlog; walk and registry
+                     #   are reconciled by RESOLVED ABSOLUTE PATH so a symlink or trailing slash
+                     #   cannot mint a phantom; worktrees, ignore-listed subtrees ($CHIEF_PREFIX/
+                     #   ignore) and stale registry entries are REPORTED, never silently dropped —
+                     #   a repo missing from a total reads exactly like a repo with no work.
+                     #   CATEGORIES are REPORTED, never adopted: `category` is an OPAQUE
+                     #   string chief holds no vocabulary for. A project declares its own
+                     #   ordering (CHIEF_CATEGORIES in .chief/config, READ AS A LINE — a
+                     #   portfolio report must not SOURCE N repos' bash); without one rows
+                     #   order by count and no ordering is claimed. Plain status always
+                     #   exits 0 — only the opt-in --enforce-order can fail, and only on
+                     #   the project's OWN declared rule. TWO RENDERS, ONE SCAN: --json
+                     #   emits the whole report as one document on stdout with every note
+                     #   on stderr (`chief events`' discipline), serializing the same
+                     #   accumulators rather than re-counting. --blocked also aggregates
+                     #   by EDGE — holds / releases / cascade, three numbers kept apart,
+                     #   ranked highest first — because "82 blocked" is a number and
+                     #   "these merges release 82" is a plan. Reads one jq per DIRECTORY,
+                     #   not per record: 1,040 records went 2,576 forks and 23s -> 32 and
+                     #   2s (test/status-perf.sh asserts the FORK count as well as the
+                     #   clock, and is out of the merge gate like monitor.sh because only
+                     #   the clock half is load-sensitive). A PARK carries a REASON on the
+                     #   same terms: "parked":true is what the SCHEDULER reads and is
+                     #   untouched, "parkedReason" is the string a person needs, and it is
+                     #   never mandatory. One reader serves both declarations
+                     #   (config_list · reconcile_decls · breakdown_rows), so
+                     #   CHIEF_PARK_REASONS behaves exactly as CHIEF_CATEGORIES does —
+                     #   including that entries are TOKENS, so a multi-word reason is
+                     #   reportable but not declarable. A reason with no flag is a park
+                     #   that never happened: it is LIVE, and named in `problems`. And the
+                     #   park is reported where it is MET — naming a parked tasklist in
+                     #   `chief run` prints its reason and schedules nothing (`--parked`
+                     #   runs it anyway; that override used to be the silent default), and
+                     #   a bare run in an all-parked repo names the parks rather than
+                     #   reporting that everything is complete
   measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
@@ -187,7 +245,8 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   watcher survives, so the file cannot pass by restating behaviour that
                      #   always worked. In all.sh + CI but NOT the merge gate, like monitor.sh:
                      #   it asserts on refresh intervals and verify runs under parallel load
-docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
+docs/                # tasklist schema · roadmap-input contract (chief gen) · chief status (scope + ignore list) ·
+                     # verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace) ·
                      # research-phase.md + plan-review.md (the two opt-in review checkpoints)
 .chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
@@ -233,6 +292,18 @@ VERSION              # engine version — bump on any engine/bin/install change
   start a watcher and hang forever. `bash -n` is clean on it, no test renders `--help`, and the
   hang looks like a slow scan — escape them `\`` (as `bin/chief`'s own usage already does), and
   check with `awk '/^name\(\)/,/^EOF$/' file | grep -n '[^\\]`'`.
+- **`IFS=$'\t' read` COLLAPSES a run of tabs.** Tab is IFS *whitespace*, so consecutive tabs are
+  one delimiter and leading ones are stripped — any **empty middle field** (a tasklist with no
+  category, one with no dependencies) silently shifts every field after it left. The engine's TSV
+  accumulators get away with tabs only because none of their fields is ever empty; a reader whose
+  fields can be empty uses **US (`printf '\037'`)**, which is not whitespace, and `read` keeps the
+  empties (`engine/status.sh`'s `read_records`). Relatedly, `read -r -d '' V <<EOF` strips leading
+  whitespace and *keeps* the final newline: `IFS= read -r -d ''` plus `V="${V%$'\n'}"` before
+  comparing against a `$( )` capture.
+- **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
+  after one inside a `jq -n '…'` program parses as an expression and silently replaces the
+  field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in
+  `docs/` uses `//` because it is documentation; the programs in `engine/` may not.
 - **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
   "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
   locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when
