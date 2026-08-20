@@ -648,14 +648,6 @@ chief_reap_evidence() {  # $1 = run id ('' when the pid was matched without one)
 # and returns, so it cannot be an orphan and was never the defect.
 CHIEF_VIEW_MARKER="engine/monitor.sh watch"
 
-chief_is_viewer() {    # $1 = a command line -> 0 when it is one of chief's watchers
-  case "${1:-}" in
-    *"$CHIEF_VIEW_MARKER") return 0 ;;
-    *"$CHIEF_VIEW_MARKER "*) return 0 ;;
-  esac
-  return 1
-}
-
 chief_pid1_comm() { ps -o comm= -p 1 2>/dev/null | head -1 | tr -d ' '; }
 
 # Is PID 1 on this host an init — i.e. does "PPID 1" MEAN re-parented?
@@ -697,7 +689,10 @@ chief_find_orphan_viewers() {
     [ "$p" -le 1 ] && continue
     case "$_chief_view" in *" $p "*) continue ;; esac
     cmd="$(ps -o command= -p "$p" 2>/dev/null | head -1)"
-    chief_is_viewer "$cmd" || continue          # pgrep matched loosely; this is exact
+    case "$cmd" in                              # pgrep matched loosely; this is exact
+      *"$CHIEF_VIEW_MARKER"|*"$CHIEF_VIEW_MARKER "*) ;;
+      *) continue ;;
+    esac
     chief_pid_alive "$p" || continue
     _chief_view="$_chief_view$p "
     CHIEF_VIEWERS="$CHIEF_VIEWERS $p"
@@ -1005,16 +1000,6 @@ chief_report_viewers() {   # $1 = headline
     printf '           nowhere; it holds no run, no worktree and no quota. Nothing is lost by ending it\n' >&2
     printf '         %s\n' "$cmd" >&2
   done
-  return 0
-}
-
-# The viewer half of "left alone": PPID 1 that this host cannot read as re-parenting.
-chief_report_viewers_declined() {
-  [ "${CHIEF_VIEWER_DECLINED:-0}" -gt 0 ] || return 0
-  echo "  ↷ left alone — ${CHIEF_VIEWER_DECLINED} monitor view(s) whose parent is PID 1, which on" \
-       "this host is '$(chief_pid1_comm)' rather than a system init. PID 1 can be the" \
-       "parent that ASKED for the view (a container entrypoint shell), and from outside" \
-       "the process that is indistinguishable from re-parenting — so they were not touched:" >&2
   return 0
 }
 
@@ -1345,7 +1330,13 @@ chief_reap_main() {
     # that misreading deletes builds here rather than merely reporting them.
     chief_find_orphans "$CHIEF_WT_ROOT_ALL" "$CHIEF_RUN_MARKER$scope" || return $?
     chief_report_unresolved
-    chief_report_viewers_declined
+    # The viewer half of "left alone": PPID 1 that this host cannot read as
+    # re-parenting, so the view may be one somebody is watching.
+    [ "${CHIEF_VIEWER_DECLINED:-0}" -gt 0 ] \
+      && echo "  ↷ left alone — ${CHIEF_VIEWER_DECLINED} monitor view(s) whose parent is PID 1, which on" \
+              "this host is '$(chief_pid1_comm)' rather than a system init. PID 1 can be the" \
+              "parent that ASKED for the view (a container entrypoint shell), and from outside" \
+              "the process that is indistinguishable from re-parenting — so they were not touched:" >&2
     if [ -z "$CHIEF_ORPHANS" ] && [ -z "$CHIEF_VIEWER_ORPHANS" ]; then
       # "of any kind" is load-bearing. This line used to be true of agent work only,
       # while nine abandoned views ran behind it — see "the other orphan" above.

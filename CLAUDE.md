@@ -179,6 +179,14 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   bystander.sh — runs the behavioural block with a decoy run from ANOTHER
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
+                     #   monitor-orphan.sh — the abandoned VIEW, both halves against a real
+                     #   watcher: it self-exits when its terminal dies, and while it is still
+                     #   alive `chief reap` reports it under [view] and never as agent work.
+                     #   REPRODUCES first — it neuters watch_should_stop in a copy of the
+                     #   engine (not `git show HEAD~N`: CI clones shallow) and asserts THAT
+                     #   watcher survives, so the file cannot pass by restating behaviour that
+                     #   always worked. In all.sh + CI but NOT the merge gate, like monitor.sh:
+                     #   it asserts on refresh intervals and verify runs under parallel load
 docs/                # tasklist schema · roadmap-input contract (chief gen) · verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace) ·
                      # research-phase.md + plan-review.md (the two opt-in review checkpoints)

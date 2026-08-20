@@ -80,6 +80,9 @@ jobs:
       - name: Live-monitor registry (ps/monitor) under the parallel driver
         run: bash test/monitor.sh
 
+      - name: Abandoned monitor view (an orphaned watcher self-exits; reap sees it as a VIEW, not as work)
+        run: bash test/monitor-orphan.sh
+
       - name: Teardown — an interrupt reaps the tree before releasing the records
         run: bash test/teardown.sh
 
