@@ -22,6 +22,10 @@
 #   never fatal    `chief status` exits 0 whatever the backlog looks like. Only the
 #                  opt-in --enforce-order exits non-zero, and only on the PROJECT'S
 #                  own declared ordering — never on the absence of one.
+#   history is     the breakdown is over the BACKLOG. completed/ records are counted
+#   not backlog    separately and never pooled into it — the same active/completed
+#                  split the totals keep. Pooling is the specific wrong implementation
+#                  guarded here, because once shipped it looks intentional.
 #
 # Arithmetic is asserted, not prose: the live and parked columns of the breakdown must
 # sum to the live and parked totals of the report they break down. A category that
@@ -61,6 +65,13 @@ tasklist() {   # $1 = repo, $2 = name, $3 = extra JSON merged in
       userStories:[{id:"US-1",title:"t",description:"",acceptanceCriteria:["x"],passes:false,notes:""}]} + $x' \
     > "$1/tasks/chief/$2.json" || fail "could not write $2 in $1"
 }
+record() {   # $1 = repo, $2 = name, $3 = extra JSON merged in — a MERGED record
+  mkdir -p "$1/tasks/chief/completed" || fail "mkdir completed in $1"
+  jq -n --arg n "$2" --argjson x "$3" \
+    '{project:"t",branchName:("chief/"+$n),description:"x",mergedToMain:"deadbee",
+      userStories:[{id:"US-1",title:"t",acceptanceCriteria:["x"],passes:true,notes:"x"}]} + $x' \
+    > "$1/tasks/chief/completed/$2.json" || fail "could not write record $2 in $1"
+}
 cat_of() { printf '{"category":%s}' "$(printf '%s' "$1" | jq -Rs 'rtrimstr("\n")')"; }
 
 status() { ( cd "$1" && shift && "$CHIEF" status "$@" 2>/dev/null ); }
@@ -82,6 +93,7 @@ cat_tab() {
 names_in_order() { cat_tab "$1" | cut -f3 | tr '\n' '|'; }
 col_sum()        { cat_tab "$1" | awk -F'\t' -v f="$2" '{ s += $f } END { print s + 0 }'; }
 total_of()       { printf '%s\n' "$1" | awk '$1 == "remaining" { print $2; exit }'; }
+completed_of()   { printf '%s\n' "$1" | awk '$1 == "completed" { print $2; exit }'; }
 live_of()        { printf '%s\n' "$1" | awk '$1 == "remaining" { print $4; exit }'; }
 parked_of()      { printf '%s\n' "$1" | awk '$1 == "remaining" { print $7; exit }'; }
 
@@ -266,6 +278,52 @@ has "none in force" "$OUT" \
 $OUT"
 ERR="$( cd "$DEV" && "$CHIEF" status --enforce-order 2>&1 >/dev/null )"; rc=$?
 [ "$rc" = 0 ] || fail "--enforce-order exited $rc with no single ordering to enforce"
+
+# ── the active/completed split: history is never pooled into the breakdown ──
+# The breakdown INHERITS the active/completed split the totals keep. Measured on this
+# host 2026-08-20 across 24 repos: among ACTIVE tasklists the uncategorized count is 0
+# of 225; among COMPLETED records it is 512 — larger than every real category combined.
+# Both numbers are correct, because completed/ records are deliberately exempt:
+# backfilling a category onto work that has already merged buys nothing, and the
+# ordering question is only ever asked about work that has not run yet. A report that
+# pools them shows an uncategorized column dominating the table and reads like a broken
+# tree. This fixture is that shape in miniature, and pooling moves BOTH of its numbers.
+SPLIT="$WORK/split"
+mkrepo "$SPLIT"
+tasklist "$SPLIT" 10-a "$(cat_of fix)"
+tasklist "$SPLIT" 11-b "$(cat_of fix)"
+tasklist "$SPLIT" 12-c "$(cat_of fix)"
+tasklist "$SPLIT" 13-d "$(cat_of feature)"
+tasklist "$SPLIT" 14-e '{"category":"feature","parked":true}'
+for n in 90 91 92 93 94; do record "$SPLIT" "$n-done" '{}'; done   # history, uncategorized
+record "$SPLIT" 95-done "$(cat_of fix)"                            # ...and one that IS categorized
+
+OUT="$(status "$SPLIT")"; rc=$?
+[ "$rc" = 0 ] || fail "chief status exited $rc over a repo with completed records:
+$OUT"
+# Every LIVE tasklist here carries a category, so the backlog breakdown has no
+# uncategorized row. The five uncategorized records would put one there if pooled.
+cat_tab "$OUT" | cut -f3 | grep -qx '(uncategorized)' \
+  && fail "completed records were pooled into the backlog breakdown — 5 uncategorized
+  records produced an (uncategorized) row in a backlog where every tasklist has one:
+$OUT"
+# ...and a categorized record must not inflate a real category either: fix is 3, not 4.
+# This is the half that a bare uncategorized check would miss.
+f="$(cat_tab "$OUT" | awk -F'\t' '$3 == "fix" { print $1 }')"
+[ "$f" = 3 ] || fail "a COMPLETED record carrying category 'fix' was counted in the backlog
+  breakdown — expected 3 live, got '$f':
+$OUT"
+# The records are still REPORTED, separately, as history — exempt is not invisible.
+c="$(completed_of "$OUT")"
+[ "$c" = 6 ] || fail "6 completed records should be reported as history, got '$c':
+$OUT"
+# The arithmetic that pins it: the breakdown sums to REMAINING, never remaining + completed.
+[ "$(total_of "$OUT")" = 5 ] || fail "the fixture has 5 remaining tasklists, report says $(total_of "$OUT"):
+$OUT"
+s=$(( $(col_sum "$OUT" 1) + $(col_sum "$OUT" 2) ))
+[ "$s" = 5 ] || fail "the breakdown sums to $s over a backlog of 5 remaining and 6 completed —
+  history has been pooled into it:
+$OUT"
 
 # ── the source discipline the whole story rests on ──────────────────────────
 # Prose may discuss this host's categories; CODE may not know them. "unblock" is the

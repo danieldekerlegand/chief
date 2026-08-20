@@ -127,6 +127,14 @@ builds, and chief holds no vocabulary of its own. The value is an **opaque strin
   the rows come out in **count** order, not that one) and the source discipline.
 - The live and parked columns **sum to** the live and parked totals of the report they
   break down. A category is never dropped, so the arithmetic always closes.
+- The breakdown is over the **backlog**. `completed/` records are counted separately, as
+  history, and are never pooled into it — the same active/completed split the totals
+  above keep. History is deliberately exempt: backfilling a category onto work that has
+  already merged buys nothing, and the ordering question is only ever asked about work
+  that has not run yet. Measured on this host 2026-08-20 across 24 repos, 0 of 225
+  active tasklists are uncategorized against 512 completed records that are — a report
+  that pooled the two would show an uncategorized column larger than every real category
+  combined and read like a broken tree.
 
 ### Declaring an ordering
 
@@ -171,6 +179,15 @@ It enforces the **project's** declared ordering and nothing else. With no vocabu
 scope — or with repos that declare conflicting ones — there is nothing to enforce: it
 says so on stderr and exits 0. Uncategorized and out-of-vocabulary work is never a
 violation, because chief has no opinion about where it belongs.
+
+**Chief does not enforce a category, and nothing here implies it does.** `chief lint`
+validates JSON, `branchName`, `mergedToMain` and the cross-repo criteria rule; it knows
+nothing about `category` and never has. A repo whose uncategorized count is zero got
+there by convention, or by its own vendored guard — not by a guarantee chief makes. Of
+the 24 repos on this host, 16 vendor a `check-tasklist-categories.mjs` and the rest do
+not, and `chief lint` calls both kinds clean. So an explanation of an uncategorized
+column that appeals to lint would be citing a guarantee that does not exist; the honest
+account of a zero is the convention, or the guard, that produced it.
 
 **If you vendored a per-repo category guard** (a `check-tasklist-categories.mjs` or
 similar), this is what replaces it and what does not. Chief computes the distribution
