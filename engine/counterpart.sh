@@ -139,3 +139,50 @@ counterpart_shipped_report() {
     esac
   done
 }
+
+# --- the report as a human reads it ------------------------------------------
+# The check REPORTS and never fails anything. Retiring a marker is a judgement — it
+# wants a `supersededBy` value, and sometimes dependents repointed first — so a lint
+# that returned non-zero, or a run that refused to launch, on somebody else's merge
+# would block authoring work that is otherwise fine. Both callers here are print-only.
+
+# counterpart_retirement_note — the ORDERING that silently breaks a queue, printed
+# next to the finding rather than filed in a doc, because this is the moment someone
+# is about to act on it.
+#
+# A marker never merges: it is retired by hand, stamped `supersededBy` and filed to
+# `completed/`. That record therefore carries NO `mergedToMain` — and `mergedToMain`
+# is the whole test a cross-repo `dependsOn` applies (engine/crossrepo.sh:
+# `is_recorded_done`). So a tasklist still depending on the marker does not become
+# satisfied when the marker is filed; it becomes permanently blocked, on a record
+# that can never be stamped. Repoint the dependents FIRST, at the counterpart that
+# actually merged.
+counterpart_retirement_note() {
+  cat <<'NOTE'
+    ↳ retire by hand, in this order: repoint anything whose dependsOn names the
+      marker at its counterpart FIRST, then stamp "supersededBy" and file the marker
+      to completed/. A completed record with no "mergedToMain" satisfies no
+      dependency edge, so a dependent still pointing at a filed marker is blocked
+      forever, on a record that can never be stamped.
+NOTE
+}
+
+# counterpart_report_block TASKS_DIR FILE… — the whole block, or nothing at all.
+# One rendering shared by every caller, so `chief lint` and `chief list` cannot drift
+# into saying two different things about the same finding.
+#
+# The heading follows the content: an `unresolvable` line on its own is not "work has
+# landed", it is a check that could not run, and the retirement note belongs only
+# where there is something to retire.
+counterpart_report_block() {
+  local dir="$1"; shift
+  local rep; rep="$(counterpart_shipped_report "$@")"
+  [ -n "$rep" ] || return 0
+  case "$rep" in
+    *'⚑'*) printf 'downstream work has landed — these markers are still live in %s/:\n' "$dir" ;;
+    *)     printf 'downstream counterparts could not be checked (%s/):\n' "$dir" ;;
+  esac
+  printf '%s\n' "$rep"
+  case "$rep" in *'⚑'*) counterpart_retirement_note ;; esac
+  return 0
+}

@@ -193,4 +193,61 @@ has "down-work" "$out"                  || fail "an unresolvable counterpart abo
 [ "$(printf '%s\n' "$out" | grep -c '⚑')" = "1" ] || fail "expected exactly one shipped finding, got:\n$out"
 rm -f "$DOWN/tasks/chief/other-work.json"
 
-echo "XREPO PASS — cross-repo dep resolution (name/path/self) + blocked-dep diagnostics + counterpart lint + the merged-counterpart check"
+# ── 11. WIRED WHERE THE BACKLOG IS READ, and it REPORTS ──────────────────
+# A check nobody runs catches nothing: all five of koine's shipped markers sat in
+# `chief list` for months. So the same scan runs there — the row is marked inline and
+# the block underneath carries the sha and the retirement ORDERING — and it stays a
+# report: neither `chief list`, `chief lint` nor a run's schedule changes because of it.
+list() { ( cd "$DOWN" && "$CHIEF" list 2>&1 ); }
+flags() { list | LC_ALL=C grep -c 'counterpart has MERGED' ; }
+
+# (a) counterpart merged, marker live -> flagged in the backlog itself, with the sha
+#     and the ordering that silently breaks a queue.
+counterpart "$DOWN" down-work '["upstream:merged-work"]'
+out="$(list)"
+has "⚑ counterpart merged" "$out" || fail "chief list did not flag the marker row:\n$out"
+has "downstream work has landed" "$out" || fail "chief list did not report the shipped counterpart:\n$out"
+has "upstream:merged-work" "$out"      || fail "the list report does not name the counterpart:\n$out"
+has "@deadbee" "$out"                  || fail "the list report does not carry the merge sha:\n$out"
+has "repoint anything whose dependsOn names the" "$out" \
+    || fail "the report does not state the retirement ORDERING:\n$out"
+has 'no "mergedToMain" satisfies no' "$out" \
+    || fail "the report does not name the retirement trap next to the finding:\n$out"
+[ "$(flags)" = "1" ] || fail "expected exactly one finding in chief list, got $(flags):\n$out"
+
+# It REPORTS. Retiring a marker is a judgement call, so nothing here may fail: both
+# commands exit 0 and the marker is still scheduled like any other live tasklist.
+( cd "$DOWN" && "$CHIEF" list >/dev/null 2>&1 ) || fail "chief list failed on a shipped-counterpart finding"
+( cd "$DOWN" && "$CHIEF" lint >/dev/null 2>&1 ) || fail "chief lint failed on a shipped-counterpart finding"
+( cd "$DOWN" && "$CHIEF" run -n >/dev/null 2>&1 ) || fail "a shipped counterpart made the schedule fail"
+out="$(plan)"
+has "down-work" "$out"        || fail "a shipped counterpart dropped the marker from the schedule:\n$out"
+case "$out" in *UNSCHEDULABLE*) fail "a shipped counterpart made the marker unschedulable:\n$out" ;; esac
+
+# (b) counterpart unmerged -> silent, and no block at all.
+counterpart "$DOWN" down-work '["upstream:inflight-work"]'
+out="$(list)"
+[ "$(flags)" = "0" ]                   || fail "an UNMERGED counterpart was flagged in chief list:\n$out"
+case "$out" in *"downstream work has landed"*) fail "chief list printed the block with nothing to report:\n$out" ;; esac
+case "$out" in *"retire by hand"*) fail "the retirement note printed with no finding to act on:\n$out" ;; esac
+
+# (c) marker already retired -> silent even though the counterpart merged.
+counterpart "$DOWN" down-work '["upstream:merged-work"]'
+tmp="$DOWN/tasks/chief/down-work.json"
+jq '.supersededBy="upstream:merged-work"' "$tmp" > "$tmp.t" && mv "$tmp.t" "$tmp"
+out="$(list)"
+[ "$(flags)" = "0" ]                   || fail "a retired marker was flagged in chief list:\n$out"
+has "down-work" "$out"                 || fail "the retired marker vanished from the backlog listing:\n$out"
+jq 'del(.supersededBy)' "$tmp" > "$tmp.t" && mv "$tmp.t" "$tmp"
+
+# (d) counterpart in a repo that is not checked out -> reported as UNCHECKED, under a
+#     heading that does not claim work has landed, and nothing else is disturbed.
+counterpart "$DOWN" down-work '["ghostrepo:whatever"]'
+out="$(list)"
+has "could not be checked" "$out"      || fail "chief list did not report an unresolvable counterpart:\n$out"
+has "ghostrepo" "$out"                 || fail "the unresolvable report does not name the repo:\n$out"
+[ "$(flags)" = "0" ]                   || fail "an unresolvable counterpart produced a false finding:\n$out"
+case "$out" in *"downstream work has landed"*) fail "an unchecked counterpart was reported as landed work:\n$out" ;; esac
+( cd "$DOWN" && "$CHIEF" list >/dev/null 2>&1 ) || fail "chief list failed on an unresolvable counterpart"
+
+echo "XREPO PASS — cross-repo dep resolution (name/path/self) + blocked-dep diagnostics + counterpart lint + the merged-counterpart check, reported in chief list"

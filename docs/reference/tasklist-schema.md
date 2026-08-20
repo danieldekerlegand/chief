@@ -181,6 +181,32 @@ Notes:
   And the check **degrades rather than aborts** — a counterpart in a repo that is not
   checked out on this host is reported as unresolvable and every other marker is
   still checked, because a partial checkout is the common case.
+
+  **The same report runs in `chief list`,** because that is where the backlog is
+  actually read and a check nobody remembers to run catches nothing — the flagged row
+  is marked inline and the block follows the listing:
+
+  ```
+     0/4   57-general-finetune-provider  ⚑ counterpart merged
+  downstream work has landed — these markers are still live in tasks/chief/:
+    ⚑ 57-general-finetune-provider — its downstream counterpart has MERGED: agora:50-finetune-live-endpoints @ea9d6c7
+      ↳ retire by hand, in this order: repoint anything whose dependsOn names the
+        marker at its counterpart FIRST, then stamp "supersededBy" and file the marker
+        to completed/. A completed record with no "mergedToMain" satisfies no
+        dependency edge, so a dependent still pointing at a filed marker is blocked
+        forever, on a record that can never be stamped.
+  ```
+
+  It **reports and never fails**: `chief list` and `chief lint` both exit 0 on a
+  finding and a run schedules the marker exactly as before. Retiring a marker is a
+  judgement — it wants a `supersededBy` value, and sometimes dependents repointed —
+  and refusing to launch on somebody else's merge would block work that is fine.
+  That ordering is the part that silently breaks a queue, which is why it is printed
+  next to the finding rather than left in this document: a marker never merges, so
+  the record it leaves in `completed/` carries no `mergedToMain`, and `mergedToMain`
+  is the entire test a cross-repo `dependsOn` applies. File the marker with a
+  dependent still pointing at it and that dependent is blocked forever, on a record
+  that can never be stamped.
 - **`repo` targets a nested repo (e.g. a submodule).** The agent runs in a worktree of
   that repo, so its checks/deps must resolve there (use `warmup` to provision them, and a
   verify hook that dispatches off its cwd). All merges are serialized, so two tasklists

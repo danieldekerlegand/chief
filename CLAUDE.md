@@ -95,7 +95,14 @@ engine/
                      #   while its marker is still live is REPORTED — marker, counterpart, merge
                      #   sha — and nothing else is. In flight, filed-without-mergedToMain, and an
                      #   already-superseded marker are all silent; a repo not checked out here
-                     #   degrades to one unresolvable line and the rest of the scan still runs
+                     #   degrades to one unresolvable line and the rest of the scan still runs.
+                     #   It REPORTS — `chief lint` and `chief list` both exit 0 on a finding and a
+                     #   run still schedules the marker — and it runs in `chief list` because that
+                     #   is where the backlog is READ; a check only answering on demand caught
+                     #   none of koine's five. The block names the retirement ORDERING in the same
+                     #   breath (repoint dependents FIRST, then stamp supersededBy and file),
+                     #   because a filed marker carries no mergedToMain and blocks its dependents
+                     #   forever on a record that can never be stamped
   criteria.sh        #   the SCOPE rule on acceptance criteria: a criterion naming ANOTHER repo
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
