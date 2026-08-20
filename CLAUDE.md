@@ -79,6 +79,19 @@ engine/
                      #   in one place — container-safe when $HOME is unset/read-only
   gitenv.sh          #   the git a CONTAINER hands us: safe.directory for a repo owned by another
                      #   uid ($CHIEF_GIT_SAFE_DIRECTORY), a committer identity when git can't find one
+  crossrepo.sh       #   resolving a "<repo>:<stem>" REFERENCE to another repo's tasklist — the
+                     #   lookup every cross-repo dependsOn has always used, lifted out of the
+                     #   driver so the AUTHORING-time gates run the same one. Chief reads exactly
+                     #   one file across the boundary (the merged completed/<stem>.json) and never
+                     #   schedules, branches or merges in another repo
+  counterpart.sh     #   the MARKER LINK: a tasklist that is a placeholder for work owned and built
+                     #   in ANOTHER repo declares the tasklist that will complete it —
+                     #   "downstreamCounterpart": ["agora:75-..."], the forward half of the
+                     #   hand-authored supersededBy. A FIELD, because prose is not checkable: a
+                     #   counterpart named only in the description is invisible and the gate SAYS
+                     #   so rather than reporting clean. `chief lint` resolves each declaration
+                     #   through crossrepo.sh, so a pointer to nothing fails instead of reading as
+                     #   checked
   criteria.sh        #   the SCOPE rule on acceptance criteria: a criterion naming ANOTHER repo
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as

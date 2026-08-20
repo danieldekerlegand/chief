@@ -301,10 +301,17 @@ cmd_gen() {
 # plus the criteria SCOPE rule the driver refuses to launch on (engine/criteria.sh):
 # a criterion naming another repo cannot be satisfied from the worktree the story
 # runs in, and catching that here costs a text edit instead of a run.
+#
+# It also resolves the MARKER LINK (engine/counterpart.sh): a tasklist may declare
+# the downstream tasklist that will complete it, and a declaration pointing at a repo
+# or stem that does not exist is worse than no declaration — it reads as checked.
+# Resolution is the driver's own (engine/crossrepo.sh), so the two cannot disagree.
 cmd_lint() {
   load_project
   . "$ENGINE/criteria.sh"
-  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n rep findings=0 checked=0
+  . "$ENGINE/crossrepo.sh"
+  . "$ENGINE/counterpart.sh"
+  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n rep findings=0 checked=0 declared=0
   local files=()
   if [ "$#" -gt 0 ]; then
     for n in "$@"; do files+=("$d/${n%.json}.json"); done
@@ -329,12 +336,25 @@ cmd_lint() {
       findings=$((findings + $(printf '%s
 ' "$rep" | grep -c '✗')))
     fi
+    declared=$((declared + $(counterpart_refs "$f" | grep -c . || true)))
+    rep="$(counterpart_lint_report "$f")"
+    if [ -n "$rep" ]; then
+      echo "  ✗ $n — its declared downstream counterpart does not resolve:"
+      printf '%s
+' "$rep"
+      findings=$((findings + $(printf '%s
+' "$rep" | grep -c '✗')))
+    fi
   done
+  # What the gate SAW, always — the marker link is a field, and a counterpart named
+  # only in a description is not detected here and is not claimed to be. "0 declared"
+  # means nobody wrote the field, never that nobody has a counterpart.
+  local seen="$declared \"$COUNTERPART_FIELD\" declaration(s) checked; a counterpart named only in prose is invisible to this gate"
   if [ "$findings" -gt 0 ]; then
-    echo "✗ $findings finding(s) across $checked tasklist(s). A cross-repo criterion is either rewritten as work in THIS repo, or declared: \"crossRepo\": [\"<repo>\"]." >&2
+    echo "✗ $findings finding(s) across $checked tasklist(s) ($seen). A cross-repo criterion is either rewritten as work in THIS repo, or declared: \"crossRepo\": [\"<repo>\"]." >&2
     return 1
   fi
-  echo "✓ $checked tasklist(s) clean"
+  echo "✓ $checked tasklist(s) clean ($seen)"
 }
 
 cmd_list() {

@@ -439,6 +439,10 @@ LIMIT_PAUSE_FILE="$STATE/.limit-pause-until"
 OPERATOR_PAUSE_FILE="$STATE/.paused"
 
 source "$ENGINE/lib.sh"
+# Resolving a "<repo>:<tasklist>" reference (engine/crossrepo.sh) — the lookup every
+# cross-repo dep has always used, shared verbatim with `chief lint` so authoring time
+# and run time cannot disagree about where another repo's tasklist lives.
+source "$ENGINE/crossrepo.sh"
 # The SCOPE rule on acceptance criteria (engine/criteria.sh) — shared verbatim with
 # `chief gen` and `chief lint`, so authoring time and run time cannot disagree about
 # what "outside this worktree" means.
@@ -1392,53 +1396,12 @@ deps_of()    { jq -r '(.dependsOn // [])[]' "$SRC/$1.json" 2>/dev/null; }
 touches_of() { jq -r '(.touches // [])[]' "$SRC/$1.json" 2>/dev/null; }
 
 # --- cross-repo deps --------------------------------------------------------
-# A dep may be QUALIFIED as "<repo>:<tasklist>" to depend on work that lands in a
-# different repo — e.g. "pinakes:10-koine-align". Bare names stay repo-local.
-# <repo> is either a path (absolute, ~/…, or relative to this repo) or the plain
-# name of a repo in the known-repos registry ($CHIEF_REPOS, appended by `chief
-# init`/`chief run`). Only the merged RECORD is read across the boundary; chief
-# never schedules, branches, or merges in another repo.
-dep_repo() { case "$1" in *:*) printf '%s' "${1%%:*}" ;; esac; }   # empty when unqualified
-dep_task() { printf '%s' "${1##*:}"; }
-
-resolve_repo() {   # repo spec -> absolute path, or nothing when it can't be resolved
-  local spec="$1" cand hits
-  case "$spec" in
-    "~/"*) cand="${HOME:-}/${spec#\~/}"; [ -n "${HOME:-}" ] || cand="" ;;
-    /*)    cand="$spec" ;;
-    */*)   cand="$REPO/$spec" ;;                      # relative to this repo
-    *)     cand="" ;;
-  esac
-  if [ -n "$cand" ]; then
-    [ -d "$cand/.chief" ] && (cd "$cand" 2>/dev/null && pwd)
-    return 0
-  fi
-  [ -f "$CHIEF_REPOS" ] || return 0                   # bare name -> the registry
-  hits="$(while read -r p; do
-            [ -n "$p" ] && [ "$(basename "$p")" = "$spec" ] && [ -d "$p/.chief" ] && printf '%s\n' "$p"
-          done < "$CHIEF_REPOS" | sort -u)"
-  [ "$(printf '%s' "$hits" | grep -c .)" = "1" ] && printf '%s' "$hits"   # ambiguous = unresolved
-  return 0
-}
-
-repo_tasks_rel() {   # another repo's CHIEF_TASKS_DIR (parsed, NOT sourced — it's foreign config)
-  local v; v="$(sed -n 's/^[[:space:]]*CHIEF_TASKS_DIR=\([^ #]*\).*/\1/p' "$1/.chief/config" 2>/dev/null | tail -1)"
-  printf '%s' "${v:-tasks/chief}"
-}
-
-dep_record() {   # dep -> the completed-record path that would satisfy it ('' if unresolvable)
-  local d="$1" rr
-  rr="$(dep_repo "$d")"
-  [ -z "$rr" ] && { printf '%s' "$COMPLETED/$d.json"; return 0; }
-  rr="$(resolve_repo "$rr")"
-  [ -n "$rr" ] || return 0
-  printf '%s' "$rr/$(repo_tasks_rel "$rr")/completed/$(dep_task "$d").json"
-}
-
-is_recorded_done() {   # merged record exists? (in this repo, or the dep's own repo)
-  local f; f="$(dep_record "$1")"
-  [ -n "$f" ] && [ -f "$f" ] && [ -n "$(jq -r '.mergedToMain // empty' "$f" 2>/dev/null)" ]
-}
+# The "<repo>:<tasklist>" resolver — dep_repo · dep_task · resolve_repo ·
+# repo_tasks_rel · dep_record · is_recorded_done — lives in engine/crossrepo.sh,
+# sourced above. It moved there because the AUTHORING-time gates need the same
+# lookup: `chief lint` resolves a tasklist's declared downstream counterpart with
+# these exact functions, and a second implementation of "where does <repo>:<stem>
+# live" would drift from this one the first time either changed.
 
 # Per-tasklist scheduler state lives in files so no associative array is needed.
 # Every lifecycle transition also lands in the liveliness record (and stamps its
@@ -1539,13 +1502,13 @@ dep_why() {
   if [ -n "$rr" ]; then                                     # qualified "<repo>:<tasklist>"
     rp="$(resolve_repo "$rr")"
     if [ -z "$rp" ]; then
-      echo "repo \"$rr\" could not be resolved — it is not a path, and no uniquely-named repo matches it in $CHIEF_REPOS (run 'chief init' or 'chief run' in that repo once to register it, or qualify with a path: \"../$rr:$(dep_task "$d")\")"; return
+      crossrepo_unresolved_repo_msg "$d"; return
     fi
     [ "$rp" = "$REPO" ] && { in_set "$(dep_task "$d")" "$NAMES" && { echo scheduled; return; }; }
     rec="$(dep_record "$d")"
     if [ ! -f "$rec" ]; then
       if [ ! -f "$rp/$(repo_tasks_rel "$rp")/$(dep_task "$d").json" ]; then
-        echo "$rp has no tasklist \"$(dep_task "$d")\" — neither $(repo_tasks_rel "$rp")/$(dep_task "$d").json nor a completed record exists there (misspelled? the name is the filename minus .json)"; return
+        crossrepo_no_such_tasklist_msg "$rp" "$d"; return
       fi
       echo "not merged in $rp yet — $rec does not exist. Chief reads that record across repos but never runs another repo: complete it there ('cd $rp && chief run')"; return
     fi

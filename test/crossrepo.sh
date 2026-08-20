@@ -102,4 +102,51 @@ has ": local-a"   "$out" || fail "local-a should be scheduled:\n$out"
 has "2 wave(s)"   "$out" || fail "self-qualified dep not treated as local ordering (expected 2 waves):\n$out"
 case "$out" in *"local-a"*"down-work"*) ;; *) fail "down-work should follow local-a:\n$out" ;; esac
 
-echo "XREPO PASS — cross-repo dep resolution (name/path/self) + blocked-dep diagnostics"
+# ── 9. The MARKER LINK: `downstreamCounterpart` resolves through the SAME lookup ──
+# A tasklist may declare the downstream tasklist that completes it. `chief lint`
+# follows it with the resolver above (engine/crossrepo.sh), so a bad declaration gets
+# the same sentence a bad dep edge does — and a counterpart named only in PROSE is
+# not detected, which the gate says out loud rather than reporting clean.
+counterpart() {   # $1 = repo, $2 = tasklist, $3 = jq value for the field (null = drop it)
+  local tmp="$1/tasks/chief/$2.json.tmp"
+  jq --argjson cp "$3" \
+     'if $cp == null then del(.downstreamCounterpart) else .downstreamCounterpart = $cp end' \
+     "$1/tasks/chief/$2.json" > "$tmp" && mv "$tmp" "$1/tasks/chief/$2.json" \
+     || fail "could not set downstreamCounterpart on $2"
+}
+lint() { ( cd "$DOWN" && "$CHIEF" lint 2>&1 ); }
+
+tasklist "$DOWN" down-work                       # drop the dep; this section is about the field
+tasklist "$UP"   up-work                         # a live tasklist to point at
+
+counterpart "$DOWN" down-work '["upstream:up-work"]'
+out="$(lint)"
+has "clean" "$out"          || fail "a resolvable counterpart was reported as a finding:\n$out"
+has '1 "downstreamCounterpart" declaration(s) checked' "$out" \
+                            || fail "lint did not report what it saw:\n$out"
+
+counterpart "$DOWN" down-work '["ghostrepo:up-work"]'
+out="$(lint)"
+has 'repo "ghostrepo" could not be resolved' "$out" || fail "unresolvable counterpart repo not diagnosed:\n$out"
+
+counterpart "$DOWN" down-work '["upstream:no-such-work"]'
+out="$(lint)"
+has 'has no tasklist "no-such-work"' "$out" || fail "counterpart with a bad stem not diagnosed:\n$out"
+
+# A merged counterpart resolves too — the field points at the WORK, not at its state.
+counterpart "$DOWN" down-work '["upstream:merged-work"]'
+jq -n '{mergedToMain:"deadbee"}' > "$UP/tasks/chief/completed/merged-work.json"
+has "clean" "$(lint)" || fail "a counterpart that has already merged should still resolve"
+
+# PROSE IS NOT THE MECHANISM: the same reference in the description is invisible, and
+# the gate says so instead of reporting a link it never checked.
+counterpart "$DOWN" down-work null
+tmp="$DOWN/tasks/chief/down-work.json"
+jq '.description="DOWNSTREAM COUNTERPART: upstream:up-work"' "$tmp" > "$tmp.t" && mv "$tmp.t" "$tmp"
+out="$(lint)"
+has '0 "downstreamCounterpart" declaration(s) checked' "$out" \
+    || fail "a prose-only counterpart must not be counted as a declaration:\n$out"
+has "only in prose is invisible" "$out" \
+    || fail "lint must state that prose counterparts are not detected:\n$out"
+
+echo "XREPO PASS — cross-repo dep resolution (name/path/self) + blocked-dep diagnostics + counterpart lint"

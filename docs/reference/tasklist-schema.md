@@ -1,6 +1,6 @@
 # Tasklist schema
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-20 · **Owner:** chief
 
 A tasklist is one JSON file in `tasks/chief/<name>.json`. `<name>` is its id
 (used for the branch, deps, and the completed record). It's a coherent unit of
@@ -46,6 +46,19 @@ work run to completion by a chain of agent iterations.
                                          //   a worktree cannot do work that lives
                                          //   elsewhere. Declaring it is the explicit,
                                          //   reviewable hatch for real coordination.
+
+  // --- the marker link (optional) ---
+  "downstreamCounterpart":               // this tasklist is a MARKER for work that is
+    ["agora:75-encode-scenarios"],       //   owned and built ELSEWHERE; these are the
+                                         //   tasklist(s) that actually complete it, in
+                                         //   the same "<repo>:<stem>" notation dependsOn
+                                         //   uses (a bare stem is this repo). A single
+                                         //   string is accepted too. The FORWARD half of
+                                         //   supersededBy — see the note below.
+  "supersededBy":                        // the BACKWARD half, written when the marker is
+    "agora:75-encode-scenarios",         //   RETIRED: what replaced it. Metadata for a
+                                         //   human reader; chief does not read it.
+
   "parked": false,                       // true = skipped by auto-discovery
   "review": "none",                      // "plan" = a HUMAN approves the agent's plan
                                          //   before it writes any code (one extra turn
@@ -135,6 +148,22 @@ Notes:
   Neither field requires the other. The required sections, the sub-agent contract, the
   reuse-on-resume guarantee and the bounded-failure state:
   [../research-phase.md](../research-phase.md).
+- **`downstreamCounterpart` is what makes a marker followable.** A tasklist can be a
+  placeholder for work that belongs in another repo — the spec repo holds the spec,
+  the implementation lands downstream — and the failure mode is silent: when the
+  downstream tasklist merges, the marker upstream keeps sitting in the backlog,
+  indistinguishable from work that still needs doing. (Measured across this host on
+  2026-08-18/19: five of koine's ten markers had already shipped and every one was
+  still counted as pending by `chief list`.) Declaring the counterpart in a field
+  makes the link **checkable**: `chief lint` resolves each reference with the same
+  lookup a cross-repo `dependsOn` uses, and a reference naming a repo or stem that
+  does not exist fails the lint with the same message a bad dep edge gets — a pointer
+  to nothing is worse than no pointer, because it reads as checked.
+  **Prose is not the mechanism.** A counterpart mentioned only in `description` (the
+  `DOWNSTREAM COUNTERPART: agora:75-…` convention) is readable but not checkable, and
+  chief does not detect it or claim to — the lint reports how many declarations it
+  actually saw. `supersededBy` is the same link pointing backwards, recorded when the
+  marker is finally retired; it is metadata for a human, and chief reads it never.
 - **`repo` targets a nested repo (e.g. a submodule).** The agent runs in a worktree of
   that repo, so its checks/deps must resolve there (use `warmup` to provision them, and a
   verify hook that dispatches off its cwd). All merges are serialized, so two tasklists
