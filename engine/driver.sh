@@ -658,12 +658,14 @@ evidence_gate() {
 # are run_worker's, by dynamic scope.
 unverified_stop() {
   local n; n="$(_int "$(printf '%s\n' "$1" | grep -c '✗' 2>/dev/null || true)")"
+  unverified_persist "$name" "$1"          # so the NEXT run re-engages instead of skipping past it
   live_set "$live" phase=unverified
   event_emit tasklist.unverified name="$name" state=failed \
     detail="$n stor$([ "$n" = 1 ] && echo y || echo ies) reported COMPLETE with no evidence in notes"
   echo "UNVERIFIED $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
   echo "!! $name UNVERIFIED — the agent reported COMPLETE, but $n stor$([ "$n" = 1 ] && echo y was || echo ies were) left unmarked with an EMPTY notes:"
   printf '%s\n' "$1"
+  echo "   Recorded for the resume in $SNAP_REL/$name.unverified.md — the next run re-engages the agent on these stories rather than reading the branch as finished."
   echo "   Not merging. A story chief passes on the agent's behalf must record in 'notes' HOW it met these — branch $branch is kept in its worktree."
 }
 
@@ -2243,6 +2245,8 @@ run_worker() {
     fi
     local skip_agent=0
     local integrate_note=""      # set when integrate_base left an instruction for the agent
+    # Last run's UNVERIFIED stop, if it left one (engine/measure.sh has the argument).
+    local unvmark; unvmark="$(unverified_marker "$name")"
     local wtstate="$wt/$STATE_REL"
     sweep_worktree "$wt" "$name"                     # reclaim last run's build artifacts first
     wt_git remove --force "$wt" 2>/dev/null || true   # free a stale worktree dir (keeps the branch)
@@ -2276,6 +2280,13 @@ run_worker() {
         elif [ "$left" = "0" ] && [ -z "$bhw" ]; then
           echo ">> $name: branch $branch marks all stories done but has NO commits vs $work_base — re-running the agent (ignoring the false all-pass)"
           mark_reengage "every story is marked done with no commits vs $work_base — the pass-flags are a misfire"
+        elif [ "$left" = "0" ] && [ -s "$unvmark" ]; then
+          # THE THIRD ARM, the same shape as the two above it: an all-pass branch that
+          # is not finished. Last run's gate demoted a story whose bar went unmeasured,
+          # into a runtime record this run rebuilds from a tasklist that still reads
+          # passes:true — so skipping the agent here re-fails at that gate forever.
+          echo ">> $name: branch $branch passes all stories but stopped UNVERIFIED last run — re-engaging the agent on the stories still owed an observed value"
+          mark_reengage "every story passes but the run stopped UNVERIFIED with a bar unmeasured ($SNAP_REL/$name.unverified.md)"
         elif [ "$left" = "0" ]; then
           echo ">> $name: all stories already pass on $branch — skip agent, go to verify+merge"; skip_agent=1
         else
@@ -2363,6 +2374,9 @@ run_worker() {
         echo '```'; cat "$SNAP/$name.verify-failed.log"; echo '```'
       } >> "$wtstate/progress.txt"
     fi
+    # And the same for the LAST RUN'S UNVERIFIED STOP: the stories it demoted put back
+    # to passes:false in the record, its report appended here (engine/measure.sh).
+    unverified_pickup "$wtstate/prd.json" "$wtstate/progress.txt" "$unvmark"
     # An un-rebasable base is handed to the agent the same way a persisted verify
     # failure is: through the progress.txt it reads at the top of every iteration.
     # (Same injection the iteration-boundary hook uses when base drifts mid-run.)
@@ -2414,7 +2428,7 @@ run_worker() {
           CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" CHIEF_VERBOSE="${CHIEF_VERBOSE:-}" \
           CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" CHIEF_ACCOUNT_LABEL="$ACCOUNT_LABEL" \
           CHIEF_RESEARCH="${CHIEF_RESEARCH:-}" CHIEF_RESEARCH_FILE="$RESEARCH_DIR/$name.md" \
-          CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" \
+          CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" CHIEF_UNVERIFIED_FILE="$unvmark" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a
@@ -2719,10 +2733,13 @@ run_worker() {
         # and (for a submodule) bumps the project's pointer to the merged submodule sha.
         finalize_merged "$name" "$branch" "$sha" "$work_repo" "$sub"
         # cleared: this branch is green + merged, so every failure artifact from a
-        # previous attempt (verify output, conflict forensics) is now stale.
+        # previous attempt (verify output, conflict forensics, the UNVERIFIED marker)
+        # is now stale. The marker especially: it exists to force an agent turn on the
+        # next resume, and a tasklist that has merged must never buy one again.
         # The zone request + verdict go with them: the change they were about is now
         # ON the base, and a verdict that outlived its subject can only mislead.
-        rm -f "$SNAP/$name.verify-failed.log" "$SNAP/$name.rebase-conflict.md" \
+        rm -f "$SNAP/$name.verify-failed.log" "$(unverified_marker "$name")" \
+              "$SNAP/$name.rebase-conflict.md" \
               "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
               "$(zones_request_file "$STATE" "$name")" "$(zones_approval_file "$STATE" "$name")" 2>/dev/null || true
         live_set "$live" phase=merged story=

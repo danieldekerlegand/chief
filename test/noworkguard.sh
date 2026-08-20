@@ -65,4 +65,10 @@ git checkout -q main
 case "$(git log --oneline)" in *"Merge chief/nw"*) fail "a merge commit exists for the empty branch (guard failed)" ;; *) ;; esac
 case "$("$CHIEF" run -n 2>&1)" in *nw*) ;; *) fail "tasklist not still pending after the guard" ;; esac
 
+# An EMPTY-NO-WORK stop must NOT leave an UNVERIFIED marker: that marker forces an
+# agent turn on every future resume, and this branch already re-runs on its own terms.
+if ls "$REPO/.chief/state/snapshots"/*.unverified.md >/dev/null 2>&1; then
+  fail "EMPTY-NO-WORK wrote an UNVERIFIED marker — only an UNVERIFIED stop may"
+fi
+
 echo "NOWORK PASS — false-complete (COMPLETE + zero commits) caught as EMPTY-NO-WORK; not merged, not retired"

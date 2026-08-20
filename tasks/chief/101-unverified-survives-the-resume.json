@@ -4,7 +4,9 @@
   "branchName": "chief/101-unverified-survives-the-resume",
   "description": "An UNVERIFIED stop does not survive the run that produced it, so the tasklist it stopped re-fails forever without ever spending an agent turn.\n\nThe merge gate demotes a passing story whose criteria state a bar and whose notes carry no observed value, and the run ends UNVERIFIED. The demotion is written to the RUNTIME prd.json in the worktree. The branch's committed tasklist still reads passes:true. On the next run, run_worker computes `left` from the branch's committed tasklist, sees 0 stories remaining, prints 'all stories already pass — skip agent, go to verify+merge' and sets skip_agent=1 (engine/driver.sh, the arm after the vfail and no-commits guards). No agent runs. The merge gate demotes the same story again. The run ends UNVERIFIED again, identically, and every subsequent resume repeats it.\n\nThe resume block ALREADY guards the two neighbouring cases: a prior post-rebase verify failure persists a marker so an all-pass branch re-engages the agent rather than re-failing, and a branch with no commits vs base re-runs rather than merging a false all-pass. The unmeasured-bar case is the third of exactly this shape and is the only one without a guard.\n\nThis is not theoretical. insimul 261-slice-corpus-babylon-reference reproduced it: three runs, each ending UNVERIFIED 2/3, always the same story, because US-1 was the only one of its three whose criteria state a bar. It was then repaired by hand — the pass flag flipped back so the resume would engage the agent at all. The boundary demotion added in 100 does not reach this case either: it fires between an agent's iterations, and this path spends no iterations.",
   "dependsOn": [],
-  "touches": ["engine"],
+  "touches": [
+    "engine"
+  ],
   "iters": 6,
   "warmup": [
     "grep -n 'skip_agent=1' engine/driver.sh",
@@ -23,7 +25,8 @@
         "A stop for any OTHER reason (INCOMPLETE, EMPTY-NO-WORK, a usage limit, an operator pause) writes no such marker. Asserted, because a marker that over-fires turns every park into a forced agent turn.",
         "GATES: bash -n clean, shellcheck -S error clean, and the behavioural core stays green."
       ],
-      "notes": null
+      "notes": "Marker $SNAP/<name>.unverified.md written by both UNVERIFIED stops, cleared at both merge sites. bash -n clean on driver.sh/measure.sh/mergequeue.sh; shellcheck not installed locally (skipped, CI enforces). Behavioural: measured-bars, evidence-gate, noworkguard, smoke, ratelimit, pause, limitstate, stale-resume, merge-batch, boundary-demotion, doc-sync, version-bump — 12 tests, all green, 0 failed. measured-bars asserts both transitions (marker present after the stop, gone after the merge); pause/limitstate/noworkguard/stale-resume assert no marker for PAUSED, RATE-LIMITED, failed-stall, EMPTY-NO-WORK and INCOMPLETE.",
+      "passes": true
     },
     {
       "id": "US-2",
@@ -34,7 +37,8 @@
         "The re-engaged agent is pointed at the specific stories and their bars, quoted in the words measure.sh already prints, not generic advice to check its work. An agent told only that something is unverified will re-mark the same story unchanged, which is the loop this closes.",
         "The demoted story reads passes:false to the agent that resumes it, so the loop picks it as work rather than seeing a finished tasklist."
       ],
-      "notes": null
+      "notes": "Third resume arm added; two existing arms untouched. bash -n clean on driver.sh/measure.sh/agent.sh/measured-bars.sh. Behavioural: measured-bars, boundary-demotion, evidence-gate, noworkguard, smoke, ratelimit, pause, limitstate, stale-resume, doc-sync, version-bump — 11 tests, 11 PASS, 0 failed. Both ways measured in ONE run (measured-bars run 2): mb-bad (marker present, committed tasklist all-pass) spent 1 agent turn — its prompt carried \"✗ US-1 — reach GREEN acceptance\" + claimed: \"the suite reaches GREEN acceptance; the baseline to beat is 77 failed\", it read US-1 as passes=false, recorded the value, MERGED and the marker is gone; mb-skip (all-pass branch, no marker) spent 0 turns (no turns-mb-skip file) via \"skip agent\" and still MERGED. Quality ratchet: OK, function_length_max 534 -> 549 (delta +15, tolerance 15). doc-links 4 dead vs 4 on main (no regression). shellcheck not installed on this host — verify.sh skips it, CI enforces.",
+      "passes": true
     },
     {
       "id": "US-3",
@@ -46,7 +50,8 @@
         "The pathological case is bounded: a story whose value is never recorded must not re-engage forever. It stops on the existing demote limit rather than spinning, and the test asserts the run terminates.",
         "The test is registered in test/all.sh and .chief/verify.sh passes."
       ],
-      "notes": null
+      "notes": "test/unverified-resume.sh added and registered in all three lists (test/all.sh, .chief/verify.sh CHIEF_BYSTANDER_TESTS, .github/workflows/ci.yml). .chief/verify.sh: exit 0 — 37/37 behavioural tests green under the bystander guard, the new one at [19/37]; quality ratchet OK (function_length_max 534 -> 549, delta +15 tol 15; single_use_functions +2 tol 2); doc-links 4 dead vs 4 on main (no regression); VERSION-BUMP PASS (0.8.66); bash -n clean; shellcheck not installed on this host (CI enforces). The test itself: PASS in 28s standalone. Reproduction proven by hand — cloned the repo to a temp dir, stripped the resume-side fix (third arm + unverified_pickup), ran the test there: exit 1 at \"the re-run did not re-engage the agent on the persisted UNVERIFIED stop\". Measured arms: un-fixed engine re-run spends 0 agent turns and ends UNVERIFIED twice; shipped engine re-engages, merges, clears the marker; uv-done (all-pass, no marker) 0 turns and still MERGED; uv-spin bounded at exactly 2 turns per run out of an iters:4 budget by MEASURE_DEMOTE_LIMIT, terminating UNVERIFIED.",
+      "passes": true
     }
   ]
 }

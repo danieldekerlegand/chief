@@ -367,7 +367,8 @@ mq_merge_member() {
   if git -C "$repo" merge --no-ff "$branch" -m "Merge $branch (chief, auto-verified)"; then
     sha="$(git -C "$repo" rev-parse --short HEAD)"
     finalize_merged "$name" "$branch" "$sha" "$repo" "$sub"
-    rm -f "$SNAP/$name.verify-failed.log" "$SNAP/$name.rebase-conflict.md" \
+    rm -f "$SNAP/$name.verify-failed.log" "$(unverified_marker "$name")" \
+          "$SNAP/$name.rebase-conflict.md" \
           "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
           "$(zones_request_file "$STATE" "$name")" "$(zones_approval_file "$STATE" "$name")" 2>/dev/null || true
     live_set "$live" phase=merged story=

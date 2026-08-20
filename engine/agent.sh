@@ -219,12 +219,27 @@ PRD_STORE="${CHIEF_PRD_SNAPSHOT:-}"
 # Written by the boundary check and cleared by it (a boundary that demotes nothing has
 # nothing outstanding to say). Removed at startup because $STATE_DIR outlives the
 # process on an in-place run, and last run's demotion is not this run's news.
+#
+# ONE EXCEPTION, and it is the whole reason a resumed run is here at all: a PERSISTED
+# UNVERIFIED stop ($CHIEF_UNVERIFIED_FILE — the driver's marker, in measure.sh's own
+# words). That one IS this run's news. The branch it hands back reads all-pass and the
+# driver re-engaged us precisely because a bar on it went unmeasured, so the first turn
+# opens with the same notice a boundary demotion would have given it — the story named,
+# the bar quoted — rather than a fresh prompt that says nothing about why it is here.
 DEMOTION_FILE="$STATE_DIR/.demoted.md"
+# Whose demotion the notice describes, since the notice itself is one block of prose
+# used by both: the boundary's is "the last iteration", the marker's is the last RUN.
+DEMOTION_WHEN="At the end of the last iteration"
 rm -f "$DEMOTION_FILE"
+if [ -n "${CHIEF_UNVERIFIED_FILE:-}" ] && [ -s "${CHIEF_UNVERIFIED_FILE:-}" ]; then
+  cp "$CHIEF_UNVERIFIED_FILE" "$DEMOTION_FILE" 2>/dev/null \
+    && DEMOTION_WHEN="At the end of the LAST RUN" || rm -f "$DEMOTION_FILE"
+fi
 # The repeat accounting behind MEASURE_DEMOTE_LIMIT (above). In-process only, and
-# deliberately so: a resumed run starts from `rm -f "$DEMOTION_FILE"` with no notice
-# outstanding, so it must also start with no repeat held against the agent it has not
-# yet spoken to. DEMOTE_KEY is the REASON — the sorted ids the last boundary demoted.
+# deliberately so: a resumed run has not yet spoken to the agent it would be counting
+# against, so it starts at zero even when it starts holding a notice (the marker seed
+# above). The agent gets the same two turns to answer that any other run would give it.
+# DEMOTE_KEY is the REASON — the sorted ids the last boundary demoted.
 DEMOTE_KEY=""
 DEMOTE_REPEATS=0
 # _compose_prompt INSTRUCTIONS DEST — the prompt one turn is handed: the engine's
@@ -328,7 +343,7 @@ _compose_prompt() {
     if [ -s "$DEMOTION_FILE" ]; then
       printf '\n\n---\n\n# STOP — chief DEMOTED a story you marked. It is back at `passes: false`.\n\n'
       printf 'This is not your edit failing to save, and re-marking it is not the fix.\n\n'
-      printf 'At the end of the last iteration chief held every story reading `passes: true`\n'
+      printf '%s chief held every story reading `passes: true`\n' "$DEMOTION_WHEN"
       printf 'to the bars its OWN acceptance criteria state. The story below claims a bar and\n'
       printf 'its `notes` recorded no observed value, so chief set `passes: false` and\n'
       printf '`unverified: true` on it, verbatim as it will be reported at merge time:\n\n'

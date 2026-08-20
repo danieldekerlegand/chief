@@ -112,6 +112,16 @@ Four more guards back this up:
   `snapshots/<name>.verify-failed.log` and injected into the next run's
   `progress.txt`, so the agent is re-run to **fix** the failure (it won't re-report
   COMPLETE until the checks pass). Cleared on a clean merge.
+- **Persisted UNVERIFIED stops re-engage the agent too**, on exactly those terms. A
+  story whose criteria state a bar and whose `notes` record no observed value is
+  demoted at the merge gate ([engine/measure.sh](../../engine/measure.sh)) — but into
+  the *runtime* record, which the next run rebuilds from a committed tasklist that
+  still reads `passes:true`. So the report is saved to
+  `snapshots/<name>.unverified.md`, and a resumed all-pass branch carrying one does
+  **not** skip the agent: the stories it named go back to `passes:false` in the record
+  the agent reads, and the report — the stories, their bars, what the notes did say —
+  is put in its prompt and its `progress.txt`. Cleared on a clean merge, so a tasklist
+  that recorded its numbers never pays an agent turn for having stopped once.
 
 - **Base integration (`INTEGRATE-BASE.md`).** The floor above catches
   drift, but only at the very end, where a conflict costs the whole tasklist. Most

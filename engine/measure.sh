@@ -110,6 +110,90 @@ measure_gate() {
   ' "$prd" > "$t" 2>/dev/null && mv "$t" "$prd" || rm -f "$t"
 }
 
+# ── THE UNVERIFIED MARKER ─────────────────────────────────────────────────────
+# An UNVERIFIED stop has to OUTLIVE the run that produced it, for exactly the reason
+# a post-rebase verify failure does (driver.sh's $SNAP/<name>.verify-failed.log):
+# the demotion lands in the RUNTIME prd.json, and the next run re-seeds that from the
+# branch's COMMITTED tasklist — which still reads passes:true. So the resume computes
+# 0 stories left, prints "all stories already pass — skip agent, go to verify+merge",
+# spends no agent turn at all, and the gate that stopped the run stops it again, in
+# the same words, forever. insimul 261-slice-corpus-babylon-reference did that three
+# runs running before a human flipped the pass-flag back by hand.
+#
+# So it is written down where the RESUME can read it, on the verify-failure's terms:
+# one file per tasklist under $SNAP (outside the worktree run_worker rm -rf's), born
+# with the stop and cleared by the merge that clears every other stale failure
+# artifact. It carries the REPORT VERBATIM — the stories, the bars they state and the
+# criteria as measure_gate printed them — because the resume's job is to hand the
+# agent the specific bars still owed a number, not generic advice to check its work.
+unverified_marker() { printf '%s/%s.unverified.md\n' "${SNAP:-${STATE:-.}/snapshots}" "$1"; }
+
+# unverified_persist NAME REPORT — record an UNVERIFIED stop for the next resume.
+#
+# ONLY the two UNVERIFIED stops call this. Every OTHER stop already re-engages the
+# agent on its own terms — INCOMPLETE and EMPTY-NO-WORK leave stories reading false,
+# a usage limit and an operator pause leave the branch mid-tasklist — so a marker
+# there would buy nothing and cost an agent turn on every future resume of a branch
+# that never needed one. Over-firing is the failure mode to fear here: this fix is
+# only worth having if the tasklists it does NOT apply to still finish agent-free.
+unverified_persist() {
+  local f; f="$(unverified_marker "$1")"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  printf '%s\n' "$2" > "$f" 2>/dev/null || true
+}
+
+# unverified_reseed PRD MARKER — the stories a persisted stop NAMED read `passes:false`
+# to the agent that resumes them.
+#
+# The marker exists precisely because the branch's committed tasklist still reads
+# `passes:true` for those stories — that IS the defect — and this run seeds its runtime
+# record from that tasklist. So re-engaging the agent without this hands it a tasklist
+# with nothing left to do: instructions.md's loop is "pick the highest-priority story
+# with passes:false", it finds none, reports COMPLETE, and the run stops UNVERIFIED
+# again having now spent a turn to do it. That is worse than the skip it replaces.
+#
+# BY ID, from the report's own "✗ <id> — <title>" lines, so it moves exactly the
+# stories the stop named and never one that has since been repaired — a value recorded
+# on the branch by hand clears the story at the gate, and this must not put it back.
+# LC_ALL=C because the report is agent-authored prose full of em-dashes, and BSD awk
+# aborts on a multi-byte character in a UTF-8 locale.
+unverified_reseed() {
+  local prd="$1" mark="$2" ids t
+  [ -s "$prd" ] && [ -s "${mark:-}" ] || return 0
+  ids="$(LC_ALL=C awk '/✗/ {print $2}' "$mark" 2>/dev/null || true)"
+  [ -n "$ids" ] || return 0
+  t="$(mktemp)"
+  jq --arg ids "$ids" '
+    ($ids | split("\n") | map(select(length > 0))) as $d
+    | .userStories |= map(. as $s
+        | if ($d | index($s.id // "")) != null
+          then $s + {passes: false, unverified: true} else $s end)
+  ' "$prd" > "$t" 2>/dev/null && mv "$t" "$prd" || rm -f "$t"
+}
+
+# unverified_pickup PRD PROGRESS MARKER — everything a resumed run owes a persisted
+# UNVERIFIED stop, in one call: the record it hands the agent, and the log it hands it.
+#
+# No-op without a marker, which is the case that has to stay cheap — every tasklist
+# that never stopped this way goes through here on every resume and must come out of it
+# exactly as it went in.
+#
+# TWO SURFACES for one stop, on purpose, and neither is redundant. The PROMPT carries
+# it into the first turn (agent.sh seeds its demotion notice from the same file), and
+# the PROGRESS LOG outlives that turn — it is re-read at the top of every iteration,
+# which is where the verify-failure it mirrors has always been said.
+unverified_pickup() {
+  local prd="$1" progress="$2" mark="$3"
+  [ -s "${mark:-}" ] || return 0
+  unverified_reseed "$prd" "$mark"
+  {
+    echo; echo "## ⚠️ PRIOR RUN STOPPED UNVERIFIED — RECORD THE VALUE YOU OBSERVED, THEN MARK"
+    echo "These stories are back at \`passes: false\`. Chief cannot evaluate the bars they"
+    echo "claim, so it will not record them as met until a run writes down what it saw."
+    echo '```'; cat "$mark"; echo '```'
+  } >> "$progress" 2>/dev/null || true
+}
+
 # Fail the tasklist on measure_gate's report. Shares the UNVERIFIED status with the
 # evidence gate on purpose — both mean "this branch is not known to have done what it
 # says", and an operator reads the same exit code (headless `6`) and the same
@@ -126,11 +210,13 @@ measure_gate() {
 # words, same fix — said hours earlier, which is the whole point of the earlier check.
 unmeasured_stop() {
   local n; n="$(_int "$(printf '%s\n' "$1" | grep -c '✗' 2>/dev/null || true)")"
+  unverified_persist "$name" "$1"          # so the NEXT run re-engages instead of re-failing
   live_set "$live" phase=unverified
   event_emit tasklist.unverified name="$name" state=failed \
     detail="$n stor$([ "$n" = 1 ] && echo y claims || echo ies claim) a measurable bar with no observed value recorded"
   echo "UNVERIFIED $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
   echo "!! $name UNVERIFIED — $n stor$([ "$n" = 1 ] && echo y claims a bar || echo ies claim bars) nothing measured:"
   printf '%s\n' "$1"
+  echo "   Recorded for the resume in ${SNAP_REL:-$SNAP}/$name.unverified.md — the next run re-engages the agent on these stories rather than skipping straight back to this gate."
   echo "   Not merging; marked 'unverified' rather than passing — chief cannot evaluate these bars, so it will not record them as met. Put the OBSERVED value in the story's 'notes' (branch $branch is kept in its worktree)."
 }
