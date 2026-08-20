@@ -35,7 +35,9 @@ Three consequences worth knowing:
   record with no `mergedToMain` can never satisfy an edge, so `--blocked` calls it
   `PERMANENTLY BLOCKED` rather than letting it read as ordinary waiting.
 - **Parked is a split, not a verdict.** A `"parked": true` tasklist counts as remaining and
-  gets no runnable/blocked verdict, because the scheduler never considers it.
+  gets no runnable/blocked verdict, because the scheduler never considers it. It may say
+  **why** in `parkedReason`, and the parked total is broken down by it — see
+  [Parks](#parks--why-the-work-is-held-on-the-same-terms).
 - **Malformed input degrades, it never aborts.** An unparseable tasklist, a missing
   `dependsOn`, a dependency naming a repo that does not exist: each is counted, named in a
   `problems` section, and the rest of the report still renders.
@@ -125,6 +127,13 @@ the totals match field by field.
                   "breakdown": [ { "category": "feature", "live": 3, "parked": 1 } ],
                   "ordering": { "declared": true, "last": "feature",
                                 "live_preceding": 4, "live_in_last": 3 } },
+
+  "parks": { "parked": 93, "with_reason": 71,
+             "vocabulary": [ "owned-elsewhere", "awaiting-evidence" ],
+             "vocabulary_source": ".chief/config (CHIEF_PARK_REASONS)",  // null if none
+             "vocabulary_conflict": 0,   // >0 = that many different vocabularies in scope
+             "breakdown": [ { "reason": "owned-elsewhere", "parked": 41 } ],
+             "tasklists": [ { "tasklist": "koine/44-y", "reason": null } ] },  // null = no reason given
 
   "problems": [ { "tasklist": "koine/17-broken", "message": "…" } ],
   "excluded": [ "/abs/path" ], "stale": [ "/abs/path" ], "worktrees_skipped": [ "/abs/path" ],
@@ -317,6 +326,89 @@ a category it was not given an ordering for. A repo consolidating onto this keep
 vocabulary — in `.chief/config`, where it is now declared once and read by the report —
 and keeps its build failure, as `chief status --enforce-order` in the same CI step.
 
+## Parks — why the work is held, on the same terms
+
+`"parked": true` tells the scheduler not to schedule a tasklist. It has never said
+**why**, so the reason lived in prose nobody reads at the moment it matters. A tasklist
+may now carry one in a field:
+
+```jsonc
+{ "parked": true, "parkedReason": "owned-elsewhere" }
+```
+
+`chief status` breaks the **parked total** down by it:
+
+```
+  park reasons    7    of 9 parked tasklist(s) say why; the value is theirs, and chief holds no vocabulary of its own
+      reason                    parked
+      owned-elsewhere                4
+      awaiting-evidence              2
+      awaiting-decision              0
+      (no reason given)              2
+      wedged                         1   *
+      * outside the declared vocabulary — reported, never dropped
+      declared  owned-elsewhere · awaiting-evidence · awaiting-decision   — in .chief/config (CHIEF_PARK_REASONS)
+```
+
+"93 parked" is a number. "41 waiting on another repo, 30 waiting on evidence, 22 waiting
+on a decision" is three different conversations, and only the last two are the
+operator's to have.
+
+The field is **additive, never mandatory**:
+
+- `"parked": true` alone keeps working exactly as it did, and reads as a park that does
+  not say why. A repo that adopts nothing sees today's behaviour, unchanged.
+- The flag is what the **scheduler** reads. A `parkedReason` with no `"parked": true` is
+  a park that never happened: the tasklist is live and will be scheduled, and the report
+  names it in `problems` rather than quietly treating it as parked.
+- The value is an **opaque string**, on exactly the terms `category` is (above). Any set
+  of values renders, an absent one reads as `(no reason given)`, and no chief source
+  file names a park vocabulary — `test/park-reasons.sh` asserts the source discipline
+  alongside the behaviour, and pins no vocabulary of its own.
+
+### Declaring a park vocabulary
+
+The same declaration, read by the same code path as `CHIEF_CATEGORIES`:
+
+```sh
+CHIEF_PARK_REASONS="owned-elsewhere awaiting-evidence awaiting-decision"
+```
+
+Then the rows render in that order — every declared reason shown, even at zero — and a
+reason outside the vocabulary is marked `*` and kept. Without a declaration, rows are
+ordered by count then name and no ordering is claimed. The same two details apply: it is
+**read as a literal line, not sourced**, and across a portfolio one repo's declaration
+is not the portfolio's (agreement wins; disagreement means none is in force and the
+report says so). `CHIEF_PARK_REASONS` in the environment overrides every declaration.
+
+One consequence of the shared reader: entries are whitespace- or comma-separated
+**tokens**, so a multi-word reason can be *reported* but not *declared* — it renders
+below the declared rows, marked `*`, and is counted like any other.
+
+### Meeting a park in `chief run`
+
+The most common way to meet a park is to try to run one, and that is where chief used to
+say nothing:
+
+```
+$ chief run 44-encode-scenarios
+Nothing was scheduled — 1 of the tasklist(s) you named is parked:
+   ⏸ 44-encode-scenarios — parked: owned-elsewhere
+   A park is a decision, not a failure. Drop "parked" in tasks/chief/<name>.json to work it for good,
+   or run it once without unparking it:  chief run --parked 44-encode-scenarios
+```
+
+Naming a parked tasklist **prints its reason and schedules nothing**. `--parked` runs it
+anyway — the capability that used to be the silent default, now explicit. A bare
+`chief run` in a repo where everything is parked names the parks and their reasons
+instead of reporting that everything is complete. Neither is a failure: both exit 0
+interactively, and `no-work` (3) under `--headless`.
+
+The **counterpart** case — a park that names work owned and built in another repo — is
+`engine/counterpart.sh`'s, and is not reimplemented here. This reports the reason; the
+merged-counterpart detection stays where it is, because a second implementation of a
+marker link would drift, and drift in a marker is the failure that check exists to close.
+
 ## Environment
 
 | Variable | Default | Effect |
@@ -326,10 +418,12 @@ and keeps its build failure, as `chief status --enforce-order` in the same CI st
 | `CHIEF_REPOS` | `$CHIEF_PREFIX/repos` | the known-repos registry (`--all`'s scope) |
 | `CHIEF_WORKTREE_ROOT` | `$CHIEF_PREFIX/worktrees` | the tree the worktree guard excludes |
 | `CHIEF_CATEGORIES` | *(unset)* | the ordered category vocabulary for one report, overriding what the repos in scope declare |
+| `CHIEF_PARK_REASONS` | *(unset)* | the same, for the park reasons broken down under `park reasons` |
+| `CHIEF_RUN_PARKED` | *(unset)* | `1` = `chief run` schedules a parked tasklist you named instead of printing its reason and stopping (`chief run --parked`) |
 | `CHIEF_STATUS_CASCADE_CAP` | `25` | how many blocked edges get the release cascade computed, and how many rows `--blocked` prints |
 
 ## Related
 
-- [Tasklist schema](tasklist-schema.md) — `dependsOn`, `parked`, `completed/` records
+- [Tasklist schema](tasklist-schema.md) — `dependsOn`, `parked`, `parkedReason`, `completed/` records
 - [Cross-repo dependencies](cross-repo-dependencies.md) — the `<repo>:<stem>` edge status resolves
 - [Drivers, scheduling, and the safety model](../explanation/drivers-and-safety.md) — the gate status reports on

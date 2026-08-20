@@ -66,7 +66,8 @@ Usage:
                               the known-repos registry regardless of cwd. The header always states
                               which scope produced the numbers. Breaks the totals down by the
                               tasklist's "category" — an OPAQUE string chief reports and never
-                              ranks, unless the project declared its own ordering in .chief/config.
+                              ranks, unless the project declared its own ordering in .chief/config —
+                              and breaks the PARKED total down by "parkedReason" on the same terms.
                               Always exits 0; only --enforce-order, opt-in for CI, can exit non-zero
   chief gen ROADMAP.json      generate tasklists from a roadmap document — one schema-valid
                               tasks/chief/NN-slug.json per roadmap item, numbered in the next
@@ -94,7 +95,11 @@ Usage:
                               CHIEF_LOCAL_ENDPOINT + CHIEF_LOCAL_MODEL (env or .chief/config);
                               unconfigured it errors instead of falling back to a paid
                               provider. See docs/guides/local-inference-preset.md
-  chief list                  list tasklists with pass status
+                              --parked run a PARKED tasklist you named anyway. Without it,
+                              naming a parked tasklist prints the reason it carries
+                              ("parkedReason") and schedules nothing
+  chief list                  list tasklists with pass status (a parked one says so, with the
+                              reason it carries)
   chief ps                    show active runs across ALL repos (one-shot table). Also flags an
                               UNREGISTERED driver — one that is running with no run file, which
                               used to read as 'no active runs' — naming its repo, the tasklists
@@ -324,6 +329,23 @@ cmd_gen() {
 # the downstream tasklist that will complete it, and a declaration pointing at a repo
 # or stem that does not exist is worse than no declaration — it reads as checked.
 # Resolution is the driver's own (engine/crossrepo.sh), so the two cannot disagree.
+# The park cell `chief list` prints, computed by the jq that already reads the file: a
+# park with no "parkedReason" renders exactly as it always has, "  (parked)", which is
+# what keeps `chief list` a different tool with unchanged output.
+#
+# A TOP-LEVEL CONSTANT, not an inline multi-line '…' argument. engine/quality.sh's
+# scanner blanks `$( … )` before it looks for the quote that opens an embedded program,
+# so a `)` anywhere on the opening line eats the quote — and every line of the jq after
+# it is then read as shell, whose `if` has no `fi`, which pins the nesting depth up and
+# swallows every function boundary in the rest of the file. Opening the quote on a line
+# of its own is exact (a single quote cannot nest or be escaped), and is the shape
+# engine/status.sh's RECORD_JQ already uses.
+LIST_PARK_JQ='
+  if (.parked // false) then
+    ((.parkedReason // "") | tostring | gsub("[\n\r\t]"; " ")) as $r
+    | if $r == "" then "  (parked)" else "  (parked: " + $r + ")" end
+  else "" end'
+
 cmd_lint() {
   load_project
   . "$ENGINE/criteria.sh"
@@ -403,7 +425,7 @@ cmd_list() {
   load_project
   . "$ENGINE/crossrepo.sh"
   . "$ENGINE/counterpart.sh"
-  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n c t mark flagged="" files=()
+  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n c t mark pk flagged="" files=()
   for f in "$d"/*.json; do [ -e "$f" ] && files+=("$f"); done
   # Guarded on the COUNT, not entered blind: under `set -u` bash 3.2 treats
   # "${files[@]}" of an empty array as unbound, so a repo with no live tasklists
@@ -419,8 +441,8 @@ cmd_list() {
       c="$(jq '[.userStories[]|select(.passes)]|length' "$f" 2>/dev/null || echo '?')"
       # -x, not a substring test: "57-foo" must not flag "157-foo".
       mark=""; printf '%s\n' "$flagged" | grep -qxF -- "$n" && mark='  ⚑ counterpart merged'
-      printf '  %2s/%-3s %s%s%s\n' "$c" "$t" "$n" \
-        "$([ "$(jq -r '.parked//false' "$f" 2>/dev/null)" = true ] && echo '  (parked)')" "$mark"
+      pk="$(jq -r "$LIST_PARK_JQ" "$f" 2>/dev/null)"   # the park, from the same jq
+      printf '  %2s/%-3s %s%s%s\n' "$c" "$t" "$n" "$pk" "$mark"
     done
   fi
   for f in "$d"/completed/*.json; do [ -e "$f" ] || continue; printf '  done     %s\n' "$(basename "$f" .json)"; done
@@ -454,6 +476,8 @@ cmd_run() {
     --preset)      preset="$2"; shift 2 ;;
     --preset=*)    preset="${1#*=}"; shift ;;
     --local)       preset=local; shift ;;   # shorthand for --preset local
+    # Run a NAMED park anyway; without it the driver prints its reason and stops.
+    --parked)      export CHIEF_RUN_PARKED=1; shift ;;
     --claude)      provider=claude; shift ;;
     --devin)       provider=devin; shift ;;
     --opencode)    provider=opencode; shift ;;

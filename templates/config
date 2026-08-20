@@ -29,6 +29,15 @@ CHIEF_PROVIDER=claude            # AI provider: claude | devin | opencode | amp 
 # Read as a LITERAL LINE, not sourced: no $VAR, no command substitution. Space- or
 # comma-separated, earliest first.
 # CHIEF_CATEGORIES="fix unblock replace feature"
+# --- the PARK REASONS this project uses (docs/reference/status.md) -----------------
+# A tasklist may carry "parkedReason": WHY it is parked, in a field rather than in
+# prose. `"parked": true` keeps working unchanged and reads as a park that does not say
+# why — this adds a reason, it never makes one mandatory. Chief treats the value as an
+# OPAQUE STRING on exactly the terms above: declare the set your repos use and `chief
+# status` renders in it; a reason outside it is reported, never dropped. Naming a
+# parked tasklist in `chief run` prints its reason and stops (`--parked` runs it once
+# anyway). Same literal-line reading as CHIEF_CATEGORIES; space- or comma-separated.
+# CHIEF_PARK_REASONS="owned-elsewhere awaiting-evidence awaiting-decision"
 # --- the per-story DIFF-SIZE BUDGET (docs/reference/diff-budget.md) -----------------
 # Larger diffs carry higher conflict probability, so change size is the lever. Chief
 # measures every branch's diff against the base, DECOMPOSED BY STORY, and reports any

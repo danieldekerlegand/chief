@@ -161,6 +161,9 @@ jobs:
       - name: `chief status` over a 1,000-record portfolio (jq per DIRECTORY, not per record)
         run: bash test/status-perf.sh
 
+      - name: A park carries a REASON (opaque string, the project's vocabulary or none, `chief run` stops on one)
+        run: bash test/park-reasons.sh
+
       - name: Code-quality ratchet (slop BLOCKED, refactor ALLOWED, unmeasurable languages skipped not zeroed)
         run: bash test/quality-ratchet.sh
 

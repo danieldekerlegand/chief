@@ -156,7 +156,20 @@ engine/
                      #   not per record: 1,040 records went 2,576 forks and 23s -> 32 and
                      #   2s (test/status-perf.sh asserts the FORK count as well as the
                      #   clock, and is out of the merge gate like monitor.sh because only
-                     #   the clock half is load-sensitive)
+                     #   the clock half is load-sensitive). A PARK carries a REASON on the
+                     #   same terms: "parked":true is what the SCHEDULER reads and is
+                     #   untouched, "parkedReason" is the string a person needs, and it is
+                     #   never mandatory. One reader serves both declarations
+                     #   (config_list · reconcile_decls · breakdown_rows), so
+                     #   CHIEF_PARK_REASONS behaves exactly as CHIEF_CATEGORIES does —
+                     #   including that entries are TOKENS, so a multi-word reason is
+                     #   reportable but not declarable. A reason with no flag is a park
+                     #   that never happened: it is LIVE, and named in `problems`. And the
+                     #   park is reported where it is MET — naming a parked tasklist in
+                     #   `chief run` prints its reason and schedules nothing (`--parked`
+                     #   runs it anyway; that override used to be the silent default), and
+                     #   a bare run in an all-parked repo names the parks rather than
+                     #   reporting that everything is complete
   measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
@@ -287,6 +300,10 @@ VERSION              # engine version — bump on any engine/bin/install change
   empties (`engine/status.sh`'s `read_records`). Relatedly, `read -r -d '' V <<EOF` strips leading
   whitespace and *keeps* the final newline: `IFS= read -r -d ''` plus `V="${V%$'\n'}"` before
   comparing against a `$( )` capture.
+- **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
+  after one inside a `jq -n '…'` program parses as an expression and silently replaces the
+  field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in
+  `docs/` uses `//` because it is documentation; the programs in `engine/` may not.
 - **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
   "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
   locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when

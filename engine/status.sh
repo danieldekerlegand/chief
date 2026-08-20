@@ -63,6 +63,16 @@
 # is the operator's. A harness with users beyond one host cannot make it for them,
 # and a hard-coded enum would make somebody else's backlog unreportable.
 #
+# A PARK CARRIES A REASON, ON THE SAME TERMS. `"parked": true` is what the scheduler
+# reads and it is untouched; `"parkedReason"` is the string a person needs, and it is
+# never mandatory — a repo that adopts nothing sees exactly the old behaviour. Chief
+# holds no park vocabulary either: a project declares its own with CHIEF_PARK_REASONS
+# in .chief/config, read by the SAME code path as CHIEF_CATEGORIES (config_list /
+# reconcile_decls / breakdown_rows), and a reason the declaration does not name is
+# marked and reported rather than dropped. "93 parked" is a number; "41 waiting on
+# another repo, 30 on evidence, 22 on a decision" is three different conversations,
+# and only two of them are the operator's to have.
+#
 # TWO OUTPUTS, ONE PASS. `--json` emits the whole report as a single JSON document
 # on stdout and pushes every human-facing note to stderr, so it pipes to jq cleanly
 # — the stdout-is-data discipline `chief events` already keeps. It is the same
@@ -100,6 +110,7 @@ CHIEF_VERSION="$(cat "$ENGINE/../VERSION" 2>/dev/null || echo unknown)"
 
 : "${CHIEF_REPOS:=}"
 : "${CHIEF_CATEGORIES:=}"
+: "${CHIEF_PARK_REASONS:=}"
 REPO=""; TASKS_REL=""; SRC=""; COMPLETED=""     # deps.sh's contract; set by deps_scope
 
 # How deep beneath the walk base a repo ROOT may sit. Bounded because the walk runs
@@ -150,11 +161,13 @@ Environment:
                        beneath it (default $CHIEF_PREFIX/ignore)
   CHIEF_CATEGORIES     the ordered category vocabulary for this report, overriding
                        what the repos in scope declare in their .chief/config
+  CHIEF_PARK_REASONS   the same, for the park reasons broken down under `park reasons`
 
-Categories are reported as OPAQUE STRINGS — chief holds no vocabulary of its own,
-any set of values renders, and a tasklist with no category reads as (uncategorized).
-A project declares its own ordering with CHIEF_CATEGORIES in .chief/config; without
-one, categories are ordered by count and no ordering is claimed.
+Categories and park reasons are reported as OPAQUE STRINGS — chief holds no vocabulary
+of its own, any set of values renders, a tasklist with no category reads as
+(uncategorized) and a park with no "parkedReason" as (no reason given). A project
+declares its own with CHIEF_CATEGORIES / CHIEF_PARK_REASONS in .chief/config; without
+one, rows are ordered by count and no ordering is claimed.
 
 Runnable means what it means to the scheduler: every dependsOn edge resolves to a
 completed record carrying mergedToMain. Exits 0 whatever the backlog looks like —
@@ -283,7 +296,7 @@ EOF
   return 1
 }
 
-# ── the category vocabulary (opt-in, declared by the project) ────────────────
+# ── the project's declared vocabularies (opt-in) ─────────────────────────────
 # READ AS A LINE, NEVER SOURCED. `.chief/config` is bash and load_project sources it,
 # which is right for `run` — one project, chosen by the operator standing in it. This
 # command reports a PORTFOLIO of repos it discovered rather than chose, and sourcing
@@ -296,17 +309,27 @@ EOF
 # The value is a LIST, not a set of known names: chief neither validates the entries
 # nor requires a tasklist to use one. It is an ORDERING, supplied by the project, and
 # that is the only meaning chief assigns to it.
+# TWO of them now, and ONE code path reads both. `CHIEF_CATEGORIES` is the ordering a
+# project works its backlog in (US-3); `CHIEF_PARK_REASONS` is the set of reasons it
+# parks work for (US-5). Chief holds neither vocabulary — it reads the one the project
+# declares, renders in it, and reports every value the declaration does not name rather
+# than dropping it. A second reader for the second field would be a second set of
+# quoting, conflict and reconciliation rules to keep in step, so there is one.
 VOCAB=""            # the ordering in force for this report, space-separated
 VOCAB_SRC=""        # where it came from — named in the render, never assumed
 VOCAB_DECLS=""      # "<label>\t<vocab>" per declaring repo; reconciled after the scan
 VOCAB_CONFLICT=0
+PARK_VOCAB=""       # ...and the same four, for the park reasons
+PARK_VOCAB_SRC=""
+PARK_DECLS=""
+PARK_VOCAB_CONFLICT=0
 
 normalize_vocab() { printf '%s' "$1" | LC_ALL=C tr ',' ' ' | LC_ALL=C tr -s '[:space:]' ' ' | LC_ALL=C sed 's/^ //; s/ $//'; }
 
-vocab_of() {   # $1 = repo root -> its declared vocabulary, or nothing
-  local f="$1/.chief/config" line
+config_list() {   # $1 = repo root, $2 = variable name -> its declared list, or nothing
+  local f="$1/.chief/config" var="$2" line
   [ -f "$f" ] || return 0
-  line="$(LC_ALL=C sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}CHIEF_CATEGORIES=//p' "$f" 2>/dev/null | tail -1)"
+  line="$(LC_ALL=C sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$var=//p" "$f" 2>/dev/null | tail -1)"
   [ -n "$line" ] || return 0
   # One layer of quoting, then whatever follows it (a trailing comment) is not ours.
   case "$line" in
@@ -317,9 +340,31 @@ vocab_of() {   # $1 = repo root -> its declared vocabulary, or nothing
   normalize_vocab "$line"
 }
 
+# One repo's declaration is that repo's. A PORTFOLIO has as many declarations as it has
+# repos, and they need not agree — so the only honest answers are "they all say the same
+# thing, and that is the vocabulary" or "they disagree, so none is in force here".
+# Guessing a winner would render a table in an order no project asked for, which is
+# precisely the failure of adopting a vocabulary, arrived at sideways.
+RD_VALUE=""; RD_CONFLICT=0
+reconcile_decls() {   # $1 = "<label>\t<list>" lines -> RD_VALUE (agreed) / RD_CONFLICT (n)
+  local distinct
+  RD_VALUE=""; RD_CONFLICT=0
+  [ -n "$1" ] || return 0
+  distinct="$(printf '%s' "$1" | cut -f2- | LC_ALL=C sort -u | grep -c .)"
+  if [ "$distinct" = 1 ]; then
+    RD_VALUE="$(printf '%s' "$1" | cut -f2- | LC_ALL=C sort -u | grep .)"
+  else
+    RD_CONFLICT="$distinct"
+  fi
+}
+
 if [ -n "$CHIEF_CATEGORIES" ]; then
   VOCAB="$(normalize_vocab "$CHIEF_CATEGORIES")"
   VOCAB_SRC="the environment (CHIEF_CATEGORIES)"
+fi
+if [ -n "$CHIEF_PARK_REASONS" ]; then
+  PARK_VOCAB="$(normalize_vocab "$CHIEF_PARK_REASONS")"
+  PARK_VOCAB_SRC="the environment (CHIEF_PARK_REASONS)"
 fi
 
 # ── scope resolution ─────────────────────────────────────────────────────────
@@ -433,7 +478,7 @@ edges=""         # EVERY unmet edge: "name<TAB>selfkey<TAB>dep<TAB>depkey<TAB>cl
                  # RECORD PATHS — the completed/ file a tasklist would have once merged is
                  # exactly what its dependents' edges resolve to — so the join is sound
                  # across repos, where a bare stem would collide.
-parked=""        # names
+parked=""        # "name<TAB>reason" — the reason is EMPTY when the park does not carry one
 unreadable=""    # names — counted as remaining, but no verdict is honest
 problems=""      # "name<TAB>message"
 rows=""          # "label<TAB>remaining<TAB>live<TAB>parked<TAB>runnable<TAB>blocked<TAB>completed<TAB>source<TAB>path"
@@ -446,6 +491,13 @@ cats=""
 CAT_NONE='(uncategorized)'        # chief's label for an ABSENT category, not a value
 CAT_UNREADABLE='(unreadable)'     # ...and for one that cannot be read at all
 n_categorized=0  # tasklists that actually carried a category — the breakdown's trigger
+# The park reasons, accumulated the same way and for the same reason: one line per
+# PARKED tasklist, aggregated once at render time. A reason is an opaque string too —
+# "93 parked" is a number, and "41 waiting on another repo, 30 on evidence, 22 on a
+# decision" is three different conversations, only two of which are the operator's.
+parks=""
+PARK_NONE='(no reason given)'     # chief's label for a park that does not say why
+n_park_reasons=0 # parked tasklists that actually carried a reason
 n_live=0 n_parked=0 n_runnable=0 n_blocked=0 n_unreadable=0 n_completed=0 n_repos=0
 
 add_problem() { problems="$problems$1	$2
@@ -457,20 +509,21 @@ add_problem() { problems="$problems$1	$2
 # on a portfolio asks this of ~1,000 files, and at a fork apiece the report costs
 # more than the question is worth.
 #
-# `category` is an OPAQUE STRING (US-3) — flattened so that whatever an author wrote
-# cannot break the record separator, and otherwise untouched. `dependsOn` is read
-# defensively: a non-array there is not an array of edges, and reading it as one
-# would abort the whole directory over a single malformed field.
+# `category` and `parkedReason` are OPAQUE STRINGS (US-3, US-5) — flattened so that
+# whatever an author wrote cannot break the record separator, and otherwise untouched.
+# `dependsOn` is read defensively: a non-array there is not an array of edges, and
+# reading it as one would abort the whole directory over a single malformed field.
 RECORD_JQ='
   def flat: tostring | gsub("[\t\n\r\u001f]"; " ") | sub("^ +"; "") | sub(" +$"; "");
   input_filename as $p
   | ($p | split("/") | last | sub("\\.json$"; "")) as $n
   | if type == "object" then
-      [$p, $n, "object", ((.parked // false) | tostring), ((.category // "") | flat),
+      [$p, $n, "object", ((.parked // false) | tostring),
+       ((.parkedReason // "") | flat), ((.category // "") | flat),
        (has("dependsOn") | tostring),
        (if (.dependsOn | type) == "array" then (.dependsOn | map(flat)) else [] end | join(" "))]
     else
-      [$p, $n, "other", "false", "", "false", ""]
+      [$p, $n, "other", "false", "", "", "false", ""]
     end
   | join("\u001f")'
 
@@ -492,8 +545,10 @@ read_records() {
     n="$(printf '%s' "$out" | LC_ALL=C cut -d"$US" -f1 | LC_ALL=C sort -u | grep -c .)"
     [ "$n" -ge "${#files[@]}" ] && return 0        # no progress possible; stop rather than spin
     f="${files[$n]}"
-    printf '%s%s%s%sbad%sfalse%s%sfalse%s\n' \
-      "$f" "$US" "$(basename "$f" .json)" "$US" "$US" "$US" "$US" "$US"
+    # Eight fields, US-separated, with FOUR of them empty — written as one string
+    # rather than a printf of interleaved separators, because the empty ones are
+    # exactly where an off-by-one silently shifts every field after it.
+    printf '%s\n' "$f${US}$(basename "$f" .json)${US}bad${US}false${US}${US}${US}false${US}"
     rest=(); i=$((n + 1))
     while [ "$i" -lt "${#files[@]}" ]; do rest+=("${files[$i]}"); i=$((i + 1)); done
     files=(); [ "${#rest[@]}" -gt 0 ] && files=("${rest[@]}")
@@ -506,19 +561,25 @@ read_records() {
 # qualified with the repo label whenever more than one repo is in scope.
 scan_repo() {
   local root="$1" label="$2" source="$3" f name q d voc
-  local fpath kind parkedv catv hasdeps deplist prev="" selfkey depkey unmet ucls udet
+  local fpath kind parkedv parkwhy catv hasdeps deplist prev="" selfkey depkey unmet ucls udet
   local r_live=0 r_parked=0 r_runnable=0 r_blocked=0 r_completed=0
   deps_scope "$root"
 
   # A vocabulary is the PROJECT's, so it is read per repo, from the repo. The env
-  # override wins outright and skips the read entirely.
+  # override wins outright and skips the read entirely. Both declarations come through
+  # the same reader; neither is chief's.
   if [ -z "$CHIEF_CATEGORIES" ]; then
-    voc="$(vocab_of "$root")"
+    voc="$(config_list "$root" CHIEF_CATEGORIES)"
     [ -n "$voc" ] && VOCAB_DECLS="$VOCAB_DECLS$label$TAB$voc
 "
   fi
+  if [ -z "$CHIEF_PARK_REASONS" ]; then
+    voc="$(config_list "$root" CHIEF_PARK_REASONS)"
+    [ -n "$voc" ] && PARK_DECLS="$PARK_DECLS$label$TAB$voc
+"
+  fi
 
-  while IFS="$US" read -r fpath name kind parkedv catv hasdeps deplist; do
+  while IFS="$US" read -r fpath name kind parkedv parkwhy catv hasdeps deplist; do
     [ -n "$name" ] || continue
     q="$name"; [ "$MULTI" = 1 ] && q="$label/$name"
 
@@ -553,15 +614,28 @@ scan_repo() {
     if [ -n "$catv" ]; then n_categorized=$((n_categorized + 1)); else catv="$CAT_NONE"; fi
 
     if [ "$parkedv" = "true" ]; then
-      r_parked=$((r_parked + 1)); parked="$parked$q
+      r_parked=$((r_parked + 1)); parked="$parked$q$TAB$parkwhy
 "
       cats="$cats$catv${TAB}parked
 "
+      # Chief knows nothing about the value; the only thing it recognizes is its ABSENCE.
+      if [ -n "$parkwhy" ]; then
+        n_park_reasons=$((n_park_reasons + 1)); parks="$parks$parkwhy
+"
+      else
+        parks="$parks$PARK_NONE
+"
+      fi
       continue
     fi
     r_live=$((r_live + 1))
     cats="$cats$catv${TAB}live
 "
+    # A reason with no park is a park that never happened — the flag is what the
+    # scheduler reads, so the tasklist is live and the reason is inert. Named rather
+    # than ignored: a typo here is invisible in every other view.
+    [ -n "$parkwhy" ] && \
+      add_problem "$q" "\"parkedReason\" without \"parked\": true — the reason is recorded but the tasklist is LIVE and will be scheduled"
 
     [ "$hasdeps" = "true" ] || \
       add_problem "$q" "no \"dependsOn\" field — read as no dependencies (the schema expects the key, even empty)"
@@ -636,20 +710,18 @@ EOF
 
 n_remaining=$((n_live + n_parked))
 
-# ── the ordering in force, reconciled across the repos in scope ──────────────
-# One repo's declaration is that repo's. A PORTFOLIO has as many declarations as it
-# has repos, and they need not agree — so the only honest answers are "they all say
-# the same thing, and that is the ordering" or "they disagree, so no ordering is in
-# force here". Guessing a winner would render a table in an order no project asked
-# for, which is precisely the failure of adopting a vocabulary, arrived at sideways.
+# ── the vocabularies in force, reconciled across the repos in scope ──────────
+# Both go through reconcile_decls (above): agreed, or none in force and the count of
+# disagreeing declarations reported.
 if [ -z "$VOCAB" ] && [ -n "$VOCAB_DECLS" ]; then
-  vocab_distinct="$(printf '%s' "$VOCAB_DECLS" | cut -f2- | LC_ALL=C sort -u | grep -c .)"
-  if [ "$vocab_distinct" = 1 ]; then
-    VOCAB="$(printf '%s' "$VOCAB_DECLS" | cut -f2- | LC_ALL=C sort -u | grep .)"
-    VOCAB_SRC=".chief/config (CHIEF_CATEGORIES)"
-  else
-    VOCAB_CONFLICT="$vocab_distinct"
-  fi
+  reconcile_decls "$VOCAB_DECLS"
+  if [ -n "$RD_VALUE" ]; then VOCAB="$RD_VALUE"; VOCAB_SRC=".chief/config (CHIEF_CATEGORIES)"
+  else VOCAB_CONFLICT="$RD_CONFLICT"; fi
+fi
+if [ -z "$PARK_VOCAB" ] && [ -n "$PARK_DECLS" ]; then
+  reconcile_decls "$PARK_DECLS"
+  if [ -n "$RD_VALUE" ]; then PARK_VOCAB="$RD_VALUE"; PARK_VOCAB_SRC=".chief/config (CHIEF_PARK_REASONS)"
+  else PARK_VOCAB_CONFLICT="$RD_CONFLICT"; fi
 fi
 
 # THE ORDERING RULE, made visible: how much LIVE work precedes the last category in
@@ -661,12 +733,64 @@ cat_counts() {   # -> "<live><TAB><parked><TAB><category>" per category, aggrega
     { if ($2 == "parked") p[$1]++; else l[$1]++; seen[$1] = 1 }
     END { for (k in seen) printf "%d\t%d\t%s\n", l[k] + 0, p[k] + 0, k }'
 }
+# The park reasons, aggregated into the SAME "<n1><TAB><n2><TAB><key>" shape, so one
+# renderer serves both. Everything counted here is parked, so the second column is 0.
+park_counts() {   # -> "<parked><TAB>0<TAB><reason>" per reason, aggregated
+  printf '%s' "$parks" | LC_ALL=C awk '
+    $0 == "" { next }
+    { c[$0]++ }
+    END { for (k in c) printf "%d\t0\t%s\n", c[k], k }'
+}
 cat_cell() {   # $1 = counts, $2 = category, $3 = 1 live | 2 parked -> a number, always
   printf '%s' "$1" | LC_ALL=C awk -F'\t' -v c="$2" -v f="$3" \
     '$3 == c { print $f; hit = 1 } END { if (!hit) print 0 }'
 }
 
+# THE ONE ORDERING RULE, for every breakdown chief renders. With a declared vocabulary:
+# that order, every declared value shown even at zero, because the ordering is what is
+# being made visible. Without one: count then name — STABLE, and pointedly not a claim.
+# A value the vocabulary does not name is MARKED and kept; dropping it would silently
+# delete work from a report whose whole purpose is that the numbers add up.
+#
+# The mark is a character, never an empty first field: `IFS=$TAB read` collapses a run
+# of tabs, so a leading empty would shift every field after it left (CLAUDE.md).
+breakdown_rows() {   # $1 = counts, $2 = vocabulary -> "<mark><TAB><n1><TAB><n2><TAB><key>"
+  local counts="$1" voc="$2" c known="" rest="" n1 n2
+  if [ -n "$voc" ]; then
+    set -f                      # a category / a reason is an opaque string, never a glob
+    for c in $voc; do
+      printf -- '-%s%s%s%s%s%s\n' "$TAB" "$(cat_cell "$counts" "$c" 1)" "$TAB" "$(cat_cell "$counts" "$c" 2)" "$TAB" "$c"
+      known="$known$c
+"
+    done
+    set +f
+  fi
+  # The membership test is done in SHELL, not by handing the vocabulary to awk in a
+  # -v assignment: the list is newline-delimited and BSD awk rejects a newline inside
+  # one ("awk: newline in string"), silently costing exactly the rows it selects.
+  while IFS="$TAB" read -r n1 n2 c; do
+    [ -n "$c" ] || continue
+    in_list "$c" "$known" && continue
+    rest="$rest$((n1 + n2))$TAB$n1$TAB$n2$TAB$c
+"
+  done <<EOF
+$counts
+EOF
+  [ -n "$rest" ] || return 0
+  # Piped, not captured: a command substitution strips the final newline, and `read`
+  # returns non-zero on an unterminated last line — dropping exactly one row from the
+  # bottom of the table.
+  printf '%s' "$rest" | LC_ALL=C sort -t"$TAB" -k1,1nr -k4,4 | cut -f2- \
+  | while IFS="$TAB" read -r n1 n2 c; do
+      [ -n "$c" ] || continue
+      if [ -n "$voc" ]; then printf '*%s%s%s%s%s%s\n' "$TAB" "$n1" "$TAB" "$n2" "$TAB" "$c"
+      else                   printf -- '-%s%s%s%s%s%s\n' "$TAB" "$n1" "$TAB" "$n2" "$TAB" "$c"
+      fi
+    done
+}
+
 COUNTS="$(cat_counts)"
+PARK_COUNTS="$(park_counts)"
 ORD_LAST=""; ORD_PRECEDE=0; ORD_LAST_LIVE=0
 if [ -n "$VOCAB" ]; then
   set -f                        # a category is an opaque string; never a glob
@@ -870,43 +994,70 @@ render_ordering() {
 
 render_categories() {
   [ "$n_categorized" -gt 0 ] || [ -n "$VOCAB" ] || return 0
-  local c rest known=""
+  local mark c_live c_parked c marked=""
   printf '\n  categories  %4d    tasklist(s) carry one; the value is theirs, and chief holds no vocabulary of its own\n' "$n_categorized"
   printf '      %-24s %6s %7s\n' category live parked
-  if [ -n "$VOCAB" ]; then
-    set -f                      # a category is an opaque string; never a glob
-    for c in $VOCAB; do
-      printf '      %-24s %6s %7s\n' "$c" "$(cat_cell "$COUNTS" "$c" 1)" "$(cat_cell "$COUNTS" "$c" 2)"
-      known="$known$c
-"
-    done
-    set +f
-  fi
-  # The membership test is done in SHELL, not by handing the vocabulary to awk in a
-  # -v assignment: the list is newline-delimited and BSD awk rejects a newline inside
-  # one ("awk: newline in string"), silently costing exactly the rows it selects.
-  rest=""
-  while IFS="$TAB" read -r c_live c_parked c; do
+  while IFS="$TAB" read -r mark c_live c_parked c; do
     [ -n "$c" ] || continue
-    in_list "$c" "$known" && continue
-    rest="$rest$((c_live + c_parked))$TAB$c_live$TAB$c_parked$TAB$c
-"
-  done <<EOF
-$COUNTS
-EOF
-  rest="$(printf '%s' "$rest" | LC_ALL=C sort -t"$TAB" -k1,1nr -k4,4 | cut -f2-)"
-  # printf with a trailing newline, not without: a command substitution strips the
-  # final one, and `read` returns non-zero on an unterminated last line — which drops
-  # exactly one category from the bottom of the table.
-  printf '%s\n' "$rest" | while IFS="$TAB" read -r c_live c_parked c; do
-    [ -n "$c" ] || continue
-    if [ -n "$VOCAB" ]; then printf '      %-24s %6s %7s   *\n' "$c" "$c_live" "$c_parked"
-    else                     printf '      %-24s %6s %7s\n'     "$c" "$c_live" "$c_parked"
+    if [ "$mark" = '*' ]; then printf '      %-24s %6s %7s   *\n' "$c" "$c_live" "$c_parked"; marked=1
+    else                       printf '      %-24s %6s %7s\n'     "$c" "$c_live" "$c_parked"
     fi
-  done
-  [ -n "$VOCAB" ] && [ -n "$rest" ] && \
+  done <<EOF
+$(breakdown_rows "$COUNTS" "$VOCAB")
+EOF
+  [ -n "$marked" ] && \
     printf '      * outside the declared vocabulary — reported, never dropped\n'
   render_ordering
+}
+
+# ── why the parked work is parked ────────────────────────────────────────────
+# The same treatment, one field over. `parked: true` is what the SCHEDULER reads, and
+# it keeps working untouched — this adds the reason a person needs, and never makes
+# one mandatory. The value is the project's: chief renders whatever string is there,
+# reports the absence of one as (no reason given), and knows no reason of its own.
+#
+# Rendered whenever anything is parked, because "3 parked, none of them says why" is
+# itself the answer to the question this section exists to ask.
+render_parks() {
+  [ "$n_parked" -gt 0 ] || return 0
+  local mark p_n c marked="" arrows
+  if [ "$n_park_reasons" = 0 ] && [ -z "$PARK_VOCAB" ]; then
+    printf '\n  park reasons       none of the %d parked tasklist(s) says why — add "parkedReason" to the tasklist to record it\n' "$n_parked"
+    return 0
+  fi
+  printf '\n  park reasons %4d    of %d parked tasklist(s) say why; the value is theirs, and chief holds no vocabulary of its own\n' \
+    "$n_park_reasons" "$n_parked"
+  printf '      %-24s %7s\n' reason parked
+  while IFS="$TAB" read -r mark p_n _ c; do
+    [ -n "$c" ] || continue
+    if [ "$mark" = '*' ]; then printf '      %-24s %7s   *\n' "$c" "$p_n"; marked=1
+    else                       printf '      %-24s %7s\n'     "$c" "$p_n"
+    fi
+  done <<EOF
+$(breakdown_rows "$PARK_COUNTS" "$PARK_VOCAB")
+EOF
+  [ -n "$marked" ] && \
+    printf '      * outside the declared vocabulary — reported, never dropped\n'
+  if [ -n "$PARK_VOCAB" ]; then
+    arrows="$(printf '%s' "$PARK_VOCAB" | LC_ALL=C sed 's/ / · /g')"
+    printf '      declared  %s   — in %s\n' "$arrows" "$PARK_VOCAB_SRC"
+  elif [ "$PARK_VOCAB_CONFLICT" != 0 ]; then
+    printf '      declared  none in force — the repos in scope declare %d different park vocabularies\n' "$PARK_VOCAB_CONFLICT"
+  else
+    printf '      declared  none — a project declares its own with CHIEF_PARK_REASONS in .chief/config\n'
+  fi
+  return 0
+}
+
+# The parked names, each with the reason it carries. A park with no reason renders
+# exactly as it did before this field existed, which is the compatibility claim.
+render_parked_names() {
+  printf '%s' "$parked" | while IFS="$TAB" read -r n r; do
+    [ -n "$n" ] || continue
+    if [ -n "$r" ]; then printf '      %-28s %s\n' "$n" "$r"
+    else                 printf '      %s\n' "$n"
+    fi
+  done
 }
 
 # ── the machine feed ─────────────────────────────────────────────────────────
@@ -933,6 +1084,9 @@ json_report() {
     --arg rows "$rows" --arg runnable "$runnable" --arg parkedl "$parked" \
     --arg unreadable "$unreadable" --arg blocked "$blocked" --arg edges "$edges" \
     --arg blockers "$(blocker_table)" --arg counts "$COUNTS" --arg problems "$problems" \
+    --arg parkcounts "$PARK_COUNTS" --argjson parkreasons "$n_park_reasons" \
+    --arg parkvocab "$PARK_VOCAB" --arg parkvocabsrc "$PARK_VOCAB_SRC" \
+    --argjson parkvocabconflict "$PARK_VOCAB_CONFLICT" \
     --arg excluded "$EXCLUDED" --arg stale "$STALE" --arg wt "$WT_SKIPPED" \
     --arg vocab "$VOCAB" --arg vocabsrc "$VOCAB_SRC" --argjson vocabconflict "$VOCAB_CONFLICT" \
     --argjson ordprecede "$ORD_PRECEDE" --arg ordlast "$ORD_LAST" --argjson ordlastlive "${ORD_LAST_LIVE:-0}" \
@@ -957,7 +1111,10 @@ json_report() {
                                   parked: (.[3]|num), runnable: (.[4]|num), blocked: (.[5]|num),
                                   completed: (.[6]|num), source: .[7], path: .[8] })),
       runnable: lines($runnable),
-      parked:   lines($parkedl),
+      # A jq comment is `#`. `//` is the ALTERNATIVE OPERATOR, so a line of prose
+      # after one parses as an expression and silently replaces the field.
+      # Names only, as it has always been; the reasons are under `parks` below.
+      parked:   (cols($parkedl) | map(.[0])),
       unreadable: lines($unreadable),
       blocked: (cols($blocked) | map({ tasklist: .[0], blocked_by: .[1], class: .[2], detail: .[3] })),
       edges:   (cols($edges)   | map({ tasklist: .[0], record: .[1], dep: .[2],
@@ -977,6 +1134,18 @@ json_report() {
                           live_in_last: $ordlastlive }
                    else { declared: false, last: null, live_preceding: null, live_in_last: null }
                    end)
+      },
+      parks: {
+        parked: $parkedn,
+        with_reason: $parkreasons,
+        vocabulary: ($parkvocab | split(" ") | map(select(length > 0))),
+        vocabulary_source: (if $parkvocabsrc == "" then null else $parkvocabsrc end),
+        vocabulary_conflict: $parkvocabconflict,
+        breakdown: (cols($parkcounts) | map({ reason: .[2], parked: (.[0]|num) })
+                    | sort_by(-.parked, .reason)),
+        tasklists: (cols($parkedl)
+                    | map({ tasklist: .[0],
+                            reason: (if ((.[1] // "") | length) > 0 then .[1] else null end) }))
       },
       problems: (cols($problems) | map({ tasklist: .[0], message: .[1] })),
       excluded: lines($excluded),
@@ -1100,6 +1269,7 @@ if [ "$MULTI" = 1 ]; then
     list_names "$unreadable"
   fi
   render_categories
+  render_parks
   render_scope_notes
   render_problems
   finish
@@ -1116,10 +1286,11 @@ if [ "$n_unreadable" -gt 0 ]; then
 fi
 if [ "$n_parked" -gt 0 ]; then
   printf '  parked      %4d    never scheduled until the flag is dropped\n' "$n_parked"
-  list_names "$parked"
+  render_parked_names
 fi
 printf '  completed   %4d    history, not backlog (%s/completed)\n' "$n_completed" "$TASKS_REL"
 render_categories
+render_parks
 render_scope_notes
 render_problems
 finish
