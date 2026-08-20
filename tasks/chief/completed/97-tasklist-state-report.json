@@ -2,13 +2,13 @@
   "project": "chief",
   "category": "feature",
   "branchName": "chief/97-tasklist-state-report",
-  "description": "Chief can run a backlog but cannot DESCRIBE one. `chief list` prints one line per tasklist with a story count, for one repo, and nothing else — no totals, no live/parked split, no notion of what is runnable versus waiting on an unmerged edge. Answering \"what is left, and what can start now\" across a portfolio currently means an ad-hoc script, and the answer is stale the moment a run merges. Measured 2026-08-14 across 16 repos: 312 remaining tasklists, of which 93 parked and 82 blocked by an unmerged dependency — three numbers `chief list` cannot produce and a person cannot hold.\n\nThe expensive part is ALREADY BUILT and must be reused, not rewritten. `driver.sh` gates every launch on exactly this question: `deps_of()` (l.916) walks `dependsOn`, `is_merged()` (l.965) checks a `completed/` record for `mergedToMain`, and the cross-repo path (l.1075) resolves a `<repo>:<stem>` edge against the OTHER repo's records. A status view is that gate run in report mode instead of launch mode. A second, independent implementation of merge-resolution would drift from the scheduler and then LIE — reporting work as runnable that the driver would refuse to launch.\n\nScope note: `category` is NOT chief's concept. It is a convention of the repos this host happens to build, enforced by a `check-tasklist-categories.mjs` vendored into 16 of them. Chief must report the distribution of whatever string a tasklist puts in `category` WITHOUT blessing a vocabulary; a project that wants the ordering rule rendered declares its own vocabulary in `.chief/config`. Chief is a general harness with users beyond this host, and a hard-coded fix/unblock/replace/feature enum would make someone else's backlog unreportable.\n\nParked is the other half, and today it is a BOOLEAN. The report can say how many are parked and never why, so 'parked' covers work waiting on three unrelated things. Measured 2026-08-20 on koine, whose backlog is 13 live tasklists and 13 parked — every single one — and chief's verdict is the unhelpfully cheerful \"every one is complete or parked\". Reading the descriptions sorts them into: five waiting on ANOTHER REPO to build the thing (`102`'s markers), four holding a spec's own open questions \"folded only on the next pressure break, never speculatively\", three waiting on a federation ADR nobody has written, and one parked with an explicit closing condition. Those want four different actions from an operator and the report distinguishes none of them.\n\nThe useful axis is not the topic, it is WHAT WOULD UNPARK IT — another repo's merge, evidence that has not arrived, a decision nobody has taken. The first of those is `102`'s and must not be reimplemented here.",
+  "description": "Chief can run a backlog but cannot DESCRIBE one. `chief list` prints one line per tasklist with a story count, for one repo, and nothing else — no totals, no live/parked split, no notion of what is runnable versus waiting on an unmerged edge. Answering \"what is left, and what can start now\" across a portfolio currently means an ad-hoc script, and the answer is stale the moment a run merges. Measured 2026-08-14 across 16 repos: 312 remaining tasklists, of which 93 parked and 82 blocked by an unmerged dependency — three numbers `chief list` cannot produce and a person cannot hold.\n\nThe expensive part is ALREADY BUILT and must be reused, not rewritten. `driver.sh` gates every launch on exactly this question: `deps_of()` (l.916) walks `dependsOn`, `is_merged()` (l.965) checks a `completed/` record for `mergedToMain`, and the cross-repo path (l.1075) resolves a `<repo>:<stem>` edge against the OTHER repo's records. A status view is that gate run in report mode instead of launch mode. A second, independent implementation of merge-resolution would drift from the scheduler and then LIE — reporting work as runnable that the driver would refuse to launch.\n\nScope note: `category` is NOT chief's concept. It is a convention of the repos this host happens to build, enforced by a `check-tasklist-categories.mjs` vendored into 16 of them. Chief must report the distribution of whatever string a tasklist puts in `category` WITHOUT blessing a vocabulary; a project that wants the ordering rule rendered declares its own vocabulary in `.chief/config`. Chief is a general harness with users beyond this host, and a hard-coded fix/unblock/replace/feature enum would make someone else's backlog unreportable.",
   "dependsOn": [],
   "touches": [
     "engine",
     "cli"
   ],
-  "iters": 8,
+  "iters": 6,
   "warmup": [
     "sed -n '235,246p' bin/chief",
     "sed -n '910,970p' engine/driver.sh",
@@ -27,7 +27,17 @@
         "Malformed input degrades, never aborts: a tasklist with unparseable JSON, an absent `dependsOn`, or a dependency naming a repo that does not exist is counted and flagged in a `problems` section, and the rest of the report still renders."
       ],
       "notes": ".chief/verify.sh: green, exit 0. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck -S error CLEAN on the three new files (0.10.0 — the two SC1073/SC1072 errors it reports at bin/chief:159 and engine/quality.sh:60 are pre-existing and byte-identical on main). Bystander behavioural block 37/37 PASS, including the new test/status-deps.sh: \"STATUS PASS — chief status agrees with the scheduler (3 runnable, 3 blocked)\". Agreement is exact: status's runnable set == wave 1 of the driver's own `chief run -n -p 99` schedule. Negative check — reintroducing a private merge resolution in status.sh (`[ -f \"$(dep_record \"$d\")\" ]` in place of is_recorded_done) FAILS the test, status reporting 13-trap runnable where the driver would not launch it. Also green: quality ratchet, test/version-bump.sh, DOC-SYNC PASS (README states v0.8.63).",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 12,
+        "lines": 475,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-2",
@@ -40,7 +50,17 @@
         "An operator can exclude a subtree without editing the walk — a documented ignore mechanism covering the AutomatedRetailAssociates case — and an excluded repo is reported as excluded rather than vanishing, so a missing repo is never mistaken for an empty one."
       ],
       "notes": ".chief/verify.sh: green, exit 0 (full run, CHIEF_VERIFY_TESTS on). Bystander behavioural block 38/38 PASS, including the new test/status-scope.sh: \"SCOPE PASS — the walk finds repo ROOTS, reconciles with the registry by resolved path, and never double-counts\". Its arithmetic assertions are the story: portfolio TOTAL = 10 = the sum of the per-repo rows (alpha 3 + beta 1 + out/gamma 2 + node_modules/delta 4), with the nested examples/minimal fixture, the .cache dot-dir repo and the worktree copy each excluded for their own stated reason — any one leaking makes it 11. Excluding a subtree via $CHIEF_PREFIX/ignore moves it 10 -> 8, exactly gamma's 2. beta appears ONCE with source=both despite being registered through a symlink with a trailing slash; node_modules/delta appears with source=registry (walk-pruned, reconciled in); --all names the stale \"vanished\" entry and exits 0; inside a repo the report is still US-1's single-repo one (\"this repo\", no TOTAL row) and no \"no .chief/config found\" hard exit anywhere. test/status-deps.sh still PASS (3 runnable / 3 blocked, exact agreement with the driver's wave 1). Also green: quality ratchet (no tracked metric regressed), VERSION-BUMP PASS (0.8.64 covers every engine/bin change), DOC-SYNC PASS (README states v0.8.64). bash -n clean; shellcheck 0.10.0 -S error CLEAN (RC=0) on engine/status.sh, engine/paths.sh, engine/deps.sh, test/status-scope.sh, test/status-deps.sh — the 2 SC1073/SC1072 errors at bin/chief:163 are pre-existing and byte-identical on main.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 13,
+        "lines": 882,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-3",
@@ -49,13 +69,20 @@
         "Where tasklists carry a `category`, the report breaks totals down by it, live and parked separately. Chief treats the value as an OPAQUE STRING: any set of categories renders, an absent category is reported as uncategorized rather than as an error, and no chief source file hard-codes fix/unblock/replace/feature as the vocabulary.",
         "A project MAY declare an ordered vocabulary in `.chief/config`. When it does, categories render in that order and the report states how much work precedes the last category in the ordering — the ordering rule made visible. When it does not, categories render in a stable order (count then name) with no ordering claim. A declared category outside the vocabulary is reported, not dropped.",
         "Chief never fails a build over a category, and `chief status` exits 0 whatever the backlog looks like. A separate opt-in flag exits non-zero for a CI job that wants the ordering enforced. The distinction is deliberate: a category is a statement ABOUT a tasklist, and the decision to run one out of order is the operator's.",
-        "docs/ states the deal for anyone who vendored a category guard: what chief now computes, what it deliberately does not decide, and how to declare a vocabulary. Consolidating N copies of a per-repo guard onto one implementation is the reason this story is scoped this way, and the doc is what makes that consolidation safe to act on.",
-        "The category breakdown INHERITS US-1's active/completed split and never pools them. Measured 2026-08-20 across 24 repos: among ACTIVE tasklists the uncategorized count is 0 of 225; among COMPLETED records it is 512 — larger than every real category combined. Both numbers are correct, because `completed/` records are deliberately exempt (backfilling history buys nothing, and the ordering question is only ever asked about work that has not run yet). A report that pools them shows an uncategorized column dominating the table and reads like a broken tree.",
-        "A test pins that shape: a fixture with categorized live tasklists and uncategorized completed records renders 0 uncategorized in the backlog breakdown and reports the completed ones separately. The counterfactual — pooling them — fails it. This is the specific wrong implementation to guard, because once shipped it looks intentional.",
-        "Nothing in the report or its docs claims chief ENFORCES a category. It does not: `chief lint` validates JSON, branchName, mergedToMain and cross-repo criteria, and knows nothing about `category` — grep for it in `bin/chief` and `src/` returns nothing. What enforces it is `check-tasklist-categories.mjs`, vendored into 16 repos of the 24 here; `amphora` and `kairos` have no such guard and `chief lint` calls their tasklists clean regardless. Their zero is convention, not enforcement, and a report that explains its uncategorized column by appealing to lint would be citing a guarantee chief does not make."
+        "docs/ states the deal for anyone who vendored a category guard: what chief now computes, what it deliberately does not decide, and how to declare a vocabulary. Consolidating N copies of a per-repo guard onto one implementation is the reason this story is scoped this way, and the doc is what makes that consolidation safe to act on."
       ],
       "notes": ".chief/verify.sh: green, exit 0 (full run, CHIEF_VERIFY_TESTS on). test/status-categories.sh PASS — \"CATEGORIES PASS — opaque strings, the project's ordering or none, and only --enforce-order can fail\"; test/status-deps.sh and test/status-scope.sh still PASS (3 runnable / 3 blocked; portfolio TOTAL 10 = the sum of its rows). Observed live on this repo: `chief status` renders \"categories 3 · feature 2 live · fix 1 live\" with \"ordering none declared — rows are ordered by count, not by any rule chief holds\" and exits 0; `chief status --enforce-order` with no vocabulary in scope exits 0 and says so on stderr. Source discipline: no vocabulary in bin/ or engine/ (the only fix/unblock/replace/feature strings are a COMMENTED example in templates/config and prose in docs/reference/status.md). This iteration completed the story against the criteria main added after the first implementation landed (75db49f): the ACTIVE/COMPLETED split is now PINNED by a new fixture in test/status-categories.sh — 5 live tasklists all categorized plus 6 completed records (5 uncategorized, 1 carrying \"fix\") renders no (uncategorized) row, fix=3 not 4, completed=6 reported separately, and the breakdown sums to 5 = remaining, never 11. Counterfactual verified by hand: pooling completed records into the breakdown (a `cats` append in status.sh's COMPLETED loop) makes the test FAIL RC=1 with \"completed records were pooled into the backlog breakdown\", rendering (uncategorized) 5 / fix 4; reverting restores RC=0. docs/reference/status.md now states the exemption and its measured numbers, and states plainly that `chief lint` knows nothing about `category` so a zero is convention, not a guarantee. This iteration also INTEGRATED THE BASE: rebased 28 commits of main (@c93d7d7). The one semantic conflict was real — main had extracted the same \"<repo>:<stem>\" resolver into engine/crossrepo.sh while this branch extracted it into engine/deps.sh — resolved by making deps.sh SOURCE crossrepo.sh and keep only deps_scope/deps_of/dep_verdict, so there is still exactly ONE implementation, which is US-1's whole claim. VERSION 0.8.72 -> 0.8.73 (VERSION-BUMP PASS), DOC-SYNC PASS (README states v0.8.73), check-doc-links RC=0. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck is not installed on this host (skipped locally by design, enforced in CI).",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 12,
+        "lines": 769,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-4",
@@ -67,7 +94,17 @@
         "`chief list` keeps working exactly as it does now. It is a different tool — per-tasklist story progress, not aggregate state — and scripts and habits depend on its output."
       ],
       "notes": ".chief/verify.sh: green, exit 0 (full run). test/status-json.sh PASS — \"one document on stdout, notes on stderr, the same numbers as the text render, and holds/releases/cascade kept apart\"; test/status-perf.sh PASS — \"1040 records in 16 repos: 2s / 32 jq invocations (budget 5s / 76), --json 3s / 33\". THE MEASURED BEFORE/AFTER on the same generated fixture: the pre-change engine (git archive HEAD) took 2,576 jq invocations and 23.6s wall; this one takes 32 and 2.0s — the criterion asked for under 5s and the fork count is what actually regresses, so the test asserts both. The forks came out of three places, all of them in deps.sh/crossrepo.sh so the scheduler shares them: one jq per DIRECTORY instead of per record (read_records, and the completed/ index behind is_recorded_done), set-a-global/print-it pairs so an edge costs no subshell ($(dep_record) etc. were ~10 forks per blocked tasklist), and a stat before the merge question so an edge pointing at work that was never done answers without reading anything. The index is OPT-IN: chief status turns it on, the driver never does, because a run asks the same question over hours while records are appearing. --blocked: holds/releases/cascade are three different numbers, pinned apart by a fixture where the same edge scores 3/2/3; ranked highest first; cascade capped at 25 edges and the cap REPORTED. chief list output pinned byte-for-byte in test/status-json.sh (still 0/1 lines + done lines, still no totals). status-deps / status-scope / status-categories still PASS. Also green: VERSION-BUMP PASS (0.8.74), DOC-SYNC PASS (README states v0.8.74), check-doc-links RC=0, quality ratchet allowing. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck is not installed on this host (skipped locally by design, enforced in CI).",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 14,
+        "lines": 992,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-5",
@@ -82,7 +119,18 @@
         "A test asserts a repo using no reasons, a repo using declared ones, and a repo using an undeclared one all render — and that no test pins a specific vocabulary, since pinning one here is the thing this story is written to avoid."
       ],
       "notes": ".chief/verify.sh: green, exit 0 — \"verify: OK (allowing merge)\". Bystander behavioural block 43/43 PASS, including the new test/park-reasons.sh: \"PARK PASS — an opaque reason, the project's vocabulary or none, and a park met where it is met\". DOC-SYNC PASS (README states v0.8.75); VERSION 0.8.74 -> 0.8.75; check-doc-links 4 dead vs 4 on main (RC 0, no new). status-deps / status-scope / status-categories / status-json all still PASS — the category render is byte-identical because breakdown_rows reproduces its exact order (declared vocabulary first including zeros, then the rest by count desc then name).\n\nObserved live on a scratch repo: 4 parked / 1 live renders \"park reasons    3    of 4 parked tasklist(s) say why\" with rows reason-alpha 2, (no reason given) 1, reason-zeta 1 and \"declared  none\"; after adding CHIEF_PARK_REASONS=\"reason-beta reason-alpha\" to .chief/config the same backlog renders reason-beta 0, reason-alpha 2, then (no reason given) and reason-zeta marked *, and names .chief/config (CHIEF_PARK_REASONS) as the source. `chief run 10-a` prints \"Nothing was scheduled — 1 of the tasklist(s) you named is parked: 10-a — parked: reason-alpha\" and exits 0 with no wave; `chief run --parked 10-a` schedules \"wave 1 (1/4): 10-a\". A bare run in an all-parked repo lists all four parks with their reasons instead of the bare \"every one is complete or parked\". `chief list` prints \"(parked: reason-alpha)\" and, for a park with no reason, the unchanged \"(parked)\".\n\nArithmetic pinned by the test rather than prose: the park breakdown sums to the parked total (5 over the opacity fixture, and still 5 once a vocabulary is declared and once two repos disagree), and the portfolio breakdown sums across repos (1 + 1 = 2). No vocabulary is pinned anywhere in the test — every reason it uses is a nonsense string it invents — and the source-discipline assertion is the inverse: grep for this host's three words across bin/chief + engine/*.sh on non-comment lines returns empty.\n\nTwo gotchas paid for this iteration. (1) A jq comment is `#`, not `//` — `//` is the alternative OPERATOR, so a line of prose after one inside a `jq -n` program parses as an expression and silently replaces the field; bash -n sees nothing. (2) engine/quality.sh blanks `$( … )` BEFORE it looks for the quote that opens an embedded multi-line program, so an inline jq whose opening line contains a `)` loses its quote and every following line is read as shell — whose `if` has no `fi`, which pinned the nesting depth up and dropped bin/chief from 30 detected functions to 7 (function_length_max 256 -> 751, ratchet BLOCK). Hoisting the program to a top-level constant opened on a line of its own (engine/status.sh RECORD_JQ's shape) restored 30 functions, and placing it above cmd_lint rather than inside its mis-detected span brought the metric to 269 vs 256 at main, delta +13 within the tolerance of 15. Quality ratchet: allowing, no tracked metric regressed. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck is not installed on this host (skipped locally by design, enforced in CI).\n\ntest/stall-flag.sh failed once mid-iteration and was proved to be the known load flake the previous iteration documented, not a regression: it failed only on the run that overlapped a second concurrent verify, passed standing alone immediately after (\"stall-flag: OK — per-phase thresholds, a flag that names the state, ...\"), and passed again in the clean full run above. The clean full run is the one quoted here: 43/43, park-reasons at [37/43].",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 15,
+        "lines": 882,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     }
-  ]
+  ],
+  "mergedToMain": "f8c03bf"
 }
