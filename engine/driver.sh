@@ -2245,6 +2245,8 @@ run_worker() {
     fi
     local skip_agent=0
     local integrate_note=""      # set when integrate_base left an instruction for the agent
+    # Last run's UNVERIFIED stop, if it left one (engine/measure.sh has the argument).
+    local unvmark; unvmark="$(unverified_marker "$name")"
     local wtstate="$wt/$STATE_REL"
     sweep_worktree "$wt" "$name"                     # reclaim last run's build artifacts first
     wt_git remove --force "$wt" 2>/dev/null || true   # free a stale worktree dir (keeps the branch)
@@ -2278,6 +2280,13 @@ run_worker() {
         elif [ "$left" = "0" ] && [ -z "$bhw" ]; then
           echo ">> $name: branch $branch marks all stories done but has NO commits vs $work_base — re-running the agent (ignoring the false all-pass)"
           mark_reengage "every story is marked done with no commits vs $work_base — the pass-flags are a misfire"
+        elif [ "$left" = "0" ] && [ -s "$unvmark" ]; then
+          # THE THIRD ARM, the same shape as the two above it: an all-pass branch that
+          # is not finished. Last run's gate demoted a story whose bar went unmeasured,
+          # into a runtime record this run rebuilds from a tasklist that still reads
+          # passes:true — so skipping the agent here re-fails at that gate forever.
+          echo ">> $name: branch $branch passes all stories but stopped UNVERIFIED last run — re-engaging the agent on the stories still owed an observed value"
+          mark_reengage "every story passes but the run stopped UNVERIFIED with a bar unmeasured ($SNAP_REL/$name.unverified.md)"
         elif [ "$left" = "0" ]; then
           echo ">> $name: all stories already pass on $branch — skip agent, go to verify+merge"; skip_agent=1
         else
@@ -2365,6 +2374,9 @@ run_worker() {
         echo '```'; cat "$SNAP/$name.verify-failed.log"; echo '```'
       } >> "$wtstate/progress.txt"
     fi
+    # And the same for the LAST RUN'S UNVERIFIED STOP: the stories it demoted put back
+    # to passes:false in the record, its report appended here (engine/measure.sh).
+    unverified_pickup "$wtstate/prd.json" "$wtstate/progress.txt" "$unvmark"
     # An un-rebasable base is handed to the agent the same way a persisted verify
     # failure is: through the progress.txt it reads at the top of every iteration.
     # (Same injection the iteration-boundary hook uses when base drifts mid-run.)
@@ -2416,7 +2428,7 @@ run_worker() {
           CHIEF_PAUSE_FILE="$OPERATOR_PAUSE_FILE" CHIEF_VERBOSE="${CHIEF_VERBOSE:-}" \
           CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" CHIEF_ACCOUNT_LABEL="$ACCOUNT_LABEL" \
           CHIEF_RESEARCH="${CHIEF_RESEARCH:-}" CHIEF_RESEARCH_FILE="$RESEARCH_DIR/$name.md" \
-          CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" \
+          CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" CHIEF_UNVERIFIED_FILE="$unvmark" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a

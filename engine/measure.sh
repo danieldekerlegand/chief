@@ -142,6 +142,58 @@ unverified_persist() {
   printf '%s\n' "$2" > "$f" 2>/dev/null || true
 }
 
+# unverified_reseed PRD MARKER — the stories a persisted stop NAMED read `passes:false`
+# to the agent that resumes them.
+#
+# The marker exists precisely because the branch's committed tasklist still reads
+# `passes:true` for those stories — that IS the defect — and this run seeds its runtime
+# record from that tasklist. So re-engaging the agent without this hands it a tasklist
+# with nothing left to do: instructions.md's loop is "pick the highest-priority story
+# with passes:false", it finds none, reports COMPLETE, and the run stops UNVERIFIED
+# again having now spent a turn to do it. That is worse than the skip it replaces.
+#
+# BY ID, from the report's own "✗ <id> — <title>" lines, so it moves exactly the
+# stories the stop named and never one that has since been repaired — a value recorded
+# on the branch by hand clears the story at the gate, and this must not put it back.
+# LC_ALL=C because the report is agent-authored prose full of em-dashes, and BSD awk
+# aborts on a multi-byte character in a UTF-8 locale.
+unverified_reseed() {
+  local prd="$1" mark="$2" ids t
+  [ -s "$prd" ] && [ -s "${mark:-}" ] || return 0
+  ids="$(LC_ALL=C awk '/✗/ {print $2}' "$mark" 2>/dev/null || true)"
+  [ -n "$ids" ] || return 0
+  t="$(mktemp)"
+  jq --arg ids "$ids" '
+    ($ids | split("\n") | map(select(length > 0))) as $d
+    | .userStories |= map(. as $s
+        | if ($d | index($s.id // "")) != null
+          then $s + {passes: false, unverified: true} else $s end)
+  ' "$prd" > "$t" 2>/dev/null && mv "$t" "$prd" || rm -f "$t"
+}
+
+# unverified_pickup PRD PROGRESS MARKER — everything a resumed run owes a persisted
+# UNVERIFIED stop, in one call: the record it hands the agent, and the log it hands it.
+#
+# No-op without a marker, which is the case that has to stay cheap — every tasklist
+# that never stopped this way goes through here on every resume and must come out of it
+# exactly as it went in.
+#
+# TWO SURFACES for one stop, on purpose, and neither is redundant. The PROMPT carries
+# it into the first turn (agent.sh seeds its demotion notice from the same file), and
+# the PROGRESS LOG outlives that turn — it is re-read at the top of every iteration,
+# which is where the verify-failure it mirrors has always been said.
+unverified_pickup() {
+  local prd="$1" progress="$2" mark="$3"
+  [ -s "${mark:-}" ] || return 0
+  unverified_reseed "$prd" "$mark"
+  {
+    echo; echo "## ⚠️ PRIOR RUN STOPPED UNVERIFIED — RECORD THE VALUE YOU OBSERVED, THEN MARK"
+    echo "These stories are back at \`passes: false\`. Chief cannot evaluate the bars they"
+    echo "claim, so it will not record them as met until a run writes down what it saw."
+    echo '```'; cat "$mark"; echo '```'
+  } >> "$progress" 2>/dev/null || true
+}
+
 # Fail the tasklist on measure_gate's report. Shares the UNVERIFIED status with the
 # evidence gate on purpose — both mean "this branch is not known to have done what it
 # says", and an operator reads the same exit code (headless `6`) and the same

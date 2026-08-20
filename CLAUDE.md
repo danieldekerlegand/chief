@@ -86,7 +86,13 @@ engine/
   measure.sh         #   the BAR rule on acceptance criteria: a story claiming a checkable bar
                      #   ("green" · "exit 0" · "the baseline to beat is 77 failed") must record the
                      #   value it OBSERVED in `notes`, or it ends `unverified` — not passing, not
-                     #   silently ignored. Chief requires the measurement; it never judges it
+                     #   silently ignored. Chief requires the measurement; it never judges it.
+                     #   That stop OUTLIVES its run: `$SNAP/<name>.unverified.md` is the
+                     #   verify-failed log's twin, and the resume reads it as a THIRD re-engage
+                     #   arm — an all-pass branch carrying one is not finished, so the agent is
+                     #   engaged with the demoted stories back at passes:false and the report in
+                     #   its prompt. Cleared at both merge sites, or a finished tasklist would
+                     #   buy a wasted agent turn on every future resume
   research.sh        #   the RESEARCH PHASE contract: the four required sections of the per-tasklist
                      #   research document, its validator, and the sub-agent structured-output prompt.
                      #   Runs ONCE per tasklist before the first story (opt-in: "research":true /

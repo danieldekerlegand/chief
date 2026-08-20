@@ -37,7 +37,8 @@
         "The re-engaged agent is pointed at the specific stories and their bars, quoted in the words measure.sh already prints, not generic advice to check its work. An agent told only that something is unverified will re-mark the same story unchanged, which is the loop this closes.",
         "The demoted story reads passes:false to the agent that resumes it, so the loop picks it as work rather than seeing a finished tasklist."
       ],
-      "notes": null
+      "notes": "Third resume arm added; two existing arms untouched. bash -n clean on driver.sh/measure.sh/agent.sh/measured-bars.sh. Behavioural: measured-bars, boundary-demotion, evidence-gate, noworkguard, smoke, ratelimit, pause, limitstate, stale-resume, doc-sync, version-bump — 11 tests, 11 PASS, 0 failed. Both ways measured in ONE run (measured-bars run 2): mb-bad (marker present, committed tasklist all-pass) spent 1 agent turn — its prompt carried \"✗ US-1 — reach GREEN acceptance\" + claimed: \"the suite reaches GREEN acceptance; the baseline to beat is 77 failed\", it read US-1 as passes=false, recorded the value, MERGED and the marker is gone; mb-skip (all-pass branch, no marker) spent 0 turns (no turns-mb-skip file) via \"skip agent\" and still MERGED. Quality ratchet: OK, function_length_max 534 -> 549 (delta +15, tolerance 15). doc-links 4 dead vs 4 on main (no regression). shellcheck not installed on this host — verify.sh skips it, CI enforces.",
+      "passes": true
     },
     {
       "id": "US-3",
