@@ -73,7 +73,12 @@ bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
-  monitor.sh         #   active-run registry view  (chief ps / chief monitor)
+  monitor.sh         #   active-run registry view  (chief ps / chief monitor). `once` renders and
+                     #   returns; `watch` LOOPS, and a looping viewer must not outlive the terminal
+                     #   that asked for it — it checks its tty and its parent once per tick and exits
+                     #   when either is gone. bin/chief EXECs into it, and the tick is bash's own
+                     #   `read` timeout, so one view is ONE process instead of wrapper + watcher + a
+                     #   forked `sleep` per second
   lib.sh             #   shared helpers: run_verify / verify_branch, locks, state I/O
   paths.sh           #   host-wide state paths (prefix · runs · repos · worktree root), resolved
                      #   in one place — container-safe when $HOME is unset/read-only

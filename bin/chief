@@ -564,7 +564,12 @@ cmd_run() {
 }
 
 cmd_ps()      { bash "$ENGINE/monitor.sh" once ; }
-cmd_monitor() { bash "$ENGINE/monitor.sh" watch "${1:-2}" ; }
+# EXEC, not fork: `chief monitor` is a view, and a view is one process. Forking left
+# this wrapper blocked in wait() for the whole session — a second process per watcher,
+# and the one whose death re-parented the watcher to init instead of ending it (see
+# monitor.sh's THE WATCH LOOP'S STOP CONDITION). `chief ps` returns, so it stays a
+# plain call.
+cmd_monitor() { exec bash "$ENGINE/monitor.sh" watch "${1:-2}" ; }
 
 # chief logs [name] [-f] [-n N] — hook into a live run's output. Each tasklist's
 # per-iteration output is teed to <state>/parallel/<name>.log; this tails it so you
