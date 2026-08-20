@@ -103,4 +103,13 @@ done
 git rev-parse --verify --quiet chief/lim-a >/dev/null || fail "the paused branch chief/lim-a was not kept for a resume"
 case "$("$CHIEF" run -n 2>&1)" in *lim-a*) ;; *) fail "lim-a is not schedulable again after the pause" ;; esac
 
+# Neither a usage limit nor a genuine stall may leave an UNVERIFIED marker — that
+# marker exists to force an agent turn on the next resume, and both of these already
+# resume from their own committed passes state without one.
+for n in lim-a lim-b st-a st-b; do
+  if [ -f "$REPO/.chief/state/snapshots/$n.unverified.md" ]; then
+    fail "$n wrote an UNVERIFIED marker — only an UNVERIFIED stop may (it forces an agent turn on every resume)"
+  fi
+done
+
 echo "LIMITSTATE PASS — usage limit → 'rate-limited' (dependent stays schedulable); genuine stall → 'failed' (dependent blocked)"

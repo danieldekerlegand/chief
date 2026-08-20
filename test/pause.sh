@@ -157,6 +157,11 @@ WT="$(ls -d "$CHIEF_PREFIX"/worktrees/*/pz 2>/dev/null | head -1 || true)"
 # Never mislabelled: not failed, not blocked, not EMPTY-NO-WORK, and never merged.
 if grep -q 'EMPTY-NO-WORK' "$LOG"; then fail "the drain was mislabelled EMPTY-NO-WORK"; fi
 if [ -f "$REPO/tasks/chief/completed/pz.json" ]; then fail "a parked tasklist was retired as completed"; fi
+# …and no UNVERIFIED marker: a park withholds agent turns, and that marker exists to
+# FORCE one on the next resume. Over-firing it would turn every pause into a spent turn.
+if [ -f "$REPO/.chief/state/snapshots/pz.unverified.md" ]; then
+  fail "an operator pause wrote an UNVERIFIED marker — only an UNVERIFIED stop may"
+fi
 grep -q 'OPERATOR PAUSE — 1 tasklist(s) PARKED' "$LOG" || fail "the summary did not report the park"
 grep -q 'chief resume' "$LOG" || fail "the summary did not name the resume command"
 [ -z "$(retries_written)" ] || fail "the drain spent rate-limit retry budget: $(retries_written)"

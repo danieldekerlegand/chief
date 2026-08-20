@@ -113,6 +113,20 @@ done
 [ "$(jq -r '.userStories[]|select(.id=="US-3")|has("unverified")' "$SNAP/mb-bad.json")" = "false" ] \
   || fail "US-3 states no bar and must not be marked unverified"
 
+# ── 2b. the stop is RECORDED where the NEXT run can read it ──────────────────
+# The demotion itself lives only in the runtime prd.json, which the next run rebuilds
+# from the branch's committed tasklist — still passes:true. Without a marker outside
+# the worktree the resume reads the branch as finished, spends no agent turn, and
+# re-fails here identically forever (insimul 261-slice-corpus-babylon-reference, three
+# runs). Same place and same lifetime as the post-rebase verify-failed log.
+MARK="$SNAP/mb-bad.unverified.md"
+[ -f "$MARK" ] || fail "the UNVERIFIED stop left no marker for the resume at $MARK"
+grep -q '✗ US-1' "$MARK" || fail "the marker does not name the story whose bar went unmeasured"
+grep -q '✗ US-2' "$MARK" || fail "the marker names only the first unmeasured story"
+grep -q 'the baseline to beat is 77 failed' "$MARK" \
+  || fail "the marker does not carry the bar the resumed agent has to measure"
+if [ -f "$SNAP/mb-good.unverified.md" ]; then fail "the MEASURED branch got an UNVERIFIED marker"; fi
+
 # ── 3. the operator is told WHAT was claimed and WHICH bar fired ──────────────
 LOG="$REPO/.chief/state/parallel/mb-bad.log"
 [ -f "$LOG" ]                          || fail "no worker log at $LOG"
@@ -142,4 +156,21 @@ git checkout -q main
 [ ! -f out/mb-bad.txt ]                    || fail "the unmeasured branch merged on the second run"
 [ ! -f tasks/chief/completed/mb-bad.json ] || fail "the unmeasured tasklist was retired on the second run"
 
-echo "MEASURE PASS — a claimed bar with no observed value is 'unverified', not passing (story + bar + criterion quoted); a run that recorded its numbers still merges"
+# ── 6. the marker is CLEARED by the merge ─────────────────────────────────────
+# The repair a human makes by hand today (and did, on insimul 261): record the values
+# in the branch's committed tasklist. Run three measures them and merges — and the
+# marker must go with every other stale failure artifact, because a merged tasklist
+# that kept one would buy a wasted agent turn on every future resume.
+WT="$(git -C "$REPO" worktree list --porcelain \
+      | awk '/^worktree /{w=$2} /^branch refs\/heads\/chief\/mb-bad$/{print w; exit}')"
+[ -n "$WT" ] && [ -d "$WT" ] || fail "the UNVERIFIED branch was not kept in a worktree to repair"
+t="$(mktemp)"
+jq '.userStories |= map(.notes="re-ran the suite: 0 failed, down from the 77 baseline; the hook exits 0")' \
+   "$WT/tasks/chief/mb-bad.json" > "$t" && mv "$t" "$WT/tasks/chief/mb-bad.json"
+git -C "$WT" commit -q -am "operator: record the observed values" \
+  || fail "could not record the observed values on the branch"
+PATH="$WORK/fakebin:$PATH" "$CHIEF" run >"$WORK/run3.log" 2>&1 || { cat "$WORK/run3.log"; fail "third run exited non-zero"; }
+case "$(status mb-bad)" in MERGED*) ;; *) fail "the repaired branch did not merge, got: '$(status mb-bad)'" ;; esac
+if [ -f "$MARK" ]; then fail "the marker outlived the merge — every future resume of a finished tasklist would re-engage the agent"; fi
+
+echo "MEASURE PASS — a claimed bar with no observed value is 'unverified', not passing (story + bar + criterion quoted), the stop is recorded for the resume and cleared by the merge; a run that recorded its numbers still merges"

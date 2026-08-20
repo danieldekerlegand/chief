@@ -658,12 +658,14 @@ evidence_gate() {
 # are run_worker's, by dynamic scope.
 unverified_stop() {
   local n; n="$(_int "$(printf '%s\n' "$1" | grep -c '✗' 2>/dev/null || true)")"
+  unverified_persist "$name" "$1"          # so the NEXT run re-engages instead of skipping past it
   live_set "$live" phase=unverified
   event_emit tasklist.unverified name="$name" state=failed \
     detail="$n stor$([ "$n" = 1 ] && echo y || echo ies) reported COMPLETE with no evidence in notes"
   echo "UNVERIFIED $(( $(_int "$total") - $(_int "$remaining") ))/$total" > "$STATE/$name.status"
   echo "!! $name UNVERIFIED — the agent reported COMPLETE, but $n stor$([ "$n" = 1 ] && echo y was || echo ies were) left unmarked with an EMPTY notes:"
   printf '%s\n' "$1"
+  echo "   Recorded for the resume in $SNAP_REL/$name.unverified.md — the next run re-engages the agent on these stories rather than reading the branch as finished."
   echo "   Not merging. A story chief passes on the agent's behalf must record in 'notes' HOW it met these — branch $branch is kept in its worktree."
 }
 
@@ -2719,10 +2721,13 @@ run_worker() {
         # and (for a submodule) bumps the project's pointer to the merged submodule sha.
         finalize_merged "$name" "$branch" "$sha" "$work_repo" "$sub"
         # cleared: this branch is green + merged, so every failure artifact from a
-        # previous attempt (verify output, conflict forensics) is now stale.
+        # previous attempt (verify output, conflict forensics, the UNVERIFIED marker)
+        # is now stale. The marker especially: it exists to force an agent turn on the
+        # next resume, and a tasklist that has merged must never buy one again.
         # The zone request + verdict go with them: the change they were about is now
         # ON the base, and a verdict that outlived its subject can only mislead.
-        rm -f "$SNAP/$name.verify-failed.log" "$SNAP/$name.rebase-conflict.md" \
+        rm -f "$SNAP/$name.verify-failed.log" "$(unverified_marker "$name")" \
+              "$SNAP/$name.rebase-conflict.md" \
               "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
               "$(zones_request_file "$STATE" "$name")" "$(zones_approval_file "$STATE" "$name")" 2>/dev/null || true
         live_set "$live" phase=merged story=

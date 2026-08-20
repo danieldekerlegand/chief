@@ -268,6 +268,12 @@ case "$(status_of sr-conf)" in
   INCOMPLETE*) ;;
   *) fail "B: expected INCOMPLETE (the agent declined the work), got '$(status_of sr-conf)' — a pickup conflict must not fail the tasklist" ;;
 esac
+# An INCOMPLETE stop leaves stories reading false, so the resume re-engages the agent
+# on its own terms — it must NOT also get the UNVERIFIED marker, which exists only to
+# force a turn on a branch whose committed tasklist reads all-pass.
+if [ -f "$WORK/sr-conf/repo/.chief/state/snapshots/sr-conf.unverified.md" ]; then
+  fail "B: an INCOMPLETE stop wrote an UNVERIFIED marker — only an UNVERIFIED stop may"
+fi
 
 # ── ARM C — conflicting drift on an all-pass branch: re-engage, don't skip ────
 scaffold sr-pass 2 1

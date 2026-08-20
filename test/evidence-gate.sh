@@ -122,6 +122,15 @@ grep -q 'the baseline to beat is 77 failed' "$LOG"  || fail "only the first unev
 # are fixed by different things (raise `iters` vs. read what was claimed).
 case "$(status ev-bad)" in *INCOMPLETE*) fail "reported as INCOMPLETE rather than UNVERIFIED" ;; *) ;; esac
 
+# ── 2b. the stop is recorded where the NEXT run can read it ──────────────────
+# Same marker, same reason as the bar rule's (test/measured-bars.sh): the demotion is
+# runtime-only, and a resume that re-seeds from the branch's committed tasklist would
+# otherwise read this branch as finished and never spend the turn that fixes it.
+SNAP="$REPO/.chief/state/snapshots"
+[ -f "$SNAP/ev-bad.unverified.md" ] || fail "the UNVERIFIED stop left no marker for the resume"
+grep -q '✗ US-1' "$SNAP/ev-bad.unverified.md" || fail "the marker does not name the unevidenced story"
+if [ -f "$SNAP/ev-good.unverified.md" ]; then fail "the honest branch got an UNVERIFIED marker"; fi
+
 # ── 3. honest work is NOT held back — no ceremony for a self-reported pass ────
 case "$(status ev-good)" in MERGED*) ;; *) fail "the honest branch did not merge, got: '$(status ev-good)'" ;; esac
 [ -f out/ev-good.txt ]                     || fail "the honest branch's work is not on main"
