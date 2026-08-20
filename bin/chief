@@ -101,13 +101,19 @@ Usage:
   chief models [provider]     list the models you can pass to --model: live from the provider for
                               devin/opencode, the stable family aliases for claude, none for amp/codex
                               (no arg = all)
-  chief reap [-n] [--grace N] stop ORPHANED chief work — agent trees still running (and
-       [--scope PREFIX]       still spending quota) with no live, registered run behind
-                              them. -n reports without signalling. HOST-WIDE by default:
+  chief reap [-n] [--grace N] stop ORPHANED chief processes, of BOTH kinds. First agent
+       [--scope PREFIX]       WORK — agent trees still running (and still spending quota)
+                              with no live, registered run behind them. Then abandoned
+                              VIEWS — \`chief monitor\` watchers that outlived the terminal
+                              that asked for them; reported SEPARATELY, because ending a
+                              view costs a redraw and ending an agent tree costs a run.
+                              -n reports without signalling. HOST-WIDE by default:
                               every repo on this box, not just the one you are in —
-                              --scope <repo>-<cksum>- narrows it to one repo's runs.
-                              Never touches a live run, another user's processes, or
-                              your own claude sessions. Then the DISK half: build
+                              --scope <repo>-<cksum>- narrows it to one repo's runs (a
+                              view belongs to no run, so it is never narrowed).
+                              Never touches a live run, a watcher whose terminal is
+                              still open, another user's processes, or your own claude
+                              sessions. Then the DISK half: build
                               directories (target/ node_modules/ .venv/ build/) left
                               behind in worktrees with no live run and idle past
                               --disk-age (default 1h). --no-disk / --disk-only pick

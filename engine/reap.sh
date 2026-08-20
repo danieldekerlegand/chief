@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# engine/reap.sh — find and reap ORPHANED chief processes: agent work that is still
-# running (and still spending account quota) with no live, registered run behind it.
+# engine/reap.sh — find and reap ORPHANED chief processes. TWO KINDS, reported
+# separately because they cost different things to end:
+#   · agent WORK still running (and still spending account quota) with no live,
+#     registered run behind it — the bulk of this file, keyed on cwd/argv/env, and
+#   · an abandoned VIEW: a `chief monitor` watcher that outlived the terminal that
+#     asked for it. It spends nothing and holds nothing, but it loops forever, it
+#     matches NONE of the three keys below, and a sweep that only knew about the
+#     first kind reported "no orphaned chief processes" with nine of them running.
+#     See "the other orphan" further down.
 #
 # WHY THIS EXISTS. The driver's startup sweep used to be one line:
 #
@@ -609,6 +616,111 @@ chief_reap_evidence() {  # $1 = run id ('' when the pid was matched without one)
   fi
 }
 
+# ── THE OTHER ORPHAN: A VIEW THAT OUTLIVED ITS TERMINAL ──────────────────────
+#
+# Everything above hunts agent WORK. A `chief monitor` watcher is not work — it
+# re-renders the registry on a refresh interval and spends no quota — but it LOOPS,
+# and until engine/monitor.sh grew a stop condition nothing could end that loop but
+# Ctrl-C. Close the window instead and the watcher was re-parented to init and kept
+# rendering into a terminal that no longer existed. Measured on this host 2026-08-19:
+# NINE of them, every one PPID 1, from three abandoned views, the oldest 11.5 hours
+# old — and `chief reap` run against those nine printed "no orphaned chief processes".
+#
+# It could not have done otherwise. A viewer carries no `--chief-run=` marker and no
+# inherited $CHIEF_RUN_ID, its cwd is wherever the operator happened to be standing,
+# and no run was ever behind it — so all three keys above miss it BY CONSTRUCTION,
+# and its absence from the registry is not a bug in the registry. A cleanup command
+# that reports clean while nine orphans run is worse than no cleanup command, because
+# it answers the question the operator actually asked.
+#
+# So a viewer is found on its OWN key — chief's own `engine/monitor.sh watch` argv —
+# and reported as its OWN KIND. That separation is not cosmetic: ending a viewer
+# costs a redraw, ending an agent tree costs a run's worth of work, and one
+# undifferentiated list makes the free case and the expensive case look alike.
+#
+# HOST-WIDE, and `--scope` cannot narrow it: a viewer belongs to no run and carries
+# no run id, so there is no repo to scope it to. That is also why it needs none of
+# the registry reasoning above — orphan-hood here is read from the process table
+# alone (is anyone still its parent), never from a run file, so a sweep pointed at
+# the wrong prefix cannot get this half wrong in either direction.
+
+# The argv of a LOOPING view. `once` (chief ps) is deliberately not here: it renders
+# and returns, so it cannot be an orphan and was never the defect.
+CHIEF_VIEW_MARKER="engine/monitor.sh watch"
+
+chief_is_viewer() {    # $1 = a command line -> 0 when it is one of chief's watchers
+  case "${1:-}" in
+    *"$CHIEF_VIEW_MARKER") return 0 ;;
+    *"$CHIEF_VIEW_MARKER "*) return 0 ;;
+  esac
+  return 1
+}
+
+chief_pid1_comm() { ps -o comm= -p 1 2>/dev/null | head -1 | tr -d ' '; }
+
+# Is PID 1 on this host an init — i.e. does "PPID 1" MEAN re-parented?
+#
+# On a laptop, always, and this question is invisible. In a container PID 1 is
+# frequently the entrypoint itself, and if that entrypoint is a shell then a viewer
+# started from it has PPID 1 from birth, with its parent alive and someone reading.
+# monitor.sh makes the same distinction from the INSIDE, where it is easy — it
+# records its PPID at startup and skips the check when init was already its parent.
+# From the outside, after the fact, all we have is what PID 1 IS. An unrecognised
+# PID 1 therefore DECLINES rather than guesses: the cost of guessing wrong is killing
+# a view somebody is watching, and the cost of declining is one line of report.
+chief_pid1_is_init() {
+  local c
+  c="$(chief_pid1_comm)"; c="${c##*/}"
+  case "$c" in
+    launchd|init|systemd|tini|docker-init|dumb-init|catatonit|s6-svscan|runsvdir) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+CHIEF_VIEWERS=""            # every live chief viewer of this user — orphaned or not
+CHIEF_VIEWER_ORPHANS=""     # the subset with no live parent: free to reap
+CHIEF_VIEWER_INFO=""        # "<pid>\t<ppid>\t<uptime>\t<command>" per orphan
+CHIEF_VIEWER_DECLINED=0     # PPID-1 viewers left alone because PID 1 is not an init
+_chief_view=" "
+
+# Sets all four. Also the reason _chief_cand_add can tell a view from a run's tree:
+# CHIEF_VIEWERS is every viewer, not just the orphaned ones, so a watcher with a
+# LIVE parent is excluded from agent-work candidacy rather than reaped as if it were
+# work — which is what would happen to a `chief monitor` started from inside a
+# worktree, on the cwd key, with nobody the wiser.
+chief_find_orphan_viewers() {
+  local p cmd pp up pids="" info=""
+  CHIEF_VIEWERS=""; CHIEF_VIEWER_ORPHANS=""; CHIEF_VIEWER_INFO=""
+  CHIEF_VIEWER_DECLINED=0; _chief_view=" "
+  for p in $(chief_pids_tagged "$CHIEF_VIEW_MARKER"); do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    [ "$p" -le 1 ] && continue
+    case "$_chief_view" in *" $p "*) continue ;; esac
+    cmd="$(ps -o command= -p "$p" 2>/dev/null | head -1)"
+    chief_is_viewer "$cmd" || continue          # pgrep matched loosely; this is exact
+    chief_pid_alive "$p" || continue
+    _chief_view="$_chief_view$p "
+    CHIEF_VIEWERS="$CHIEF_VIEWERS $p"
+    pp="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    case "$pp" in ''|*[!0-9]*) continue ;; esac
+    [ "$pp" -le 1 ] || continue                 # a live parent asked for this view
+    if ! chief_pid1_is_init; then               # here PID 1 may BE that parent
+      CHIEF_VIEWER_DECLINED=$(( CHIEF_VIEWER_DECLINED + 1 ))
+      continue
+    fi
+    up="$(ps -o etime= -p "$p" 2>/dev/null | tr -d ' ')"
+    pids="$pids $p"
+    info="$info$p	$pp	${up:--}	$(chief_pid_cmd "$p")
+"
+  done
+  CHIEF_VIEWERS="${CHIEF_VIEWERS# }"
+  # shellcheck disable=SC2086
+  set -- $pids
+  CHIEF_VIEWER_ORPHANS="$*"
+  CHIEF_VIEWER_INFO="$info"
+  return 0
+}
+
 CHIEF_ORPHANS=""        # space-separated pids to reap
 CHIEF_ORPHAN_INFO=""    # one "<pid><TAB><why><TAB><run id><TAB><path>" line per pid
 CHIEF_UNRESOLVED=""     # space-separated pids DELIBERATELY LEFT ALONE (not reaped)
@@ -624,6 +736,12 @@ _chief_cand_add() {     # $1 = pid, $2 = why, [$3 = run id], [$4 = path] — no 
   case "$p" in ''|*[!0-9]*) return 0 ;; esac
   [ "$p" = "$$" ] && return 0
   [ "$p" -le 1 ] && return 0
+  # A VIEW is never agent work, whichever key found it. It reaches here on the cwd
+  # key (a `chief monitor` started from inside a worktree) or as a [tree] descendant
+  # of something that did, and reaping it under that reason would both mis-name it
+  # and kill a watcher whose terminal is still open. The orphaned ones are reaped
+  # below as their own kind; the live ones are not reaped at all.
+  case "$_chief_view" in *" $p "*) return 0 ;; esac
   case "$_chief_cand" in *" $p "*) return 0 ;; esac
   _chief_cand="$_chief_cand$p "
   # '-' for an absent field, never an empty one: TAB is IFS whitespace, so a `read`
@@ -712,6 +830,11 @@ chief_find_orphans() {
   # Before anything is even LOOKED at: a host-wide argv scan judged against somebody
   # else's registry is refused outright, not softened.
   chief_reap_scope_guard "$marker" || return 2
+
+  # Views FIRST, and not only to report them: the result is what keeps a live
+  # `chief monitor` out of the agent-work candidate list below (see _chief_cand_add).
+  # Registry-independent and unscoped — see "the other orphan" above.
+  chief_find_orphan_viewers
 
   chief_protected_pids                     # snapshot 1 — before the scan
 
@@ -862,6 +985,36 @@ chief_report_orphans() {   # $1 = headline
     printf '         ↳ ORPHAN — %s\n' "$(chief_reap_evidence "$rid")" >&2
     printf '         %s\n' "$(chief_pid_cmd "$pid")" >&2
   done
+  return 0
+}
+
+# The VIEW report, kept separate from the one above on purpose. What an operator
+# needs from these two lists is different: an agent-work line is a decision (that is
+# a run's worth of work, and here is the evidence it is dead), a viewer line is
+# housekeeping (nothing is lost). Merging them would make the expensive case read
+# like the free one.
+chief_report_viewers() {   # $1 = headline
+  local pid ppid up cmd
+  echo "$1" >&2
+  echo "       key: [view] chief's own \"$CHIEF_VIEW_MARKER\" argv, re-parented to PID 1" >&2
+  printf '%s\n' "$CHIEF_VIEWER_INFO" | while IFS=$'\t' read -r pid ppid up cmd; do
+    [ -n "$pid" ] || continue
+    printf '       · pid %-7s [view] chief monitor watcher · ppid %s · up %s\n' \
+      "$pid" "${ppid:-?}" "${up:--}" >&2
+    printf '         ↳ ORPHAN VIEW — the terminal that asked for it is gone, so it renders\n' >&2
+    printf '           nowhere; it holds no run, no worktree and no quota. Nothing is lost by ending it\n' >&2
+    printf '         %s\n' "$cmd" >&2
+  done
+  return 0
+}
+
+# The viewer half of "left alone": PPID 1 that this host cannot read as re-parenting.
+chief_report_viewers_declined() {
+  [ "${CHIEF_VIEWER_DECLINED:-0}" -gt 0 ] || return 0
+  echo "  ↷ left alone — ${CHIEF_VIEWER_DECLINED} monitor view(s) whose parent is PID 1, which on" \
+       "this host is '$(chief_pid1_comm)' rather than a system init. PID 1 can be the" \
+       "parent that ASKED for the view (a container entrypoint shell), and from outside" \
+       "the process that is indistinguishable from re-parenting — so they were not touched:" >&2
   return 0
 }
 
@@ -1118,6 +1271,15 @@ Sweep the host for ORPHANED chief work: driver/agent/tool processes still runnin
 with no live, registered run behind them (a run killed with SIGKILL, a terminal
 closed on an older engine, a crash) — and then the BYTES those runs left behind.
 
+It also sweeps the OTHER kind of orphan: an abandoned \`chief monitor\` VIEW, a
+watcher that outlived the terminal that asked for it and kept re-rendering into a
+window that is gone. Views are found on their own key (chief's own \`monitor.sh
+watch\` argv, re-parented to PID 1) and REPORTED SEPARATELY from agent work, because
+ending a view costs a redraw and ending an agent tree costs a run's worth of work.
+They belong to no run, so --scope does not narrow them and the registry is never
+consulted for them; a watcher whose parent is still alive is never touched, by
+either half. "no orphaned chief processes of any kind" therefore means both.
+
 Every process is NAMED BEFORE IT IS SIGNALLED, with or without -n: the repo, the
 tasklist, the run id it belongs to and the evidence that the run is dead. Processes
 whose run this install cannot resolve are listed separately as LEFT ALONE — a block
@@ -1144,7 +1306,8 @@ nothing, exactly as the process half does.
                       (default ${CHIEF_SWEEP_MIN_AGE:-3600}). CHIEF_SWEEP=0 turns the pass off.
 
 Never touches a registered live run, a driver holding its repo's driver.lock,
-another user's processes, or anything outside $CHIEF_WT_ROOT_ALL.
+a monitor view whose parent is still alive, another user's processes, or anything
+outside $CHIEF_WT_ROOT_ALL.
 
 A host-wide sweep is REFUSED when \$CHIEF_RUNS is not this host's own registry:
 process discovery is host-wide either way, so judging other prefixes' runs against
@@ -1176,18 +1339,23 @@ chief_reap_main() {
   if [ "$procs" = 1 ]; then
     where="worktrees: $CHIEF_WT_ROOT_ALL"
     [ -n "$scope" ] && where="$where; runs matching '$scope'"
+    where="$where; monitor views: host-wide"
     # The scope guard's refusal is fatal for the disk pass too: it means this sweep is
     # judging other prefixes' runs against a registry that never heard of them, and
     # that misreading deletes builds here rather than merely reporting them.
     chief_find_orphans "$CHIEF_WT_ROOT_ALL" "$CHIEF_RUN_MARKER$scope" || return $?
     chief_report_unresolved
-    if [ -z "$CHIEF_ORPHANS" ]; then
-      echo "chief reap: no orphaned chief processes ($where)"
+    chief_report_viewers_declined
+    if [ -z "$CHIEF_ORPHANS" ] && [ -z "$CHIEF_VIEWER_ORPHANS" ]; then
+      # "of any kind" is load-bearing. This line used to be true of agent work only,
+      # while nine abandoned views ran behind it — see "the other orphan" above.
+      echo "chief reap: no orphaned chief processes of any kind — no agent work, no abandoned monitor views ($where)"
       # An empty env read is not evidence of an empty host — say which keys actually ran.
       [ -n "$(chief_env_key_mode)" ] || echo "  (this platform will not show another" \
         "process's environment, so the inherited-\$CHIEF_RUN_ID key was inactive —" \
         "cwd + argv carried this sweep)"
-    else
+    fi
+    if [ -n "$CHIEF_ORPHANS" ]; then
       # shellcheck disable=SC2086
       set -- $CHIEF_ORPHANS; n="$#"
       if [ "$dry" = 1 ]; then
@@ -1196,6 +1364,19 @@ chief_reap_main() {
       else
         chief_report_orphans "chief reap: $n orphaned process(es) — chief work with no live, registered run. About to reap each of these:"
         chief_reap_pids "$CHIEF_ORPHANS" "orphaned chief work" "$grace" || rc=$?
+      fi
+    fi
+    # Reported and reaped SECOND and separately: the expensive list is the one an
+    # operator must read, and this one must not dilute it.
+    if [ -n "$CHIEF_VIEWER_ORPHANS" ]; then
+      # shellcheck disable=SC2086
+      set -- $CHIEF_VIEWER_ORPHANS; n="$#"
+      if [ "$dry" = 1 ]; then
+        chief_report_viewers "chief reap: $n orphaned monitor view(s) — \`chief monitor\` watchers whose terminal is gone. WOULD reap each of these:"
+        echo "  (dry run — nothing was signalled; drop -n to reap)" >&2
+      else
+        chief_report_viewers "chief reap: $n orphaned monitor view(s) — \`chief monitor\` watchers whose terminal is gone. About to reap each of these:"
+        chief_reap_pids "$CHIEF_VIEWER_ORPHANS" "orphaned monitor views" "$grace" || rc=$?
       fi
     fi
   fi
