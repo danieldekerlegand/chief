@@ -4,7 +4,10 @@
   "branchName": "chief/102-retired-work-must-not-leave-a-marker",
   "description": "A tasklist in one repo can be a MARKER for work that belongs in another. koine carries ten of them, each saying so in its own first line — 'CROSS-REPO, owned and built in AGORA, not koine' — because ADR-0001 puts implementation downstream of the spec.\n\nNothing connects the two ends. `supersededBy` appears NOWHERE in the engine: it is hand-authored metadata that chief reads never. So when the downstream tasklist merges, the marker upstream keeps sitting in the backlog, indistinguishable from work that still needs doing.\n\nMeasured 2026-08-18/19 on this host. Five of koine's ten markers had already shipped — 57 in agora, 58 in lugh, 60 in agora, 61 in formant, 59 in cuneiform — and every one was still listed as pending. `chief list` counted them. The queue reported work that was finished. Finding them took a content-level search across fourteen repos, because one of the five (59) led its park sentence with a dependency rather than the word placeholder and was missed on the first pass.\n\nThis is not koine's problem. Any repo can hold a marker for another repo's work, and the same silence applies. The forward pointer now exists in koine (`DOWNSTREAM COUNTERPART: agora:75-...`), which makes the link readable — but readable is not checkable, and the whole point of a marker is that nobody is looking at it.",
   "dependsOn": [],
-  "touches": ["engine", "cli"],
+  "touches": [
+    "engine",
+    "cli"
+  ],
   "iters": 6,
   "warmup": [
     "grep -rn 'supersededBy' engine/ bin/ | head",
@@ -22,7 +25,8 @@
         "Prose in a description is NOT the mechanism. A marker whose counterpart is only mentioned in text is not detected and is not claimed to be — the gate reports what it can see, and says so.",
         "GATES: bash -n clean, shellcheck -S error clean, behavioural core green."
       ],
-      "notes": null
+      "notes": "downstreamCounterpart added (array or bare string, \"<repo>:<stem>\"), documented in docs/reference/tasklist-schema.md alongside supersededBy as its forward half. chief lint resolves each declaration through the driver's OWN lookup — dep_repo/dep_task/resolve_repo/repo_tasks_rel/dep_record/is_recorded_done extracted from driver.sh into engine/crossrepo.sh and sourced by both, with the two unresolvable-reference sentences factored out so dep_why and the counterpart gate emit identical text. Prose is not detected and the gate says so: `0 \"downstreamCounterpart\" declaration(s) checked; a counterpart named only in prose is invisible to this gate`. GATES OBSERVED: bash -n clean across bin/chief + engine/*.sh + install.sh + templates/*.sh + test/*.sh (0 failures); shellcheck 0.10.0 -S error on the changed files (bin/chief, engine/crossrepo.sh, engine/counterpart.sh, engine/driver.sh, test/crossrepo.sh) exit 0 — the one tree-wide SC1072/SC1073 hit is pre-existing in engine/quality.sh:60 and reproduces identically on main; behavioural core green — smoke PASS, ratelimit PASS, noworkguard PASS; plus crossrepo PASS (6 new counterpart lint assertions), criteria-scope PASS, version-bump PASS (0.8.67), doc-sync PASS, quality ratchet OK (no metric regressed), doc-links 4 dead vs 4 on main.",
+      "passes": true
     },
     {
       "id": "US-2",
@@ -33,7 +37,8 @@
         "A counterpart that has NOT merged is silent. A marker whose counterpart is still active is the normal state for four of koine's five right now and must not be reported as a finding.",
         "Cross-repo resolution degrades rather than aborts: a counterpart in a repo that is not checked out here is reported as unresolvable and the rest of the check still runs, because a laptop with a partial checkout is the common case."
       ],
-      "notes": null
+      "notes": null,
+      "passes": false
     },
     {
       "id": "US-3",
@@ -44,7 +49,8 @@
         "The retirement trap is named in the same breath: a completed record with no mergedToMain can never satisfy a dependency edge, so any dependents must be repointed BEFORE the marker is filed. The output says this where a reader will act on it, because that ordering is the part that silently breaks a queue.",
         "A hermetic test covers the three states — counterpart merged and marker live (reported), counterpart merged and marker retired (silent), counterpart unmerged (silent) — plus the unresolvable-repo case. 4 states, 0 false findings."
       ],
-      "notes": null
+      "notes": null,
+      "passes": false
     }
   ]
 }
