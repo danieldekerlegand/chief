@@ -26,7 +26,17 @@
         "GATES: bash -n clean, shellcheck -S error clean, and the behavioural core stays green."
       ],
       "notes": "Marker $SNAP/<name>.unverified.md written by both UNVERIFIED stops, cleared at both merge sites. bash -n clean on driver.sh/measure.sh/mergequeue.sh; shellcheck not installed locally (skipped, CI enforces). Behavioural: measured-bars, evidence-gate, noworkguard, smoke, ratelimit, pause, limitstate, stale-resume, merge-batch, boundary-demotion, doc-sync, version-bump — 12 tests, all green, 0 failed. measured-bars asserts both transitions (marker present after the stop, gone after the merge); pause/limitstate/noworkguard/stale-resume assert no marker for PAUSED, RATE-LIMITED, failed-stall, EMPTY-NO-WORK and INCOMPLETE.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 12,
+        "lines": 125,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -38,7 +48,17 @@
         "The demoted story reads passes:false to the agent that resumes it, so the loop picks it as work rather than seeing a finished tasklist."
       ],
       "notes": "Third resume arm added; two existing arms untouched. bash -n clean on driver.sh/measure.sh/agent.sh/measured-bars.sh. Behavioural: measured-bars, boundary-demotion, evidence-gate, noworkguard, smoke, ratelimit, pause, limitstate, stale-resume, doc-sync, version-bump — 11 tests, 11 PASS, 0 failed. Both ways measured in ONE run (measured-bars run 2): mb-bad (marker present, committed tasklist all-pass) spent 1 agent turn — its prompt carried \"✗ US-1 — reach GREEN acceptance\" + claimed: \"the suite reaches GREEN acceptance; the baseline to beat is 77 failed\", it read US-1 as passes=false, recorded the value, MERGED and the marker is gone; mb-skip (all-pass branch, no marker) spent 0 turns (no turns-mb-skip file) via \"skip agent\" and still MERGED. Quality ratchet: OK, function_length_max 534 -> 549 (delta +15, tolerance 15). doc-links 4 dead vs 4 on main (no regression). shellcheck not installed on this host — verify.sh skips it, CI enforces.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 9,
+        "lines": 235,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -51,7 +71,18 @@
         "The test is registered in test/all.sh and .chief/verify.sh passes."
       ],
       "notes": "test/unverified-resume.sh added and registered in all three lists (test/all.sh, .chief/verify.sh CHIEF_BYSTANDER_TESTS, .github/workflows/ci.yml). .chief/verify.sh: exit 0 — 37/37 behavioural tests green under the bystander guard, the new one at [19/37]; quality ratchet OK (function_length_max 534 -> 549, delta +15 tol 15; single_use_functions +2 tol 2); doc-links 4 dead vs 4 on main (no regression); VERSION-BUMP PASS (0.8.66); bash -n clean; shellcheck not installed on this host (CI enforces). The test itself: PASS in 28s standalone. Reproduction proven by hand — cloned the repo to a temp dir, stripped the resume-side fix (third arm + unverified_pickup), ran the test there: exit 1 at \"the re-run did not re-engage the agent on the persisted UNVERIFIED stop\". Measured arms: un-fixed engine re-run spends 0 agent turns and ends UNVERIFIED twice; shipped engine re-engages, merges, clears the marker; uv-done (all-pass, no marker) 0 turns and still MERGED; uv-spin bounded at exactly 2 turns per run out of an iters:4 budget by MEASURE_DEMOTE_LIMIT, terminating UNVERIFIED.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 5,
+        "lines": 267,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "a9ba809"
 }
