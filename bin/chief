@@ -301,10 +301,17 @@ cmd_gen() {
 # plus the criteria SCOPE rule the driver refuses to launch on (engine/criteria.sh):
 # a criterion naming another repo cannot be satisfied from the worktree the story
 # runs in, and catching that here costs a text edit instead of a run.
+#
+# It also resolves the MARKER LINK (engine/counterpart.sh): a tasklist may declare
+# the downstream tasklist that will complete it, and a declaration pointing at a repo
+# or stem that does not exist is worse than no declaration — it reads as checked.
+# Resolution is the driver's own (engine/crossrepo.sh), so the two cannot disagree.
 cmd_lint() {
   load_project
   . "$ENGINE/criteria.sh"
-  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n rep findings=0 checked=0
+  . "$ENGINE/crossrepo.sh"
+  . "$ENGINE/counterpart.sh"
+  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n rep findings=0 checked=0 declared=0
   local files=()
   if [ "$#" -gt 0 ]; then
     for n in "$@"; do files+=("$d/${n%.json}.json"); done
@@ -329,24 +336,67 @@ cmd_lint() {
       findings=$((findings + $(printf '%s
 ' "$rep" | grep -c '✗')))
     fi
+    declared=$((declared + $(counterpart_refs "$f" | grep -c . || true)))
+    rep="$(counterpart_lint_report "$f")"
+    if [ -n "$rep" ]; then
+      echo "  ✗ $n — its declared downstream counterpart does not resolve:"
+      printf '%s
+' "$rep"
+      findings=$((findings + $(printf '%s
+' "$rep" | grep -c '✗')))
+    fi
   done
+  # The marker link followed FORWARD (engine/counterpart.sh): a counterpart that has
+  # MERGED while its marker is still live here. This is a REPORT, never a finding —
+  # retiring a marker is a judgement call, and a lint that failed on somebody else's
+  # merge would block authoring work that is otherwise fine. Rendered by the module,
+  # so this and `chief list` cannot drift into two accounts of the same finding.
+  counterpart_report_block "$CHIEF_TASKS_DIR" "${files[@]}"
+  # What the gate SAW, always — the marker link is a field, and a counterpart named
+  # only in a description is not detected here and is not claimed to be. "0 declared"
+  # means nobody wrote the field, never that nobody has a counterpart.
+  local seen="$declared \"$COUNTERPART_FIELD\" declaration(s) checked; a counterpart named only in prose is invisible to this gate"
   if [ "$findings" -gt 0 ]; then
-    echo "✗ $findings finding(s) across $checked tasklist(s). A cross-repo criterion is either rewritten as work in THIS repo, or declared: \"crossRepo\": [\"<repo>\"]." >&2
+    echo "✗ $findings finding(s) across $checked tasklist(s) ($seen). A cross-repo criterion is either rewritten as work in THIS repo, or declared: \"crossRepo\": [\"<repo>\"]." >&2
     return 1
   fi
-  echo "✓ $checked tasklist(s) clean"
+  echo "✓ $checked tasklist(s) clean ($seen)"
 }
 
+# chief list — the backlog, and therefore the ONE place a finished marker has to be
+# visible. The whole failure this repo's 102 tasklist describes is a marker sitting in
+# `chief list` counting as pending months after the work shipped downstream; a check
+# that only answered when someone thought to run it would have caught none of the five.
+# So the marker link is followed here too (engine/counterpart.sh): the flagged rows are
+# marked inline, and the block underneath names the counterpart, the merge sha and the
+# order retirement has to happen in. It prints; it never changes the exit status.
 cmd_list() {
   load_project
-  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n c t
-  for f in "$d"/*.json; do [ -e "$f" ] || continue
-    n="$(basename "$f" .json)"
-    t="$(jq '.userStories|length' "$f" 2>/dev/null || echo '?')"
-    c="$(jq '[.userStories[]|select(.passes)]|length' "$f" 2>/dev/null || echo '?')"
-    printf '  %2s/%-3s %s%s\n' "$c" "$t" "$n" "$([ "$(jq -r '.parked//false' "$f" 2>/dev/null)" = true ] && echo '  (parked)')"
-  done
+  . "$ENGINE/crossrepo.sh"
+  . "$ENGINE/counterpart.sh"
+  local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n c t mark flagged="" files=()
+  for f in "$d"/*.json; do [ -e "$f" ] && files+=("$f"); done
+  # Guarded on the COUNT, not entered blind: under `set -u` bash 3.2 treats
+  # "${files[@]}" of an empty array as unbound, so a repo with no live tasklists
+  # would die here rather than list its completed ones.
+  if [ "${#files[@]}" -gt 0 ]; then
+    # One scan for the whole listing — the markers whose counterpart has already
+    # merged. LC_ALL=C: awk parses lines built from agent-authored tasklist names,
+    # and BSD awk aborts on a multi-byte character in a UTF-8 locale.
+    flagged="$(counterpart_scan "${files[@]}" | LC_ALL=C awk -F'\t' '$1=="done"{print $2}')"
+    for f in "${files[@]}"; do
+      n="$(basename "$f" .json)"
+      t="$(jq '.userStories|length' "$f" 2>/dev/null || echo '?')"
+      c="$(jq '[.userStories[]|select(.passes)]|length' "$f" 2>/dev/null || echo '?')"
+      # -x, not a substring test: "57-foo" must not flag "157-foo".
+      mark=""; printf '%s\n' "$flagged" | grep -qxF -- "$n" && mark='  ⚑ counterpart merged'
+      printf '  %2s/%-3s %s%s%s\n' "$c" "$t" "$n" \
+        "$([ "$(jq -r '.parked//false' "$f" 2>/dev/null)" = true ] && echo '  (parked)')" "$mark"
+    done
+  fi
   for f in "$d"/completed/*.json; do [ -e "$f" ] || continue; printf '  done     %s\n' "$(basename "$f" .json)"; done
+  [ "${#files[@]}" -gt 0 ] && counterpart_report_block "$CHIEF_TASKS_DIR" "${files[@]}"
+  return 0
 }
 
 cmd_run() {

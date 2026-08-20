@@ -152,6 +152,9 @@ jobs:
       - name: Merge queue (batch tip verified ONCE; red tip bisected; ratchet attributed; absent, the floor verifies N times)
         run: bash test/merge-batch.sh
 
+      - name: Cross-repo deps + the marker link (counterpart lint, the merged-counterpart report)
+        run: bash test/crossrepo.sh
+
       - name: Roadmap -> tasklists generator (contract enforced, conventions correct)
         run: bash test/gen.sh
 

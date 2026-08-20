@@ -79,6 +79,30 @@ engine/
                      #   in one place — container-safe when $HOME is unset/read-only
   gitenv.sh          #   the git a CONTAINER hands us: safe.directory for a repo owned by another
                      #   uid ($CHIEF_GIT_SAFE_DIRECTORY), a committer identity when git can't find one
+  crossrepo.sh       #   resolving a "<repo>:<stem>" REFERENCE to another repo's tasklist — the
+                     #   lookup every cross-repo dependsOn has always used, lifted out of the
+                     #   driver so the AUTHORING-time gates run the same one. Chief reads exactly
+                     #   one file across the boundary (the merged completed/<stem>.json) and never
+                     #   schedules, branches or merges in another repo
+  counterpart.sh     #   the MARKER LINK: a tasklist that is a placeholder for work owned and built
+                     #   in ANOTHER repo declares the tasklist that will complete it —
+                     #   "downstreamCounterpart": ["agora:75-..."], the forward half of the
+                     #   hand-authored supersededBy. A FIELD, because prose is not checkable: a
+                     #   counterpart named only in the description is invisible and the gate SAYS
+                     #   so rather than reporting clean. `chief lint` resolves each declaration
+                     #   through crossrepo.sh, so a pointer to nothing fails instead of reading as
+                     #   checked. Then it FOLLOWS the link: a counterpart carrying mergedToMain
+                     #   while its marker is still live is REPORTED — marker, counterpart, merge
+                     #   sha — and nothing else is. In flight, filed-without-mergedToMain, and an
+                     #   already-superseded marker are all silent; a repo not checked out here
+                     #   degrades to one unresolvable line and the rest of the scan still runs.
+                     #   It REPORTS — `chief lint` and `chief list` both exit 0 on a finding and a
+                     #   run still schedules the marker — and it runs in `chief list` because that
+                     #   is where the backlog is READ; a check only answering on demand caught
+                     #   none of koine's five. The block names the retirement ORDERING in the same
+                     #   breath (repoint dependents FIRST, then stamp supersededBy and file),
+                     #   because a filed marker carries no mergedToMain and blocks its dependents
+                     #   forever on a record that can never be stamped
   criteria.sh        #   the SCOPE rule on acceptance criteria: a criterion naming ANOTHER repo
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as

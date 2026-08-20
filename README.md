@@ -70,7 +70,7 @@ chief init                     # scaffolds .chief/ + tasks/chief/ (+ gitignores 
 # 3. edit .chief/agent-context.md — your project's quality checks + conventions
 # 4. write tasklists in tasks/chief/*.json   (see docs/reference/tasklist-schema.md)
 
-chief list                     # tasklists + how many stories pass
+chief list                     # tasklists + how many stories pass (+ markers whose downstream work has landed)
 chief run -n -p 3              # DRY RUN — print the schedule waves, spawn nothing
 chief run                      # sequential (one tasklist at a time, still worktree-isolated)
 chief run -p 3                 # up to 3 tasklists at once
@@ -243,7 +243,7 @@ the run will look.
 | `chief run --merge-batch[=N]` | **Opt-in merge queue, off by default.** Batch up to N merge-ready branches (bare flag = 4), stack them on the base and verify the batch TIP **once** instead of paying the verify gate once per branch. Merges stay `--no-ff`, one commit per tasklist, serialized against the base — only the verification is amortized. Without the flag the merge phase is the unchanged serialized floor. Also `CHIEF_MERGE_BATCH` in `.chief/config` ([`docs/explanation/drivers-and-safety.md`](docs/explanation/drivers-and-safety.md)). |
 | `chief run --headless` | Non-interactive embedding mode: no colour, a `chief: run-id=…` line, a JSON outcome summary and a documented exit-code table ([`docs/guides/headless-invocation.md`](docs/guides/headless-invocation.md)). |
 | `chief run --account-env FILE` | Run this run's AGENT TURNS under a designated provider account: a `KEY=VALUE` credential env file applied at the provider boundary only (`--account-label NAME` names it in `ps`/`monitor`/events; also `CHIEF_ACCOUNT_ENV_FILE`). Values never reach logs, the registry or `argv` ([`docs/reference/account-credentials.md`](docs/reference/account-credentials.md)). |
-| `chief list` | List tasklists with pass status. |
+| `chief list` | List tasklists with pass status; flags any marker whose declared `downstreamCounterpart` has already merged. |
 | `chief lint [names…]` | Check tasklists before a run spends turns on them: valid JSON, `branchName` == `chief/<stem>`, no `mergedToMain` on unmerged work, and no acceptance criterion naming work in **another repo** — which the tasklist's worktree cannot reach. Declare real coordination with `"crossRepo":["<repo>"]`. Non-zero on any finding. |
 | `chief ps` | One-shot table of active runs across all repos. |
 | `chief monitor [interval]` | Live-refreshing run view (default 2s; Ctrl-C to exit). |
@@ -333,7 +333,7 @@ tree at once.
 
 ## Status
 
-**v0.8.66** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.69** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the
