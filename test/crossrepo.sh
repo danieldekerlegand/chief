@@ -149,4 +149,48 @@ has '0 "downstreamCounterpart" declaration(s) checked' "$out" \
 has "only in prose is invisible" "$out" \
     || fail "lint must state that prose counterparts are not detected:\n$out"
 
-echo "XREPO PASS — cross-repo dep resolution (name/path/self) + blocked-dep diagnostics + counterpart lint"
+# ── 10. The CHECK: a counterpart that MERGED while its marker is still live ──
+# The failure the field exists for. Four states, and only one of them is a finding.
+shipped() { lint | grep '⚑' ; }
+
+# (a) counterpart merged, marker live -> REPORTED, by name and with the merge sha, so
+#     acting on it needs no second investigation.
+counterpart "$DOWN" down-work '["upstream:merged-work"]'
+out="$(shipped)"
+has "down-work" "$out"                  || fail "a merged counterpart with a live marker was not reported:\n$(lint)"
+has "upstream:merged-work" "$out"       || fail "the report does not name the counterpart:\n$out"
+has "@deadbee" "$out"                   || fail "the report does not carry the merge sha:\n$out"
+
+# (b) counterpart still in flight -> SILENT. The normal state of a marker whose
+#     downstream work has not landed; reporting it would be noise.
+tasklist "$UP" inflight-work                     # live upstream, no completed record
+counterpart "$DOWN" down-work '["upstream:inflight-work"]'
+[ -z "$(shipped)" ] || fail "an UNMERGED counterpart was reported as shipped:\n$(shipped)"
+
+# (b′) a counterpart FILED without mergedToMain is unmerged too — it can satisfy no
+#      dependency edge, and it is the retirement trap, not shipped work.
+jq -n '{}' > "$UP/tasks/chief/completed/filed-work.json"
+counterpart "$DOWN" down-work '["upstream:filed-work"]'
+[ -z "$(shipped)" ] || fail "a completed record with no mergedToMain was reported as shipped:\n$(shipped)"
+
+# (c) marker already retired -> SILENT even though the counterpart merged. The human acted.
+counterpart "$DOWN" down-work '["upstream:merged-work"]'
+tmp="$DOWN/tasks/chief/down-work.json"
+jq '.supersededBy="upstream:merged-work"' "$tmp" > "$tmp.t" && mv "$tmp.t" "$tmp"
+[ -z "$(shipped)" ] || fail "a retired marker (supersededBy set) was still reported:\n$(shipped)"
+jq 'del(.supersededBy)' "$tmp" > "$tmp.t" && mv "$tmp.t" "$tmp"
+
+# (d) a counterpart in a repo that is NOT checked out here DEGRADES: it is reported as
+#     unresolvable, and every other marker is still checked. A partial checkout is the
+#     common case, and it must not cost the rest of the findings.
+tasklist "$DOWN" other-work
+counterpart "$DOWN" other-work '["ghostrepo:whatever"]'
+out="$(lint)"
+has "could not be checked" "$out"       || fail "an unresolvable counterpart was not reported as such:\n$out"
+has "ghostrepo" "$out"                  || fail "the unresolvable report does not name the repo:\n$out"
+out="$(shipped)"
+has "down-work" "$out"                  || fail "an unresolvable counterpart aborted the rest of the check:\n$(lint)"
+[ "$(printf '%s\n' "$out" | grep -c '⚑')" = "1" ] || fail "expected exactly one shipped finding, got:\n$out"
+rm -f "$DOWN/tasks/chief/other-work.json"
+
+echo "XREPO PASS — cross-repo dep resolution (name/path/self) + blocked-dep diagnostics + counterpart lint + the merged-counterpart check"

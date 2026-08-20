@@ -163,7 +163,24 @@ Notes:
   `DOWNSTREAM COUNTERPART: agora:75-…` convention) is readable but not checkable, and
   chief does not detect it or claim to — the lint reports how many declarations it
   actually saw. `supersededBy` is the same link pointing backwards, recorded when the
-  marker is finally retired; it is metadata for a human, and chief reads it never.
+  marker is finally retired; chief reads it for exactly one purpose — a marker that
+  already carries it has been retired and is never reported again.
+  **The link is then followed forward.** `chief lint` resolves every declared
+  counterpart and reports each one that carries `mergedToMain` while its marker is
+  still live, naming the marker, the counterpart and the merge sha, so retiring it
+  needs no second investigation:
+
+  ```
+  downstream work has landed — these markers are still live in tasks/chief/:
+    ⚑ 57-general-finetune-provider — its downstream counterpart has MERGED: agora:50-finetune-live-endpoints @ea9d6c7
+  ```
+
+  Only that state is a finding. A counterpart still in flight is the normal state of
+  a marker and is silent; so is a counterpart *filed* to `completed/` without
+  `mergedToMain`, which has merged nowhere and can satisfy no dependency edge either.
+  And the check **degrades rather than aborts** — a counterpart in a repo that is not
+  checked out on this host is reported as unresolvable and every other marker is
+  still checked, because a partial checkout is the common case.
 - **`repo` targets a nested repo (e.g. a submodule).** The agent runs in a worktree of
   that repo, so its checks/deps must resolve there (use `warmup` to provision them, and a
   verify hook that dispatches off its cwd). All merges are serialized, so two tasklists

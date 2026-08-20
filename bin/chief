@@ -346,6 +346,15 @@ cmd_lint() {
 ' "$rep" | grep -c '✗')))
     fi
   done
+  # The marker link followed FORWARD (engine/counterpart.sh): a counterpart that has
+  # MERGED while its marker is still live here. This is a REPORT, never a finding —
+  # retiring a marker is a judgement call, and a lint that failed on somebody else's
+  # merge would block authoring work that is otherwise fine.
+  local shipped; shipped="$(counterpart_shipped_report "${files[@]}")"
+  if [ -n "$shipped" ]; then
+    echo "downstream work has landed — these markers are still live in $CHIEF_TASKS_DIR/:"
+    printf '%s\n' "$shipped"
+  fi
   # What the gate SAW, always — the marker link is a field, and a counterpart named
   # only in a description is not detected here and is not claimed to be. "0 declared"
   # means nobody wrote the field, never that nobody has a counterpart.

@@ -91,7 +91,11 @@ engine/
                      #   counterpart named only in the description is invisible and the gate SAYS
                      #   so rather than reporting clean. `chief lint` resolves each declaration
                      #   through crossrepo.sh, so a pointer to nothing fails instead of reading as
-                     #   checked
+                     #   checked. Then it FOLLOWS the link: a counterpart carrying mergedToMain
+                     #   while its marker is still live is REPORTED — marker, counterpart, merge
+                     #   sha — and nothing else is. In flight, filed-without-mergedToMain, and an
+                     #   already-superseded marker are all silent; a repo not checked out here
+                     #   degrades to one unresolvable line and the rest of the scan still runs
   criteria.sh        #   the SCOPE rule on acceptance criteria: a criterion naming ANOTHER repo
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as

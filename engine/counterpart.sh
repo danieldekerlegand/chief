@@ -66,3 +66,76 @@ counterpart_lint_report() {
     esac
   done
 }
+
+# --- the check: a counterpart that MERGED while its marker is still live -------
+# The failure this whole module exists for. The marker is a placeholder; the work
+# happened downstream; nothing upstream noticed. `chief list` kept counting five of
+# koine's markers as pending for as long as it took a human to search fourteen repos
+# by content — and the one that led its park sentence with a dependency instead of
+# the word "placeholder" was missed on the first pass.
+#
+# Resolution is crossrepo.sh's, the driver's own: chief reads exactly one file across
+# the boundary, the counterpart's completed record, and asks the one question
+# `dependsOn` asks of it — does it carry `mergedToMain`.
+#
+# What is NOT a finding:
+#   • a counterpart still in flight (`active`) — the normal state, and four of koine's
+#     five markers were in it while the fifth had shipped. A check that flagged those
+#     would be noise, and noise is how a report stops being read.
+#   • a counterpart FILED without `mergedToMain` — a completed record that never
+#     merged. It cannot satisfy a dependency edge either, and it is the retirement
+#     trap, not a shipped counterpart.
+#   • a marker that already carries `supersededBy` — retired. The human acted.
+
+# counterpart_scan FILE… — one TAB-separated record per finding, on stdout:
+#
+#   done<TAB><marker><TAB><ref><TAB><merge-sha><TAB><record-path>
+#   unresolvable<TAB><marker><TAB><ref><TAB><reason><TAB>
+#
+# and nothing at all for the three non-findings above. Callers pass the LIVE
+# tasklists (`tasks/chief/*.json`); a marker already moved to `completed/` is not a
+# marker anymore.
+#
+# It DEGRADES, never aborts: a counterpart in a repo that is not checked out on this
+# host is one `unresolvable` record and the scan moves to the next file, because a
+# partial checkout is the common case and a laptop missing one sibling repo must
+# still get the other findings.
+counterpart_scan() {
+  local f marker ref loc st path sha
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    # Already retired: the human has acted, and re-reporting it is a false finding.
+    if [ -n "$(jq -r '.supersededBy // empty' "$f" 2>/dev/null)" ]; then continue; fi
+    marker="$(basename "$f" .json)"
+    counterpart_refs "$f" | while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      loc="$(crossrepo_locate "$ref")"
+      st="${loc%% *}"; path="${loc#* }"
+      case "$st" in
+        merged)
+          sha="$(jq -r '.mergedToMain // empty' "$path" 2>/dev/null)"
+          printf 'done\t%s\t%s\t%s\t%s\n' "$marker" "$ref" "${sha:-?}" "$path" ;;
+        norepo)
+          printf 'unresolvable\t%s\t%s\t%s\t\n' "$marker" "$ref" \
+            "repo \"$(dep_repo "$ref")\" is not checked out here" ;;
+        missing)
+          printf 'unresolvable\t%s\t%s\t%s\t\n' "$marker" "$ref" \
+            "no tasklist \"$(dep_task "$ref")\" there" ;;
+      esac
+    done
+  done
+}
+
+# counterpart_shipped_report FILE… — counterpart_scan rendered for a human, one line
+# each. Every line names the marker, the counterpart and the merge sha, because the
+# next action is retiring that marker and it should not need a second investigation
+# to start. Empty output = nothing shipped that is still sitting in the backlog.
+counterpart_shipped_report() {
+  local st marker ref detail path
+  counterpart_scan "$@" | while IFS="$(printf '\t')" read -r st marker ref detail path; do
+    case "$st" in
+      done)         printf '  ⚑ %s — its downstream counterpart has MERGED: %s @%s\n' "$marker" "$ref" "$detail" ;;
+      unresolvable) printf '  ? %s — counterpart %s could not be checked (%s)\n' "$marker" "$ref" "$detail" ;;
+    esac
+  done
+}
