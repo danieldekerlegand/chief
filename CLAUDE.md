@@ -279,6 +279,14 @@ VERSION              # engine version — bump on any engine/bin/install change
   start a watcher and hang forever. `bash -n` is clean on it, no test renders `--help`, and the
   hang looks like a slow scan — escape them `\`` (as `bin/chief`'s own usage already does), and
   check with `awk '/^name\(\)/,/^EOF$/' file | grep -n '[^\\]`'`.
+- **`IFS=$'\t' read` COLLAPSES a run of tabs.** Tab is IFS *whitespace*, so consecutive tabs are
+  one delimiter and leading ones are stripped — any **empty middle field** (a tasklist with no
+  category, one with no dependencies) silently shifts every field after it left. The engine's TSV
+  accumulators get away with tabs only because none of their fields is ever empty; a reader whose
+  fields can be empty uses **US (`printf '\037'`)**, which is not whitespace, and `read` keeps the
+  empties (`engine/status.sh`'s `read_records`). Relatedly, `read -r -d '' V <<EOF` strips leading
+  whitespace and *keeps* the final newline: `IFS= read -r -d ''` plus `V="${V%$'\n'}"` before
+  comparing against a `$( )` capture.
 - **`LC_ALL=C` any `awk`/`grep` that parses agent-authored prose.** BSD `awk` (macOS) aborts with
   "illegal byte sequence" as soon as `tolower()`/`substr()` meets a multi-byte character in a UTF-8
   locale — and everything the agent writes here is full of em-dashes. Byte semantics cost nothing when
