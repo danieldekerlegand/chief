@@ -104,6 +104,9 @@ jobs:
       - name: Bar rule at the iteration boundary (an unmeasured story is demoted before the next turn)
         run: bash test/boundary-demotion.sh
 
+      - name: An UNVERIFIED stop outlives its run (the resume re-engages instead of re-failing forever)
+        run: bash test/unverified-resume.sh
+
       - name: Stall flag is run-state aware (a quiet-by-design phase is not also called stalled)
         run: bash test/stall-flag.sh
 

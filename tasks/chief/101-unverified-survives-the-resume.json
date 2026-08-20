@@ -50,7 +50,8 @@
         "The pathological case is bounded: a story whose value is never recorded must not re-engage forever. It stops on the existing demote limit rather than spinning, and the test asserts the run terminates.",
         "The test is registered in test/all.sh and .chief/verify.sh passes."
       ],
-      "notes": null
+      "notes": "test/unverified-resume.sh added and registered in all three lists (test/all.sh, .chief/verify.sh CHIEF_BYSTANDER_TESTS, .github/workflows/ci.yml). .chief/verify.sh: exit 0 — 37/37 behavioural tests green under the bystander guard, the new one at [19/37]; quality ratchet OK (function_length_max 534 -> 549, delta +15 tol 15; single_use_functions +2 tol 2); doc-links 4 dead vs 4 on main (no regression); VERSION-BUMP PASS (0.8.66); bash -n clean; shellcheck not installed on this host (CI enforces). The test itself: PASS in 28s standalone. Reproduction proven by hand — cloned the repo to a temp dir, stripped the resume-side fix (third arm + unverified_pickup), ran the test there: exit 1 at \"the re-run did not re-engage the agent on the persisted UNVERIFIED stop\". Measured arms: un-fixed engine re-run spends 0 agent turns and ends UNVERIFIED twice; shipped engine re-engages, merges, clears the marker; uv-done (all-pass, no marker) 0 turns and still MERGED; uv-spin bounded at exactly 2 turns per run out of an iters:4 budget by MEASURE_DEMOTE_LIMIT, terminating UNVERIFIED.",
+      "passes": true
     }
   ]
 }
