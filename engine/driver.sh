@@ -592,6 +592,21 @@ sweep_worktree() {
   return 0
 }
 
+# A successful merge is the one teardown path that cannot rely on a later run to
+# revisit the tasklist. finalize_merged has already filed the completed record when
+# this is called, so this is deliberately unreachable from verify failures, policy
+# holds, or any other path that leaves work for review.
+# $1 = worktree, $2 = tasklist name.
+reclaim_merged_worktree() {
+  local wt="$1" name="$2"
+  [ -d "$wt" ] || return 0
+  sweep_worktree "$wt" "$name"
+  if ! wt_git remove --force "$wt" 2>/dev/null; then
+    echo ">> $name: git worktree removal failed after merge; removing the directory directly: $wt"
+    rm -rf "$wt"
+  fi
+}
+
 # git worktree add / remove are NOT safe to run concurrently on one repo: they
 # take the same ref lock and a race yields a spurious failure. Serialize them
 # behind a short-held mkdir lock so PARALLEL>1 workers don't collide. (The agent
@@ -2288,8 +2303,9 @@ run_worker() {
     local unvmark; unvmark="$(unverified_marker "$name")"
     local wtstate="$wt/$STATE_REL"
     sweep_worktree "$wt" "$name"                     # reclaim last run's build artifacts first
-    wt_git remove --force "$wt" 2>/dev/null || true   # free a stale worktree dir (keeps the branch)
-    rm -rf "$wt"
+    if ! wt_git remove --force "$wt" 2>/dev/null; then
+      rm -rf "$wt"
+    fi   # free a stale worktree dir (keeps the branch)
     # RESUME: if a branch from a prior (interrupted) run exists — a run stopped by
     # Ctrl-C, token/quota exhaustion, or lost connectivity — reuse it instead of
     # restarting from scratch. RESET=1 forces a fresh start from the base branch.
@@ -2674,7 +2690,9 @@ run_worker() {
       # a `git worktree remove` that fails here is what strands a 1.4 GB `target`
       # behind a tasklist that finished cleanly.
       sweep_worktree "$wt" "$name"
-      wt_git remove --force "$wt" 2>/dev/null || true
+      if ! wt_git remove --force "$wt" 2>/dev/null; then
+        rm -rf "$wt"
+      fi
       # work_checkout, never a bare `git checkout` — a gitlink the ref moves and the
       # working tree does not is not uncommitted work (see its header).
       work_checkout "$work_repo" "$branch" "$name" || { live_set "$live" phase=checkout-failed
@@ -2779,6 +2797,7 @@ run_worker() {
         # finalize writes the completed record + retires the tasklist in the PROJECT,
         # and (for a submodule) bumps the project's pointer to the merged submodule sha.
         finalize_merged "$name" "$branch" "$sha" "$work_repo" "$sub"
+        reclaim_merged_worktree "$wt" "$name"
         # cleared: this branch is green + merged, so every failure artifact from a
         # previous attempt (verify output, conflict forensics, the UNVERIFIED marker)
         # is now stale. The marker especially: it exists to force an agent turn on the

@@ -367,6 +367,7 @@ mq_merge_member() {
   if git -C "$repo" merge --no-ff "$branch" -m "Merge $branch (chief, auto-verified)"; then
     sha="$(git -C "$repo" rev-parse --short HEAD)"
     finalize_merged "$name" "$branch" "$sha" "$repo" "$sub"
+    reclaim_merged_worktree "$wt" "$name"
     rm -f "$SNAP/$name.verify-failed.log" "$(unverified_marker "$name")" \
           "$SNAP/$name.rebase-conflict.md" \
           "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
@@ -874,7 +875,9 @@ mq_worker_merge() {
   mq_init
   # Free the branch from its worktree BEFORE enqueuing: a leader cannot check out a
   # branch another worktree holds, and this worker is done with it either way.
-  wt_git remove --force "$wt" 2>/dev/null || true
+  if ! wt_git remove --force "$wt" 2>/dev/null; then
+    rm -rf "$wt"
+  fi
   mq_enqueue "$name" "$branch" "$repo" "$base" "$sub"
   live_set "$live" phase=merge-queued story=
   event_emit tasklist.queued name="$name" state=running detail="merge queue — max batch $(mq_batch_max)"

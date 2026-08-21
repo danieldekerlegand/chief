@@ -241,7 +241,16 @@ finalize_merged() {
   [ "$bump_failed" = "1" ] && \
     echo "  !! POINTER STALE for $name ('$sub') — the merge is in the submodule but the project" \
          "does not reference it. Nothing else will see this work until the pointers are bumped." >&2
-  git -C "$work_repo" branch -d "$branch" >/dev/null 2>&1 || true
+  # Never force-delete a branch here. A future caller may reuse this helper after
+  # filing a record, and a branch that is not reachable from the integration base is
+  # still somebody's work. The normal merge makes this check true; keep the explicit
+  # guard so a surprising state is reported and preserved rather than lost.
+  if git -C "$work_repo" merge-base --is-ancestor "$branch" "${work_base:-$BASE_BRANCH}" 2>/dev/null; then
+    git -C "$work_repo" branch -d "$branch" >/dev/null 2>&1 || \
+      echo "  !! branch kept: could not delete genuinely merged $branch"
+  else
+    echo "  !! branch kept: $branch is not an ancestor of ${work_base:-$BASE_BRANCH} (unmerged work)"
+  fi
 }
 
 # verify_submodule_chain PROJECT SUB — post-condition for bump_submodule_chain. For every
