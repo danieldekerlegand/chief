@@ -55,7 +55,8 @@
         "`chief monitor` renders the same view under `-a`, since a live-refreshing view of only the running subset has the same blind spot.",
         "A test drives a fixture repo containing one of each state and asserts every one appears under `-a` and that the done ones do not."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "Implemented ps/monitor --all with repo-scoped ready, running, blocked, and parked rows sourced from status.sh JSON; fixture test green; monitor/status-deps/doc-sync/version-bump/quality checks green."
     }
   ]
 }

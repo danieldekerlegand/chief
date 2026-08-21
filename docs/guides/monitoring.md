@@ -8,9 +8,16 @@ run is printing to. Two commands read it:
 
 ```sh
 chief ps                 # one-shot table of active runs
+chief ps --all           # active runs plus every non-done tasklist in this repo
 chief monitor            # the same view, refreshing in place (Ctrl-C to exit)
+chief monitor --all      # the same aggregate view, refreshing in place
 chief monitor 5          # refresh every 5s (default 2s)
 ```
+
+The bare `ps` view remains host-wide and process-shaped. The `--all` view is scoped
+to the current repo and adds ready, running, blocked, and parked tasklists; completed
+tasklists are omitted. Blocked dependency details and parked reasons are read from
+the same `status.sh --json` verdict used by the scheduler.
 
 Example:
 

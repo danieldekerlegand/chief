@@ -100,11 +100,12 @@ Usage:
                               ("parkedReason") and schedules nothing
   chief list [-a|--all]       list live tasklists with state, progress, category and reason;
                               -a/--all includes completed tasklists; --plain is stable TSV
-  chief ps                    show active runs across ALL repos (one-shot table). Also flags an
+  chief ps [-a|--all]         show active runs across ALL repos; -a also shows every non-done
+                              tasklist in the current repo. Also flags an
                               UNREGISTERED driver — one that is running with no run file, which
                               used to read as 'no active runs' — naming its repo, the tasklists
                               in flight, and the pid to kill.
-  chief monitor [interval]    live-refresh that view (default 2s; Ctrl-C to exit)
+  chief monitor [-a|--all] [interval] live-refresh that view (default 2s; Ctrl-C to exit)
   chief logs [name] [-f]      hook into a live run's output — tail a tasklist's per-iteration log
                               (the agent's stdout, gate output, stall notes). Defaults to the
                               running tasklist; -f/--follow streams it live, -n N sets the tail size
@@ -689,13 +690,33 @@ cmd_run() {
     bash "$ENGINE/driver.sh" ${names[@]+"${names[@]}"}
 }
 
-cmd_ps()      { bash "$ENGINE/monitor.sh" once ; }
+cmd_ps() {
+  local all=0 arg
+  while [ "$#" -gt 0 ]; do
+    arg="$1"; shift
+    case "$arg" in -a|--all) all=1 ;; *) echo "chief ps: unknown flag: $arg" >&2; return 2 ;; esac
+  done
+  if [ "$all" -eq 1 ]; then load_project; export CHIEF_PS_REPO="$CHIEF_PROJECT"; fi
+  bash "$ENGINE/monitor.sh" "$([ "$all" -eq 1 ] && echo once-all || echo once)"
+}
 # EXEC, not fork: `chief monitor` is a view, and a view is one process. Forking left
 # this wrapper blocked in wait() for the whole session — a second process per watcher,
 # and the one whose death re-parented the watcher to init instead of ending it (see
 # monitor.sh's THE WATCH LOOP'S STOP CONDITION). `chief ps` returns, so it stays a
 # plain call.
-cmd_monitor() { exec bash "$ENGINE/monitor.sh" watch "${1:-2}" ; }
+cmd_monitor() {
+  local all=0 interval=2 arg
+  while [ "$#" -gt 0 ]; do
+    arg="$1"; shift
+    case "$arg" in
+      -a|--all) all=1 ;;
+      ''|*[!0-9]*) echo "chief monitor: expected an interval or --all: $arg" >&2; return 2 ;;
+      *) interval="$arg" ;;
+    esac
+  done
+  if [ "$all" -eq 1 ]; then load_project; export CHIEF_PS_REPO="$CHIEF_PROJECT"; fi
+  exec bash "$ENGINE/monitor.sh" "$([ "$all" -eq 1 ] && echo watch-all || echo watch)" "$interval"
+}
 
 # chief logs [name] [-f] [-n N] — hook into a live run's output. Each tasklist's
 # per-iteration output is teed to <state>/parallel/<name>.log; this tails it so you
@@ -1298,7 +1319,7 @@ case "$cmd" in
   status)               cmd_status "$@" ;;
   lint)                 cmd_lint "$@" ;;
   gen|generate)         cmd_gen "$@" ;;
-  ps)                   cmd_ps ;;
+  ps)                   cmd_ps "$@" ;;
   monitor|watch)        cmd_monitor "$@" ;;
   logs|tail)            cmd_logs "$@" ;;
   events|subscribe)     cmd_events "$@" ;;

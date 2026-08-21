@@ -70,6 +70,8 @@ set -uo pipefail
 RUNS="$(chief_runs_dir)"
 MODE="${1:-once}"
 INTERVAL="${2:-2}"
+ALL=0
+case "$MODE" in once-all|watch-all) ALL=1 ;; esac
 
 # How long a RUNNING tasklist may go without a heartbeat before it reads as stalled.
 # The default is generous on purpose: an agent turn ticks the record every ~15s
@@ -380,6 +382,45 @@ activity_of() { # $1 = progress.txt path -> latest meaningful line (truncated)
   awk 'NF && $0 !~ /^#/ && $0 !~ /^---/ {last=$0} END{if(last)print last}' "$1" 2>/dev/null | cut -c1-76
 }
 
+# `ps -a` is a repo-scoped aggregate view. The verdicts and reasons come directly
+# from status.sh's JSON so this view cannot grow a second dependency resolver.
+render_all_inflight() {
+  local repo="${CHIEF_PS_REPO:-}" report n reason file prog state tasks
+  [ -n "$repo" ] || return 0
+  report="$(cd "$repo" && bash "$_MON_DIR/status.sh" --json 2>/dev/null || echo '{}')"
+  printf '\n%s%s · all non-done tasklists%s\n' "$BOLD" "$(basename "$repo")" "$RST"
+  printf '   %-32s %-12s %-7s %s\n' NAME STATE PROGRESS REASON
+  printf '   %-32s %-12s %-7s %s\n' '--------------------------------' '------------' '-------' '------'
+  tasks="${CHIEF_TASKS_DIR:-tasks/chief}"
+  while IFS=$'\t' read -r n reason; do
+    [ -n "$n" ] || continue
+    file="$repo/$tasks/$n.json"; prog='?/?'; state=ready
+    if tasklist_running "$repo" "$n"; then state=running; fi
+    [ -f "$file" ] && prog="$(jq -r '([.userStories[]?|select(.passes==true)]|length|tostring) + "/" + (.userStories|length|tostring)' "$file" 2>/dev/null || echo '?/?')"
+    printf '   %-32s %-12s %-7s %s\n' "$n" "$state" "$prog" "${reason:-ready}"
+  done < <(jq -r '.runnable[]? | [. , ""] | @tsv' <<<"$report")
+  while IFS=$'\t' read -r n reason; do
+    [ -n "$n" ] || continue
+    printf '   %-32s %-12s %-7s %s\n' "$n" blocked '-' "needs ${reason:-dependency}"
+  done < <(jq -r '.blocked[]? | [.tasklist, ((.detail // .blocked_by) // "dependency")] | @tsv' <<<"$report")
+  while IFS=$'\t' read -r n reason; do
+    [ -n "$n" ] || continue
+    printf '   %-32s %-12s %-7s %s\n' "$n" parked '-' "${reason:-no reason given}"
+  done < <(jq -r '.parks.tasklists[]? | [.tasklist, (.reason // "")] | @tsv' <<<"$report")
+}
+
+tasklist_running() {
+  local repo="$1" wanted="$2" rf rrepo names pid
+  for rf in "$RUNS"/*.run; do
+    [ -f "$rf" ] || continue
+    rrepo="$(field repo "$rf")"; pid="$(field pid "$rf")"
+    [ "$rrepo" = "$repo" ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || continue
+    names="$(field names "$rf")"
+    case " $names " in *" $wanted "*) return 0 ;; esac
+  done
+  return 1
+}
+
 glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
   case "$1" in
     running)         printf '%s●%s|running' "$YEL" "$RST" ;;
@@ -662,6 +703,7 @@ render() {
       [ "$n_foreign" -lt "$n_files" ] && printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
       foreign_note "$n_foreign"
     fi
+    [ "$ALL" -eq 1 ] && render_all_inflight
     return 0
   fi
   printf '%sCHIEF%s · %s%d active run(s)%s%s · %s%s%s\n' "$BOLD" "$RST" "$CYN" "$n_active" "$RST" \
@@ -672,6 +714,7 @@ render() {
     # all the only thing running is the unregistered driver below.
     [ -n "$runfiles" ] && [ "$n_foreign" -lt "$n_files" ] && printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
     unreg_render
+    [ "$ALL" -eq 1 ] && render_all_inflight
     return 0
   fi
 
@@ -784,6 +827,7 @@ render() {
     done
   done
   [ "$UNREG_N" -gt 0 ] && unreg_render
+  [ "$ALL" -eq 1 ] && render_all_inflight
   return 0
 }
 
@@ -850,7 +894,7 @@ watch_tick() {
 
 if [ "$MODE" = lib ]; then
   :
-elif [ "$MODE" = watch ]; then
+elif [ "$MODE" = watch ] || [ "$MODE" = watch-all ]; then
   trap 'printf "\033[?25h"' EXIT                  # always restore the cursor
   # Ctrl-C is unchanged. HUP joins it so the terminal-sent signal ALSO runs the EXIT
   # trap above, instead of taking bash's default terminate and leaving the cursor
