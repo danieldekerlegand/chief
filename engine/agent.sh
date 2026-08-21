@@ -803,7 +803,7 @@ _demote_escalate() {
 # provider already printed on the stdout it was going to capture anyway. No API call,
 # no polling loop, no second invocation. When a provider prints nothing usage-shaped
 # (which is `claude --print` today), this yields nothing and the event's `usage` is
-# null: a nullable, provider-dependent field, exactly as docs/reference/events.md promises.
+# null: a nullable, provider-dependent field for providers that do not expose usage.
 #
 # _parse_usage OUTPUT -> ' key=value …' event_emit keys ('' when nothing was found).
 # Two shapes, most trustworthy first:
@@ -842,13 +842,29 @@ _parse_usage() {
   printf '%s' "$got"
   return 0
 }
+# _humanize_provider_output OUTPUT -> the text an operator and the loop should see.
+# Claude's JSON result envelope is transport for usage, not the provider's human
+# response. Keep the raw envelope separately for _parse_usage, while exposing its
+# result field to completion detection and logs. Any non-envelope output (including
+# malformed JSON) passes through exactly as it did before the structured request.
+_humanize_provider_output() {
+  local out="$1" result=""
+  command -v jq >/dev/null 2>&1 || { printf '%s' "$out"; return 0; }
+  result="$(printf '%s\n' "$out" | grep '"type"[[:space:]]*:[[:space:]]*"result"' | tail -1 \
+    | jq -er 'select(.result | type == "string") | .result' 2>/dev/null || echo "")"
+  if [ -n "$result" ]; then
+    printf '%s' "$result"
+  else
+    printf '%s' "$out"
+  fi
+}
 # _emit_turn_event ITER — one `agent.turn` per provider turn that returned, emitted
 # at the same point the loop already writes the post-turn live_set. It is what carries
 # the per-turn usage figures (null when the provider printed none), so a host can keep
 # a spend ledger without re-running or re-parsing anything. `model` comes from the
 # engine's own configuration, not a scrape, so it is populated whenever one is set.
 _emit_turn_event() {
-  local u; u="$(_parse_usage "${OUTPUT:-}")"
+  local u; u="$(_parse_usage "${RAW_OUTPUT:-${OUTPUT:-}}")"
   # shellcheck disable=SC2086  # $u is a deliberate word-split list of key=value args
   event_emit agent.turn name="${CHIEF_TASKLIST:-}" state=running \
     detail="iteration ${1:-?} — $(_passes)/$(_total) passing" \
@@ -1071,6 +1087,22 @@ _apply_account_env() {
   return 0
 }
 
+# Capture provider output once, retaining the raw envelope for usage parsing while
+# exposing the human-readable result to the log and completion detector.
+_capture_provider_output() {
+  RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
+  : > "$RAW_OUTPUT_FILE"
+  if _run_provider < "$1" >"$RAW_OUTPUT_FILE" 2>&1; then
+    TOOL_RC=0
+  else
+    TOOL_RC=$?
+  fi
+  RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
+  OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
+  printf '%s\n' "$OUTPUT" >&2
+  rm -f "$RAW_OUTPUT_FILE"
+}
+
 # Run one provider in non-interactive mode. The prompt is supplied on stdin by the
 # caller so every provider receives the same Chief instructions and project context.
 #
@@ -1091,8 +1123,8 @@ _run_provider() {
 _provider_exec() {
   case "$PROVIDER" in
     claude)
-      if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --model "$MODEL"
-      else claude --dangerously-skip-permissions --print
+      if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --output-format json --model "$MODEL"
+      else claude --dangerously-skip-permissions --print --output-format json
       fi
       ;;
     devin)
@@ -1229,7 +1261,7 @@ if research_enabled "$PRD_FILE"; then
           "$(research_missing "$RESEARCH_DOC")" "$RESEARCH_FEEDBACK" > "$RESEARCH_PROMPT_FILE"
         TOOL_RC=0
         _beat_start
-        OUTPUT=$(_run_provider < "$RESEARCH_PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
+        _capture_provider_output "$RESEARCH_PROMPT_FILE"
         _beat_stop
         # A research turn is still a provider turn: it costs quota and belongs in the
         # spend ledger like any other. Reported as iteration 0 — the phase runs before
@@ -1424,7 +1456,7 @@ while :; do
     "$ACTIVE_PROMPT" \
     "$(wc -l < "$ACTIVE_PROMPT" 2>/dev/null | tr -d ' ')" >&2
   _beat_start
-  OUTPUT=$(_run_provider < "$ACTIVE_PROMPT" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
+  _capture_provider_output "$ACTIVE_PROMPT"
   _beat_stop
   live_set "$LIVE" phase="$TURN_PHASE" story="$(_story)" passing="$(_passes)" total="$(_total)"
   _emit_story_events "$i"
