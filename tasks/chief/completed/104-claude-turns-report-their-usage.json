@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "fix",
   "branchName": "chief/104-claude-turns-report-their-usage",
-  "description": "**The usage ledger is plumbed end to end and returns null for the provider chief runs by default.**\n\n`_parse_usage()` (`engine/agent.sh` ~l.816) was written to read exactly the `{\"type\":\"result\",\"total_cost_usd\":\u2026,\"usage\":{\u2026}}` line that `claude --output-format json` prints. The dispatch case at `engine/agent.sh:1094` runs `claude --dangerously-skip-permissions --print` \u2014 **without `--output-format json`** \u2014 so that line never appears and every `agent.turn` event carries `usage: null`. `docs/reference/events.md` documents the outcome as expected behaviour: *\"Expect `usage: null` on a default install.\"*\n\nTwo halves of chief were built to fit each other and are not connected. The consequence is that the event stream's usage contract \u2014 the runner-side data source for chief-cloud's `82-run-history-analytics-and-cost-persistence`, which is merged \u2014 is **vacuous for the default provider**. A spend ledger over claude runs has nothing to persist.\n\n\u26a0\ufe0f **This is not a one-flag change, and the risk is the reason it has not happened.** Chief pipes the provider's stdout, tees it, and the agent loop READS that text \u2014 completion promises, progress, refusals. Asking for JSON changes the shape of the thing the loop parses. The turn's human-readable output must still reach the log and the loop unchanged; only the usage figures are new. A change that makes the ledger work by breaking completion detection is strictly worse than `null`.\n\n\u26a0\ufe0f **`test/provider-conformance.sh` asserts the EXACT argv the engine composes for each provider**, from the `ROSTER` array near the top of that file. Changing claude's dispatch without updating that line is a red build \u2014 which is the harness working, not an obstacle.",
+  "description": "**The usage ledger is plumbed end to end and returns null for the provider chief runs by default.**\n\n`_parse_usage()` (`engine/agent.sh` ~l.816) was written to read exactly the `{\"type\":\"result\",\"total_cost_usd\":…,\"usage\":{…}}` line that `claude --output-format json` prints. The dispatch case at `engine/agent.sh:1094` runs `claude --dangerously-skip-permissions --print` — **without `--output-format json`** — so that line never appears and every `agent.turn` event carries `usage: null`. `docs/reference/events.md` documents the outcome as expected behaviour: *\"Expect `usage: null` on a default install.\"*\n\nTwo halves of chief were built to fit each other and are not connected. The consequence is that the event stream's usage contract — the runner-side data source for chief-cloud's `82-run-history-analytics-and-cost-persistence`, which is merged — is **vacuous for the default provider**. A spend ledger over claude runs has nothing to persist.\n\n⚠️ **This is not a one-flag change, and the risk is the reason it has not happened.** Chief pipes the provider's stdout, tees it, and the agent loop READS that text — completion promises, progress, refusals. Asking for JSON changes the shape of the thing the loop parses. The turn's human-readable output must still reach the log and the loop unchanged; only the usage figures are new. A change that makes the ledger work by breaking completion detection is strictly worse than `null`.\n\n⚠️ **`test/provider-conformance.sh` asserts the EXACT argv the engine composes for each provider**, from the `ROSTER` array near the top of that file. Changing claude's dispatch without updating that line is a red build — which is the harness working, not an obstacle.",
   "dependsOn": [],
   "touches": [
     "engine/agent.sh",
@@ -19,7 +19,7 @@
       "description": "Ask claude for the structured result and feed it to the parser that already knows the shape.",
       "acceptanceCriteria": [
         "An `agent.turn` event from a claude run carries non-null `input_tokens`, `output_tokens` and `cost_usd`.",
-        "`_parse_usage()` is REUSED, not rewritten \u2014 it already handles this exact shape.",
+        "`_parse_usage()` is REUSED, not rewritten — it already handles this exact shape.",
         "The `ROSTER` line for claude in `test/provider-conformance.sh` is updated to the new argv, and the harness passes.",
         "`docs/reference/events.md` is corrected: the sentence promising `usage: null` on a default install is no longer true."
       ],
@@ -28,12 +28,12 @@
     },
     {
       "id": "US-2",
-      "title": "The agent loop is unaffected \u2014 output still reads as it did",
+      "title": "The agent loop is unaffected — output still reads as it did",
       "description": "The loop's contract with the provider's text output must survive. Prove it rather than assume it.",
       "acceptanceCriteria": [
         "Completion detection still works: a turn emitting the completion promise still ends the loop with exit 0.",
         "The turn's human-readable output still reaches the per-iteration log and `chief logs`, not raw JSON the operator has to decode.",
-        "`test/smoke.sh` passes \u2014 the end-to-end offline run is the regression net for exactly this.",
+        "`test/smoke.sh` passes — the end-to-end offline run is the regression net for exactly this.",
         "A turn whose output is NOT valid JSON is handled without crashing the loop; the fallback is the pre-existing behaviour."
       ],
       "passes": true,
@@ -44,12 +44,13 @@
       "title": "A provider that prints nothing usage-shaped still yields null, cleanly",
       "description": "The design rule holds: a guessed number is worse than a null, because a ledger cannot tell an invented figure from a measured one.",
       "acceptanceCriteria": [
-        "Providers with no usage output continue to emit `usage: null` \u2014 no zero-filling, no estimating from character counts.",
+        "Providers with no usage output continue to emit `usage: null` — no zero-filling, no estimating from character counts.",
         "The nullable, provider-dependent contract in `docs/reference/events.md` is preserved for every other provider.",
-        "`VERSION` is bumped and the README version string synced, because `engine/` changed \u2014 `test/version-bump.sh` and `test/doc-sync.sh` enforce both."
+        "`VERSION` is bumped and the README version string synced, because `engine/` changed — `test/version-bump.sh` and `test/doc-sync.sh` enforce both."
       ],
       "passes": true,
       "notes": "bash test/events.sh PASS — providers with no usage-shaped output emitted usage:null on every event; docs preserve the nullable provider-dependent contract. VERSION 0.8.78 matches README **v0.8.78**; version-bump and doc-sync checks passed."
     }
-  ]
+  ],
+  "mergedToMain": "c67379c"
 }
