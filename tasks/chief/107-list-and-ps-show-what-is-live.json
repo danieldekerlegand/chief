@@ -42,7 +42,8 @@
         "A test asserts `--plain` is stable across the formatting change — the counterfactual is a downstream script silently breaking on box-drawing characters.",
         "Non-TTY output must not emit colour or box-drawing by default. A piped `chief list` that ships escape codes is the same bug in a different costume."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "Implemented aligned human columns (name/state/progress/category/reason) and stable tab-delimited --plain output; status.sh JSON supplies blocked dependency reasons and parked rows retain reasons. status-deps fixture test: green; bash -n, doc-sync, version-bump, quality ratchet, doc-link ratchet, and git diff --check: green; shellcheck unavailable."
     },
     {
       "id": "US-3",
