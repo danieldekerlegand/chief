@@ -1087,6 +1087,19 @@ _apply_account_env() {
   return 0
 }
 
+# Capture provider output once, retaining the raw envelope for usage parsing while
+# exposing the human-readable result to the log and completion detector.
+_capture_provider_output() {
+  RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
+  : > "$RAW_OUTPUT_FILE"
+  _run_provider < "$1" 2>&1 | tee "$RAW_OUTPUT_FILE" \
+    | { raw="$(cat)"; _humanize_provider_output "$raw" >&2; } \
+    || TOOL_RC="${PIPESTATUS[0]}"
+  RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
+  OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
+  rm -f "$RAW_OUTPUT_FILE"
+}
+
 # Run one provider in non-interactive mode. The prompt is supplied on stdin by the
 # caller so every provider receives the same Chief instructions and project context.
 #
@@ -1245,14 +1258,7 @@ if research_enabled "$PRD_FILE"; then
           "$(research_missing "$RESEARCH_DOC")" "$RESEARCH_FEEDBACK" > "$RESEARCH_PROMPT_FILE"
         TOOL_RC=0
         _beat_start
-        RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
-        : > "$RAW_OUTPUT_FILE"
-        _run_provider < "$RESEARCH_PROMPT_FILE" 2>&1 | tee "$RAW_OUTPUT_FILE" \
-          | { raw="$(cat)"; _humanize_provider_output "$raw" >&2; } \
-          || TOOL_RC="${PIPESTATUS[0]}"
-        RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
-        OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
-        rm -f "$RAW_OUTPUT_FILE"
+        _capture_provider_output "$RESEARCH_PROMPT_FILE"
         _beat_stop
         # A research turn is still a provider turn: it costs quota and belongs in the
         # spend ledger like any other. Reported as iteration 0 — the phase runs before
@@ -1447,14 +1453,7 @@ while :; do
     "$ACTIVE_PROMPT" \
     "$(wc -l < "$ACTIVE_PROMPT" 2>/dev/null | tr -d ' ')" >&2
   _beat_start
-  RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
-  : > "$RAW_OUTPUT_FILE"
-  _run_provider < "$ACTIVE_PROMPT" 2>&1 | tee "$RAW_OUTPUT_FILE" \
-    | { raw="$(cat)"; _humanize_provider_output "$raw" >&2; } \
-    || TOOL_RC="${PIPESTATUS[0]}"
-  RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
-  OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
-  rm -f "$RAW_OUTPUT_FILE"
+  _capture_provider_output "$ACTIVE_PROMPT"
   _beat_stop
   live_set "$LIVE" phase="$TURN_PHASE" story="$(_story)" passing="$(_passes)" total="$(_total)"
   _emit_story_events "$i"
