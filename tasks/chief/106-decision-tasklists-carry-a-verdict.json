@@ -55,7 +55,8 @@
         "The verdict lands in the event stream like every other state transition, so a decision is visible in `chief events` and to any embedding host.",
         "A test drives both outcomes end to end and asserts the resulting JSON against the retirement rules, including the refusal."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n + test/decision.sh + test/parked-decisions.sh + test/status-json.sh + test/quality-ratchet.sh: green; fixture observed dependent refusal, durable sqlite verdict note, unpark clearing parked fields, completed/ retirement without mergedToMain, and tasklist.decision event"
     },
     {
       "id": "US-4",

@@ -156,6 +156,9 @@ Usage:
                               verdict is durable and bound by checksum to the change it approved,
                               so a restart never re-asks. No name (or --list) reports what is
                               waiting. See docs/reference/overlap-zones.md
+  chief decide NAME VERDICT  record the operator's verdict with --note NOTE, then
+       [--retire ID]          retire it to completed/ (without mergedToMain), or
+       [--unpark]             clear its park while retaining the verdict.
   chief pause [--all]         withhold AGENT TURNS: launch no tasklist and start no new agent
                               iteration — but DRAIN, never kill: the iteration in flight runs to
                               completion so its commits land, a tasklist whose agent loop already
@@ -999,6 +1002,61 @@ cmd_approve() {
   exit "$rc"
 }
 
+# ── operator decision verdicts (the only path that may make this transition) ──
+cmd_decide() {
+  local name="" verdict="" note="" action="" superseded="" f rec tmp deps="" n
+  [ "$#" -ge 1 ] || { echo "usage: chief decide NAME VERDICT --note NOTE (--retire ID|--unpark)" >&2; return 2; }
+  name="${1%.json}"; shift
+  case "${1:-}" in
+    --verdict|-v) [ "$#" -ge 2 ] || { echo "chief decide: --verdict needs a value" >&2; return 2; }; verdict="$2"; shift 2 ;;
+    -*) ;;
+    *) verdict="$1"; shift ;;
+  esac
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -m|--note) [ "$#" -ge 2 ] || { echo "chief decide: --note needs a value" >&2; return 2; }; note="$2"; shift 2 ;;
+      --retire) action=retire; shift; [ "$#" -gt 0 ] && [[ "$1" != -* ]] && { superseded="$1"; shift; } ;;
+      --superseded-by) [ "$#" -ge 2 ] || { echo "chief decide: --superseded-by needs a value" >&2; return 2; }; superseded="$2"; shift 2 ;;
+      --unpark) action=unpark; shift ;;
+      -*) echo "chief decide: unknown option $1" >&2; return 2 ;;
+      *) echo "chief decide: unexpected argument $1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$verdict" ] || { echo "chief decide: a verdict is required" >&2; return 2; }
+  [ -n "$note" ] || { echo "chief decide: --note is required" >&2; return 2; }
+  [ -n "$action" ] || { echo "chief decide: choose --retire ID or --unpark" >&2; return 2; }
+  [ "$action" != retire ] || [ -n "$superseded" ] || { echo "chief decide: --retire requires an ID" >&2; return 2; }
+  load_project
+  . "$ENGINE/decision.sh"
+  f="$CHIEF_PROJECT/$CHIEF_TASKS_DIR/$name.json"
+  [ -f "$f" ] || { echo "chief decide: no live tasklist '$name'" >&2; return 1; }
+  is_decision_tasklist "$f" || { echo "chief decide: '$name' is not a DECISION tasklist" >&2; return 1; }
+  if [ "$action" = retire ]; then
+    for n in "$CHIEF_PROJECT/$CHIEF_TASKS_DIR"/*.json; do
+      [ -f "$n" ] || continue
+      [ "$(basename "$n" .json)" = "$name" ] && continue
+      if jq -e --arg d "$name" '(.dependsOn // []) | any(. == $d)' "$n" >/dev/null 2>&1; then deps="$deps $(basename "$n" .json)"; fi
+    done
+    [ -z "$deps" ] || { echo "chief decide: refusing retirement of '$name'; live dependents:$deps" >&2; return 1; }
+  fi
+  tmp="${f}.decide.$$"
+  jq --arg choice "$verdict" --arg reason "$note" --arg action "$action" --arg superseded "$superseded" \
+    '.verdict={choice:$choice,note:$reason,recordedAt:(now|todateiso8601)} |
+     if $action == "unpark" then (.parked=false | del(.parkedReason)) else (.supersededBy=$superseded) end' \
+    "$f" > "$tmp" || { rm -f "$tmp"; echo "chief decide: invalid tasklist JSON" >&2; return 1; }
+  mv "$tmp" "$f"
+  if [ "$action" = retire ]; then
+    rec="$CHIEF_PROJECT/$CHIEF_TASKS_DIR/completed/$name.json"
+    mkdir -p "$(dirname "$rec")"; mv "$f" "$rec"
+    echo "✓ $name retired in completed/ (supersededBy=$superseded; no mergedToMain)"
+  else
+    echo "✓ $name unparked with verdict '$verdict'"
+  fi
+  . "$ENGINE/events.sh"
+  CHIEF_EVENTS_FILE="${CHIEF_RUNS}/decisions.events.jsonl" CHIEF_EVENT_REPO="$CHIEF_PROJECT" \
+    event_emit "tasklist.decision" name="$name" state="$action" detail="$verdict — $note"
+}
+
 # ── operator pause / resume (the human's quota lever) ────────────────────────
 # The pause is a FLAG FILE under a repo's scheduler state — <state>/parallel/.paused —
 # polled by the driver's launch gate and by agent.sh's iteration boundary (see the
@@ -1185,6 +1243,7 @@ case "$cmd" in
   reap)                 cmd_reap "$@" ;;
   quality)              cmd_quality "$@" ;;
   approve)              cmd_approve "$@" ;;
+  decide)               cmd_decide "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;
   resume)               cmd_pause_resume resume "$@" ;;
   version|-v|--version) echo "chief $VERSION" ;;

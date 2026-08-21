@@ -1,23 +1,6 @@
 # Chief Progress — 106-decision-tasklists-carry-a-verdict
-Started: Fri Aug 21 03:09:29 CDT 2026
+Started: Fri Aug 21 05:06:30 CDT 2026
 ---
-
-US-2: Added DECISION tasklist detection shared by the worker and driver. Decision
-tasklists automatically receive a research brief requiring explicit options and
-what each option forecloses, may use the existing review gate in decision mode,
-and stop at AWAITING-DECISION after stories pass instead of merging or treating
-agent-authored passes as a human verdict. Documented the schema and added outcome
-and monitor-state mappings.
-
-Files changed: `engine/decision.sh`, `engine/agent.sh`, `engine/research.sh`,
-`engine/driver.sh`, `engine/monitor.sh`, `docs/reference/tasklist-schema.md`,
-`VERSION`, runtime/tracked PRDs.
-
-Learnings for future iterations: decision metadata must be recognized from both
-the durable worker copy and the driver's runtime copy; source shared predicates
-with a worktree-local fallback because installed `CHIEF_HOME` may predate a new
-engine module. The inherited `test/ratelimit.sh` regression currently hangs in its
-fixture and remains a prior-verification blocker.
 
 ## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
 ```
@@ -79,3 +62,53 @@ bystander: [3/43] test/ratelimit.sh
 BYSTANDER FAIL: test/ratelimit.sh failed (its output is above)
 verify: BLOCK — behavioral tests failed (see above)
 ```
+
+## ⚠️ BASE INTEGRATION REQUIRED — do this FIRST, before any user story
+
+`chief/106-decision-tasklists-carry-a-verdict` is **19 commit(s) behind** its base `main` (@b45bf84) and
+chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
+your branch is exactly as it was and nothing is lost — but it cannot merge
+until the base is integrated, and every commit that lands on `main` while
+this is unresolved makes it worse.
+
+**Your first task this iteration is to integrate the base yourself:**
+
+1. `git rebase main` in this worktree.
+2. At each stop, resolve the conflicts keeping BOTH sides' intent — the
+   `main` side is already-merged work, so never discard it, and never
+   discard your own — then `git add <files>` and `git rebase --continue`.
+   `git rebase --abort` returns you to exactly this state if you need it.
+3. Re-run the project's quality gates and make them green.
+
+Rebase, not `git merge main`: chief rebases this branch again at merge time,
+and a rebase drops merge commits and replays the originals — a resolution
+recorded in a merge commit would be thrown away and this conflict would come
+straight back. Resolving inside the rebase puts the fix in your own commits.
+
+Then continue the normal loop: pick the highest-priority story with
+`passes:false` and implement it. The integration is NOT a user story — do not
+flip any story's `passes` for it, and do not report completion until the
+stories themselves are really done.
+
+## Conflicting paths
+- README.md
+- VERSION
+- test/all.sh
+
+base: main @b45bf84 · behind: 19 commit(s) · branch: chief/106-decision-tasklists-carry-a-verdict
+(full note: .chief/state/INTEGRATE-BASE.md)
+
+US-3 implemented: added the human-only `chief decide` command with required prose notes,
+dependency refusal, unpark and completed/ retirement outcomes, durable verdict JSON, and
+`tasklist.decision` event emission. Added `test/decision.sh` and registered it in
+`test/all.sh`; bumped VERSION/README to 0.8.81. Files changed: bin/chief, test/decision.sh,
+test/all.sh, VERSION, README.md, and the tasklist status records.
+
+Verification observed: `bash -n`, `test/decision.sh`, `test/parked-decisions.sh`,
+`test/status-json.sh`, and `test/quality-ratchet.sh` all green. The decision fixture observed
+retirement refusal naming `dependent`, verdict-note persistence, park clearing, a completed
+record with `supersededBy` and no `mergedToMain`, and a decision event.
+
+Learnings for future iterations: decision retirement must scan live tasklists before moving
+the record; completed decision records intentionally omit `mergedToMain`, so ordinary merge
+retirement logic must not be reused.
