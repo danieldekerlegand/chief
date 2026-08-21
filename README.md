@@ -234,6 +234,7 @@ the run will look.
 | Command | Purpose |
 | --- | --- |
 | `chief init` | Scaffold `.chief/` + `tasks/chief/` in the current repo. |
+| `chief usage [--days N] [--repo PATH|--scope PATH] [--json]` | Project usage and rate-limit history from existing event logs: per-run and total turns, available token/cost measurements, limit incidents, wait time, and reset ETA. JSON is documented in [docs/reference/usage.md](docs/reference/usage.md). |
 | `chief gen <roadmap.json>` | Generate one schema-valid `tasks/chief/NN-slug.json` per roadmap item — the programmatic way to author tasklists (`-n` emits NDJSON and writes nothing; input contract: [`docs/reference/roadmap-input.md`](docs/reference/roadmap-input.md)). |
 | `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = concurrency (default 1). |
 | `chief run --provider P --model M` | Select Claude (default), Devin, OpenCode, Amp, or Codex (shortcuts: `--claude`, `--devin`, `--opencode`, `--amp`, `--codex`) and optionally override its model. Amp has no model selector, so `--model` is refused for it. |
@@ -335,7 +336,7 @@ tree at once.
 
 ## Status
 
-**v0.8.78** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
+**v0.8.80** (current version: [`VERSION`](VERSION)) — extracted from a production setup where it drives real multi-tasklist
 programs, then generalized: self-installing/updating, a cross-repo run monitor,
 hardened merge safety (no-work guard, verify-failure re-engagement, mid-merge
 crash recovery), and offline end-to-end tests. Known limit: parallel drivers rely on the

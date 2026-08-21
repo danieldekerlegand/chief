@@ -25,8 +25,8 @@
         "It reads only existing logs: no new state file, no daemon, no provider call.",
         "It runs correctly when no logs exist yet, saying so rather than failing."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n bin/chief, test/usage.sh, and test/events.sh: green; fixture report observed 2 turns, 10 input/5 output/15 total tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, and reset ETA 180; no-log case exited 0 with a helpful message"
     },
     {
       "id": "US-2",
@@ -38,8 +38,8 @@
         "`--json` emits a machine-readable form, and its shape is documented.",
         "The human output stays readable when a provider contributes no cost data \u2014 the table does not collapse into blank columns."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n bin/chief + test/usage.sh + test/events.sh: green; --json no-log feed parsed successfully with null unavailable measurements; --days, --repo/--scope filtering and fixed-width human columns implemented and documented in docs/reference/usage.md"
     },
     {
       "id": "US-3",
@@ -52,8 +52,8 @@
         "The test drives real fixture logs, including a log with null usage and a log with rate-limit events, and asserts the reported figures.",
         "`VERSION` is bumped and the README version string synced."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n + test/usage-report.sh + test/usage.sh + test/events.sh + test/doc-sync.sh + test/version-bump.sh: green; fixture report observed 2 runs, 3 turns, 10/5/15 tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, and a non-null reset ETA while preserving null usage; README/help, all.sh, CI, and VERSION 0.8.80 synced"
     }
   ]
 }

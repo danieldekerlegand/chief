@@ -47,6 +47,9 @@ jobs:
       - name: Usage/help (prints, never executes; exit codes)
         run: bash test/usage.sh
 
+      - name: Usage report aggregation (fixture event logs, nullable usage, and limits)
+        run: bash test/usage-report.sh
+
       - name: Provider/model selection
         run: bash test/provider.sh
 

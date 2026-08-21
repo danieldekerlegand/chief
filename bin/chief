@@ -115,6 +115,8 @@ Usage:
                               enumerates the logs on this host, -n N starts N lines back. stdout is
                               pure NDJSON (pipe it to jq) — notes go to stderr. This is the contract
                               chief-cloud and embedding hosts read: docs/reference/events.md
+  chief usage [--days N]      report turns, provider usage, and rate-limit incidents from the
+       [--repo PATH] [--json] existing event logs; --json emits one machine-readable document
   chief models [provider]     list the models you can pass to --model: live from the provider for
                               devin/opencode, the stable family aliases for claude, none for amp/codex
                               (no arg = all)
@@ -800,6 +802,102 @@ EOF
   fi
 }
 
+# `chief usage` is deliberately a projection over the append-only event logs. It must not
+# become a second ledger: there is no state file, provider call, or registry mutation here.
+# Usage is nullable in the event schema, so blank measurements remain distinct from zero.
+cmd_usage() {
+  local files=() f rows totals row id turns in out total cost hits wait reset
+  local days="" repo="" json=0 cutoff now
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days|-d) shift; days="${1:-}" ;;
+      --repo|--scope) shift; repo="${1:-}" ;;
+      --json) json=1 ;;
+      -h|--help) printf '%s\n' 'Usage: chief usage [--days N] [--repo PATH|--scope PATH] [--json]'; return 0 ;;
+      -*) echo "chief usage: unknown flag: $1" >&2; return 2 ;;
+      *) echo "chief usage: unexpected argument: $1" >&2; return 2 ;;
+    esac
+    shift
+  done
+  if [ -n "$days" ]; then
+    case "$days" in ''|*[!0-9]*|0) echo 'chief usage: --days wants a positive integer' >&2; return 2 ;; esac
+  fi
+  if [ -n "$repo" ]; then
+    [ -d "$repo" ] || { echo "chief usage: repo is not a directory: $repo" >&2; return 2; }
+    repo="$(cd -P "$repo" && pwd)"
+  fi
+  now="$(date +%s)"; cutoff=0
+  [ -n "$days" ] && cutoff=$((now - days * 86400))
+  for f in "$CHIEF_RUNS"/*.events.jsonl; do
+    [ -f "$f" ] && files+=("$f")
+  done
+  if [ "${#files[@]}" -eq 0 ]; then
+    if [ "$json" -eq 1 ]; then
+      jq -n --arg repo "$repo" --argjson days "${days:-null}" \
+        '{chief:"usage",scope:{repo:(if $repo=="" then null else $repo end),days:$days},runs:[],total:{turns:0,input_tokens:null,output_tokens:null,total_tokens:null,cost_usd:null,limit_incidents:0,wait_seconds:0,last_reset_eta:null}}'
+    else echo "chief usage: no event logs in $CHIEF_RUNS"; fi
+    return 0
+  fi
+
+  rows="$(jq -r -s --arg repo "$repo" --argjson cutoff "$cutoff" '
+    def present_sum($key):
+      [ .[] | .usage?[$key]? | select(type == "number") ] as $v
+      | if ($v|length) == 0 then "" else (($v|add)|tostring) end;
+    [ .[] | select((.ts // 0) >= $cutoff)
+      | select($repo == "" or (.repo? == $repo) or ((.repo? // "") | startswith($repo + "/"))) ] as $events
+    | $events
+    | group_by(.runId) | .[]
+    | [ .[] | select(.event == "agent.turn") ] as $turns
+    | [ .[] | select(.limit?.hit == true) ] as $limits
+    | ($limits | sort_by(.ts) | map(.limit.retry_at? | select(type == "number"))
+       | if length == 0 then "" else (.[-1]|tostring) end) as $reset
+    | ([ $limits[] | select((.limit.retry_at? | type) == "number")
+          | ((.limit.retry_at - .ts) | select(. > 0)) ] | add // 0) as $wait
+    | [((.[0].runId) // "unknown"), ($turns|length|tostring),
+       (present_sum("input_tokens")), (present_sum("output_tokens")),
+       (present_sum("total_tokens")), (present_sum("cost_usd")),
+       ($limits|length|tostring), ($wait|tostring), $reset] | @tsv
+  ' "${files[@]}")" || {
+    echo "chief usage: could not read event logs in $CHIEF_RUNS" >&2
+    return 1
+  }
+
+  if [ "$json" -eq 1 ]; then
+    jq -n --arg repo "$repo" --argjson days "${days:-null}" --arg rows "$rows" '
+      def nums($i): [$rows|split("\n")[]|select(length>0)|split("\t")[$i]|select(length>0)|tonumber];
+      def sum($i): (nums($i)|if length==0 then null else add end);
+      ($rows|split("\n")|map(select(length>0)|split("\t"))) as $r |
+      {chief:"usage",scope:{repo:(if $repo=="" then null else $repo end),days:$days},
+       runs:($r|map({run_id:.[0],turns:(.[1]|tonumber),usage:{input_tokens:(if .[2]=="" then null else (.[2]|tonumber) end),output_tokens:(if .[3]=="" then null else (.[3]|tonumber) end),total_tokens:(if .[4]=="" then null else (.[4]|tonumber) end),cost_usd:(if .[5]=="" then null else (.[5]|tonumber) end)},limits:{incidents:(.[6]|tonumber),wait_seconds:(.[7]|tonumber),last_reset_eta:(if .[8]=="" then null else (.[8]|tonumber) end)}})),
+       total:{turns:([$r[]|.[1]|tonumber]|add//0),input_tokens:sum(2),output_tokens:sum(3),total_tokens:sum(4),cost_usd:sum(5),limit_incidents:([$r[]|.[6]|tonumber]|add//0),wait_seconds:([$r[]|.[7]|tonumber]|add//0),last_reset_eta:([ $r[]|.[8]|select(length>0)|tonumber]|if length==0 then null else max end)}}
+    '
+    return 0
+  fi
+
+  printf 'Usage report · %s\n' "$CHIEF_RUNS"
+  printf '%-32s %6s %14s %15s %14s %10s %6s %10s %16s\n' \
+    'Run' 'Turns' 'Input tokens' 'Output tokens' 'Total tokens' 'Cost (USD)' 'Limits' 'Wait (s)' 'Last reset ETA'
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r id turns in out total cost hits wait reset; do
+    printf '%-32s %6s %14s %15s %14s %10s %6s %10s %16s\n' \
+      "$id" "$turns" "$in" "$out" "$total" "$cost" "$hits" "$wait" "$reset"
+  done
+
+  totals="$(printf '%s\n' "$rows" | jq -r -R -s '
+    split("\n") | map(select(length > 0) | split("\t")) as $r
+    | ["TOTAL", ($r|map(.[1]|tonumber)|add|tostring),
+       (if ([$r[]|.[2]|select(length > 0)]|length)==0 then "" else ([$r[]|.[2]|tonumber]|add|tostring) end),
+       (if ([$r[]|.[3]|select(length > 0)]|length)==0 then "" else ([$r[]|.[3]|tonumber]|add|tostring) end),
+       (if ([$r[]|.[4]|select(length > 0)]|length)==0 then "" else ([$r[]|.[4]|tonumber]|add|tostring) end),
+       (if ([$r[]|.[5]|select(length > 0)]|length)==0 then "" else ([$r[]|.[5]|tonumber]|add|tostring) end),
+       ($r|map(.[6]|tonumber)|add|tostring), ($r|map(.[7]|tonumber)|add|tostring),
+       ([$r[]|.[8]|select(length > 0)]|if length == 0 then "" else .[-1] end)] | @tsv
+  ' )"
+  printf '%s\n' "$totals" | while IFS="$(printf '\t')" read -r id turns in out total cost hits wait reset; do
+    printf '%-32s %6s %14s %15s %14s %10s %6s %10s %16s\n' \
+      "$id" "$turns" "$in" "$out" "$total" "$cost" "$hits" "$wait" "$reset"
+  done
+}
+
 # chief models [provider] — what to pass to --model. Delegates to each provider's own
 # enumeration where it has one (devin, opencode — the lists are account-specific and
 # change often, so never hardcode them); claude has no listing command, so print its
@@ -1078,6 +1176,7 @@ case "$cmd" in
   monitor|watch)        cmd_monitor "$@" ;;
   logs|tail)            cmd_logs "$@" ;;
   events|subscribe)     cmd_events "$@" ;;
+  usage)                 cmd_usage "$@" ;;
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   quality)              cmd_quality "$@" ;;
