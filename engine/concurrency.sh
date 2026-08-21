@@ -12,6 +12,48 @@ CHIEF_MACHINE_RUNS=0
 CHIEF_MACHINE_AGENT_TURNS=0
 CHIEF_MACHINE_GATES=0
 CHIEF_MACHINE_STALE=0
+CHIEF_MACHINE_CORES=1
+CHIEF_MACHINE_BUDGET=1
+CHIEF_MACHINE_BUDGET_DISABLED=0
+
+chief_machine_core_count() {
+  local n
+  n="$(sysctl -n hw.physicalcpu 2>/dev/null || echo)"
+  case "$n" in
+    ''|*[!0-9]*|0)
+      n="$(lscpu -p=CORE 2>/dev/null | awk '!/^#/ && !seen[$1]++ {n++} END {print n+0}')"
+      ;;
+  esac
+  case "$n" in ''|*[!0-9]*|0) n="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo)" ;; esac
+  case "$n" in ''|*[!0-9]*|0) n="$(nproc 2>/dev/null || echo)" ;; esac
+  case "$n" in ''|*[!0-9]*|0) n=1 ;; esac
+  printf '%s' "$n"
+}
+
+# CHIEF_MACHINE_BUDGET is the number of simultaneous agent turns allowed across
+# the host. Zero/off is the explicit escape hatch for the pre-budget behavior.
+chief_machine_budget_init() {
+  local requested="${CHIEF_MACHINE_BUDGET:-}"
+  CHIEF_MACHINE_CORES="$(chief_machine_core_count)"
+  CHIEF_MACHINE_BUDGET_DISABLED=0
+  case "$requested" in
+    0|off|false|none) CHIEF_MACHINE_BUDGET_DISABLED=1; CHIEF_MACHINE_BUDGET=0 ;;
+    ''|*[!0-9]*) CHIEF_MACHINE_BUDGET="$CHIEF_MACHINE_CORES" ;;
+    *) CHIEF_MACHINE_BUDGET="$requested" ;;
+  esac
+}
+
+chief_machine_budget_allows() {
+  [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ] || [ "$CHIEF_MACHINE_AGENT_TURNS" -lt "$CHIEF_MACHINE_BUDGET" ]
+}
+
+chief_machine_budget_line() {
+  if [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ]; then
+    printf 'machine budget: disabled (CHIEF_MACHINE_BUDGET=0)'
+  else
+    printf 'machine budget: %s agent turn(s) across %s physical core(s)' "$CHIEF_MACHINE_BUDGET" "$CHIEF_MACHINE_CORES"
+  fi
+}
 
 concurrency_field() {
   sed -n "s/^$1=//p" "${2:-}" 2>/dev/null | head -1

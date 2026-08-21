@@ -274,6 +274,7 @@ load_project() {
   # in every operator's shell. All optional; unset means the documented defaults
   # (400 lines / 20 files per story, reported and NOT blocking).
   export CHIEF_DIFF_BUDGET CHIEF_DIFF_BUDGET_LINES CHIEF_DIFF_BUDGET_FILES
+  export CHIEF_MACHINE_BUDGET
   # The OPT-IN BATCH MERGE QUEUE (engine/mergequeue.sh). Exported so a repo can set
   # its own policy in .chief/config rather than in every operator's shell. UNSET is
   # the default and the default is OFF: absent these, the merge phase is the

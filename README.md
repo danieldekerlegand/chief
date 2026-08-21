@@ -167,10 +167,14 @@ GUI-free by design. The reasoning is written down in
 
 ## Concurrency & the safety floor
 
-`-p N` sets max tasklists running at once. A pending tasklist launches only when
+`-p N` sets max tasklists running at once within this run. A pending tasklist launches only when
 **all three** hold: fewer than `N` are running, every `dependsOn` entry is already
 merged, and none of its `touches` conflict-domains overlaps a currently-running
-tasklist.
+tasklist. It is additionally clamped by the host-wide machine budget, which defaults
+to the detected physical core count and is shared by all registered runs. A run says
+`machine budget hold` while waiting for a turn from another repo. Set
+`CHIEF_MACHINE_BUDGET=0` to opt out; that choice is recorded in the run registry and
+`machine-budget.log`.
 
 - **dependsOn** = *ordering* — B needs A merged first.
 - **touches** = *conflict domains* — A and B edit the same area, so don't co-run
@@ -238,7 +242,7 @@ the run will look.
 | `chief init` | Scaffold `.chief/` + `tasks/chief/` in the current repo. |
 | `chief usage [--days N] [--repo PATH|--scope PATH] [--json]` | Project usage and rate-limit history from existing event logs: per-run and total turns, available token/cost measurements, limit incidents, wait time, and reset ETA. JSON is documented in [docs/reference/usage.md](docs/reference/usage.md). |
 | `chief gen <roadmap.json>` | Generate one schema-valid `tasks/chief/NN-slug.json` per roadmap item — the programmatic way to author tasklists (`-n` emits NDJSON and writes nothing; input contract: [`docs/reference/roadmap-input.md`](docs/reference/roadmap-input.md)). |
-| `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = concurrency (default 1). |
+| `chief run [-p N] [names…]` | Run pending tasklists. `-p N` = within-run concurrency (default 1), additionally clamped by the host-wide machine budget (`CHIEF_MACHINE_BUDGET`, default physical-core count). |
 | `chief run --provider P --model M` | Select Claude (default), Devin, OpenCode, Amp, or Codex (shortcuts: `--claude`, `--devin`, `--opencode`, `--amp`, `--codex`) and optionally override its model. Amp has no model selector, so `--model` is refused for it. |
 | `chief run --local` | Cost-avoidance preset: every agent turn on a LOCAL/self-hosted endpoint via OpenCode — zero API cost, materially lower coding quality, and an error rather than a paid fallback when unconfigured ([`docs/guides/local-inference-preset.md`](docs/guides/local-inference-preset.md)). |
 | `chief run -n` | Dry run: print the schedule waves and exit (no git, no agents). |
@@ -268,6 +272,7 @@ the run will look.
 
 - [`ROADMAP.md`](ROADMAP.md) — the roadmap: shipped capabilities vs. planned work.
 - [`docs/reference/tasklist-schema.md`](docs/reference/tasklist-schema.md) — the tasklist JSON format.
+- [`docs/reference/concurrency.md`](docs/reference/concurrency.md) — the host-wide agent-turn budget and hold behavior.
 - [`docs/reference/roadmap-input.md`](docs/reference/roadmap-input.md) — the roadmap-document contract
   `chief gen` consumes: `phases[] → items[]`, the field mapping and defaults, and a
   worked example. The programmatic way for an embedding host to author tasklists.
