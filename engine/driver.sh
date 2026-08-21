@@ -478,6 +478,9 @@ source "$ENGINE/gitenv.sh"
 # Orphan identification + the bounded, reporting reap (engine/reap.sh). Shared with
 # `chief reap`, which is the same sweep on a path that does NOT need a new run.
 source "$ENGINE/reap.sh"
+# Host-wide activity reader. US-1 reports the work already consuming the machine
+# before this driver adds another tasklist; US-2 is the policy that will act on it.
+source "$ENGINE/concurrency.sh"
 # The DISK half of the same idea (engine/sweep.sh): reap.sh collects orphaned
 # PROCESSES, this collects the build directories they left behind. Shared with
 # `chief reap` for the same reason.
@@ -2071,6 +2074,8 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
   echo "names=$NAMES"
 } > "$RUN_FILE" 2>/dev/null || true
+chief_machine_activity "$CHIEF_RUNS"
+echo "  machine activity before launch: $(chief_machine_activity_line)"
 # The run file now exists, so the id a headless host reads here is immediately
 # resolvable in the registry. Emitted BEFORE the scheduler loop (and before the
 # orphan sweep below, which can spend seconds) so the parent can start correlating

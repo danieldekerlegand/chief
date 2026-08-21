@@ -201,6 +201,17 @@ else
   chief_ns_foreign()  { return 1; }
 fi
 
+# Shared machine-activity reader. It uses the same registry and liveness
+# predicate as the reaper; this is the operator-visible answer to "why is my
+# run holding?" and the driver uses the same line before it launches work.
+if [ -f "$_MON_DIR/concurrency.sh" ]; then
+  # shellcheck source=engine/concurrency.sh
+  . "$_MON_DIR/concurrency.sh"
+else
+  chief_machine_activity() { :; }
+  chief_machine_activity_line() { printf 'machine activity unavailable'; }
+fi
+
 dur() {       # $1 = seconds -> "45s" / "12m" / "3h04m"
   local s="${1:-}"
   case "$s" in ''|*[!0-9]*) printf '?'; return ;; esac
@@ -674,6 +685,8 @@ render() {
   set -- "$RUNS"/*.run
   [ -e "$1" ] && runfiles="$*"
 
+  chief_machine_activity "$RUNS"
+
   # Header (count active first so a run whose pid just died isn't counted).
   #
   # This loop DELETES the run file of a run whose pid is gone — reasonable when the
@@ -708,6 +721,7 @@ render() {
   fi
   printf '%sCHIEF%s · %s%d active run(s)%s%s · %s%s%s\n' "$BOLD" "$RST" "$CYN" "$n_active" "$RST" \
     "$([ "$UNREG_N" -gt 0 ] && printf ' · %s⚠ %d unregistered%s' "$RED" "$UNREG_N" "$RST")" "$DIM" "$now" "$RST"
+  printf '%sMachine activity: %s%s\n' "$DIM" "$(chief_machine_activity_line)" "$RST"
   foreign_note "$n_foreign"
   if [ "$n_active" -eq 0 ]; then
     # Only a registry that HAD entries can have "all exited" — with no run files at
