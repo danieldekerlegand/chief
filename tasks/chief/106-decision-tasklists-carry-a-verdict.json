@@ -1,0 +1,70 @@
+{
+  "project": "chief",
+  "category": "feature",
+  "branchName": "chief/106-decision-tasklists-carry-a-verdict",
+  "description": "**Chief can prepare a decision and can hold for a human, but a decision has nowhere to LAND — so every one is settled by hand-editing JSON.**\n\nMeasured across the portfolio on 2026-08-20: **20 parked tasklists reference a decision, an ADR, or waiting for an answer, and NOT ONE of them sets `parkedReason`.** `chief status` already breaks parks down by that field and `driver.sh` already prints it; the reporting shipped in `97` and the data never followed. So the operator's real question — *which of these is waiting on ME, and which is waiting on a toolchain, a licence counterparty, or hardware I do not own* — cannot be answered without opening twenty files. Today it separates `talos/66-root-license-decision` (mine to make) from `talos/47-ue-toolchain-and-build-matrix` (provisioning-blocked, not a decision at all) only by reading prose.\n\n**The machinery to run a decision interactively already exists and is better than assumed.** `review.sh` hands a document to a reviewer program, blocks for a verdict, records it as a checksum-bound file, and — critically — **absence is detected, never assumed**: no reviewer on PATH parks the tasklist rather than approving it. `review_record` keeps `rounds` APPEND-ONLY because *\"the annotation history is the reviewer's side of the conversation and is what the next plan turn is briefed with.\"* `research: true` produces the reviewable, editable brief to decide FROM. That is a decision loop with a prose channel, already built.\n\n**What is missing is only the terminal state.** A tasklist ends when its stories pass and its branch merges. That fits *\"write the ADR\"*. It does not fit *\"choose between three options\"*, where the deliverable is a human's judgement and there may be no code at all. So the verdict has no home, and retiring the tasklist afterwards means hand-writing `supersededBy` with no `mergedToMain` — a filing whose one mis-step permanently blocks every dependent. That surgery was performed by hand on `koine/62` and `koine/63` on 2026-08-20, which is the immediate motivation for this work.\n\nBuild the smallest thing that closes it: make the park reason real, give a decision tasklist a shape, and give the verdict a command. Do NOT build a second review system — this rides the one in `review.sh`.",
+  "touches": [
+    "bin/chief",
+    "engine/",
+    "docs/reference/",
+    "test/"
+  ],
+  "iters": 8,
+  "warmup": [
+    "python3 -c \"import json,glob;print(sum(1 for f in glob.glob('../*/tasks/chief/*.json') if json.load(open(f)).get('parked')), 'parked;', sum(1 for f in glob.glob('../*/tasks/chief/*.json') if json.load(open(f)).get('parkedReason')), 'with parkedReason')\"",
+    "grep -n 'parkedReason' engine/driver.sh engine/status.sh | head",
+    "sed -n '1,120p' engine/review.sh",
+    "grep -n 'review_record\\|rounds' engine/review.sh | head -20",
+    "grep -n 'supersededBy\\|mergedToMain' engine/*.sh docs/reference/tasklist-schema.md | head"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A park says what KIND of park it is, and chief can filter to the ones awaiting a human",
+      "acceptanceCriteria": [
+        "`parkedReason` gains a recognized leading CLASS while remaining the opaque free-text field driver.sh already treats it as — at minimum distinguishing a park awaiting a HUMAN DECISION from one blocked on an external dependency, a toolchain, or a counterparty. Chief must keep printing an unrecognized reason verbatim: a class it does not know is not an error.",
+        "`chief lint` fails a tasklist that is `\"parked\": true` with no `parkedReason`. Twenty parks across the portfolio carry a decision in prose and none in the field, which is the exact gap `97`'s reporting cannot see through.",
+        "`chief status` can filter to the decision class, so 'what is waiting on me' is one command. Counterfactual: a run of that filter today would return the empty set from twenty genuine candidates, and the test asserts against a fixture that reproduces that shape.",
+        "The classes are documented in `tasklist-schema.md` with an example of each, including at least one park that is NOT a decision. A park blocked on an unprovisioned toolchain is the shape to keep out of the decision class — a lint that assumes every park is a question would sweep those in, and across the portfolio they outnumber the real decisions.",
+        "This story ships the CLASS, the lint and the filter. Backfilling the existing parked tasklists is a portfolio sweep in the repos that own them and is explicitly NOT done here."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "A decision tasklist's deliverable is the operator's verdict, not a merge",
+      "acceptanceCriteria": [
+        "A tasklist may declare itself a DECISION. Its completion condition is a recorded human verdict, not passing stories plus a merged branch — a choice between three options may produce no code at all, and today such a tasklist can only end by lying about what it did.",
+        "It rides the EXISTING review gate in `review.sh` — the reviewer contract, the checksum binding, the append-only `rounds`, and the park-on-absence semantics are reused, not reimplemented. A second review system in this repo would be the wrong outcome of this story.",
+        "The decision brief is produced by the existing `research` phase so the operator decides from a mapped, editable document rather than from the tasklist description. The brief must state the options and what each one forecloses.",
+        "The verdict is durable across process death, a usage-limit sleep, and a rebuilt worktree, on the same guarantees the plan verdict already has. An approval given once is never asked for twice.",
+        "A decision tasklist on a host with no reviewer PARKS. It must never self-approve, and the test asserts that on a host with `CHIEF_REVIEW_NONINTERACTIVE=1`."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "`chief decide` records the verdict and files the retirement correctly",
+      "acceptanceCriteria": [
+        "A command records an operator's verdict against a tasklist with a prose note — the note is the point, since a verdict without its reasoning is folklore in six months.",
+        "Where the verdict retires the tasklist, chief performs the `completed/` filing itself: `supersededBy` set, `mergedToMain` deliberately absent, moved to `completed/`. This is currently hand-edited JSON and it was hand-edited twice on 2026-08-20.",
+        "Chief REFUSES the retirement while any live tasklist still depends on it, naming the dependents. A `completed/` record with no `mergedToMain` permanently blocks every dependent — intended when the retirement is deliberate, catastrophic when a dependent was overlooked, and `~/Development/CLAUDE.md` states the ordering rule as 'repoint its dependents BEFORE filing it'.",
+        "Where the verdict instead UNPARKS, the park fields are cleared and the recorded verdict survives in the tasklist — a tasklist that was parked on a question should carry the answer that released it.",
+        "The verdict lands in the event stream like every other state transition, so a decision is visible in `chief events` and to any embedding host.",
+        "A test drives both outcomes end to end and asserts the resulting JSON against the retirement rules, including the refusal."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-4",
+      "title": "The agent prepares the decision and is structurally unable to make it",
+      "acceptanceCriteria": [
+        "No agent turn can produce a verdict. The agent researches, frames the options and drafts the record; the verdict enters only through the human path. A model that can write its own approval has turned a decision gate into a formality.",
+        "A test asserts an agent cannot reach the verdict — the counterfactual is an agent-authored verdict file being rejected rather than honoured.",
+        "Where a decision's outcome is an ADR, the agent may draft it, but the draft carries the operator's verdict rather than asserting one of its own. Several parked tasklists across the portfolio are exactly this shape — an ADR nobody can write until a person chooses.",
+        "Documented in `docs/reference/` as its own page, covering the decision class, the interactive loop, `chief decide`, and the retirement rules, and linked from `docs/README.md` per the documentation standard."
+      ],
+      "notes": null
+    }
+  ]
+}

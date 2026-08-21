@@ -1,0 +1,59 @@
+{
+  "project": "chief",
+  "category": "feature",
+  "branchName": "chief/107-list-and-ps-show-what-is-live",
+  "description": "**`chief list` in this repo prints two live tasklists followed by ninety-four `done` ones, and nothing on screen distinguishes a park from a block from a ready.** The signal is 2% of the output and it is at the top only by luck of the sort. In `cuneiform` — 371 tasklists, 312 done — the live work is under 16% of the lines. An operator's actual question is *what can I run right now*, and the command named `list` answers it worst of the three commands that could.\n\n`97-tasklist-state-report` deliberately left this alone, and its reason is binding on how this is done rather than on whether: *\"`chief list` keeps working exactly as it does now. It is a different tool — per-tasklist story progress, not aggregate state — and scripts and habits depend on its output.\"* Both halves of that hold. `chief status` is the aggregate; `chief list` is per-tasklist and should stay per-tasklist. **So the change is presentation and default scope, not a merge of the two commands, and the script contract must survive it** — `scripts/tasklist-census.py --plain` in `~/Development` is the precedent for how: pretty for a human, stable and parseable on demand.\n\nSecond half, same complaint one level over: `chief ps` shows RUNNING drivers, which is correct and is why it is called `ps`. But there is no view of everything in flight — running plus ready plus blocked plus parked, minus the done — for a single repo. That is the thing an operator looks at before deciding what to start, and today it takes `chief list`, `chief status --blocked` and reading park prose to assemble.\n\nNothing here is new state. Every fact needed is already computed by `status.sh` for its own table, including the dependency verdicts behind BLOCKED and the park reasons behind PARKED. **This is a rendering and default-scope story; if it grows a new source of truth, it has gone wrong.**",
+  "touches": [
+    "bin/chief",
+    "engine/status.sh",
+    "engine/driver.sh",
+    "docs/reference/",
+    "test/"
+  ],
+  "iters": 7,
+  "warmup": [
+    "chief list | head -20; echo '---'; chief list | wc -l",
+    "chief status | head -30",
+    "chief ps | head -20",
+    "../scripts/tasklist-census.py | head -8",
+    "grep -n 'plain\\|bars\\|box\\|┌' ../scripts/tasklist-census.py | head -12",
+    "grep -n 'cmd_list\\|cmd_ps\\|cmd_status' bin/chief | head"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "`chief list` defaults to the work that is still live",
+      "acceptanceCriteria": [
+        "By default `chief list` omits completed tasklists. `-a`/`--all` restores them. In this repo that is 96 lines down to 2; in cuneiform, 371 down to 59.",
+        "The default must not hide anything an operator could act on. Ready, in-progress, blocked and PARKED all remain — parked especially, since a park is a decision waiting on a human and hiding it is how twenty of them accumulated unnoticed.",
+        "A count of what was omitted is printed, so the shorter output never reads as a smaller portfolio. Silent truncation is the failure mode.",
+        "The done-by-default change is documented in the CHANGELOG as a behaviour change to a long-stable command, not slipped in as a formatting tweak."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "It is formatted as a table, and machines get a stable contract",
+      "acceptanceCriteria": [
+        "Human output is a column-aligned table in the house style already set by `scripts/tasklist-census.py` and `chief status` — at minimum name, state, story progress, category, and for a park or a block the reason in the operator's terms. Reuse the existing rendering; a third table style in this codebase is a defect, not a feature.",
+        "STATE is visually distinguishable at a glance, not inferable from a progress fraction: today `0/3` is printed identically for a tasklist that is ready to run and one that is blocked on a dependency.",
+        "`--plain` emits stable, parseable, unaligned output for scripts, on the same rationale as the census script's flag. `97` declined to touch this command because 'scripts and habits depend on its output', and this flag is what makes that safe.",
+        "A test asserts `--plain` is stable across the formatting change — the counterfactual is a downstream script silently breaking on box-drawing characters.",
+        "Non-TTY output must not emit colour or box-drawing by default. A piped `chief list` that ships escape codes is the same bug in a different costume."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "`chief ps -a` shows everything in flight, not only what has a driver",
+      "acceptanceCriteria": [
+        "`chief ps -a` shows all non-done tasklists — running, ready, blocked, parked — while bare `chief ps` keeps its current meaning of live drivers across all repos. A command called `ps` that stopped showing processes would be worse than the gap it closed.",
+        "The live-run detail `ps` already renders — zone-hold reasons, approval commands, diff-budget warnings, stall detection, the UNREGISTERED-driver flag — is preserved unchanged for the rows that have a driver. This story adds rows; it must not thin the ones that matter most.",
+        "A blocked row names what blocks it and a parked row names its reason, both from the verdicts `status.sh` already computes. No new dependency resolution is written for this view.",
+        "`chief monitor` renders the same view under `-a`, since a live-refreshing view of only the running subset has the same blind spot.",
+        "A test drives a fixture repo containing one of each state and asserts every one appears under `-a` and that the done ones do not."
+      ],
+      "notes": null
+    }
+  ]
+}
