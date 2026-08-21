@@ -200,10 +200,11 @@ these fields; chief does not persist, aggregate, or bill anything itself.
 | `turns` | int \| null | 〃 (`num_turns` — the provider's internal turns, not chief's iteration) |
 | `model` | string \| null | chief's own configured model — **not** a scrape, so it is set whenever one is configured |
 
-**Expect `usage: null` on a default install.** `claude --print`, the provider chief
-runs by default, prints no usage figures, so only `model` is populated and the rest
-are null. A provider that emits a `{"type":"result","total_cost_usd":…,"usage":{…}}`
-line (or a plain `Total cost: $0.0421` / `1234 input tokens` summary) fills them in.
+Claude runs request its structured result, so a default install emits the usage
+figures Claude reports. A provider that emits a
+`{"type":"result","total_cost_usd":…,"usage":{…}}` line (or a plain
+`Total cost: $0.0421` / `1234 input tokens` summary) fills them in; providers that
+do not expose usage continue to yield `usage: null`.
 The scrape is deliberately narrow: **a guessed number is worse than a null**, because
 a ledger cannot tell an invented figure from a measured one.
 

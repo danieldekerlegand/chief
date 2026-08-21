@@ -1,0 +1,15 @@
+# Chief Progress — 104-claude-turns-report-their-usage
+Started: Thu Aug 20 22:36:24 CDT 2026
+---
+
+## Codebase Patterns
+
+- Provider argv is specified exactly in `test/provider-conformance.sh`; update the roster whenever dispatch flags change.
+
+## US-1 — A claude turn emits real usage figures
+
+- Added `--output-format json` to both Claude dispatch paths in `engine/agent.sh`, preserving the existing `_parse_usage()` parser.
+- Updated the Claude argv roster and corrected the usage contract documentation in `docs/reference/events.md`.
+- Verification: `bash test/provider-conformance.sh` PASS (5 providers); `bash test/events.sh` PASS, with observed `input_tokens=1200`, `output_tokens=340`, and `cost_usd=0.0421` on the reporting turn.
+
+Learnings for future iterations: the existing event test already exercises the structured result shape and confirms provider output is scraped only when present; output presentation and version synchronization remain separate story concerns.

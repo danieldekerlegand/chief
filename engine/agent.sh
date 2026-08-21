@@ -803,7 +803,7 @@ _demote_escalate() {
 # provider already printed on the stdout it was going to capture anyway. No API call,
 # no polling loop, no second invocation. When a provider prints nothing usage-shaped
 # (which is `claude --print` today), this yields nothing and the event's `usage` is
-# null: a nullable, provider-dependent field, exactly as docs/reference/events.md promises.
+# null: a nullable, provider-dependent field for providers that do not expose usage.
 #
 # _parse_usage OUTPUT -> ' key=value …' event_emit keys ('' when nothing was found).
 # Two shapes, most trustworthy first:
@@ -1091,8 +1091,8 @@ _run_provider() {
 _provider_exec() {
   case "$PROVIDER" in
     claude)
-      if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --model "$MODEL"
-      else claude --dangerously-skip-permissions --print
+      if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --output-format json --model "$MODEL"
+      else claude --dangerously-skip-permissions --print --output-format json
       fi
       ;;
     devin)

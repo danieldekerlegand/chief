@@ -60,7 +60,7 @@ CHIEF="$ROOT/bin/chief"
 # tasklist 85 — docs/guides/providers.md#model-overrides). Section 4 below asserts that
 # refusal for every `unwired` entry, so the stance stays a decision, not a drop.
 ROSTER=(
-"claude|stdin|wired|--dangerously-skip-permissions --print --model %MODEL%|--dangerously-skip-permissions --print"
+"claude|stdin|wired|--dangerously-skip-permissions --print --output-format json --model %MODEL%|--dangerously-skip-permissions --print --output-format json"
 "devin|prompt-file|wired|--permission-mode bypass --respect-workspace-trust false --print --model %MODEL% --prompt-file %PROMPT_FILE%|--permission-mode bypass --respect-workspace-trust false --print --prompt-file %PROMPT_FILE%"
 "opencode|stdin|wired|run --model %MODEL%|run"
 "amp|stdin|unwired|--dangerously-allow-all|--dangerously-allow-all"
