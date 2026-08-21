@@ -40,3 +40,7 @@ still hangs on its first detection case and was not changed.
 Learnings for future iterations: when two provider phases need identical tee and
 humanization behavior, keep the raw capture and `PIPESTATUS` handling in one helper
 so quality ratchets do not count the phase-specific copies as duplicate code.
+
+Final verification note: after the follow-up engine commit, VERSION was bumped to
+0.8.77 and README was synced; `test/version-bump.sh` and `test/doc-sync.sh` both
+passed. The runtime PRD has US-1, US-2, and US-3 set to `passes: true`.
