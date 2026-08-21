@@ -370,6 +370,10 @@ cmd_lint() {
     fi
     jq -e --arg n "$n" '.branchName == "chief/\($n)"' "$f" >/dev/null 2>&1       || { echo "  ✗ $n — branchName is $(jq -r '.branchName // "(missing)"' "$f"), expected chief/$n"; findings=$((findings + 1)); }
     jq -e 'has("mergedToMain")|not' "$f" >/dev/null 2>&1       || { echo "  ✗ $n — carries mergedToMain; an unmerged tasklist must not claim to be merged"; findings=$((findings + 1)); }
+    if jq -e '(.parked // false) and ((.parkedReason // "") | tostring | length == 0)' "$f" >/dev/null 2>&1; then
+      echo "  ✗ $n — parked tasklist must carry parkedReason (use CLASS: explanation)"
+      findings=$((findings + 1))
+    fi
     rep="$(criteria_scope_report "$f" "$CHIEF_PROJECT")"
     if [ -n "$rep" ]; then
       echo "  ✗ $n — an acceptance criterion names work in another repo:"

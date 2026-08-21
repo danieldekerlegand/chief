@@ -28,7 +28,8 @@
         "The classes are documented in `tasklist-schema.md` with an example of each, including at least one park that is NOT a decision. A park blocked on an unprovisioned toolchain is the shape to keep out of the decision class — a lint that assumes every park is a question would sweep those in, and across the portfolio they outnumber the real decisions.",
         "This story ships the CLASS, the lint and the filter. Backfilling the existing parked tasklists is a portfolio sweep in the repos that own them and is explicitly NOT done here."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n + shellcheck (when available) + test/parked-decisions.sh + test/park-reasons.sh + status JSON/category regressions: green; focused test passed"
     },
     {
       "id": "US-2",

@@ -62,14 +62,22 @@ work run to completion by a chain of agent iterations.
   "parked": false,                       // true = skipped by auto-discovery. Naming one in
                                          //   `chief run` prints its reason and stops
                                          //   (`--parked` runs it anyway).
-  "parkedReason": "",                    // WHY it is parked, in a field rather than in
+  "parkedReason": "HUMAN_DECISION: choose the storage backend", // WHY it is parked, in a field rather than in
                                          //   prose. Optional and additive: `parked` alone
                                          //   still parks and reads as a park that does
                                          //   not say why. An OPAQUE STRING — chief holds
                                          //   no vocabulary; a project declares its own
                                          //   with CHIEF_PARK_REASONS in .chief/config, and
                                          //   `chief status` breaks the parked total down
-                                         //   by it. See status.md.
+                                         //   by it. See status.md. The leading class is one
+                                         //   of HUMAN_DECISION, EXTERNAL_DEPENDENCY, TOOLCHAIN,
+                                         //   or COUNTERPARTY, followed by a colon and opaque
+                                         //   prose. For example, HUMAN_DECISION: choose A
+                                         //   means a person must choose; TOOLCHAIN: UE SDK
+                                         //   not provisioned is a dependency, not a decision.
+                                         //   Unknown classes remain valid prose and render
+                                         //   verbatim. `chief status --decision` filters to
+                                         //   HUMAN_DECISION parks.
   "review": "none",                      // "plan" = a HUMAN approves the agent's plan
                                          //   before it writes any code (one extra turn
                                          //   per story). "none" (default) is the

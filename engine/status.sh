@@ -130,6 +130,8 @@ CASCADE_CAP="${CHIEF_STATUS_CASCADE_CAP:-25}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --blocked)        BLOCKED_ONLY=1; shift ;;
+    --decision)       DECISION_CLASS="HUMAN_DECISION"; shift ;;
+    --parked-reason)  [ "$#" -gt 1 ] || { echo "chief status: --parked-reason needs a class" >&2; exit 2; }; DECISION_CLASS="$2"; shift 2 ;;
     --all)            ALL=1; shift ;;
     --enforce-order)  ENFORCE_ORDER=1; shift ;;
     --json)           JSON=1; shift ;;
@@ -177,6 +179,24 @@ USAGE
     *) echo "chief status: unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+
+: "${DECISION_CLASS:=}"
+
+# The leading token is a recognized class only when it is followed by a colon.
+# The remainder remains opaque prose, and unknown classes are never rejected.
+park_reason_class() {
+  local reason="$1" token
+  case "$reason" in *:*) ;; *) printf ''; return ;; esac
+  token="${reason%%:*}"
+  token="$(printf '%s' "$token" | tr '[:lower:]-' '[:upper:]_')"
+  case "$token" in
+    DECISION|HUMAN_DECISION) printf 'HUMAN_DECISION' ;;
+    EXTERNAL|EXTERNAL_DEPENDENCY|DEPENDENCY) printf 'EXTERNAL_DEPENDENCY' ;;
+    TOOLCHAIN) printf 'TOOLCHAIN' ;;
+    COUNTERPARTY) printf 'COUNTERPARTY' ;;
+    *) printf '' ;;
+  esac
+}
 
 # ── identity, membership, and the tree walk ──────────────────────────────────
 # Every path that reaches a count goes through abspath() first. That is the whole
@@ -614,6 +634,9 @@ scan_repo() {
     if [ -n "$catv" ]; then n_categorized=$((n_categorized + 1)); else catv="$CAT_NONE"; fi
 
     if [ "$parkedv" = "true" ]; then
+      if [ -n "$DECISION_CLASS" ] && [ "$(park_reason_class "$parkwhy")" != "$(printf '%s' "$DECISION_CLASS" | tr '[:lower:]-' '[:upper:]_')" ]; then
+        continue
+      fi
       r_parked=$((r_parked + 1)); parked="$parked$q$TAB$parkwhy
 "
       cats="$cats$catv${TAB}parked
