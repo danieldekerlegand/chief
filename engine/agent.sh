@@ -842,13 +842,29 @@ _parse_usage() {
   printf '%s' "$got"
   return 0
 }
+# _humanize_provider_output OUTPUT -> the text an operator and the loop should see.
+# Claude's JSON result envelope is transport for usage, not the provider's human
+# response. Keep the raw envelope separately for _parse_usage, while exposing its
+# result field to completion detection and logs. Any non-envelope output (including
+# malformed JSON) passes through exactly as it did before the structured request.
+_humanize_provider_output() {
+  local out="$1" result=""
+  command -v jq >/dev/null 2>&1 || { printf '%s' "$out"; return 0; }
+  result="$(printf '%s\n' "$out" | grep '"type"[[:space:]]*:[[:space:]]*"result"' | tail -1 \
+    | jq -er 'select(.result | type == "string") | .result' 2>/dev/null || echo "")"
+  if [ -n "$result" ]; then
+    printf '%s' "$result"
+  else
+    printf '%s' "$out"
+  fi
+}
 # _emit_turn_event ITER — one `agent.turn` per provider turn that returned, emitted
 # at the same point the loop already writes the post-turn live_set. It is what carries
 # the per-turn usage figures (null when the provider printed none), so a host can keep
 # a spend ledger without re-running or re-parsing anything. `model` comes from the
 # engine's own configuration, not a scrape, so it is populated whenever one is set.
 _emit_turn_event() {
-  local u; u="$(_parse_usage "${OUTPUT:-}")"
+  local u; u="$(_parse_usage "${RAW_OUTPUT:-${OUTPUT:-}}")"
   # shellcheck disable=SC2086  # $u is a deliberate word-split list of key=value args
   event_emit agent.turn name="${CHIEF_TASKLIST:-}" state=running \
     detail="iteration ${1:-?} — $(_passes)/$(_total) passing" \
@@ -1229,7 +1245,14 @@ if research_enabled "$PRD_FILE"; then
           "$(research_missing "$RESEARCH_DOC")" "$RESEARCH_FEEDBACK" > "$RESEARCH_PROMPT_FILE"
         TOOL_RC=0
         _beat_start
-        OUTPUT=$(_run_provider < "$RESEARCH_PROMPT_FILE" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
+        RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
+        : > "$RAW_OUTPUT_FILE"
+        _run_provider < "$RESEARCH_PROMPT_FILE" 2>&1 | tee "$RAW_OUTPUT_FILE" \
+          | { raw="$(cat)"; _humanize_provider_output "$raw" >&2; } \
+          || TOOL_RC="${PIPESTATUS[0]}"
+        RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
+        OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
+        rm -f "$RAW_OUTPUT_FILE"
         _beat_stop
         # A research turn is still a provider turn: it costs quota and belongs in the
         # spend ledger like any other. Reported as iteration 0 — the phase runs before
@@ -1424,7 +1447,14 @@ while :; do
     "$ACTIVE_PROMPT" \
     "$(wc -l < "$ACTIVE_PROMPT" 2>/dev/null | tr -d ' ')" >&2
   _beat_start
-  OUTPUT=$(_run_provider < "$ACTIVE_PROMPT" 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}") || TOOL_RC=$?
+  RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
+  : > "$RAW_OUTPUT_FILE"
+  _run_provider < "$ACTIVE_PROMPT" 2>&1 | tee "$RAW_OUTPUT_FILE" \
+    | { raw="$(cat)"; _humanize_provider_output "$raw" >&2; } \
+    || TOOL_RC="${PIPESTATUS[0]}"
+  RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
+  OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
+  rm -f "$RAW_OUTPUT_FILE"
   _beat_stop
   live_set "$LIVE" phase="$TURN_PHASE" story="$(_story)" passing="$(_passes)" total="$(_total)"
   _emit_story_events "$i"

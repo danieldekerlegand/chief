@@ -117,7 +117,12 @@ jq '(.userStories[0].passes)=true' .chief/state/prd.json > .chief/state/prd.tmp
 mv .chief/state/prd.tmp .chief/state/prd.json
 git add -A
 git commit -q -m "conformance double: $(basename "$0")"
-printf '%s\n' '<promise>COMPLETE</promise>'
+if [ "$(basename "$0")" = claude ]; then
+  printf '%s\n' '{"type":"result","result":"<promise>COMPLETE</promise>","total_cost_usd":0.01,"usage":{"input_tokens":3,"output_tokens":2}}'
+else
+  # Invalid JSON is the pre-existing provider-output path and must remain usable.
+  printf '%s\n' '<promise>COMPLETE</promise>'
+fi
 SH
 for r in "${ROSTER[@]}"; do
   cp "$WORK/fakebin/_double" "$WORK/fakebin/${r%%|*}"
@@ -161,6 +166,13 @@ run_case() {
   [ "$rc" = 0 ] || { sed -n '1,40p' "$out" >&2; fail "$label: agent.sh exited $rc, not 0 (a committed COMPLETE must end the loop)"; }
   [ -f "$argv_log" ] || fail "$label: the $name double was never invoked"
   [ "$(git -C "$repo" rev-list --count HEAD)" -gt 2 ] || fail "$label: the double's commit did not land"
+  if [ "$name" = claude ]; then
+    case "$(cat "$out")" in
+      *'"type":"result"'*) fail "$label: operator log exposed Claude's raw JSON envelope" ;;
+      *'<promise>COMPLETE</promise>'*) ;;
+      *) fail "$label: human-readable Claude result did not reach the log" ;;
+    esac
+  fi
 
   # 2a) EXACT argv, one arg per line.
   local want="$WORK/$label.want"

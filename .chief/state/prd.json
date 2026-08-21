@@ -36,8 +36,8 @@
         "`test/smoke.sh` passes \u2014 the end-to-end offline run is the regression net for exactly this.",
         "A turn whose output is NOT valid JSON is handled without crashing the loop; the fallback is the pre-existing behaviour."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash test/provider-conformance.sh PASS — structured Claude result was humanized to the completion promise with no raw JSON in the operator log; the other provider doubles emitted invalid JSON and still completed with exit 0. bash test/smoke.sh PASS."
     },
     {
       "id": "US-3",

@@ -13,3 +13,11 @@ Started: Thu Aug 20 22:36:24 CDT 2026
 - Verification: `bash test/provider-conformance.sh` PASS (5 providers); `bash test/events.sh` PASS, with observed `input_tokens=1200`, `output_tokens=340`, and `cost_usd=0.0421` on the reporting turn.
 
 Learnings for future iterations: the existing event test already exercises the structured result shape and confirms provider output is scraped only when present; output presentation and version synchronization remain separate story concerns.
+
+## US-2 — The agent loop is unaffected — output still reads as it did
+
+- Added a normalization boundary in `engine/agent.sh`: raw provider output remains available to `_parse_usage()`, while a Claude result envelope exposes only its human-readable `result` to completion detection and logs.
+- Extended `test/provider-conformance.sh` to exercise structured Claude output and assert that malformed non-JSON provider output still completes and remains visible.
+- Verification: `bash test/provider-conformance.sh` PASS (5 providers); `bash test/smoke.sh` PASS.
+
+Learnings for future iterations: structured provider output must be split into a raw accounting stream and a human-readable control stream; completion detection should consume the latter.
