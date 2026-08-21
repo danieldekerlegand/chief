@@ -15,3 +15,6 @@ Learnings for future iterations: cache keys must use `HEAD^{tree}` rather than c
 ids, and the gate script content belongs in the key so a changed verifier cannot reuse
 an old verdict. Keep the cache under run state with a per-repository namespace and a
 fixed record bound.
+
+Follow-up mutation probe also committed a one-byte tree change and confirmed the
+cache missed, then changed the hook and confirmed another miss.
