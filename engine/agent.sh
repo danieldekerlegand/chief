@@ -1092,11 +1092,14 @@ _apply_account_env() {
 _capture_provider_output() {
   RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
   : > "$RAW_OUTPUT_FILE"
-  _run_provider < "$1" 2>&1 | tee "$RAW_OUTPUT_FILE" \
-    | { raw="$(cat)"; _humanize_provider_output "$raw" >&2; } \
-    || TOOL_RC="${PIPESTATUS[0]}"
+  if _run_provider < "$1" >"$RAW_OUTPUT_FILE" 2>&1; then
+    TOOL_RC=0
+  else
+    TOOL_RC=$?
+  fi
   RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
   OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
+  printf '%s\n' "$OUTPUT" >&2
   rm -f "$RAW_OUTPUT_FILE"
 }
 
