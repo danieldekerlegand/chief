@@ -20,6 +20,8 @@ WORK="$(mktemp -d)"
 # fixture-independent failure that reads as a regression in whatever happened to run
 # after the flag appeared. No test here ever wants to inherit one.
 unset CHIEF_PAUSE_FILE
+unset CHIEF_PROVIDER CHIEF_TOOL CHIEF_MODEL CHIEF_PRESET
+export CHIEF_PROVIDER=claude CHIEF_TOOL=claude
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=rl GIT_AUTHOR_EMAIL=rl@test GIT_COMMITTER_NAME=rl GIT_COMMITTER_EMAIL=rl@test
 export CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos"   # hermetic: don't touch ~/.chief
