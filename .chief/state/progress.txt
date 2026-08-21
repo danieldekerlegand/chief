@@ -1,5 +1,5 @@
 # Chief Progress — 104-claude-turns-report-their-usage
-Started: Thu Aug 20 22:36:24 CDT 2026
+Started: Fri Aug 21 04:10:58 CDT 2026
 ---
 
 ## Codebase Patterns
@@ -21,3 +21,11 @@ Learnings for future iterations: the existing event test already exercises the s
 - Verification: `bash test/provider-conformance.sh` PASS (5 providers); `bash test/smoke.sh` PASS.
 
 Learnings for future iterations: structured provider output must be split into a raw accounting stream and a human-readable control stream; completion detection should consume the latter.
+
+## US-3 — A provider that prints nothing usage-shaped still yields null, cleanly
+
+- Bumped `VERSION` to 0.8.76 and synchronized the README’s current-version line.
+- Preserved the existing nullable, provider-dependent usage contract; no-usage providers remain `usage:null` without zero-filling or estimation.
+- Verification: `bash test/events.sh` PASS; `bash test/version-bump.sh` PASS; `bash test/doc-sync.sh` PASS.
+
+Learnings for future iterations: release version changes must update both the single-line `VERSION` source and README’s bold current-version claim.

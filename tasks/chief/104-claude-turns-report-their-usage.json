@@ -48,8 +48,8 @@
         "The nullable, provider-dependent contract in `docs/reference/events.md` is preserved for every other provider.",
         "`VERSION` is bumped and the README version string synced, because `engine/` changed \u2014 `test/version-bump.sh` and `test/doc-sync.sh` enforce both."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash test/events.sh PASS — providers with no usage-shaped output emitted usage:null on every event; docs preserve the nullable provider-dependent contract. VERSION 0.8.76 matches README **v0.8.76**; version-bump and doc-sync checks passed."
     }
   ]
 }
