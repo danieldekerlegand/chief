@@ -161,9 +161,13 @@ out="$( cd "$WORK" && "$CHIEF" status 2>&1 )"; rc=$?
 [ "$rc" = 0 ]                      || fail "chief status above a repo exited $rc"
 case "$out" in *"no .chief/config found"*) fail "chief status went through load_project's hard exit: $out" ;; esac
 
-# ── 7. `chief list` is untouched ────────────────────────────────────────────
+# ── 7. `chief list` keeps live work by default; --all restores history ───────
 out="$( cd "$REPO" && "$CHIEF" list 2>&1 )"
 has "10-free" "$out"   || fail "chief list stopped listing tasklists:\n$out"
-has "09-merged" "$out" || fail "chief list stopped listing completed records:\n$out"
+has "15-parked" "$out" || fail "chief list hid parked work:\n$out"
+has "completed tasklist(s) omitted" "$out" || fail "chief list did not summarize omitted completed records:\n$out"
+case "$out" in *"09-merged"*) fail "chief list included completed records without --all:\n$out" ;; esac
+out="$( cd "$REPO" && "$CHIEF" list --all 2>&1 )"
+has "09-merged" "$out" || fail "chief list --all did not restore completed records:\n$out"
 
 echo "STATUS PASS — chief status agrees with the scheduler ($(echo "$status_runnable" | wc -l | tr -d ' ') runnable, $(echo "$status_blocked" | wc -l | tr -d ' ') blocked), degrades on bad input, and names the retirement trap"

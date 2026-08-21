@@ -2,8 +2,9 @@
 
 > **Status:** Current · **Updated:** 2026-08-20 · **Owner:** chief
 
-`chief list` prints one line per tasklist with a story count. It answers *how far along is
-each one*. `chief status` answers the other question — **what is the state of the backlog**:
+`chief list` prints one line per live tasklist with a story count and summarizes completed
+tasklists. Use `chief list --all` to include those completed records. It answers *how far
+along is each one*. `chief status` answers the other question — **what is the state of the backlog**:
 how much remains, how it splits into live and parked, how much of it could start right now,
 and what is holding the rest.
 
@@ -146,8 +147,9 @@ Stable points a consumer can rely on: every count is a number, never a string; e
 is present even when empty; `(uncategorized)` and `(unreadable)` are chief's labels for an
 absent and an unparseable category and are the only category values chief itself produces.
 
-`chief list` is untouched by all of this. It is a different tool — per-tasklist story
-progress, not aggregate state — and `test/status-json.sh` pins its output byte for byte.
+`chief list` remains a different tool — per-tasklist story progress, not aggregate state —
+and completed tasklists are opt-in with `--all`; `test/status-json.sh` pins the status JSON,
+not this human listing.
 
 ## Cost, and why it is a fixed number of forks
 

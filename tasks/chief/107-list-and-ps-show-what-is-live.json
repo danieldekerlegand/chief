@@ -29,7 +29,8 @@
         "A count of what was omitted is printed, so the shorter output never reads as a smaller portfolio. Silent truncation is the failure mode.",
         "The done-by-default change is documented in the CHANGELOG as a behaviour change to a long-stable command, not slipped in as a formatting tweak."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "Implemented live-by-default listing: completed tasklists are omitted with an explicit count, --all restores them, parked rows remain, and CHANGELOG.md documents the behavior change. Verified with bash -n, test/status-deps.sh, test/park-reasons.sh, test/doc-sync.sh, test/version-bump.sh, and git diff --check; all green (shellcheck unavailable)."
     },
     {
       "id": "US-2",

@@ -98,8 +98,8 @@ Usage:
                               --parked run a PARKED tasklist you named anyway. Without it,
                               naming a parked tasklist prints the reason it carries
                               ("parkedReason") and schedules nothing
-  chief list                  list tasklists with pass status (a parked one says so, with the
-                              reason it carries)
+  chief list [-a|--all]       list live tasklists with pass status (a parked one says so, with
+                              the reason it carries); -a/--all includes completed tasklists
   chief ps                    show active runs across ALL repos (one-shot table). Also flags an
                               UNREGISTERED driver — one that is running with no run file, which
                               used to read as 'no active runs' — naming its repo, the tasklists
@@ -434,6 +434,22 @@ cmd_list() {
   load_project
   . "$ENGINE/crossrepo.sh"
   . "$ENGINE/counterpart.sh"
+  local all=0 arg d f n c t mark pk flagged="" completed=0 files=()
+  while [ "$#" -gt 0 ]; do
+    arg="$1"; shift
+    case "$arg" in
+      -a|--all) all=1 ;;
+      -h|--help)
+        cat <<'USAGE'
+chief list — list live tasklists with story progress.
+
+  chief list              live and parked tasklists; completed ones are summarized
+  chief list --all        include completed tasklists
+USAGE
+        return 0 ;;
+      *) echo "chief list: unknown flag: $arg" >&2; return 2 ;;
+    esac
+  done
   local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n c t mark pk flagged="" files=()
   for f in "$d"/*.json; do [ -e "$f" ] && files+=("$f"); done
   # Guarded on the COUNT, not entered blind: under `set -u` bash 3.2 treats
@@ -454,7 +470,14 @@ cmd_list() {
       printf '  %2s/%-3s %s%s%s\n' "$c" "$t" "$n" "$pk" "$mark"
     done
   fi
-  for f in "$d"/completed/*.json; do [ -e "$f" ] || continue; printf '  done     %s\n' "$(basename "$f" .json)"; done
+  for f in "$d"/completed/*.json; do
+    [ -e "$f" ] || continue
+    completed=$((completed + 1))
+    [ "$all" -eq 1 ] && printf '  done     %s\n' "$(basename "$f" .json)"
+  done
+  if [ "$all" -eq 0 ]; then
+    printf '  (%d completed tasklist(s) omitted; use --all to show)\n' "$completed"
+  fi
   [ "${#files[@]}" -gt 0 ] && counterpart_report_block "$CHIEF_TASKS_DIR" "${files[@]}"
   return 0
 }
@@ -1230,7 +1253,7 @@ cmd="${1:-help}"; shift 2>/dev/null || true
 case "$cmd" in
   init)                 cmd_init ;;
   run)                  cmd_run "$@" ;;
-  list)                 cmd_list ;;
+  list)                 cmd_list "$@" ;;
   status)               cmd_status "$@" ;;
   lint)                 cmd_lint "$@" ;;
   gen|generate)         cmd_gen "$@" ;;
