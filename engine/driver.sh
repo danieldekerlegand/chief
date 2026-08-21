@@ -2787,7 +2787,12 @@ run_worker() {
         echo ">> verifying $branch (rebased${sub:+, in $sub})"
         local vout vrc
         live_set "$live" phase=verifying
-        vout="$(run_verify "$work_repo" "$name" 2>&1)"; vrc=$?
+        if verify_cache_try "$work_repo" "$name" "$work_base"; then
+          vrc=0; vout=""
+        else
+          vout="$(run_verify "$work_repo" "$name" 2>&1)"; vrc=$?
+          verify_cache_record "$work_repo" "$work_base" "$vrc"
+        fi
         printf '%s\n' "$vout"
         if [ "$vrc" != "0" ]; then
           printf '%s\n' "$vout" > "$SNAP/$name.verify-failed.log"
