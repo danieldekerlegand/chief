@@ -115,6 +115,8 @@ Usage:
                               enumerates the logs on this host, -n N starts N lines back. stdout is
                               pure NDJSON (pipe it to jq) — notes go to stderr. This is the contract
                               chief-cloud and embedding hosts read: docs/reference/events.md
+  chief usage                 report turns, provider usage, and rate-limit incidents from the
+                              existing event logs on this host; no provider or state is queried
   chief models [provider]     list the models you can pass to --model: live from the provider for
                               devin/opencode, the stable family aliases for claude, none for amp/codex
                               (no arg = all)
@@ -800,6 +802,64 @@ EOF
   fi
 }
 
+# `chief usage` is deliberately a projection over the append-only event logs. It must not
+# become a second ledger: there is no state file, provider call, or registry mutation here.
+# Usage is nullable in the event schema, so blank measurements remain distinct from zero.
+cmd_usage() {
+  local files=() f rows totals row id turns in out total cost hits wait reset
+  for f in "$CHIEF_RUNS"/*.events.jsonl; do
+    [ -f "$f" ] && files+=("$f")
+  done
+  if [ "${#files[@]}" -eq 0 ]; then
+    echo "chief usage: no event logs in $CHIEF_RUNS"
+    return 0
+  fi
+
+  rows="$(jq -r -s '
+    def present_sum($key):
+      [ .[] | .usage?[$key]? | select(type == "number") ] as $v
+      | if ($v|length) == 0 then "" else (($v|add)|tostring) end;
+    . as $events
+    | group_by(.runId) | .[]
+    | [ .[] | select(.event == "agent.turn") ] as $turns
+    | [ .[] | select(.limit?.hit == true) ] as $limits
+    | ($limits | sort_by(.ts) | map(.limit.retry_at? | select(type == "number"))
+       | if length == 0 then "" else (.[-1]|tostring) end) as $reset
+    | ([ $limits[] | select((.limit.retry_at? | type) == "number")
+          | ((.limit.retry_at - .ts) | select(. > 0)) ] | add // 0) as $wait
+    | [((.[0].runId) // "unknown"), ($turns|length|tostring),
+       (present_sum("input_tokens")), (present_sum("output_tokens")),
+       (present_sum("total_tokens")), (present_sum("cost_usd")),
+       ($limits|length|tostring), ($wait|tostring), $reset] | @tsv
+  ' "${files[@]}")" || {
+    echo "chief usage: could not read event logs in $CHIEF_RUNS" >&2
+    return 1
+  }
+
+  printf 'Usage report · %s\n' "$CHIEF_RUNS"
+  printf '%-32s %6s %14s %15s %14s %10s %6s %10s %16s\n' \
+    'Run' 'Turns' 'Input tokens' 'Output tokens' 'Total tokens' 'Cost (USD)' 'Limits' 'Wait (s)' 'Last reset ETA'
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r id turns in out total cost hits wait reset; do
+    printf '%-32s %6s %14s %15s %14s %10s %6s %10s %16s\n' \
+      "$id" "$turns" "$in" "$out" "$total" "$cost" "$hits" "$wait" "$reset"
+  done
+
+  totals="$(printf '%s\n' "$rows" | jq -r -R -s '
+    split("\n") | map(select(length > 0) | split("\t")) as $r
+    | ["TOTAL", ($r|map(.[1]|tonumber)|add|tostring),
+       (if ([$r[]|.[2]|select(length > 0)]|length)==0 then "" else ([$r[]|.[2]|tonumber]|add|tostring) end),
+       (if ([$r[]|.[3]|select(length > 0)]|length)==0 then "" else ([$r[]|.[3]|tonumber]|add|tostring) end),
+       (if ([$r[]|.[4]|select(length > 0)]|length)==0 then "" else ([$r[]|.[4]|tonumber]|add|tostring) end),
+       (if ([$r[]|.[5]|select(length > 0)]|length)==0 then "" else ([$r[]|.[5]|tonumber]|add|tostring) end),
+       ($r|map(.[6]|tonumber)|add|tostring), ($r|map(.[7]|tonumber)|add|tostring),
+       ([$r[]|.[8]|select(length > 0)]|if length == 0 then "" else .[-1] end)] | @tsv
+  ' )"
+  printf '%s\n' "$totals" | while IFS="$(printf '\t')" read -r id turns in out total cost hits wait reset; do
+    printf '%-32s %6s %14s %15s %14s %10s %6s %10s %16s\n' \
+      "$id" "$turns" "$in" "$out" "$total" "$cost" "$hits" "$wait" "$reset"
+  done
+}
+
 # chief models [provider] — what to pass to --model. Delegates to each provider's own
 # enumeration where it has one (devin, opencode — the lists are account-specific and
 # change often, so never hardcode them); claude has no listing command, so print its
@@ -1078,6 +1138,7 @@ case "$cmd" in
   monitor|watch)        cmd_monitor "$@" ;;
   logs|tail)            cmd_logs "$@" ;;
   events|subscribe)     cmd_events "$@" ;;
+  usage)                 cmd_usage "$@" ;;
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   quality)              cmd_quality "$@" ;;

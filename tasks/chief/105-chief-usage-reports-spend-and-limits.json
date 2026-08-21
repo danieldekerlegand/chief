@@ -25,8 +25,8 @@
         "It reads only existing logs: no new state file, no daemon, no provider call.",
         "It runs correctly when no logs exist yet, saying so rather than failing."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n bin/chief, test/usage.sh, and test/events.sh: green; fixture report observed 2 turns, 10 input/5 output/15 total tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, and reset ETA 180; no-log case exited 0 with a helpful message"
     },
     {
       "id": "US-2",
