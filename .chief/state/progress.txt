@@ -1,31 +1,42 @@
 # Chief Progress — 104-claude-turns-report-their-usage
-Started: Fri Aug 21 04:10:58 CDT 2026
+Started: Fri Aug 21 04:12:58 CDT 2026
 ---
 
-## Codebase Patterns
+## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
+```
+doc-links: 4 dead vs 4 on main
+verify: quality — ratchet (engine/quality.sh, deltas vs main)
+chief quality: ratchet — measuring 6 changed path(s) on HEAD and at main
+quality: scope — the 3 changed source file(s), HEAD vs main (2 file(s) new on this branch — no base version, deferred to the baseline axis)
+quality:   BLOCK  duplicate_blocks       base 0 -> branch 1 (delta +1, tolerance 0)
+quality:            top contributors by duplicate_lines (base -> branch):
+quality:              engine/agent.sh                                0 -> 12 (+12)
+quality:   BLOCK  duplicate_line_pct     base 0 -> branch 1.42 (delta +1.42, tolerance 1)
+quality:            top contributors by duplicate_lines (base -> branch):
+quality:              engine/agent.sh                                0 -> 12 (+12)
+quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
+quality:   ok     function_length_max          75 -> 75       (delta 0      tol 15)
+quality:   ok     function_length_mean      14.03 -> 14.13    (delta +0.1   tol 5)
+quality:   ok     single_use_functions         12 -> 12       (delta 0      tol 2)
+quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
+quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
+quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
+quality: BLOCKED — a tracked metric regressed past its tolerance.
+quality:   Fix the named files, loosen the tolerance in .chief/quality.conf (a
+quality:   reviewable diff), or re-baseline deliberately with --write-baseline.
+verify: BLOCK — code-quality ratchet: a tracked metric regressed (see above)
+```
 
-- Provider argv is specified exactly in `test/provider-conformance.sh`; update the roster whenever dispatch flags change.
+## Verification follow-up
 
-## US-1 — A claude turn emits real usage figures
+Extracted the shared provider-output capture pipeline into `_capture_provider_output`
+in `engine/agent.sh`, preserving raw usage parsing and humanized logs while removing
+the duplicate block. Commit `837f180` now reports quality duplicate_blocks 0 -> 0
+and duplicate_line_pct 0 -> 0. Provider conformance, smoke, events, version-bump,
+doc-sync, and bash syntax checks are green. The doc-links report remains unchanged
+at 4 dead links on both HEAD and main; the unrelated bystander ratelimit fixture
+still hangs on its first detection case and was not changed.
 
-- Added `--output-format json` to both Claude dispatch paths in `engine/agent.sh`, preserving the existing `_parse_usage()` parser.
-- Updated the Claude argv roster and corrected the usage contract documentation in `docs/reference/events.md`.
-- Verification: `bash test/provider-conformance.sh` PASS (5 providers); `bash test/events.sh` PASS, with observed `input_tokens=1200`, `output_tokens=340`, and `cost_usd=0.0421` on the reporting turn.
-
-Learnings for future iterations: the existing event test already exercises the structured result shape and confirms provider output is scraped only when present; output presentation and version synchronization remain separate story concerns.
-
-## US-2 — The agent loop is unaffected — output still reads as it did
-
-- Added a normalization boundary in `engine/agent.sh`: raw provider output remains available to `_parse_usage()`, while a Claude result envelope exposes only its human-readable `result` to completion detection and logs.
-- Extended `test/provider-conformance.sh` to exercise structured Claude output and assert that malformed non-JSON provider output still completes and remains visible.
-- Verification: `bash test/provider-conformance.sh` PASS (5 providers); `bash test/smoke.sh` PASS.
-
-Learnings for future iterations: structured provider output must be split into a raw accounting stream and a human-readable control stream; completion detection should consume the latter.
-
-## US-3 — A provider that prints nothing usage-shaped still yields null, cleanly
-
-- Bumped `VERSION` to 0.8.76 and synchronized the README’s current-version line.
-- Preserved the existing nullable, provider-dependent usage contract; no-usage providers remain `usage:null` without zero-filling or estimation.
-- Verification: `bash test/events.sh` PASS; `bash test/version-bump.sh` PASS; `bash test/doc-sync.sh` PASS.
-
-Learnings for future iterations: release version changes must update both the single-line `VERSION` source and README’s bold current-version claim.
+Learnings for future iterations: when two provider phases need identical tee and
+humanization behavior, keep the raw capture and `PIPESTATUS` handling in one helper
+so quality ratchets do not count the phase-specific copies as duplicate code.
