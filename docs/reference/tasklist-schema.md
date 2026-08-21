@@ -160,7 +160,7 @@ Notes:
   it off for the one-shots, refactors and doc fixes that are most of a roadmap. It is
   a one-word, reviewable diff either way. The rationale, the artifact schema, the
   reviewer contract and what happens when nobody is there:
-  [plan-review.md](plan-review.md).
+  [plan-review.md](../plan-review.md).
 - **`research` buys the map once instead of once per story.** With it on, chief spends
   one turn before the first story writing a structured map of the code to
   `.chief/state/research/<name>.md`, and appends that map to every story's (and every
