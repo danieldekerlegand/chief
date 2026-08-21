@@ -2,9 +2,11 @@
 
 > **Status:** Current · **Updated:** 2026-08-20 · **Owner:** chief
 
-`chief list` prints one line per live tasklist with a story count and summarizes completed
-tasklists. Use `chief list --all` to include those completed records. It answers *how far
-along is each one*. `chief status` answers the other question — **what is the state of the backlog**:
+`chief list` prints a column-aligned table per live tasklist with its state, story progress,
+category and any park/block reason, and summarizes completed tasklists. Use `chief list --all`
+to include those completed records. Use `chief list --plain` for stable tab-delimited rows
+when a script consumes the output. It answers *how far along is each one*. `chief status`
+answers the other question — **what is the state of the backlog**:
 how much remains, how it splits into live and parked, how much of it could start right now,
 and what is holding the rest.
 

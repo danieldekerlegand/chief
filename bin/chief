@@ -98,8 +98,8 @@ Usage:
                               --parked run a PARKED tasklist you named anyway. Without it,
                               naming a parked tasklist prints the reason it carries
                               ("parkedReason") and schedules nothing
-  chief list [-a|--all]       list live tasklists with pass status (a parked one says so, with
-                              the reason it carries); -a/--all includes completed tasklists
+  chief list [-a|--all]       list live tasklists with state, progress, category and reason;
+                              -a/--all includes completed tasklists; --plain is stable TSV
   chief ps                    show active runs across ALL repos (one-shot table). Also flags an
                               UNREGISTERED driver — one that is running with no run file, which
                               used to read as 'no active runs' — naming its repo, the tasklists
@@ -434,23 +434,26 @@ cmd_list() {
   load_project
   . "$ENGINE/crossrepo.sh"
   . "$ENGINE/counterpart.sh"
-  local all=0 arg d f n c t mark pk flagged="" completed=0 files=()
+  local all=0 plain=0 arg d f n c t mark pk flagged="" completed=0 files=()
   while [ "$#" -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
       -a|--all) all=1 ;;
+      --plain) plain=1 ;;
       -h|--help)
         cat <<'USAGE'
-chief list — list live tasklists with story progress.
+  chief list — list live tasklists with story progress.
 
   chief list              live and parked tasklists; completed ones are summarized
   chief list --all        include completed tasklists
+  chief list --plain      stable tab-delimited rows for scripts (combine with --all)
 USAGE
         return 0 ;;
       *) echo "chief list: unknown flag: $arg" >&2; return 2 ;;
     esac
   done
   local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n c t mark pk flagged="" files=()
+  local verdicts="" blocked="" category state reason
   for f in "$d"/*.json; do [ -e "$f" ] && files+=("$f"); done
   # Guarded on the COUNT, not entered blind: under `set -u` bash 3.2 treats
   # "${files[@]}" of an empty array as unbound, so a repo with no live tasklists
@@ -460,23 +463,61 @@ USAGE
     # merged. LC_ALL=C: awk parses lines built from agent-authored tasklist names,
     # and BSD awk aborts on a multi-byte character in a UTF-8 locale.
     flagged="$(counterpart_scan "${files[@]}" | LC_ALL=C awk -F'\t' '$1=="done"{print $2}')"
+    verdicts="$(bash "$ENGINE/status.sh" --json 2>/dev/null || echo '{}')"
+    blocked="$(printf '%s' "$verdicts" | jq -r '.blocked[]? | [.tasklist, (.blocked_by // ""), (.detail // "")] | @tsv' 2>/dev/null || true)"
+    if [ "$plain" -eq 0 ]; then
+      printf '%-32s %-14s %-9s %-16s %s\n' NAME STATE PROGRESS CATEGORY REASON
+      printf '%-32s %-14s %-9s %-16s %s\n' \
+        '--------------------------------' '--------------' '---------' '----------------' '------'
+    fi
     for f in "${files[@]}"; do
       n="$(basename "$f" .json)"
       t="$(jq '.userStories|length' "$f" 2>/dev/null || echo '?')"
       c="$(jq '[.userStories[]|select(.passes)]|length' "$f" 2>/dev/null || echo '?')"
+      category="$(jq -r '.category // "(uncategorized)"' "$f" 2>/dev/null || echo '(uncategorized)')"
+      state="ready"; [ "$c" != 0 ] && [ "$c" != '?' ] && state="in-progress"
+      reason=""
+      pk="$(jq -r "$LIST_PARK_JQ" "$f" 2>/dev/null)"
+      if [ -n "$pk" ]; then
+        state="parked"
+        reason="$(jq -r '.parkedReason // "(no reason given)"' "$f" 2>/dev/null || echo '(no reason given)')"
+      else
+        while IFS=$'\t' read -r bn bd br; do
+          [ "$bn" = "$n" ] || continue
+          state="blocked"; reason="needs ${bd:-dependency}"
+          [ -n "$br" ] && reason="$reason — $br"
+        done <<EOF
+$blocked
+EOF
+      fi
+      if [ "$plain" -eq 1 ]; then
+        printf '%s\t%s\t%s/%s\t%s\t%s\n' "$n" "$state" "$c" "$t" "$category" "$reason"
+        continue
+      fi
       # -x, not a substring test: "57-foo" must not flag "157-foo".
       mark=""; printf '%s\n' "$flagged" | grep -qxF -- "$n" && mark='  ⚑ counterpart merged'
-      pk="$(jq -r "$LIST_PARK_JQ" "$f" 2>/dev/null)"   # the park, from the same jq
-      printf '  %2s/%-3s %s%s%s\n' "$c" "$t" "$n" "$pk" "$mark"
+      [ -n "$mark" ] && reason="${reason:+$reason; }counterpart merged"
+      printf '%-32s %-14s %-9s %-16s %s\n' "$n" "$state" "$c/$t" "$category" "$reason"
     done
   fi
   for f in "$d"/completed/*.json; do
     [ -e "$f" ] || continue
     completed=$((completed + 1))
-    [ "$all" -eq 1 ] && printf '  done     %s\n' "$(basename "$f" .json)"
+    if [ "$all" -eq 1 ]; then
+      n="$(basename "$f" .json)"
+      if [ "$plain" -eq 1 ]; then
+        printf '%s\tdone\t-\t%s\t\n' "$n" "$(jq -r '.category // "(uncategorized)"' "$f" 2>/dev/null || echo '(uncategorized)')"
+      else
+        printf '%-32s %-14s %-9s %-16s %s\n' "$n" done - "$(jq -r '.category // "(uncategorized)"' "$f" 2>/dev/null || echo '(uncategorized)')" ""
+      fi
+    fi
   done
   if [ "$all" -eq 0 ]; then
-    printf '  (%d completed tasklist(s) omitted; use --all to show)\n' "$completed"
+    if [ "$plain" -eq 1 ]; then
+      printf '# %d completed tasklist(s) omitted; use --all to show\n' "$completed"
+    else
+      printf '\n(%d completed tasklist(s) omitted; use --all to show)\n' "$completed"
+    fi
   fi
   [ "${#files[@]}" -gt 0 ] && counterpart_report_block "$CHIEF_TASKS_DIR" "${files[@]}"
   return 0
