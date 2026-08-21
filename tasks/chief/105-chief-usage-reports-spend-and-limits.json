@@ -38,8 +38,8 @@
         "`--json` emits a machine-readable form, and its shape is documented.",
         "The human output stays readable when a provider contributes no cost data \u2014 the table does not collapse into blank columns."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n bin/chief + test/usage.sh + test/events.sh: green; --json no-log feed parsed successfully with null unavailable measurements; --days, --repo/--scope filtering and fixed-width human columns implemented and documented in docs/reference/usage.md"
     },
     {
       "id": "US-3",
