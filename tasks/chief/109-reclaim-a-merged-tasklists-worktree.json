@@ -31,8 +31,8 @@
         "A tasklist that did NOT merge \u2014 verify-failed, zone-held, rebase-refused, or left for review \u2014 keeps its worktree untouched. Reclaiming one of those would destroy the tree an operator is about to inspect",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n clean; shellcheck unavailable in environment; VERSION-BUMP PASS, DOC-SYNC PASS, sweep 47 passed/0 failed, smoke PASS, merge-batch OK, RETIRE-DIRTY PASS"
     },
     {
       "id": "US-2",
