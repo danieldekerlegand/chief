@@ -1,5 +1,5 @@
 # Chief Progress — 104-claude-turns-report-their-usage
-Started: Fri Aug 21 04:12:58 CDT 2026
+Started: Fri Aug 21 04:22:15 CDT 2026
 ---
 
 ## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
@@ -8,39 +8,70 @@ doc-links: 4 dead vs 4 on main
 verify: quality — ratchet (engine/quality.sh, deltas vs main)
 chief quality: ratchet — measuring 6 changed path(s) on HEAD and at main
 quality: scope — the 3 changed source file(s), HEAD vs main (2 file(s) new on this branch — no base version, deferred to the baseline axis)
-quality:   BLOCK  duplicate_blocks       base 0 -> branch 1 (delta +1, tolerance 0)
-quality:            top contributors by duplicate_lines (base -> branch):
-quality:              engine/agent.sh                                0 -> 12 (+12)
-quality:   BLOCK  duplicate_line_pct     base 0 -> branch 1.42 (delta +1.42, tolerance 1)
-quality:            top contributors by duplicate_lines (base -> branch):
-quality:              engine/agent.sh                                0 -> 12 (+12)
+quality:   ok     duplicate_blocks              0 -> 0        (delta 0      tol 0)
+quality:   ok     duplicate_line_pct            0 -> 0        (delta 0      tol 1)
 quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
 quality:   ok     function_length_max          75 -> 75       (delta 0      tol 15)
-quality:   ok     function_length_mean      14.03 -> 14.13    (delta +0.1   tol 5)
-quality:   ok     single_use_functions         12 -> 12       (delta 0      tol 2)
+quality:   ok     function_length_mean      14.03 -> 14.03    (delta 0      tol 5)
+quality:   ok     single_use_functions         12 -> 13       (delta +1     tol 2)
 quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
 quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
 quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
-quality: BLOCKED — a tracked metric regressed past its tolerance.
-quality:   Fix the named files, loosen the tolerance in .chief/quality.conf (a
-quality:   reviewable diff), or re-baseline deliberately with --write-baseline.
-verify: BLOCK — code-quality ratchet: a tracked metric regressed (see above)
+quality: OK — no tracked metric regressed (allowing)
+verify: shell — bash -n
+verify: shellcheck not installed — skipping (CI enforces it)
+verify: policy — VERSION bump (test/version-bump.sh)
+VERSION-BUMP PASS — VERSION (0.8.77) covers every engine/bin change on HEAD
+verify: behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)
+bystander: decoy run up — driver pid 88480, agent pid 88693, run bystander-sibling-1906186470-1700-88480
+bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.G1NF0qfr8E/decoy/runs, which no test below can read
+bystander: [1/43] test/smoke.sh
+  smoke| SMOKE PASS — install → init → dry-run honoured → agent loop → verify → merge → completed + $HOME-init guard (offline)
+bystander: [2/43] test/provider-conformance.sh
+  provider-conformance| provider-conformance: roster-drift guard OK — agent.sh, bin/chief and this harness agree: amp claude codex devin opencode 
+  provider-conformance| provider-conformance: claude — argv · stdin prompt · model:wired
+  provider-conformance| provider-conformance: devin — argv · prompt-file prompt · model:wired
+  provider-conformance| provider-conformance: opencode — argv · stdin prompt · model:wired
+  provider-conformance| provider-conformance: amp — argv · stdin prompt · model:unwired
+  provider-conformance| provider-conformance: codex — argv · stdin prompt · model:wired
+  provider-conformance| provider-conformance: CLI surface OK — a --<provider> shorthand for each, and every unwired provider refuses --model
+  provider-conformance| PROVIDER-CONFORMANCE PASS — 5 providers: argv, prompt channel, model stance (wired propagates, unwired refuses), shorthand, completion; validators in lockstep
+bystander: [3/43] test/ratelimit.sh
+  ratelimit| ratelimit: detection fixtures (exit 2 = limit, exit 1 = stall)
+  ratelimit|  # Chief Progress Log
+  ratelimit|  Started: Fri Aug 21 04:21:31 CDT 2026
+  ratelimit|  ---
+  ratelimit| +
+  ratelimit| +## US-1 — one
+  ratelimit| +
+  ratelimit| +Completed the only runtime story. The worktree contains no application files, task-specific acceptance criteria, or project quality checks, so no source change was required. Updated `.chief/state/prd.json` with the observed empty-scope verification and created the required `chief/fix` branch.
+  ratelimit| +
+  ratelimit| +Learnings for future iterations: this tasklist is bookkeeping-only; inspect the runtime PRD before assuming a source implementation exists.
+  ratelimit| 
+  ratelimit| tokens used
+  ratelimit| 17,681
+  ratelimit| Implemented and committed US-1 on `chief/fix`.
+  ratelimit| 
+  ratelimit| - Commit: `5ffd483 feat: US-1 - one`
+  ratelimit| - Verification: JSON valid; empty-scope checks clean
+  ratelimit| - All stories marked passed; no prior verification failures found
+  ratelimit| 
+  ratelimit| <promise>COMPLETE</promise>
+  ratelimit| Chief completed all tasks! (iteration 1)
+  ratelimit| RATELIMIT FAIL: fixture [--print epoch form] (claude rc=0): agent.sh exited 0, want 2
+BYSTANDER FAIL: test/ratelimit.sh failed (its output is above)
+verify: BLOCK — behavioral tests failed (see above)
 ```
 
 ## Verification follow-up
 
-Extracted the shared provider-output capture pipeline into `_capture_provider_output`
-in `engine/agent.sh`, preserving raw usage parsing and humanized logs while removing
-the duplicate block. Commit `837f180` now reports quality duplicate_blocks 0 -> 0
-and duplicate_line_pct 0 -> 0. Provider conformance, smoke, events, version-bump,
-doc-sync, and bash syntax checks are green. The doc-links report remains unchanged
-at 4 dead links on both HEAD and main; the unrelated bystander ratelimit fixture
-still hangs on its first detection case and was not changed.
+Fixed the prior merge-time `test/ratelimit.sh` failure. `engine/agent.sh` now captures provider output through a temporary file while preserving the provider exit status, so rate-limit fixtures still classify correctly; `test/ratelimit.sh` is hermetic about inherited `CHIEF_PROVIDER`/`CHIEF_TOOL` and pins Claude.
 
-Learnings for future iterations: when two provider phases need identical tee and
-humanization behavior, keep the raw capture and `PIPESTATUS` handling in one helper
-so quality ratchets do not count the phase-specific copies as duplicate code.
+Files changed: `engine/agent.sh`, `test/ratelimit.sh`, `VERSION`, `README.md`, and both runtime/tracked tasklist notes.
 
-Final verification note: after the follow-up engine commit, VERSION was bumped to
-0.8.77 and README was synced; `test/version-bump.sh` and `test/doc-sync.sh` both
-passed. The runtime PRD has US-1, US-2, and US-3 set to `passes: true`.
+Verification observed: `bash test/ratelimit.sh` PASS (all detection/ETA fixtures and parallel pause/resume); `bash test/provider-conformance.sh` PASS; `bash test/smoke.sh` PASS; `bash test/events.sh` PASS; `bash test/version-bump.sh` PASS; `bash test/doc-sync.sh` PASS. Version `0.8.78` matches README `v0.8.78`.
+
+### Learnings for future iterations
+
+- Tests that install from the committed checkout must be run after committing source changes.
+- Hermetic tests must clear inherited provider-selection variables when the driver environment exports them.
