@@ -873,8 +873,7 @@ mq_worker_merge() {
   local name="$1" branch="$2" repo="$3" base="$4" sub="$5" wt="$6"
   local live; live="$(live_of "$name")"
   mq_init
-  # Free the branch from its worktree BEFORE enqueuing: a leader cannot check out a
-  # branch another worktree holds, and this worker is done with it either way.
+  # Detach the branch before enqueueing; the batch leader must check it out later.
   remove_worktree "$wt" "$name"
   mq_enqueue "$name" "$branch" "$repo" "$base" "$sub"
   live_set "$live" phase=merge-queued story=

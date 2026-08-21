@@ -2698,10 +2698,8 @@ run_worker() {
       local mstash=""
       trap 'work_checkout "$work_repo" "$work_base" "$name" || true; merge_stash_pop "$work_repo" "$mstash" "$name" || echo "$work_repo|$mstash" > "$STATE/$name.stash"; rm -f "$STATE/$name.critical" 2>/dev/null' EXIT
       merge_critical_enter "$work_repo" "$name" "$work_base"; mstash="$MERGE_STASH"
-      # Free the branch from its worktree so the work repo can check it out. The
-      # sweep goes first: this is the last moment anyone looks at that directory, and
-      # a `git worktree remove` that fails here is what strands a 1.4 GB `target`
-      # behind a tasklist that finished cleanly.
+      # The merge checkout needs the branch detached. Sweep first: this is the last
+      # moment this worker can inspect the directory before handing it to git.
       sweep_worktree "$wt" "$name"
       remove_worktree "$wt" "$name"
       # work_checkout, never a bare `git checkout` — a gitlink the ref moves and the
