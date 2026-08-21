@@ -42,6 +42,8 @@
         "A test starts two fixture runs against a budget of one and asserts the second holds, then proceeds when the first finishes."
       ],
       "notes": null
+      ,"passes": true
+      ,"notes": "test/machine-budget.sh: green — two fixture runs held the second at 1/1 live agent turn and proceeded after the first finished; budget default derived from detected physical cores, CHIEF_MACHINE_BUDGET=0 opt-out recorded in registry and machine-budget.log; bash -n, version-bump, doc-sync, and smoke passed"
     },
     {
       "id": "US-3",

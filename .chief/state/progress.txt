@@ -1,9 +1,45 @@
 # Chief Progress — 108-concurrency-is-machine-wide
-Started: Fri Aug 21 03:18:25 CDT 2026
+Started: Fri Aug 21 05:46:07 CDT 2026
 ---
 
-Implemented US-1 in commit b5feedd. Added `engine/concurrency.sh`, which reads the existing cross-repo `.run` registry, reuses `chief_pid_alive` from `reap.sh` (including zombie handling), classifies live tasklist phases as agent turns or gates, and reports stale records without counting them. `chief ps` and the driver now show the machine activity line; `test/concurrency.sh` covers one live run, one agent turn, one gate, and one stale PID. Bumped VERSION/README to 0.8.76.
+## ⚠️ BASE INTEGRATION REQUIRED — do this FIRST, before any user story
 
-Verification observed: `test/concurrency.sh`, `bash -n`, `test/version-bump.sh`, `test/doc-sync.sh`, and `test/smoke.sh` passed. `test/ratelimit.sh` remains red on its pre-existing epoch-form fixture (`agent.sh exited 0, want 2`); this story's focused registry test is green.
+`chief/108-concurrency-is-machine-wide` is **19 commit(s) behind** its base `main` (@b45bf84) and
+chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
+your branch is exactly as it was and nothing is lost — but it cannot merge
+until the base is integrated, and every commit that lands on `main` while
+this is unresolved makes it worse.
 
-Learnings for future iterations: the run registry is the single host-wide source of driver liveness; use `chief_pid_alive` rather than raw `kill -0` so zombies do not consume capacity. Keep registry readers non-destructive; `chief ps` owns stale-file pruning.
+**Your first task this iteration is to integrate the base yourself:**
+
+1. `git rebase main` in this worktree.
+2. At each stop, resolve the conflicts keeping BOTH sides' intent — the
+   `main` side is already-merged work, so never discard it, and never
+   discard your own — then `git add <files>` and `git rebase --continue`.
+   `git rebase --abort` returns you to exactly this state if you need it.
+3. Re-run the project's quality gates and make them green.
+
+Rebase, not `git merge main`: chief rebases this branch again at merge time,
+and a rebase drops merge commits and replays the originals — a resolution
+recorded in a merge commit would be thrown away and this conflict would come
+straight back. Resolving inside the rebase puts the fix in your own commits.
+
+Then continue the normal loop: pick the highest-priority story with
+`passes:false` and implement it. The integration is NOT a user story — do not
+flip any story's `passes` for it, and do not report completion until the
+stories themselves are really done.
+
+## Conflicting paths
+- README.md
+- VERSION
+
+base: main @b45bf84 · behind: 19 commit(s) · branch: chief/108-concurrency-is-machine-wide
+(full note: .chief/state/INTEGRATE-BASE.md)
+
+Base integration completed first: rebased onto main and preserved both branches' intent in README.md and VERSION, including the target branch's runtime state.
+
+Implemented US-2 in commit 78aa0df. Added host-wide agent-turn budgeting in engine/concurrency.sh and engine/driver.sh, with physical-core-derived default, CHIEF_MACHINE_BUDGET configuration, explicit zero/off opt-out, registry/event/log recording, and a hold-and-retry scheduler path. Documented the within-run meaning of -p and the machine budget in README.md and docs/reference/concurrency.md. Added test/machine-budget.sh and registered it in test/all.sh; bumped VERSION/README to 0.8.81.
+
+Verification observed: bash -n, test/concurrency.sh, test/machine-budget.sh, test/version-bump.sh, test/doc-sync.sh, and test/smoke.sh all passed. The machine-budget fixture observed the second run held at 1/1 and proceeded after the first finished.
+
+Learnings for future iterations: machine-wide policy can remain cooperative by reusing the existing live run registry; keep the budget reader non-destructive and record opt-outs in both the registry and a run-local log so later investigation can distinguish intentional oversubscription.
