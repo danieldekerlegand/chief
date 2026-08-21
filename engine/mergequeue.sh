@@ -875,9 +875,7 @@ mq_worker_merge() {
   mq_init
   # Free the branch from its worktree BEFORE enqueuing: a leader cannot check out a
   # branch another worktree holds, and this worker is done with it either way.
-  if ! wt_git remove --force "$wt" 2>/dev/null; then
-    rm -rf "$wt"
-  fi
+  remove_worktree "$wt" "$name"
   mq_enqueue "$name" "$branch" "$repo" "$base" "$sub"
   live_set "$live" phase=merge-queued story=
   event_emit tasklist.queued name="$name" state=running detail="merge queue — max batch $(mq_batch_max)"

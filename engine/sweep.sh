@@ -10,12 +10,11 @@
 # own. Chief creates the conditions for all of it and had no matching teardown.
 #
 # The leak is not that `rm -rf $wt` fails to remove a build directory — it removes
-# everything under it. The leak is that worktree removal is BEST-EFFORT at every
-# call site (`wt_git remove --force … 2>/dev/null || true`), and a removal that
-# fails leaves the whole tree standing, build directory included, behind a run that
-# has already finished. Sweeping the heavy directories FIRST means the bytes are
-# reclaimed even when the git removal that follows loses, and it makes that removal
-# cheap instead of a walk over three-quarters of a million files.
+# everything under it. The leak was that worktree removal discarded its diagnostic
+# when it failed, leaving the whole tree standing behind a run that had finished.
+# Sweeping the heavy directories FIRST means the bytes are reclaimed even when the
+# git removal that follows loses, and it makes that removal cheap instead of a walk
+# over three-quarters of a million files; the driver reports any tree still standing.
 #
 # THE RULE — what chief created with the worktree goes with the worktree; what the
 # OPERATOR put there does not. Deliberately NOT Rust-specific: the shape is general

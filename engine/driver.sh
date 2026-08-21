@@ -244,7 +244,7 @@ CHIEF_REPOS="$(chief_repos_dir)"
 BASE_BRANCH="${CHIEF_BASE_BRANCH:-main}"
 VERIFY_HOOK=""; [ -n "${CHIEF_VERIFY:-}" ] && VERIFY_HOOK="$REPO/$CHIEF_VERIFY"
 mkdir -p "$COMPLETED" "$SNAP" "$WT_ROOT" "$STATE" "$RESEARCH_DIR"
-rm -f "$STATE/sweep.bytes" 2>/dev/null || true   # this run's disk-reclaim tally (sweep_worktree)
+rm -f "$STATE/sweep.bytes" "$STATE/stranded.bytes" "$STATE/stranded.count" 2>/dev/null || true   # this run's disk-reclaim tally and removal warnings
 
 PROVIDER="${CHIEF_PROVIDER:-${CHIEF_TOOL:-${TOOL:-claude}}}"
 MODEL="${CHIEF_MODEL:-}"
@@ -579,16 +579,34 @@ chief_git_env_setup "$REPO" "$WT_ROOT" >&2 || exit "$(hl_rc "$HL_RC_CONFIG" 1)"
 in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }   # is $1 a word in list $2?
 
 # TEARDOWN SYMMETRY — chief created the worktree, so chief collects what accumulated
-# inside it. Called immediately BEFORE every worktree removal, because removal here
-# is best-effort at every site (`wt_git remove --force … 2>/dev/null || true`) and a
-# removal that loses is exactly how a finished run leaves gigabytes standing. The
-# verdict on each directory is engine/sweep.sh's business, not this function's; this
-# only supplies the two paths that bound it and totals the bytes for the run summary.
+# inside it. Called immediately BEFORE every worktree removal. The verdict on each
+# directory is engine/sweep.sh's business, not this function's; this only supplies
+# the two paths that bound it and totals the bytes for the run summary.
 # $1 = worktree, $2 = tasklist name (the label on the report lines).
 sweep_worktree() {
   [ -d "$1" ] || return 0
   chief_sweep_worktree "$WT_ROOT" "$1" "$2" || true
   [ "${CHIEF_SWEEP_BYTES:-0}" -gt 0 ] && echo "$CHIEF_SWEEP_BYTES" >> "$STATE/sweep.bytes" 2>/dev/null
+  return 0
+}
+
+# Remove a worktree without turning an unrecovered failure into a silent leak. Git's
+# diagnostic is retained for the operator, while the fallback keeps the historical
+# best-effort behavior: a failed git removal is not a failed tasklist or run.
+# $1 = worktree, $2 = tasklist name.
+remove_worktree() {
+  local wt="$1" name="$2" out rc=0 bytes
+  out="$(wt_git remove --force "$wt" 2>&1)" || rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ -n "$out" ] || out="git worktree remove exited $rc"
+  out="$(printf '%s' "$out" | tr '\n' ' ' | tr -s ' ')"
+  rm -rf "$wt" 2>/dev/null || true
+  if [ -d "$wt" ] || [ -L "$wt" ]; then
+    bytes="$(chief_sweep_bytes "$wt")"
+    echo "$bytes" >> "$STATE/stranded.bytes" 2>/dev/null || true
+    echo 1 >> "$STATE/stranded.count" 2>/dev/null || true
+    echo "⚠ WARNING: $name: worktree remains after removal failure: $wt ($(chief_sweep_human "$bytes") standing); git said: $out"
+  fi
   return 0
 }
 
@@ -601,10 +619,7 @@ reclaim_merged_worktree() {
   local wt="$1" name="$2"
   [ -d "$wt" ] || return 0
   sweep_worktree "$wt" "$name"
-  if ! wt_git remove --force "$wt" 2>/dev/null; then
-    echo ">> $name: git worktree removal failed after merge; removing the directory directly: $wt"
-    rm -rf "$wt"
-  fi
+  remove_worktree "$wt" "$name"
 }
 
 # git worktree add / remove are NOT safe to run concurrently on one repo: they
@@ -2303,9 +2318,7 @@ run_worker() {
     local unvmark; unvmark="$(unverified_marker "$name")"
     local wtstate="$wt/$STATE_REL"
     sweep_worktree "$wt" "$name"                     # reclaim last run's build artifacts first
-    if ! wt_git remove --force "$wt" 2>/dev/null; then
-      rm -rf "$wt"
-    fi   # free a stale worktree dir (keeps the branch)
+    remove_worktree "$wt" "$name"   # free a stale worktree dir (keeps the branch)
     # RESUME: if a branch from a prior (interrupted) run exists — a run stopped by
     # Ctrl-C, token/quota exhaustion, or lost connectivity — reuse it instead of
     # restarting from scratch. RESET=1 forces a fresh start from the base branch.
@@ -2690,9 +2703,7 @@ run_worker() {
       # a `git worktree remove` that fails here is what strands a 1.4 GB `target`
       # behind a tasklist that finished cleanly.
       sweep_worktree "$wt" "$name"
-      if ! wt_git remove --force "$wt" 2>/dev/null; then
-        rm -rf "$wt"
-      fi
+      remove_worktree "$wt" "$name"
       # work_checkout, never a bare `git checkout` — a gitlink the ref moves and the
       # working tree does not is not uncommitted work (see its header).
       work_checkout "$work_repo" "$branch" "$name" || { live_set "$live" phase=checkout-failed
@@ -3334,8 +3345,19 @@ done
 # What the run cost in DISK, alongside what it cost in tokens. Silent when nothing
 # was reclaimed, so a docs-only run prints exactly what it used to.
 swept="$(awk '{t += $1} END {print t + 0}' "$STATE/sweep.bytes" 2>/dev/null || echo 0)"
+stranded="$(awk '{t += $1} END {print t + 0}' "$STATE/stranded.bytes" 2>/dev/null || echo 0)"
+stranded_count="$(awk '{t += $1} END {print t + 0}' "$STATE/stranded.count" 2>/dev/null || echo 0)"
 [ "${swept:-0}" -gt 0 ] && echo "   (reclaimed $(chief_sweep_human "$swept") of build artifacts from this run's worktrees)"
+if [ "${stranded_count:-0}" -gt 0 ]; then
+  if [ "${swept:-0}" -gt 0 ]; then
+    echo "   ⚠ WARNING: $(chief_sweep_human "$stranded") remains in worktrees that could not be removed"
+  else
+    echo "   ⚠ WARNING: no build artifacts were reclaimed; $(chief_sweep_human "$stranded") remains in worktrees that could not be removed"
+  fi
+fi
 rm -f "$STATE/sweep.bytes" 2>/dev/null || true
+rm -f "$STATE/stranded.bytes" 2>/dev/null || true
+rm -f "$STATE/stranded.count" 2>/dev/null || true
 # `touches` under-tagging: co-scheduled tasklists that turned out to edit the same
 # files. Pure reporting — nothing above changed because of it. Silent when the run
 # had no overlap (the normal case), so a clean run prints exactly what it used to.
