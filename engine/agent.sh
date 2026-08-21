@@ -62,6 +62,10 @@
 
 set -e
 
+[ -f "${CHIEF_HOME:-}/decision.sh" ] && . "$CHIEF_HOME/decision.sh"
+[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/decision.sh" ] && \
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/decision.sh"
+
 # Parse arguments
 PROVIDER="${CHIEF_PROVIDER:-${CHIEF_TOOL:-claude}}"
 MODEL="${CHIEF_MODEL:-}"
@@ -572,7 +576,7 @@ _prd_promote() {
 PLAN_DIR="$STATE_DIR/plans"
 PLAN_PROMPT_FILE="$STATE_DIR/.plan-prompt.md"
 REVIEW_MODE="${CHIEF_REVIEW:-$(jq -r '.review // "none"' "$PRD_FILE" 2>/dev/null || echo none)}"
-case "$REVIEW_MODE" in plan) ;; *) REVIEW_MODE=none ;; esac
+case "$REVIEW_MODE" in plan|decision) ;; *) REVIEW_MODE=none ;; esac
 
 # _plan_valid FILE STORY — does the artifact satisfy the documented schema?
 # Silent (the caller reports); returns non-zero for a missing file, unparseable

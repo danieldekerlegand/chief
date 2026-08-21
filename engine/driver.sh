@@ -340,6 +340,7 @@ tasklist_outcome() {
     PLAN-INVALID*)                    printf 'plan-invalid' ;;
     RESEARCH-FAILED*)                 printf 'research-failed' ;;
     AWAITING-REVIEW*)                 printf 'awaiting-review' ;;
+    AWAITING-DECISION*)               printf 'awaiting-decision' ;;
     AWAITING-APPROVAL*)               printf 'awaiting-approval' ;;
     BAD-REPO*)                        printf 'bad-repo' ;;
     # No status line (or one no worker writes): fall back to the scheduler state,
@@ -352,6 +353,7 @@ tasklist_outcome() {
          rate-limited) printf 'rate-limited' ;;
          paused)          printf 'paused' ;;
          awaiting-review) printf 'awaiting-review' ;;
+         awaiting-decision) printf 'awaiting-decision' ;;
          awaiting-approval) printf 'awaiting-approval' ;;
          *)               printf 'failed' ;;
        esac ;;
@@ -494,6 +496,7 @@ CHIEF_EVENT_REPO="$REPO"
 export CHIEF_EVENTS_FILE CHIEF_EVENT_REPO
 
 command -v jq >/dev/null || { echo "ERROR: jq is required."; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
+[ -f "$ENGINE/decision.sh" ] && source "$ENGINE/decision.sh"
 
 # ACCOUNT DESIGNATION (docs/reference/account-credentials.md) — the optional credential env
 # FILE this run's provider turns execute under. The driver only PLUMBS the path
@@ -2202,6 +2205,7 @@ worker_park() {
     # but an actionable one: the fix is usually to write the document by hand.
     research-failed) phase=research-failed; status=RESEARCH-FAILED; ev=tasklist.research-failed; state=failed; story="" ;;
     awaiting-review) phase=awaiting-review; status=AWAITING-REVIEW; ev=tasklist.awaiting-review; state=awaiting-review ;;
+    awaiting-decision) phase=awaiting-decision; status=AWAITING-DECISION; ev=tasklist.awaiting-decision; state=awaiting-decision ;;
     # The one arm that fires INSIDE the merge phase, after the floor came back
     # green (engine/zones.sh). Its worktree is already gone — the merge phase
     # removes it to free the branch — so unlike its four siblings what is kept is
@@ -2608,6 +2612,14 @@ run_worker() {
       event_emit tasklist.incomplete name="$name" state=failed detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out"
       echo "INCOMPLETE $(( total - remaining ))/$total" > "$STATE/$name.status"
       echo "!! $name INCOMPLETE — branch $branch left in worktree for review"; return 0
+    fi
+    # Passing stories prepare a decision brief; they are not the operator's
+    # verdict. Keep the branch and worktree available for `chief decide` rather
+    # than letting the ordinary merge path turn model-authored passes into consent.
+    if is_decision_tasklist "$wtstate/prd.json"; then
+      worker_park awaiting-decision "the decision brief is prepared; waiting for a human verdict" \
+        "!! $name AWAITING-DECISION — stories are complete, but only a human verdict can finish this tasklist"
+      return 0
     fi
     if [ "$AUTO_MERGE_MAIN" != "1" ]; then
       live_set "$live" phase=complete-unmerged story=
@@ -3126,6 +3138,7 @@ for n in $NAMES; do
     rate-limited) ran=1; paused="$paused $n" ;;   # it ran; it is paused, not failed
     paused) ran=1; parked="$parked $n" ;;         # it ran; the operator stopped it
     awaiting-review) ran=1; inreview="$inreview $n" ;;  # it ran; a human hasn't approved its plan
+    awaiting-decision) ran=1; inreview="$inreview $n" ;;
     awaiting-approval) ran=1; inzone="$inzone $n" ;;   # it ran, rebased and verified green; a human hasn't approved the zone it changed
   esac
   # Collected off the STATUS, not the scheduler state: a refusal is 'failed' like any

@@ -12,6 +12,11 @@ work run to completion by a chain of agent iterations.
   "branchName": "chief/my-feature",     // branch the tasklist runs on
   "description": "One paragraph: what this tasklist delivers and why.",
 
+  "type": "DECISION",                     // optional: the deliverable is a human
+                                             // verdict, not a merged branch. `kind:
+                                             // "DECISION"` and `decision: true` are
+                                             // accepted aliases for hand-authored records.
+
   // --- where the work happens (optional) ---
   "repo": ".",                           // "." = the project (default). A path (e.g.
                                          //   "packages/engine" or a submodule "sub")
@@ -90,6 +95,14 @@ work run to completion by a chain of agent iterations.
                                          //   re-deriving it. Produced once, reused on
                                          //   resume, human-editable between iterations.
                                          //   false (default) — see the note below.
+
+  // A DECISION tasklist always pays for research. Its brief names the options and
+  // what each forecloses. Passing stories only prepares the brief; it cannot merge
+  // or approve the choice. Set review:"decision" to use the existing review gate.
+
+  // A DECISION tasklist always pays for research. Its brief names the options and
+  // what each forecloses. Passing stories only prepares the brief; it cannot merge
+  // or approve the choice. Use review:"decision" for the existing review gate.
 
   "userStories": [
     {

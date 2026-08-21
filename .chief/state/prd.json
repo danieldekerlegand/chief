@@ -1,59 +1,72 @@
 {
   "project": "chief",
   "category": "feature",
-  "branchName": "chief/105-chief-usage-reports-spend-and-limits",
-  "description": "**Chief can hit a usage limit, wait for it, resume from it, and report none of it afterwards.**\n\nThe data already exists. Every run writes an append-only NDJSON event log (`chief events -l` lists the logs on this host), and two documented blocks ride on it: `usage` on `agent.turn` (`input_tokens`, `output_tokens`, `cost_usd`, `duration_ms`, `turns`, `model`) and `limit` on the rate-limit events (`hit`, `retry_at`, `waits`, `max_waits`). Nothing reads them back. The command surface \u2014 approve \u00b7 events \u00b7 gen \u00b7 init \u00b7 lint \u00b7 list \u00b7 logs \u00b7 models \u00b7 monitor \u00b7 pause \u00b7 ps \u00b7 quality \u00b7 reap \u00b7 run \u00b7 update \u2014 has no `usage`.\n\n**Deliberately NOT dependent on `104`.** The most useful number here does not need token counts at all. On a subscription plan the question is not *what did this cost* but *how close am I to the five-hour or weekly window* \u2014 and **no provider CLI exposes that**: `claude` has no usage subcommand (`--max-budget-usd` is a spend cap, not a report), `devin` has only `auth status`, `codex` has nothing. Only `opencode stats` reports usage at all. So chief's own **rate-limit incident history \u2014 how often a limit was hit, how long was lost waiting, when the window reset \u2014 is the best signal available on this machine**, and it works for every provider today. `104` makes the dollar half real; this is useful before it lands.\n\n**Aggregation belongs to chief-cloud, and this must not become a second ledger.** `docs/reference/events.md` is explicit: *\"chief does not persist, aggregate, or bill anything itself.\"* This command READS logs chief already wrote and prints a report. It stores nothing new, bills nothing, and adds no daemon. If it starts wanting a database, it has gone out of scope.\n\nAlign the CLI shape with `97-tasklist-state-report`'s `chief status` where they overlap (`--json`, reporting across repos from a parent directory) so the two read as one tool.",
-  "dependsOn": [],
+  "branchName": "chief/106-decision-tasklists-carry-a-verdict",
+  "description": "**Chief can prepare a decision and can hold for a human, but a decision has nowhere to LAND — so every one is settled by hand-editing JSON.**\n\nMeasured across the portfolio on 2026-08-20: **20 parked tasklists reference a decision, an ADR, or waiting for an answer, and NOT ONE of them sets `parkedReason`.** `chief status` already breaks parks down by that field and `driver.sh` already prints it; the reporting shipped in `97` and the data never followed. So the operator's real question — *which of these is waiting on ME, and which is waiting on a toolchain, a licence counterparty, or hardware I do not own* — cannot be answered without opening twenty files. Today it separates `talos/66-root-license-decision` (mine to make) from `talos/47-ue-toolchain-and-build-matrix` (provisioning-blocked, not a decision at all) only by reading prose.\n\n**The machinery to run a decision interactively already exists and is better than assumed.** `review.sh` hands a document to a reviewer program, blocks for a verdict, records it as a checksum-bound file, and — critically — **absence is detected, never assumed**: no reviewer on PATH parks the tasklist rather than approving it. `review_record` keeps `rounds` APPEND-ONLY because *\"the annotation history is the reviewer's side of the conversation and is what the next plan turn is briefed with.\"* `research: true` produces the reviewable, editable brief to decide FROM. That is a decision loop with a prose channel, already built.\n\n**What is missing is only the terminal state.** A tasklist ends when its stories pass and its branch merges. That fits *\"write the ADR\"*. It does not fit *\"choose between three options\"*, where the deliverable is a human's judgement and there may be no code at all. So the verdict has no home, and retiring the tasklist afterwards means hand-writing `supersededBy` with no `mergedToMain` — a filing whose one mis-step permanently blocks every dependent. That surgery was performed by hand on `koine/62` and `koine/63` on 2026-08-20, which is the immediate motivation for this work.\n\nBuild the smallest thing that closes it: make the park reason real, give a decision tasklist a shape, and give the verdict a command. Do NOT build a second review system — this rides the one in `review.sh`.",
   "touches": [
     "bin/chief",
-    "test/",
-    "docs/",
-    "README.md",
-    "VERSION"
+    "engine/",
+    "docs/reference/",
+    "test/"
   ],
-  "iters": 6,
-  "warmup": [],
+  "iters": 8,
+  "warmup": [
+    "python3 -c \"import json,glob;print(sum(1 for f in glob.glob('../*/tasks/chief/*.json') if json.load(open(f)).get('parked')), 'parked;', sum(1 for f in glob.glob('../*/tasks/chief/*.json') if json.load(open(f)).get('parkedReason')), 'with parkedReason')\"",
+    "grep -n 'parkedReason' engine/driver.sh engine/status.sh | head",
+    "sed -n '1,120p' engine/review.sh",
+    "grep -n 'review_record\\|rounds' engine/review.sh | head -20",
+    "grep -n 'supersededBy\\|mergedToMain' engine/*.sh docs/reference/tasklist-schema.md | head"
+  ],
   "userStories": [
     {
       "id": "US-1",
-      "title": "`chief usage` reports spend and limit incidents from the event logs",
-      "description": "Read the NDJSON chief already writes. Aggregate per run, and total.",
+      "title": "A park says what KIND of park it is, and chief can filter to the ones awaiting a human",
       "acceptanceCriteria": [
-        "`chief usage` summarises the logs on this host: turns, tokens and cost where present, per run and in total.",
-        "It reports rate-limit incidents \u2014 how many times a limit was hit, total time spent waiting, and the last observed reset ETA.",
-        "A provider that printed no usage figures reports its turns and its limit incidents with the cost columns EMPTY, never zero \u2014 zero is a measurement, empty is an absence.",
-        "It reads only existing logs: no new state file, no daemon, no provider call.",
-        "It runs correctly when no logs exist yet, saying so rather than failing."
+        "`parkedReason` gains a recognized leading CLASS while remaining the opaque free-text field driver.sh already treats it as — at minimum distinguishing a park awaiting a HUMAN DECISION from one blocked on an external dependency, a toolchain, or a counterparty. Chief must keep printing an unrecognized reason verbatim: a class it does not know is not an error.",
+        "`chief lint` fails a tasklist that is `\"parked\": true` with no `parkedReason`. Twenty parks across the portfolio carry a decision in prose and none in the field, which is the exact gap `97`'s reporting cannot see through.",
+        "`chief status` can filter to the decision class, so 'what is waiting on me' is one command. Counterfactual: a run of that filter today would return the empty set from twenty genuine candidates, and the test asserts against a fixture that reproduces that shape.",
+        "The classes are documented in `tasklist-schema.md` with an example of each, including at least one park that is NOT a decision. A park blocked on an unprovisioned toolchain is the shape to keep out of the decision class — a lint that assumes every park is a question would sweep those in, and across the portfolio they outnumber the real decisions.",
+        "This story ships the CLASS, the lint and the filter. Backfilling the existing parked tasklists is a portfolio sweep in the repos that own them and is explicitly NOT done here."
       ],
       "passes": true,
-      "notes": "bash -n bin/chief, test/usage.sh, and test/events.sh: green; fixture report observed 2 turns, 10 input/5 output/15 total tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, and reset ETA 180; no-log case exited 0 with a helpful message"
+      "notes": "bash -n + shellcheck (when available) + test/parked-decisions.sh + test/park-reasons.sh + status JSON/category regressions: green; focused test passed"
     },
     {
       "id": "US-2",
-      "title": "Scoping and a machine feed",
-      "description": "Useful interactively and to a script, with the same shape `chief status` uses.",
+      "title": "A decision tasklist's deliverable is the operator's verdict, not a merge",
       "acceptanceCriteria": [
-        "A time window can be selected (for example the last N days), because a limit window is the unit that matters.",
-        "Output can be scoped to one repo, and run from a parent directory to cover every repo beneath it.",
-        "`--json` emits a machine-readable form, and its shape is documented.",
-        "The human output stays readable when a provider contributes no cost data \u2014 the table does not collapse into blank columns."
+        "A tasklist may declare itself a DECISION. Its completion condition is a recorded human verdict, not passing stories plus a merged branch — a choice between three options may produce no code at all, and today such a tasklist can only end by lying about what it did.",
+        "It rides the EXISTING review gate in `review.sh` — the reviewer contract, the checksum binding, the append-only `rounds`, and the park-on-absence semantics are reused, not reimplemented. A second review system in this repo would be the wrong outcome of this story.",
+        "The decision brief is produced by the existing `research` phase so the operator decides from a mapped, editable document rather than from the tasklist description. The brief must state the options and what each one forecloses.",
+        "The verdict is durable across process death, a usage-limit sleep, and a rebuilt worktree, on the same guarantees the plan verdict already has. An approval given once is never asked for twice.",
+        "A decision tasklist on a host with no reviewer PARKS. It must never self-approve, and the test asserts that on a host with `CHIEF_REVIEW_NONINTERACTIVE=1`."
       ],
       "passes": true,
-      "notes": "bash -n bin/chief + test/usage.sh + test/events.sh: green; --json no-log feed parsed successfully with null unavailable measurements; --days, --repo/--scope filtering and fixed-width human columns implemented and documented in docs/reference/usage.md"
+      "notes": "bash -n engine/decision.sh engine/agent.sh engine/research.sh engine/driver.sh engine/monitor.sh bin/chief: green; VERSION-BUMP PASS; decision predicate and research brief assertions passed; inherited test/ratelimit.sh fixture hung and was stopped (prior verification blocker remains)"
     },
     {
       "id": "US-3",
-      "title": "Wired into the roster the way every other command is",
-      "description": "Chief's own providers guide is emphatic that roster surfaces drift when only some are updated.",
+      "title": "`chief decide` records the verdict and files the retirement correctly",
       "acceptanceCriteria": [
-        "`chief usage --help` and the `chief help` usage block both document it.",
-        "The README command table gains a row \u2014 `test/doc-sync.sh` fails without it.",
-        "A test covering the aggregation is registered in `test/all.sh`'s `BASH_SUITE` and given its own CI step, because CI enumerates the shell tests individually rather than running `all.sh`.",
-        "The test drives real fixture logs, including a log with null usage and a log with rate-limit events, and asserts the reported figures.",
-        "`VERSION` is bumped and the README version string synced."
+        "A command records an operator's verdict against a tasklist with a prose note — the note is the point, since a verdict without its reasoning is folklore in six months.",
+        "Where the verdict retires the tasklist, chief performs the `completed/` filing itself: `supersededBy` set, `mergedToMain` deliberately absent, moved to `completed/`. This is currently hand-edited JSON and it was hand-edited twice on 2026-08-20.",
+        "Chief REFUSES the retirement while any live tasklist still depends on it, naming the dependents. A `completed/` record with no `mergedToMain` permanently blocks every dependent — intended when the retirement is deliberate, catastrophic when a dependent was overlooked, and `~/Development/CLAUDE.md` states the ordering rule as 'repoint its dependents BEFORE filing it'.",
+        "Where the verdict instead UNPARKS, the park fields are cleared and the recorded verdict survives in the tasklist — a tasklist that was parked on a question should carry the answer that released it.",
+        "The verdict lands in the event stream like every other state transition, so a decision is visible in `chief events` and to any embedding host.",
+        "A test drives both outcomes end to end and asserts the resulting JSON against the retirement rules, including the refusal."
       ],
-      "passes": true,
-      "notes": "bash -n + test/usage-report.sh + test/usage.sh + test/events.sh + test/doc-sync.sh + test/version-bump.sh: green; fixture report observed 2 runs, 3 turns, 10/5/15 tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, and a non-null reset ETA while preserving null usage; README/help, all.sh, CI, and VERSION 0.8.80 synced"
+      "notes": null
+    },
+    {
+      "id": "US-4",
+      "title": "The agent prepares the decision and is structurally unable to make it",
+      "acceptanceCriteria": [
+        "No agent turn can produce a verdict. The agent researches, frames the options and drafts the record; the verdict enters only through the human path. A model that can write its own approval has turned a decision gate into a formality.",
+        "A test asserts an agent cannot reach the verdict — the counterfactual is an agent-authored verdict file being rejected rather than honoured.",
+        "Where a decision's outcome is an ADR, the agent may draft it, but the draft carries the operator's verdict rather than asserting one of its own. Several parked tasklists across the portfolio are exactly this shape — an ADR nobody can write until a person chooses.",
+        "Documented in `docs/reference/` as its own page, covering the decision class, the interactive loop, `chief decide`, and the retirement rules, and linked from `docs/README.md` per the documentation standard."
+      ],
+      "notes": null
     }
   ]
 }

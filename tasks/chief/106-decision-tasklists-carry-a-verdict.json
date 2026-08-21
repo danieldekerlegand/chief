@@ -41,7 +41,8 @@
         "The verdict is durable across process death, a usage-limit sleep, and a rebuilt worktree, on the same guarantees the plan verdict already has. An approval given once is never asked for twice.",
         "A decision tasklist on a host with no reviewer PARKS. It must never self-approve, and the test asserts that on a host with `CHIEF_REVIEW_NONINTERACTIVE=1`."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n engine/decision.sh engine/agent.sh engine/research.sh engine/driver.sh engine/monitor.sh bin/chief: green; VERSION-BUMP PASS; decision predicate and research brief assertions passed; inherited test/ratelimit.sh fixture hung and was stopped (prior verification blocker remains)"
     },
     {
       "id": "US-3",
