@@ -32,8 +32,8 @@
         "Mutation-check it: change one byte in the tree and confirm the gate RUNS; change the gate script and confirm it runs; leave both identical and confirm it skips. A cache that cannot be shown to miss is not safe to trust",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Mutation probe green: identical tree/base/hook skipped with tree SHA and cache path reported; committed tree and verify-hook changes missed and reran. bash -n, quality ratchet, doc-sync, and test/version-bump green; VERSION 0.8.82; shellcheck unavailable."
     },
     {
       "id": "US-2",

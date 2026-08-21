@@ -1,65 +1,78 @@
 {
   "project": "chief",
   "category": "fix",
-  "branchName": "chief/109-reclaim-a-merged-tasklists-worktree",
-  "description": "\ud83d\uddd1\ufe0f **Reclamation is keyed to a tasklist RUNNING AGAIN, and a merged tasklist never runs again \u2014 so its worktree is stranded forever.** Both removal sites assume a next run: `engine/driver.sh:2276` sweeps at worktree CREATION (*\"reclaim last run's build artifacts first\"*), and `:2652` removes to free the branch for the merge checkout. Neither is reached again once a tasklist merges and retires.\n\n**Measured on cuneiform, 2026-08-21.** `361-run-budget-and-bounce-termination` merged cleanly at `dfe69a08c`, never re-ran, and left **15 GB** standing until it was deleted by hand. It was not alone: `~/.chief/worktrees` had reached **94 GB across 1,867 containers**, of which 1,857 were dead shells and one live container (cuneiform) held 72 GB in six trees of 10\u201320 GB each. The host sat at **84% full**. Every one of those trees is a full `core/engine/target` \u2014 chief creates a worktree per tasklist and they share no build cache, so the cost is per-tasklist-ever-run rather than per-concurrent-run. Running sequentially does not bound it.\n\n**The code already knows this can happen and says so.** `:2652`'s own comment: *\"a `git worktree remove` that fails here is what strands a 1.4 GB `target` behind a tasklist that finished cleanly.\"* The observed strand was ten times that. And the removal is `wt_git remove --force \"$wt\" 2>/dev/null || true` \u2014 failure is discarded at every site, with no retry, no report, and (unlike `:2276`, which follows it with `rm -rf \"$wt\"`) no fallback on the merge path.\n\n**Two defects, and the second is why the first goes unnoticed.** (1) Nothing reclaims after a successful merge+retire. (2) A removal that loses is silent, so an operator learns about it from `df`, weeks later, rather than from the run that caused it. `sweep_worktree` already tallies reclaimed bytes into `$STATE/sweep.bytes` \u2014 the machinery for reporting exists and is not used for the failure case.",
+  "branchName": "chief/110-a-green-branch-should-not-be-verified-three-times",
+  "description": "\u23f1\ufe0f **Three already-green branches took over two hours to merge, and nothing was wrong with any of them.** Measured on cuneiform 2026-08-21, a `-p1` run at 2h11m: `353-console-linear-order` merged after **~34 minutes** \u2014 a branch that was 4/4 and had been verified GREEN before the run started. `355-multimodal-ingest` sat at 3/3 with **2 merge-phase verifies and 6 agent iterations**; `363-composer-stop-control` at 3/3 with another. The operator's summary: *\"it takes hours and hours to simply complete one single tasklist. Other projects are not like this.\"*\n\n**Re-verification after a rebase is CORRECT and this tasklist does not remove it.** `engine/driver.sh`'s own header states the reason: a branch is *\"REBASED onto the latest main and RE-VERIFIED (verify_branch). File overlap surfaces as a rebase conflict; semantic staleness surfaces as a verify [failure]... There is no correctness knob to get wrong.\"* That is right, and this repo has paid for the alternative.\n\n**What is wasted is verifying a tree that DID NOT CHANGE.** There is no verify-result cache anywhere \u2014 `GATE_EXIT`/tree-sha caching appears **0 times** in `engine/driver.sh`. So a rebase that is a fast-forward, or that replays to a byte-identical tree, pays a full gate to re-derive a verdict that provably still holds. On cuneiform a full umbrella gate spans go + desktop + engine; the engine arm alone is the long pole.\n\n**Three multipliers stack on top, and together they are the hours.** (1) The AGENT runs its own full `.chief/verify.sh` to decide a story is done, then chief runs the merge-phase gate again \u2014 the same tree, twice, by two different callers. (2) An overlap-zone `review` hold parks the branch until `chief approve`, and **approval does not merge** \u2014 `chief approve --list` says *\"the next run merges it\"* \u2014 so landing it costs a SECOND run, which rebases onto a main that has since moved and verifies a THIRD time. (3) Merges are serialized on the merge lock, so each branch in a batch rebases onto the previous one's merge and re-verifies; N green branches cost N sequential gates, not one.\n\n**And the operator cannot see any of it.** `chief ps` reported `verifying for 10m` for a branch whose state was `awaiting-approval` \u2014 the opposite condition. That single mislabel cost an hour of waiting for something that was waiting on a human. `chief approve --list` had the truth (`state awaiting-approval`) the whole time.",
   "dependsOn": [],
   "touches": [
     "engine/driver.sh",
-    "engine/sweep.sh",
+    "engine/measure.sh",
     "test",
     "docs",
     "VERSION"
   ],
-  "iters": 6,
+  "iters": 7,
   "warmup": [
-    "sed -n '2270,2282p' engine/driver.sh",
-    "sed -n '2645,2660p' engine/driver.sh",
-    "grep -n 'sweep_worktree\\|wt_git remove\\|sweep.bytes' engine/driver.sh",
-    "grep -n 'chief_sweep_worktree' engine/sweep.sh | head -5",
-    "du -sh ~/.chief/worktrees 2>/dev/null; ls -d ~/.chief/worktrees/*/ | wc -l"
+    "sed -n '20,35p' engine/driver.sh",
+    "grep -n 'verify_branch\\|verifying \\$branch\\|phase=verifying' engine/driver.sh",
+    "grep -n 'awaiting-approval\\|zone\\|review' engine/driver.sh | head -20",
+    "grep -c 'GATE_EXIT' engine/driver.sh",
+    "grep -n 'live_set .* phase=' engine/driver.sh | head -12"
   ],
   "userStories": [
     {
       "id": "US-1",
-      "title": "A merged tasklist's worktree is reclaimed when it retires",
-      "description": "The missing site. Both existing removals assume the tasklist runs again; the one path that guarantees it never will \u2014 merge + record + retire \u2014 reclaims nothing.",
+      "title": "An unchanged tree is not re-verified",
+      "description": "The one safe reduction. A rebase that produces a tree identical to the one already verified cannot have changed the verdict, so re-deriving it is pure cost.",
       "acceptanceCriteria": [
-        "After a tasklist merges and its record is filed to `completed/`, its worktree directory is removed and the reclaimed byte count is added to the run's existing `$STATE/sweep.bytes` tally, so the run summary can report what a session actually freed",
-        "The branch is deleted only when it is genuinely merged \u2014 `git branch -d` semantics, never `-D`. A branch that is NOT an ancestor of the base is KEPT and the reason reported: an unmerged branch is somebody's work, and this story must not become a way to lose it",
-        "Removal FALLS BACK the way `:2276` already does (`wt_git remove --force` then `rm -rf`), because the merge-path site at `:2652` has no fallback today and that asymmetry is part of why 361 survived",
-        "A tasklist that did NOT merge \u2014 verify-failed, zone-held, rebase-refused, or left for review \u2014 keeps its worktree untouched. Reclaiming one of those would destroy the tree an operator is about to inspect",
+        "A verify verdict is recorded against the TREE it was computed on (`git rev-parse HEAD^{tree}`, not the commit sha \u2014 a rebase rewrites commit shas while leaving the tree identical, which is exactly the case worth catching), together with the base it was verified against and the gate's exit status",
+        "When a branch reaches the merge phase and its post-rebase tree matches a recorded GREEN verdict for the same base, the gate is SKIPPED and the run says so \u2014 naming the tree and where the verdict came from, so a reader can tell a skip from a pass",
+        "Any difference re-verifies: a different tree, a different base, a non-green prior verdict, or no record at all. The cache is an optimisation over an unchanged input and must never be the reason a real failure is missed",
+        "The record is per-repo and BOUNDED, and is invalidated when `.chief/verify.sh` itself changes \u2014 a verdict computed by a different gate is not a verdict about this one. That file's own mtime/sha is part of the key",
+        "Mutation-check it: change one byte in the tree and confirm the gate RUNS; change the gate script and confirm it runs; leave both identical and confirm it skips. A cache that cannot be shown to miss is not safe to trust",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
       "passes": true,
-      "notes": "bash -n clean; shellcheck unavailable in environment; VERSION-BUMP PASS, DOC-SYNC PASS, sweep 47 passed/0 failed, smoke PASS, merge-batch OK, RETIRE-DIRTY PASS"
+      "notes": "Mutation probe green: identical tree/base/hook skipped with tree SHA and cache path reported; committed tree and verify-hook changes missed and reran. bash -n, quality ratchet, doc-sync, and test/version-bump green; VERSION 0.8.82; shellcheck unavailable."
     },
     {
       "id": "US-2",
-      "title": "A removal that loses is REPORTED, at every site",
-      "description": "`2>/dev/null || true` at three sites. The failure that stranded 15 GB produced no output at all, so the only symptom was the disk filling weeks later.",
+      "title": "`chief ps` never reports a waiting branch as working",
+      "description": "The mislabel that cost an hour. The state was `awaiting-approval` and the display said `verifying`.",
       "acceptanceCriteria": [
-        "Every `wt_git remove` site reports a failure it could not recover from \u2014 naming the path, the measured size, and the reason git gave \u2014 instead of discarding it. The existing sweep tally is the natural carrier; a silent strand is the defect",
-        "The report is a WARNING and never fails the run: a tasklist that merged correctly must not be marked failed because a directory could not be deleted. The cost of getting this backwards is worse than the leak",
-        "A run summary that reclaimed nothing while leaving worktrees behind SAYS SO, with the total still standing \u2014 `df` is not an acceptable notification channel for a tool that created the directories",
-        "Mutation-check it: make the removal fail unconditionally and confirm the run still completes, still merges, and now reports the strand. A silent failure must be impossible to reintroduce without the test going red"
+        "A branch held at an overlap zone reports a state that names the hold and the action \u2014 `awaiting-approval`, with the `chief approve <name>` invocation \u2014 in `chief ps`, not only in `chief approve --list`. `ps` is the view an operator watches; a hold invisible there is a hold nobody clears",
+        "The phase shown is the phase the branch is IN. `verifying` is never displayed for a branch that is not running a gate, and a test asserts the specific regression: a branch parked at a review zone renders as awaiting approval, never as verifying",
+        "The elapsed timer reflects how long it has been WAITING, so `held 2h21m` reads as a queue age rather than as work in progress",
+        "`chief ps` states plainly that approval alone does not merge, wherever it shows an approved-but-unmerged branch \u2014 the current `--list` wording (*\"the next run merges it\"*) is correct and is simply not where anyone is looking"
       ],
-      "passes": true,
-      "notes": "bash -n clean; shellcheck unavailable locally and skipped; quality ratchet green; VERSION-BUMP PASS (0.8.82); DOC-SYNC PASS; full hermetic suite 43 passed/0 failed under bystander guard; sweep 47 passed/0 failed; removal failures use a non-fatal fallback and report path, measured standing bytes, and git diagnostic"
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-3",
-      "title": "A startup sweep bounds what earlier runs already stranded",
-      "description": "US-1 stops the bleeding for future merges; it does nothing about what is already on disk. 1,857 dead containers and 94 GB accumulated before anyone noticed.",
+      "title": "Approving a held branch does not require a whole second run to land it",
+      "description": "The third gate per branch comes from the approve\u2192run\u2192rebase\u2192re-verify round trip, on a main that moved while the branch was parked.",
       "acceptanceCriteria": [
-        "At run start, worktree directories that NO repository references are removed \u2014 the verdict computed against every repo that could own one, not just the repo being run. **This is the dangerous part and the acceptance bar is on it:** a first attempt at this analysis checked two repos and classified 1,866 of 1,867 containers as dead, when 29 of them held LIVE worktrees for formant, chief, vita, praxis, talos and others. The check must enumerate live worktrees across all candidate repos and prove it, and the test must include a container that is live for a DIFFERENT repo than the one running",
-        "`git worktree prune` runs first in each repo, so a stale REGISTRATION is resolved before any directory is judged by it",
-        "A directory is never removed while any live run could own it \u2014 a run in a sibling repo must not lose its trees to a sweep started here",
-        "The sweep is BOUNDED and reports what it freed, and a `--dry-run`/plan mode prints the verdict set without deleting, so an operator can inspect before trusting it",
-        "Deletion logic gets a PURE candidate function with adversarial tests (a path outside the worktree root, a symlink, a name with spaces, an empty string), so \"it can never walk outside `$WT_ROOT`\" is a property of the code rather than a comment \u2014 the `sweep_candidate` convention `cross_system_interop_smoke` already established"
+        "An APPROVED branch is merged by the run that is already in flight when approval happens, if one is \u2014 rather than requiring a fresh `chief run` naming it. The round trip is what forces the extra rebase and the third gate",
+        "If no run is in flight, `chief approve` states the exact command that will land it, so the two-step is explicit rather than discovered. Silence after an approval is the current behaviour and it reads as done",
+        "A branch approved and then merged in the same run is verified ONCE if its tree did not change (US-1's cache is what makes this true) \u2014 the acceptance is on the observable gate count for a batch of N approved green branches, which must not be N gates when nothing moved between them",
+        "Nothing here weakens the zone. A `review` zone still holds until a human approves, however green the gate came back; this story changes only what happens AFTER the human says yes"
       ],
-      "passes": true,
-      "notes": "bash -n clean; shellcheck unavailable locally; test/sweep.sh green with 55 passed, 0 failed; startup dry-run and mutation tests preserved a referenced worktree and a live sibling-repo worktree while reclaiming an unreferenced one; VERSION 0.8.84 synced with README"
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-4",
+      "title": "The agent's own verify and the merge gate are not two full runs of the same thing",
+      "description": "An agent runs `.chief/verify.sh` to decide a story is done; chief then runs it again at merge. Same script, same tree, two callers.",
+      "acceptanceCriteria": [
+        "An agent-side verify records its verdict in the same tree-keyed store US-1 introduces, so the merge phase can reuse it when the tree is unchanged rather than re-running the identical gate",
+        "The agent's verify remains available and unchanged in behaviour \u2014 it is how a story is decided, and removing it would make the agent guess. This story removes the DUPLICATION, not the check",
+        "The measured outcome is stated in the notes: for a tasklist that finishes green with no rebase, the number of full gate executions between the agent's decision and the merge drops from two to one",
+        "A tree that DID change between the agent's verdict and the merge still verifies at merge \u2014 the common case of an agent committing after its own verify must not be optimised into a skip"
+      ],
+      "passes": false,
+      "notes": ""
     }
   ]
 }

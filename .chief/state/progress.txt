@@ -1,43 +1,17 @@
-# Chief Progress — 109-reclaim-a-merged-tasklists-worktree
-Started: Fri Aug 21 23:56:56 CDT 2026
+# Chief Progress — 110-a-green-branch-should-not-be-verified-three-times
+Started: Fri Aug 21 06:13:53 CDT 2026
 ---
 
-## BASE INTEGRATION RESOLVED
+US-1 implemented: added a bounded per-repository verify verdict cache keyed by the
+post-rebase tree, base commit, and `.chief/verify.sh` blob. The merge phase records
+both green and non-green exits, skips only a matching green record, and reports the
+tree plus cache source when skipping. Files changed: engine/lib.sh, engine/driver.sh,
+VERSION, README.md. Verification observed the mutation probe green (identical tree
+skipped; committed tree and hook mutations missed), bash -n green, quality ratchet
+green, doc-sync green, and test/version-bump green at VERSION 0.8.82; shellcheck was
+unavailable in this environment.
 
-`chief/109-reclaim-a-merged-tasklists-worktree` is **31 commit(s) behind** its base `main` (@bebc6a3) and
-chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
-your branch is exactly as it was and nothing is lost — but it cannot merge
-until the base is integrated, and every commit that lands on `main` while
-this is unresolved makes it worse.
-
-**Your first task this iteration is to integrate the base yourself:**
-
-1. `git rebase main` in this worktree.
-2. At each stop, resolve the conflicts keeping BOTH sides' intent — the
-   `main` side is already-merged work, so never discard it, and never
-   discard your own — then `git add <files>` and `git rebase --continue`.
-   `git rebase --abort` returns you to exactly this state if you need it.
-3. Re-run the project's quality gates and make them green.
-
-Rebase, not `git merge main`: chief rebases this branch again at merge time,
-and a rebase drops merge commits and replays the originals — a resolution
-recorded in a merge commit would be thrown away and this conflict would come
-straight back. Resolving inside the rebase puts the fix in your own commits.
-
-Then continue the normal loop: pick the highest-priority story with
-`passes:false` and implement it. The integration is NOT a user story — do not
-flip any story's `passes` for it, and do not report completion until the
-stories themselves are really done.
-
-## Conflicting paths
-- README.md
-- VERSION
-
-base: main @bebc6a3 · behind: 31 commit(s) · branch: chief/109-reclaim-a-merged-tasklists-worktree
-(full note: .chief/state/INTEGRATE-BASE.md)
-
-## US-3 — startup reclamation of stranded worktrees
-
-Rebased the branch onto main, preserving both branches' README/VERSION intent. Added a bounded host-wide startup sweep in `engine/sweep.sh`, invoked by `engine/driver.sh` after pruning. It prunes every known repository before collecting git worktree references, protects referenced and live sibling-repo worktrees, supports `CHIEF_SWEEP_STARTUP_DRY_RUN=1`, and uses a pure path candidate check before deleting unreferenced trees. Added adversarial and cross-repository fixtures to `test/sweep.sh`; VERSION/README are 0.8.84.
-
-Learnings for future iterations: startup cleanup must treat the shared worktree root as a fleet, not a repo-local directory; pruning and reference collection must happen for every registered repository before any deletion, and dry-run plus a bounded cap are essential safety controls.
+Learnings for future iterations: cache keys must use `HEAD^{tree}` rather than commit
+ids, and the gate script content belongs in the key so a changed verifier cannot reuse
+an old verdict. Keep the cache under run state with a per-repository namespace and a
+fixed record bound.
