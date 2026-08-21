@@ -195,7 +195,7 @@ rm -f "$DOWN/tasks/chief/other-work.json"
 
 # ── 11. WIRED WHERE THE BACKLOG IS READ, and it REPORTS ──────────────────
 # A check nobody runs catches nothing: all five of koine's shipped markers sat in
-# `chief list` for months. So the same scan runs there — the row is marked inline and
+# `chief list` for months. So the same scan runs there — the row's reason is marked and
 # the block underneath carries the sha and the retirement ORDERING — and it stays a
 # report: neither `chief list`, `chief lint` nor a run's schedule changes because of it.
 list() { ( cd "$DOWN" && "$CHIEF" list 2>&1 ); }
@@ -205,7 +205,7 @@ flags() { list | LC_ALL=C grep -c 'counterpart has MERGED' ; }
 #     and the ordering that silently breaks a queue.
 counterpart "$DOWN" down-work '["upstream:merged-work"]'
 out="$(list)"
-has "⚑ counterpart merged" "$out" || fail "chief list did not flag the marker row:\n$out"
+has "counterpart merged" "$out" || fail "chief list did not flag the marker row:\n$out"
 has "downstream work has landed" "$out" || fail "chief list did not report the shipped counterpart:\n$out"
 has "upstream:merged-work" "$out"      || fail "the list report does not name the counterpart:\n$out"
 has "@deadbee" "$out"                  || fail "the list report does not carry the merge sha:\n$out"

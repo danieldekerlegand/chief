@@ -1,12 +1,13 @@
 # Chief Progress — 107-list-and-ps-show-what-is-live
-Started: Fri Aug 21 05:19:24 CDT 2026
+Started: Fri Aug 21 05:22:30 CDT 2026
 ---
 
 ## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
 ```
-doc-links: 4 dead vs 4 on main
+doc-links: 0 dead vs 4 on main
+  retired 4
 verify: quality — ratchet (engine/quality.sh, deltas vs main)
-chief quality: ratchet — measuring 10 changed path(s) on HEAD and at main
+chief quality: ratchet — measuring 14 changed path(s) on HEAD and at main
 quality: scope — the 4 changed source file(s), HEAD vs main (2 file(s) new on this branch — no base version, deferred to the baseline axis)
 quality:   ok     duplicate_blocks              0 -> 0        (delta 0      tol 0)
 quality:   ok     duplicate_line_pct            0 -> 0        (delta 0      tol 1)
@@ -21,19 +22,27 @@ quality: OK — no tracked metric regressed (allowing)
 verify: shell — bash -n
 verify: shellcheck not installed — skipping (CI enforces it)
 verify: policy — VERSION bump (test/version-bump.sh)
-VERSION-BUMP FAIL: shipped code changed since the last VERSION bump (b88e9fb — VERSION is 0.8.81):
-    bin/chief
-    engine/monitor.sh
-  → bump VERSION so 'chief update' and 'chief version' are distinguishable.
-verify: BLOCK — VERSION not bumped for an engine change
+VERSION-BUMP PASS — VERSION (0.8.82) covers every engine/bin change on HEAD
+verify: behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)
+bystander: decoy run up — driver pid 9628, agent pid 9752, run bystander-sibling-865854441-1700-9628
+bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.6smM8tC13F/decoy/runs, which no test below can read
+bystander: [1/43] test/smoke.sh
+  smoke| SMOKE FAIL: chief list doesn't show the completed smoke tasklist
+BYSTANDER FAIL: test/smoke.sh failed (its output is above)
+verify: BLOCK — behavioral tests failed (see above)
 ```
 
-## Verification follow-up
+## Verification follow-up resolved
 
-Resolved the prior merge-time verification failure by correcting six relative documentation links across the plan-review, events, schema, and headless-invocation pages, synchronizing README.md with VERSION 0.8.82, and retaining the existing engine/bin changes under the new version.
+Updated stale tests that still asserted the pre-US-1/pre-US-2 `chief list` output:
+the smoke test now uses `list --all` for retired tasklists, park-reasons checks the
+STATE/REASON columns, and crossrepo checks the aligned `counterpart merged` reason.
+Observed green: `test/all.sh` through the crossrepo boundary after the fixes, plus
+the focused smoke, status-deps, park-reasons, crossrepo, doc-sync, version-bump,
+`bash -n`, and `git diff --check` checks. Shellcheck is unavailable locally.
 
-Observed verification: documentation link ratchet reports 0 dead references versus 4 on main (4 retired), bash syntax and git diff checks are green. The version and doc-sync gates are run after this commit so their HEAD-based policies can observe the VERSION commit.
+### Learnings for future iterations
 
-Learnings for future iterations: the documentation link checker resolves Markdown links relative to their citing file; cross-directory references must use explicit `../` or directory prefixes, even when the target exists elsewhere under `docs/`.
-
-Final observed checks: `node scripts/check-doc-links.mjs --ratchet --base main` reported 0 dead vs 4 on main; `test/version-bump.sh`, `test/doc-sync.sh`, `test/ps-all.sh`, `test/monitor.sh`, `test/status-deps.sh`, and `test/quality-ratchet.sh` all passed; `bash -n bin/chief engine/*.sh test/*.sh` and `git diff --check` were clean.
+When a table/default-scope story changes CLI presentation, update older end-to-end
+assertions at the same time; legacy tests may validate exact inline markers or
+retired rows even though the new behavior is intentional.
