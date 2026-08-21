@@ -52,8 +52,8 @@
         "The test drives real fixture logs, including a log with null usage and a log with rate-limit events, and asserts the reported figures.",
         "`VERSION` is bumped and the README version string synced."
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n + test/usage-report.sh + test/usage.sh + test/events.sh + test/doc-sync.sh + test/version-bump.sh: green; fixture report observed 2 runs, 3 turns, 10/5/15 tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, and a non-null reset ETA while preserving null usage; README/help, all.sh, CI, and VERSION 0.8.80 synced"
     }
   ]
 }

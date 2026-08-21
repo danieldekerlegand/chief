@@ -8,3 +8,7 @@ US-2 progress below; no source intent from either side was discarded.
 US-2 implemented: extended `chief usage` with `--days`, `--repo`/`--scope`, and `--json`, preserving nullable provider measurements and fixed-width human columns. Added the JSON contract at `docs/reference/usage.md`. Verified `bash -n bin/chief`, `test/usage.sh`, and `test/events.sh` (green); the no-log JSON case observed an empty report with null unavailable measurements.
 
 Learnings for future iterations: usage aggregation can remain a passive projection over event logs; keep JSON and human output derived from the same filtered rows so null stays distinct from zero.
+
+US-3 implemented: documented `chief usage` in the help roster and README, registered a dedicated fixture aggregation test in `test/all.sh` and CI, and bumped/synced VERSION 0.8.80. Files changed: README.md, VERSION, .github/workflows/ci.yml, test/all.sh, test/usage-report.sh. Verification observed all focused checks green; the fixture report contained 2 runs, 3 turns, 10/5/15 tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, a reset ETA, and null usage for the unmeasured provider.
+
+Learnings for future iterations: on macOS, canonicalize fixture repository paths with `cd -P` before testing `--repo`, because `/tmp` paths can differ from the resolved path chief records.
