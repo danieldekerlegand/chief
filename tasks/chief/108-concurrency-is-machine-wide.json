@@ -1,0 +1,57 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/108-concurrency-is-machine-wide",
+  "description": "**`-p N` is per-run, so N is a lie the moment a second repo starts.** Five `chief run` invocations across five repos share no concurrency budget and cannot see each other. Nothing coordinates them, so an operator who asks for `-p 2` in one repo and `-p 1` in four others has not asked for 6 — they have asked for 6 *drivers*, each free to spawn a toolchain that itself claims every core.\n\nMeasured on this host 2026-08-20. A 14-physical-core machine, five concurrent runs, **load average 62 — 4.4x oversubscribed**. In `cuneiform` the consequence was precise and expensive: a healthy full merge gate there is **158 seconds** (`cuneiform/340-build-cache-hygiene`, and that repo's own cache checker still reports the tree healthy at 10,260 dep files), yet `353-console-linear-order` spent a **~5 hour iteration whose entire output was** *\"Gate is still on `engine-build`, the first of nine. Waiting.\"* The same agent recorded the cause without recognising it: **three concurrent `verify.sh` processes**, each invoking an uncapped `cargo` that asks for all 14 cores. Across 37 iterations, **12 consumed 85% of 23.6 hours**, and every one of the longest began with all of its stories already passing — the clock was in re-verification, not in writing code.\n\nThe repo-side half is fixable in the repo and has been (`cuneiform` now caps `[build] jobs`). **The half that belongs here is that chief hands out parallelism it does not own.** `-p` bounds tasklists inside one run; nothing bounds runs against each other, and the resource actually being contended — cores — is a property of the machine, not of a repo.\n\nThis is filed as `fix` rather than `feature` deliberately. `-p N` already promises a bound and does not deliver one once a second run exists; a flag whose stated meaning holds only in the single-run case is a defect in the flag.\n\nDo NOT solve this by making chief a scheduler daemon. A run registry already exists — `chief ps` reads live records across every repo — so the cheap version is cooperative: consult what is already recorded, and hold rather than oversubscribe.",
+  "touches": [
+    "bin/chief",
+    "engine/",
+    "docs/reference/",
+    "test/"
+  ],
+  "iters": 8,
+  "warmup": [
+    "chief ps | head -30",
+    "grep -n 'PARALLEL\\|-p)' bin/chief | head -12",
+    "grep -rn 'live_set\\|run file\\|runs/' engine/live.sh | head -10",
+    "ls ~/.chief/runs | tail -5",
+    "sysctl -n hw.physicalcpu; uptime",
+    "sed -n '/CAP THE JOBS/,+18p' ../cuneiform/core/engine/.cargo/config.toml"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A run can see what the machine is already doing",
+      "acceptanceCriteria": [
+        "Chief reads the existing cross-repo run registry — the same records `chief ps` renders — to determine how many agent turns and gates are live on this machine before launching another. No new daemon, no new state store: `ps` already proves the data is there.",
+        "A stale record (a driver whose pid is gone) must not count toward the budget. `chief reap` already models this and the same predicate is reused rather than re-derived.",
+        "The count is reported in a way an operator can check, so 'why is my run holding' is answerable without reading source.",
+        "A test drives fixture run records — including one stale — and asserts the derived count."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "A machine-wide budget bounds concurrency across runs, and defaults to the hardware",
+      "acceptanceCriteria": [
+        "A machine-wide limit bounds concurrent agent turns across ALL runs, configurable and defaulting to something derived from the host's core count rather than a round number. The measured failure was 4.4x oversubscription on 14 cores.",
+        "A run that would exceed the budget HOLDS rather than failing or oversubscribing, and says what it is waiting for. Holding is the drain-not-kill behaviour `chief pause` already establishes; a refusal would make a second repo unusable.",
+        "`-p N` keeps its meaning WITHIN a run and is additionally clamped by the machine budget. Documented explicitly, because the current flag reads as an absolute bound and is not one.",
+        "The budget is opt-outable in one obvious way for an operator who genuinely wants the old behaviour, and the opt-out is recorded in the run's own log so a later investigation can see it was set.",
+        "A test starts two fixture runs against a budget of one and asserts the second holds, then proceeds when the first finishes."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "Contention is visible where the operator already looks",
+      "acceptanceCriteria": [
+        "`chief ps` shows load average against core count when the machine is oversubscribed. A 6-hour iteration and a 3-minute one look identical in the output today, and the difference was never in the repo.",
+        "A tasklist holding on the machine budget renders as a distinct state with its reason — not as generic `pending`, which is what a blocked-on-dependency tasklist already means.",
+        "The stall/quiet thresholds account for contention rather than flagging a queued gate as hung. `monitor.sh` already tunes per-phase thresholds against measurements and this is the same idea: a gate waiting for cores is working, and must not be reported as stalled.",
+        "Document the failure shape in `docs/reference/` with the numbers, so the next operator reading a slow run checks `uptime` before rebuilding their theory of the repo."
+      ],
+      "notes": null
+    }
+  ]
+}
