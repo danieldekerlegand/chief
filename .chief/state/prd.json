@@ -28,6 +28,7 @@
         "The count is reported in a way an operator can check, so 'why is my run holding' is answerable without reading source.",
         "A test drives fixture run records — including one stale — and asserts the derived count."
       ],
+      "passes": true,
       "notes": "test/concurrency.sh: green — fixture found 1 live run with 1 agent turn and 1 gate, and ignored 1 stale PID record; bash -n, version-bump, doc-sync, and smoke passed. test/ratelimit.sh has an unrelated existing epoch-form fixture failure (agent exited 0, expected 2)."
     },
     {
