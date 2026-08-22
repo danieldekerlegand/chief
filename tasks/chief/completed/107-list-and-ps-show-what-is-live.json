@@ -30,7 +30,17 @@
         "The done-by-default change is documented in the CHANGELOG as a behaviour change to a long-stable command, not slipped in as a formatting tweak."
       ],
       "passes": true,
-      "notes": "Implemented live-by-default listing: completed tasklists are omitted with an explicit count, --all restores them, parked rows remain, and CHANGELOG.md documents the behavior change. Verified with bash -n, test/status-deps.sh, test/park-reasons.sh, test/doc-sync.sh, test/version-bump.sh, and git diff --check; all green (shellcheck unavailable)."
+      "notes": "Implemented live-by-default listing: completed tasklists are omitted with an explicit count, --all restores them, parked rows remain, and CHANGELOG.md documents the behavior change. Verified with bash -n, test/status-deps.sh, test/park-reasons.sh, test/doc-sync.sh, test/version-bump.sh, and git diff --check; all green (shellcheck unavailable).",
+      "diffSize": {
+        "files": 6,
+        "lines": 63,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -43,7 +53,17 @@
         "Non-TTY output must not emit colour or box-drawing by default. A piped `chief list` that ships escape codes is the same bug in a different costume."
       ],
       "passes": true,
-      "notes": "Implemented aligned human columns (name/state/progress/category/reason) and stable tab-delimited --plain output; status.sh JSON supplies blocked dependency reasons and parked rows retain reasons. status-deps fixture test: green; bash -n, doc-sync, version-bump, quality ratchet, doc-link ratchet, and git diff --check: green; shellcheck unavailable."
+      "notes": "Implemented aligned human columns (name/state/progress/category/reason) and stable tab-delimited --plain output; status.sh JSON supplies blocked dependency reasons and parked rows retain reasons. status-deps fixture test: green; bash -n, doc-sync, version-bump, quality ratchet, doc-link ratchet, and git diff --check: green; shellcheck unavailable.",
+      "diffSize": {
+        "files": 4,
+        "lines": 82,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -56,7 +76,18 @@
         "A test drives a fixture repo containing one of each state and asserts every one appears under `-a` and that the done ones do not."
       ],
       "passes": true,
-      "notes": "Implemented ps/monitor --all with repo-scoped ready, running, blocked, and parked rows sourced from status.sh JSON; fixture test green; monitor/status-deps/doc-sync/version-bump/quality checks green."
+      "notes": "Implemented ps/monitor --all with repo-scoped ready, running, blocked, and parked rows sourced from status.sh JSON; fixture test green; monitor/status-deps/doc-sync/version-bump/quality checks green.",
+      "diffSize": {
+        "files": 8,
+        "lines": 438,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     }
-  ]
+  ],
+  "mergedToMain": "522ee4c"
 }
