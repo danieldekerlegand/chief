@@ -29,7 +29,17 @@
         "This story ships the CLASS, the lint and the filter. Backfilling the existing parked tasklists is a portfolio sweep in the repos that own them and is explicitly NOT done here."
       ],
       "passes": true,
-      "notes": "bash -n + shellcheck (when available) + test/parked-decisions.sh + test/park-reasons.sh + status JSON/category regressions: green; focused test passed"
+      "notes": "bash -n + shellcheck (when available) + test/parked-decisions.sh + test/park-reasons.sh + status JSON/category regressions: green; focused test passed",
+      "diffSize": {
+        "files": 5,
+        "lines": 66,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -56,7 +66,17 @@
         "A test drives both outcomes end to end and asserts the resulting JSON against the retirement rules, including the refusal."
       ],
       "passes": true,
-      "notes": "bash -n + test/decision.sh + test/parked-decisions.sh + test/status-json.sh + test/quality-ratchet.sh: green; fixture observed dependent refusal, durable sqlite verdict note, unpark clearing parked fields, completed/ retirement without mergedToMain, and tasklist.decision event"
+      "notes": "bash -n + test/decision.sh + test/parked-decisions.sh + test/status-json.sh + test/quality-ratchet.sh: green; fixture observed dependent refusal, durable sqlite verdict note, unpark clearing parked fields, completed/ retirement without mergedToMain, and tasklist.decision event",
+      "diffSize": {
+        "files": 8,
+        "lines": 162,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-4",
@@ -68,7 +88,18 @@
         "Documented in `docs/reference/` as its own page, covering the decision class, the interactive loop, `chief decide`, and the retirement rules, and linked from `docs/README.md` per the documentation standard."
       ],
       "passes": true,
-      "notes": "bash -n + test/decision-agent.sh + test/decision.sh + test/parked-decisions.sh + test/doc-sync.sh: green; agent-authored verdict was ignored and the tasklist remained awaiting a human verdict"
+      "notes": "bash -n + test/decision-agent.sh + test/decision.sh + test/parked-decisions.sh + test/doc-sync.sh: green; agent-authored verdict was ignored and the tasklist remained awaiting a human verdict",
+      "diffSize": {
+        "files": 8,
+        "lines": 200,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "c2c30e4"
 }
