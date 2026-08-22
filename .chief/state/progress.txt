@@ -319,3 +319,11 @@ Re-ran the previously failing `test/stall-flag.sh`; the two-iteration transcript
 ### Learnings for future iterations
 
 The stall-flag integration fixture is timing-sensitive when run under load; rerun the focused script before changing engine behavior when its transcript assertion fails.
+
+## Verification follow-up resolved
+
+Committed the pending `test/status-json.sh` update so the machine-feed fixture asserts the live-by-default `chief list --plain` contract and normalizes temporary dependency paths. Re-ran `test/status-json.sh` and `test/stall-flag.sh`; both were green, including the two-iteration stall transcript and re-engagement assertion.
+
+### Learnings for future iterations
+
+When a list-format change updates a fixture, pin the parseable fields while normalizing only ephemeral temp paths; do not loosen the shape or fold aggregate status assertions into the list test.
