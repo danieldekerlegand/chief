@@ -104,8 +104,9 @@ mkdir -p "$REPO"
 # hermetic fixture — one zone of each policy
 serialize  path:out/sz/    scheduled apart, merged as usual
 review     path:out/rz/    the shared design two branches must not diverge on
+review     path:out/ri/    the in-flight approval regression fixture
 CONF
-  for t in sz rz bw bb; do
+  for t in sz rz bw bb ri; do
     jq -n --arg n "$t" '
       { project:"oz", branchName:("chief/" + $n), description:("policy-layer fixture " + $n),
         iters:3, dependsOn:[], touches:["design-a-" + $n], warmup:[],
@@ -125,10 +126,10 @@ echo 450 > "$WORK/size.bw"; echo 450 > "$WORK/size.bb"
 run_chief() {   # $1 = log; rest = args to `chief run`
   local log="$1"; shift
   if [ -n "${OZ_BUDGET:-}" ]; then
-    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS=1 \
+    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS="${OZ_POLL:-1}" \
         CHIEF_DIFF_BUDGET="$OZ_BUDGET" "$CHIEF" run "$@" ) >"$log" 2>&1
   else
-    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS=1 \
+    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS="${OZ_POLL:-1}" \
         "$CHIEF" run "$@" ) >"$log" 2>&1
   fi
 }
@@ -212,6 +213,29 @@ if grep -q 'HELD BY THE MERGE POLICY LAYER' "$LOG"; then fail "an approved chang
 # the base, and a verdict that outlived its subject can only mislead.
 if [ -f "$(req rz)" ] || [ -f "$(appr rz)" ]; then fail "the request/verdict survived the merge they were about"; fi
 echo "   ok  merged on a banked verdict, no re-ask, no agent turn, artifacts cleared"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PART C (cont.) — approval during the same run is consumed by that run.
+# The request is created after the worker's gate, while reap() still owns the
+# tasklist's transition from running to awaiting-approval.
+# ══════════════════════════════════════════════════════════════════════════════
+echo "overlap-zones: PART C (cont.) — an in-flight approval lands without a second run"
+LOG="$WORK/in-flight.log"
+OZ_POLL=5 run_chief "$LOG" ri & inflight_pid=$!
+for _ in $(seq 1 100); do
+  [ -s "$(req ri)" ] && break
+  sleep 0.1
+done
+[ -s "$(req ri)" ] || { cat "$LOG" >&2; fail "in-flight run never wrote its approval request"; }
+approve ri -m "approved while the run was still polling" > "$WORK/in-flight-approval.txt" 2>&1 \
+  || { cat "$WORK/in-flight-approval.txt" >&2; fail "in-flight approval failed"; }
+wait "$inflight_pid" || { cat "$LOG" >&2; fail "in-flight run exited non-zero"; }
+[ "$(state ri)" = "done" ] || fail "in-flight approval did not let the existing run merge (state $(state ri))"
+on_main "out/ri/US-1.txt" || fail "in-flight approval did not merge the branch"
+grep -q 'approved while this run was in flight' "$LOG" \
+  || fail "the run did not report consuming its in-flight approval"
+[ "$(calls ri)" = 1 ] || fail "in-flight approval spent another agent turn ($(calls ri))"
+echo "   ok  approval consumed by the in-flight run, no second agent turn"
 
 # ══ PART D — the diff-size budget: warn reports, block withholds ═════════════
 echo "overlap-zones: PART D — an oversized story is reported under warn and withheld under block"

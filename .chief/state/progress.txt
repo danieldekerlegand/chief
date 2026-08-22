@@ -57,3 +57,7 @@ base: main @540f9f2 · behind: 42 commit(s) · branch: chief/110-a-green-branch-
 Updated `engine/monitor.sh` so overlap-zone rows explicitly render `awaiting-approval`, retain the elapsed `held` duration, and show the exact `chief approve <name>` action. Approved-but-unmerged holds now say that approval alone does not merge and point to the next `chief run`. Extended `test/stall-flag.sh` with the regression and approved-hold assertions; bumped VERSION/README to 0.8.85.
 
 Learnings for future iterations: monitor rows must derive human-verdict state from the tasklist state/live record rather than the last active phase, and durable approval artifacts need an explicit “not merged yet” message.
+
+US-3 implemented: reap() now detects an approval written while a worker is still in flight and re-arms that tasklist directly, allowing the same run to rebuild the branch, reuse its green verdict cache, and merge without another agent turn or manually starting a second run. Added an end-to-end overlap-zone regression covering the in-flight approval path; bumped VERSION/README to 0.8.86.
+
+Learnings for future iterations: approval artifacts are the durable handoff between the CLI and scheduler; reap() must validate the request-bound checksum before treating an approval as ready, then requeue only that tasklist so unrelated holds remain parked.

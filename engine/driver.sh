@@ -2972,6 +2972,14 @@ retryable_status() {
 retry_at_of()   { _int "$(cat "$STATE/$1.retry-at" 2>/dev/null)"; }
 pause_until()   { _int "$(cat "$LIMIT_PAUSE_FILE" 2>/dev/null)"; }
 eta()           { date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null || echo "$1"; }
+approval_ready() {
+  local n="$1" req app change
+  req="$(zones_request_file "$STATE" "$n")"
+  app="$(zones_approval_file "$STATE" "$n")"
+  [ -s "$req" ] || return 1
+  change="$(jq -r '.change // empty' "$req" 2>/dev/null || echo)"
+  zones_approved "$app" "$change"
+}
 
 # --- operator pause (see OPERATOR PAUSE in the header) -----------------------
 # PRESENCE is the gate, not the content: a truncated or garbled flag file must still
@@ -3078,9 +3086,17 @@ reap() {   # collect any finished workers, update state
       # Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
       # or an over-budget story (docs/reference/diff-budget.md). Non-terminal on the
       # same terms again — but note what is different: this branch already passed the
-      # whole merge floor. Nothing here re-arms it either; `chief approve` records the
-      # verdict and the next run reads it.
-      AWAITING-APPROVAL*) set_state "$n" awaiting-approval ;;
+      # whole merge floor. If approval arrived while this run was still draining the
+      # worker, re-arm it here so this run can finish the merge without a new run.
+      AWAITING-APPROVAL*)
+        if approval_ready "$n"; then
+          echo "  ✓ $n was approved while this run was in flight — continuing to merge"
+          set_state "$n" pending
+          live_set "$(live_of "$n")" phase=approved
+        else
+          set_state "$n" awaiting-approval
+        fi
+        ;;
       *) set_state "$n" failed ;;
     esac
     echo "  ● $n finished → $st"

@@ -59,8 +59,8 @@
         "Nothing here weakens the zone. A `review` zone still holds until a human approves, however green the gate came back; this story changes only what happens AFTER the human says yes",
         "An approval SURVIVES the base moving when the rebase is clean and the re-verify is green. Measured: `362` was approved, `365` merged, and `362` reverted to `awaiting approval` for a rebase `git merge-tree` reported CONFLICT-FREE. Re-asking a human for a decision they already made, because an unrelated branch landed, is what trains an operator to approve without reading. A rebase that CONFLICTS, or a re-verify that comes back red, must still re-ask \u2014 the approval attaches to a reviewed state, not to a name"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "overlap-zones.sh green: approval arriving while the run was in flight was consumed by that run, merged without a second agent turn, and the review zone still held until approval; the approval digest remains valid across a clean base rebase while changed files/zones stay identical, and the existing approved-resume path reports the exact chief run command"
     },
     {
       "id": "US-4",
