@@ -54,7 +54,8 @@
         "The stall/quiet thresholds account for contention rather than flagging a queued gate as hung. `monitor.sh` already tunes per-phase thresholds against measurements and this is the same idea: a gate waiting for cores is working, and must not be reported as stalled.",
         "Document the failure shape in `docs/reference/` with the numbers, so the next operator reading a slow run checks `uptime` before rebuilding their theory of the repo."
       ],
-      "notes": null
+      "notes": "test/concurrency-monitor.sh: green — chief ps rendered load average 62 against 14 physical cores as OVERSUBSCRIBED, marked a pending tasklist budget-hold with its waiting reason, and kept the budget-waiting phase below the 23,400-second stall threshold"
+      ,"passes": true
     }
   ]
 }

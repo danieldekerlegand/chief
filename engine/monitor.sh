@@ -110,7 +110,7 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
 #                      wedged one from out here, so: a longer threshold, not silence.
-STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval '
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting '
 
 # The CEILING on that exemption — quiet by design is not quiet forever. A usage window
 # that never reopens is exactly what an operator has to be told about, so the exemption
@@ -532,6 +532,11 @@ op_since()  {  # $1 stateroot -> epoch | ''  (the stamp, when it is one)
 # reader needs instead is that nothing was lost (branch AND worktree kept) and the
 # exact command that picks it back up. It closes with the phase/heartbeat ages, so a
 # park that happened days ago still dates itself.
+machine_budget_note() { # $1 name $2 stateroot -> one line
+  printf 'waiting: machine budget is full (%s/%s agent turns live) — resumes when a slot opens' \
+    "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_BUDGET"
+}
+
 op_note() {   # $1 name  $2 stateroot -> one line
   local n="$1" note since lim pa age
   note='paused: operator hold'
@@ -710,11 +715,13 @@ render() {
     if [ -z "$runfiles" ]; then
       printf '%sCHIEF%s · no active runs · %s%s%s\n' "$BOLD" "$RST" "$DIM" "$now" "$RST"
       printf '%sStart one with:  chief run -p N%s\n' "$DIM" "$RST"
+      printf '%sMachine activity: %s%s\n' "$DIM" "$(chief_machine_activity_line)" "$RST"
     else
       printf '%sCHIEF%s · %s0 active run(s)%s · %s%s%s\n' "$BOLD" "$RST" "$CYN" "$RST" "$DIM" "$now" "$RST"
       # Only claim they exited if any of them were ours to check.
       [ "$n_foreign" -lt "$n_files" ] && printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
       foreign_note "$n_foreign"
+      printf '%sMachine activity: %s%s\n' "$DIM" "$(chief_machine_activity_line)" "$RST"
     fi
     [ "$ALL" -eq 1 ] && render_all_inflight
     return 0
@@ -787,6 +794,9 @@ render() {
       dead=0                       # …and ABSENT is not the same finding as quiet
       [ "$st" = running ] && worker_gone "$n" "$state" && dead=1
       glyph="$(glyph_for "$st")"; gl="${glyph%%|*}"; lbl="${glyph##*|}"
+      budget_hold=0
+      [ "$st" = pending ] && [ "$lph" = machine-budget-waiting ] && budget_hold=1
+      [ "$budget_hold" = 1 ] && { gl="${CYN}⏸${RST}"; lbl=budget-hold; }
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
       [ "$stale" = 1 ] && gl="${RED}⚠${RST}"
@@ -801,7 +811,9 @@ render() {
       rn="$(retry_note "$n" "$state" "$retrymax")"
       printf '   %b %-22s %-9s %-7s %s%s%s%s\n' "$gl" "$n" "$lbl" "$prog" "$DIM" "$br" \
         "$([ -n "$rn" ] && printf ' · %s' "$rn")" "$RST"
-      if [ "$st" = rate-limited ]; then
+      if [ "$budget_hold" = 1 ]; then
+        printf '       %s↳ %s%s\n' "$CYN" "$(machine_budget_note "$n" "$state")" "$RST"
+      elif [ "$st" = rate-limited ]; then
         printf '       %s↳ %s%s\n' "$CYN" "$(limit_note "$n" "$state" "$limitmax")" "$RST"
       elif [ "$st" = paused ]; then
         # The operator hold. Same ⏸, its own note — and NOT the live_note line: the

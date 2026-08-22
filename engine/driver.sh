@@ -3100,6 +3100,15 @@ while :; do
         echo "  ⏸ machine budget hold — waiting for an agent turn ($CHIEF_MACHINE_AGENT_TURNS/$CHIEF_MACHINE_BUDGET live across the machine)"
         printf '%s\n' "$(date +%s) HOLD machine budget: $CHIEF_MACHINE_AGENT_TURNS/$CHIEF_MACHINE_BUDGET agent turns live" >> "$STATE/machine-budget.log" 2>/dev/null || true
       fi
+      # Keep dependency-blocked work distinguishable from work that is ready but
+      # waiting for a machine-wide slot. The live record is intentionally a hold
+      # marker while the coarse scheduler state remains pending.
+      for n in $NAMES; do
+        [ "$(get_state "$n")" = pending ] || continue
+        deps_satisfied "$n" || continue
+        touch_free "$n" || continue
+        live_set "$(live_of "$n")" name="$n" state=pending phase=machine-budget-waiting
+      done
       break
     fi
     for n in $NAMES; do

@@ -1,10 +1,10 @@
 # Chief Progress — 108-concurrency-is-machine-wide
-Started: Fri Aug 21 05:46:07 CDT 2026
+Started: Fri Aug 21 22:43:18 CDT 2026
 ---
 
 ## ⚠️ BASE INTEGRATION REQUIRED — do this FIRST, before any user story
 
-`chief/108-concurrency-is-machine-wide` is **19 commit(s) behind** its base `main` (@b45bf84) and
+`chief/108-concurrency-is-machine-wide` is **21 commit(s) behind** its base `main` (@2d1e79e) and
 chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
 your branch is exactly as it was and nothing is lost — but it cannot merge
 until the base is integrated, and every commit that lands on `main` while
@@ -30,16 +30,20 @@ flip any story's `passes` for it, and do not report completion until the
 stories themselves are really done.
 
 ## Conflicting paths
-- README.md
-- VERSION
+- .chief/state/prd.json
+- .chief/state/progress.txt
 
-base: main @b45bf84 · behind: 19 commit(s) · branch: chief/108-concurrency-is-machine-wide
+base: main @2d1e79e · behind: 21 commit(s) · branch: chief/108-concurrency-is-machine-wide
 (full note: .chief/state/INTEGRATE-BASE.md)
 
-Base integration completed first: rebased onto main and preserved both branches' intent in README.md and VERSION, including the target branch's runtime state.
+US-3 — Contention is visible where the operator already looks: `chief ps` now reports
+one-minute load average against physical cores and marks oversubscription, while ready
+pending tasklists held by the machine budget render as `budget-hold` with a reason.
+Budget-waiting is a quiet-by-design phase so monitor does not call the cooperative hold
+stalled. Added `test/concurrency-monitor.sh` and documented the measured 62/14 (4.4x)
+incident in `docs/reference/concurrency.md`; bumped VERSION/README to 0.8.83.
 
-Implemented US-2 in commit 78aa0df. Added host-wide agent-turn budgeting in engine/concurrency.sh and engine/driver.sh, with physical-core-derived default, CHIEF_MACHINE_BUDGET configuration, explicit zero/off opt-out, registry/event/log recording, and a hold-and-retry scheduler path. Documented the within-run meaning of -p and the machine budget in README.md and docs/reference/concurrency.md. Added test/machine-budget.sh and registered it in test/all.sh; bumped VERSION/README to 0.8.81.
-
-Verification observed: bash -n, test/concurrency.sh, test/machine-budget.sh, test/version-bump.sh, test/doc-sync.sh, and test/smoke.sh all passed. The machine-budget fixture observed the second run held at 1/1 and proceeded after the first finished.
-
-Learnings for future iterations: machine-wide policy can remain cooperative by reusing the existing live run registry; keep the budget reader non-destructive and record opt-outs in both the registry and a run-local log so later investigation can distinguish intentional oversubscription.
+Learnings for future iterations: keep scheduler holds in the live record while leaving
+the coarse lifecycle state pending; monitor can then distinguish dependency blocking from
+resource contention without creating another state store. Use `CHIEF_LOAD_AVERAGE` only
+as a deterministic test override; production reads the host's one-minute load average.

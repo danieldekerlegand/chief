@@ -15,6 +15,7 @@ CHIEF_MACHINE_STALE=0
 CHIEF_MACHINE_CORES=1
 CHIEF_MACHINE_BUDGET=1
 CHIEF_MACHINE_BUDGET_DISABLED=0
+CHIEF_MACHINE_LOAD_AVERAGE=""
 
 chief_machine_core_count() {
   local n
@@ -45,6 +46,30 @@ chief_machine_budget_init() {
 
 chief_machine_budget_allows() {
   [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ] || [ "$CHIEF_MACHINE_AGENT_TURNS" -lt "$CHIEF_MACHINE_BUDGET" ]
+}
+
+chief_machine_load_average() {
+  local load
+  load="${CHIEF_LOAD_AVERAGE:-}"
+  if [ -z "$load" ]; then
+    load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{gsub(/[{}]/, ""); print $1}' )"
+  fi
+  if [ -z "$load" ] && [ -r /proc/loadavg ]; then
+    load="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+  fi
+  case "$load" in
+    ''|*[!0-9.]*|*.*.*) printf '?'; return 0 ;;
+    *) printf '%s' "$load" ;;
+  esac
+}
+
+chief_machine_load_line() {
+  local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}" oversubscribed
+  [ -n "$load" ] || load="$(chief_machine_load_average)"
+  CHIEF_MACHINE_LOAD_AVERAGE="$load"
+  printf 'load average: %s / %s physical core(s)' "$load" "$CHIEF_MACHINE_CORES"
+  oversubscribed="$(awk -v load="$load" -v cores="$CHIEF_MACHINE_CORES" 'BEGIN { print (load != "?" && load > cores) ? 1 : 0 }' 2>/dev/null || echo 0)"
+  [ "$oversubscribed" = 1 ] && printf ' · OVERSUBSCRIBED'
 }
 
 chief_machine_budget_line() {
@@ -121,8 +146,8 @@ chief_machine_activity() {
 }
 
 chief_machine_activity_line() {
-  printf '%s live run(s) · %s agent turn(s) · %s gate(s)' \
-    "$CHIEF_MACHINE_RUNS" "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_GATES"
+  printf '%s live run(s) · %s agent turn(s) · %s gate(s) · %s' \
+    "$CHIEF_MACHINE_RUNS" "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_GATES" "$(chief_machine_load_line)"
   [ "$CHIEF_MACHINE_STALE" -gt 0 ] && \
     printf ' · %s stale record(s) ignored' "$CHIEF_MACHINE_STALE"
 }
