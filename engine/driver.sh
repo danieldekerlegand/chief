@@ -2136,6 +2136,13 @@ event_emit run.started state=running \
 chief_reap_orphans "$WT_ROOT" "$CHIEF_RUN_MARKER_REPO" \
   "a previous run on $(basename "$REPO")" "${CHIEF_REAP_GRACE:-5}" || true
 git -C "$REPO" worktree prune 2>/dev/null || true   # drop stale worktree metadata (branches kept)
+# Reclaim complete worktrees stranded by earlier runs. This is host-wide: the
+# registry and live-run predicate include sibling repositories before deletion.
+CHIEF_REAP_LIVE_CKSUMS="$(chief_reap_live_cksums)"
+startup_dry=""
+[ "${CHIEF_SWEEP_STARTUP_DRY_RUN:-0}" = 1 ] && startup_dry="-n"
+chief_sweep_startup "$(chief_worktree_root)" "$CHIEF_REPOS" "$REPO" \
+  "$startup_dry" chief_reap_wt_live "${CHIEF_SWEEP_MAX:-100}" || true
 
 # THE STARTUP PRECONDITION — what it protects, and what it does NOT.
 #
