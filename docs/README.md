@@ -24,6 +24,7 @@ The map. Structured per the ecosystem
 
 - [Account credentials — running under a designated provider account](reference/account-credentials.md)
 - [Cross-repo dependencies](reference/cross-repo-dependencies.md)
+- [Decision tasklists](reference/decision-tasklists.md)
 - [The per-story diff-size budget](reference/diff-budget.md)
 - [The event stream — chief's machine-readable status contract](reference/events.md)
 - [Overlap zones — where a green gate is not enough authority to merge](reference/overlap-zones.md)

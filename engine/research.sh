@@ -49,6 +49,9 @@
 # is present — a capability check, never a hard dependency.
 #
 # bash 3.2: no associative arrays, no mapfile, no ${var^^}, no process substitution.
+_research_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+[ -f "${CHIEF_HOME:-}/decision.sh" ] && . "$CHIEF_HOME/decision.sh"
+[ -f "$_research_dir/decision.sh" ] && . "$_research_dir/decision.sh"
 
 # Stamped in the document header. Bump only when the REQUIRED SECTIONS change — a
 # consumer (or a human re-reading a stale document) needs to know which contract it
@@ -129,6 +132,7 @@ research_enabled() {
   esac
   [ -n "$prd" ] && [ -r "$prd" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
+  is_decision_tasklist "$prd" && return 0
   flag="$(jq -r 'if has("research") then (.research | tostring) else "" end' "$prd" 2>/dev/null || echo "")"
   case "$flag" in
     true)  return 0 ;;
@@ -163,6 +167,14 @@ research_prompt() {
       | "TASKLIST GOAL\n" + $d + "\n\nUSER STORIES THIS RESEARCH MUST SERVE\n"
       + ([ .userStories[]? | "- [\(.id)] \(.title)\n" + ([ .acceptanceCriteria[]? | "    · \(.)" ] | join("\n")) ] | join("\n"))
     ' "$prd" 2>/dev/null || echo "")"
+  if is_decision_tasklist "$prd"; then
+    stories="$stories
+
+DECISION BRIEF REQUIREMENTS
+State the concrete options the operator must choose between. For every option,
+state what it forecloses, makes more expensive, or rules out later. Do not choose
+an option or write a verdict; this document is the brief a human decides from."
+  fi
 
   cat <<PROMPT_HEAD
 # RESEARCH PHASE — map the code before anything is written
@@ -299,7 +311,7 @@ research_review_markdown() {
 # of the one it replaced.
 research_review_gate() {
   local doc="$1" rev="$2" md result why dec fb rounds pid max
-  case "${REVIEW_MODE:-none}" in plan) ;; *) return 0 ;; esac
+  case "${REVIEW_MODE:-none}" in plan|decision) ;; *) return 0 ;; esac
   if ! command -v review_ask >/dev/null 2>&1; then
     echo "Research review: this install has no engine/review.sh — nothing here can approve the map."
     return 2

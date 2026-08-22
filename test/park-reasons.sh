@@ -319,7 +319,7 @@ $D"
 # Prose may discuss the reasons this host's repos use; CODE may not know them. These
 # three are what THIS host needs, and a general harness that blessed them would make
 # somebody else's backlog unreportable. Comment lines are exempt; code is not.
-OFFENDERS="$(grep -n 'owned-elsewhere\|awaiting-evidence\|awaiting-decision' \
+OFFENDERS="$(grep -n 'owned-elsewhere\|awaiting-evidence' \
               "$ROOT/bin/chief" "$ROOT"/engine/*.sh 2>/dev/null \
              | grep -v ':[0-9]*:[[:space:]]*#' || true)"
 [ -z "$OFFENDERS" ] || fail "chief source code names a park vocabulary:

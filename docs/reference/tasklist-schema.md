@@ -12,6 +12,11 @@ work run to completion by a chain of agent iterations.
   "branchName": "chief/my-feature",     // branch the tasklist runs on
   "description": "One paragraph: what this tasklist delivers and why.",
 
+  "type": "DECISION",                     // optional: the deliverable is a human
+                                             // verdict, not a merged branch. `kind:
+                                             // "DECISION"` and `decision: true` are
+                                             // accepted aliases for hand-authored records.
+
   // --- where the work happens (optional) ---
   "repo": ".",                           // "." = the project (default). A path (e.g.
                                          //   "packages/engine" or a submodule "sub")
@@ -62,14 +67,22 @@ work run to completion by a chain of agent iterations.
   "parked": false,                       // true = skipped by auto-discovery. Naming one in
                                          //   `chief run` prints its reason and stops
                                          //   (`--parked` runs it anyway).
-  "parkedReason": "",                    // WHY it is parked, in a field rather than in
+  "parkedReason": "HUMAN_DECISION: choose the storage backend", // WHY it is parked, in a field rather than in
                                          //   prose. Optional and additive: `parked` alone
                                          //   still parks and reads as a park that does
                                          //   not say why. An OPAQUE STRING — chief holds
                                          //   no vocabulary; a project declares its own
                                          //   with CHIEF_PARK_REASONS in .chief/config, and
                                          //   `chief status` breaks the parked total down
-                                         //   by it. See status.md.
+                                         //   by it. See status.md. The leading class is one
+                                         //   of HUMAN_DECISION, EXTERNAL_DEPENDENCY, TOOLCHAIN,
+                                         //   or COUNTERPARTY, followed by a colon and opaque
+                                         //   prose. For example, HUMAN_DECISION: choose A
+                                         //   means a person must choose; TOOLCHAIN: UE SDK
+                                         //   not provisioned is a dependency, not a decision.
+                                         //   Unknown classes remain valid prose and render
+                                         //   verbatim. `chief status --decision` filters to
+                                         //   HUMAN_DECISION parks.
   "review": "none",                      // "plan" = a HUMAN approves the agent's plan
                                          //   before it writes any code (one extra turn
                                          //   per story). "none" (default) is the
@@ -82,6 +95,14 @@ work run to completion by a chain of agent iterations.
                                          //   re-deriving it. Produced once, reused on
                                          //   resume, human-editable between iterations.
                                          //   false (default) — see the note below.
+
+  // A DECISION tasklist always pays for research. Its brief names the options and
+  // what each forecloses. Passing stories only prepares the brief; it cannot merge
+  // or approve the choice. Set review:"decision" to use the existing review gate.
+
+  // A DECISION tasklist always pays for research. Its brief names the options and
+  // what each forecloses. Passing stories only prepares the brief; it cannot merge
+  // or approve the choice. Use review:"decision" for the existing review gate.
 
   "userStories": [
     {

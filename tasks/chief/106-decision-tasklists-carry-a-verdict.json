@@ -28,7 +28,8 @@
         "The classes are documented in `tasklist-schema.md` with an example of each, including at least one park that is NOT a decision. A park blocked on an unprovisioned toolchain is the shape to keep out of the decision class — a lint that assumes every park is a question would sweep those in, and across the portfolio they outnumber the real decisions.",
         "This story ships the CLASS, the lint and the filter. Backfilling the existing parked tasklists is a portfolio sweep in the repos that own them and is explicitly NOT done here."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n + shellcheck (when available) + test/parked-decisions.sh + test/park-reasons.sh + status JSON/category regressions: green; focused test passed"
     },
     {
       "id": "US-2",
@@ -40,7 +41,8 @@
         "The verdict is durable across process death, a usage-limit sleep, and a rebuilt worktree, on the same guarantees the plan verdict already has. An approval given once is never asked for twice.",
         "A decision tasklist on a host with no reviewer PARKS. It must never self-approve, and the test asserts that on a host with `CHIEF_REVIEW_NONINTERACTIVE=1`."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n engine/decision.sh engine/agent.sh engine/research.sh engine/driver.sh engine/monitor.sh bin/chief: green; VERSION-BUMP PASS; decision predicate and research brief assertions passed; inherited test/ratelimit.sh fixture hung and was stopped (prior verification blocker remains)"
     },
     {
       "id": "US-3",
@@ -53,7 +55,8 @@
         "The verdict lands in the event stream like every other state transition, so a decision is visible in `chief events` and to any embedding host.",
         "A test drives both outcomes end to end and asserts the resulting JSON against the retirement rules, including the refusal."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n + test/decision.sh + test/parked-decisions.sh + test/status-json.sh + test/quality-ratchet.sh: green; fixture observed dependent refusal, durable sqlite verdict note, unpark clearing parked fields, completed/ retirement without mergedToMain, and tasklist.decision event"
     },
     {
       "id": "US-4",
@@ -64,7 +67,8 @@
         "Where a decision's outcome is an ADR, the agent may draft it, but the draft carries the operator's verdict rather than asserting one of its own. Several parked tasklists across the portfolio are exactly this shape — an ADR nobody can write until a person chooses.",
         "Documented in `docs/reference/` as its own page, covering the decision class, the interactive loop, `chief decide`, and the retirement rules, and linked from `docs/README.md` per the documentation standard."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n + test/decision-agent.sh + test/decision.sh + test/parked-decisions.sh + test/doc-sync.sh: green; agent-authored verdict was ignored and the tasklist remained awaiting a human verdict"
     }
   ]
 }
