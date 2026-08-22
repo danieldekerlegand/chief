@@ -298,6 +298,6 @@ event, the stall counter reset, and the next iteration puts it in front of a hum
   gate above. It is in the merge gate for any branch that touches the engine.
 - [research-phase.md](research-phase.md) — the rung above: the map every story
   implements from, and how this checkpoint reviews it first
-- [tasklist-schema.md](tasklist-schema.md) — the rest of the tasklist fields
-- [events.md](events.md) — the `story.plan-*` / `tasklist.plan-invalid` contract
-- [monitoring.md](monitoring.md) — the phase vocabulary `chief ps` renders
+- [tasklist-schema.md](reference/tasklist-schema.md) — the rest of the tasklist fields
+- [events.md](reference/events.md) — the `story.plan-*` / `tasklist.plan-invalid` contract
+- [monitoring.md](guides/monitoring.md) — the phase vocabulary `chief ps` renders

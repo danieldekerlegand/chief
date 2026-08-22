@@ -122,7 +122,7 @@ git checkout -q main
 # case-match (not `| grep -q`) so pipefail's SIGPIPE race can't false-negative.
 case "$(git log --oneline)" in *"Merge chief/smoke"*) ;; *) fail "no --no-ff merge commit on main" ;; esac
 if git rev-parse --verify -q chief/smoke >/dev/null; then fail "feature branch not deleted after merge"; fi
-case "$("$CHIEF" list)" in *smoke*) ;; *) fail "chief list doesn't show the completed smoke tasklist" ;; esac
+case "$("$CHIEF" list --all)" in *smoke*) ;; *) fail "chief list --all doesn't show the completed smoke tasklist" ;; esac
 
 # ── 7. init guard: refuse to scaffold in $HOME (collides with the install prefix) ──
 GHOME="$WORK/ghome"; mkdir -p "$GHOME"

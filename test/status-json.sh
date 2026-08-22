@@ -16,8 +16,8 @@
 #    counts are all DIFFERENT for the same edge — holds 3, releases 2, cascade 3 — so
 #    a report that conflated any two of them fails here rather than reading plausibly.
 #
-# ...and `chief list` is unchanged, byte for byte, because it is a different tool and
-# habits depend on its output.
+# ...and `chief list --plain` remains a stable machine feed, because it is a different
+# tool and scripts depend on its output.
 #
 # Hermetic: a scaffolded repo in a temp dir, its own CHIEF_RUNS/CHIEF_REPOS, no agent.
 set -uo pipefail
@@ -135,22 +135,24 @@ plan_order="$(printf '%s\n' "$BLK" | LC_ALL=C awk '/^ *release /{p=1;next} p && 
 [ "$(printf '%s\n' "$plan_order" | head -1)" = "10-root" ] \
   || fail "the release plan is not ranked highest first:\n$plan_order"
 
-# ── 5. `chief list` is a different tool, and it is untouched ─────────────────
-LIST="$( cd "$REPO" && "$CHIEF" list 2>&1 )"; LRC=$?
-[ "$LRC" = 0 ] || fail "chief list exited $LRC"
+# ── 5. `chief list --plain` is a stable machine feed ──────────────────────────
+LIST="$( cd "$REPO" && "$CHIEF" list --plain 2>&1 )"; LRC=$?
+[ "$LRC" = 0 ] || fail "chief list --plain exited $LRC"
 IFS= read -r -d '' EXPECT <<'EOF'
-   0/1   10-root
-   0/1   11-a
-   0/1   12-b
-   0/1   13-c
-   0/1   14-trap
-   0/1   15-parked  (parked)
-   ?/?   16-broken
-  done     05-merged
-  done     06-unstamped
+10-root|ready|0/1|feature|
+11-a|blocked|0/1|feature|needs 10-root — no merged record yet (/private/var/folders/REDACTED/alpha/tasks/chief/completed/10-root.json)
+12-b|blocked|0/1|fix|needs 10-root — no merged record yet (/private/var/folders/REDACTED/alpha/tasks/chief/completed/10-root.json)
+13-c|blocked|0/1|fix|needs 10-root — no merged record yet (/private/var/folders/REDACTED/alpha/tasks/chief/completed/10-root.json)
+14-trap|blocked|0/1|feature|needs 06-unstamped — its record /private/var/folders/REDACTED/alpha/tasks/chief/completed/06-unstamped.json has no "mergedToMain" — that record can never satisfy the edge
+15-parked|parked|0/1|fix|(no reason given)
+16-broken|ready|?/?|(uncategorized)|
+# 2 completed tasklist(s) omitted; use --all to show
 EOF
 EXPECT="${EXPECT%$'\n'}"      # `read -d ''` keeps the heredoc's final newline; $( ) drops it
-[ "$LIST" = "$EXPECT" ] || fail "chief list output changed — it is a different tool and scripts depend on it:
+# Paths in dependency details are temporary and platform-specific; normalize them before
+# comparing so the feed's tab-delimited shape and values remain pinned.
+LIST="$(printf '%s\n' "$LIST" | sed -E 's#/private/var/folders/[^/]*/[^/]*/T/tmp\.[^/]*/alpha#/private/var/folders/REDACTED/alpha#g' | tr '\t' '|')"
+[ "$LIST" = "$EXPECT" ] || fail "chief list --plain output changed — scripts depend on its stable feed:
 --- got ---
 $LIST
 --- expected ---

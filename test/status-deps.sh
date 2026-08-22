@@ -61,7 +61,7 @@ tasklist 11-on-live    '{}' 10-free                             # blocked: dep i
 tasklist 12-on-merged  '{}' 09-merged                           # runnable: dep merged on disk
 tasklist 13-trap       '{}' 08-unstamped                        # blocked FOREVER
 tasklist 14-ghost      '{}' "ghostrepo:whatever"                # blocked: repo unresolvable
-tasklist 15-parked     '{"parked":true}'                        # neither live nor scheduled
+tasklist 15-parked     '{"parked":true,"parkedReason":"waiting for design","category":"feature"}' # neither live nor scheduled
 # Absent dependsOn: legal to the driver (`.dependsOn // []`), a schema problem worth
 # naming. Built by hand because the generator above always writes the key.
 jq -n '{project:"t",branchName:"chief/16-nodeps",description:"x",iters:1,touches:[],warmup:[],
@@ -161,9 +161,26 @@ out="$( cd "$WORK" && "$CHIEF" status 2>&1 )"; rc=$?
 [ "$rc" = 0 ]                      || fail "chief status above a repo exited $rc"
 case "$out" in *"no .chief/config found"*) fail "chief status went through load_project's hard exit: $out" ;; esac
 
-# ── 7. `chief list` is untouched ────────────────────────────────────────────
+# ── 7. `chief list` keeps live work by default; --all restores history ───────
 out="$( cd "$REPO" && "$CHIEF" list 2>&1 )"
 has "10-free" "$out"   || fail "chief list stopped listing tasklists:\n$out"
-has "09-merged" "$out" || fail "chief list stopped listing completed records:\n$out"
+has "15-parked" "$out" || fail "chief list hid parked work:\n$out"
+has "completed tasklist(s) omitted" "$out" || fail "chief list did not summarize omitted completed records:\n$out"
+case "$out" in *"09-merged"*) fail "chief list included completed records without --all:\n$out" ;; esac
+out="$( cd "$REPO" && "$CHIEF" list --all 2>&1 )"
+has "09-merged" "$out" || fail "chief list --all did not restore completed records:\n$out"
+
+# ── 8. `chief list` has a human table and a stable machine contract ──────────
+has "NAME" "$out" || fail "chief list did not render column headings:\n$out"
+live="$( cd "$REPO" && "$CHIEF" list 2>&1 )"
+has "STATE" "$live" || fail "chief list did not distinguish state in its table:\n$live"
+has "15-parked" "$live" || fail "the table dropped parked work:\n$live"
+has "waiting for design" "$live" || fail "the table dropped the park reason:\n$live"
+case "$live" in *$'\033'*|*'┌'*|*'┐'*) fail "non-TTY chief list emitted terminal decoration:\n$live" ;; esac
+plain="$( cd "$REPO" && "$CHIEF" list --plain 2>&1 )"
+plain_again="$( cd "$REPO" && "$CHIEF" list --plain 2>&1 )"
+[ "$plain" = "$plain_again" ] || fail "chief list --plain was not stable across identical runs"
+has $'10-free\tready\t0/1\t(uncategorized)\t' "$plain" || fail "plain list row changed contract:\n$plain"
+has $'15-parked\tparked\t0/1\tfeature\twaiting for design' "$plain" || fail "plain list lost state/category/reason:\n$plain"
 
 echo "STATUS PASS — chief status agrees with the scheduler ($(echo "$status_runnable" | wc -l | tr -d ' ') runnable, $(echo "$status_blocked" | wc -l | tr -d ' ') blocked), degrades on bad input, and names the retirement trap"

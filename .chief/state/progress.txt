@@ -1,19 +1,20 @@
-# Chief Progress — 106-decision-tasklists-carry-a-verdict
-Started: Fri Aug 21 20:16:13 CDT 2026
+# Chief Progress — 107-list-and-ps-show-what-is-live
+Started: Fri Aug 21 20:58:29 CDT 2026
 ---
 
 ## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
 ```
-doc-links: 4 dead vs 4 on main
+doc-links: 0 dead vs 4 on main
+  retired 4
 verify: quality — ratchet (engine/quality.sh, deltas vs main)
-chief quality: ratchet — measuring 14 changed path(s) on HEAD and at main
-quality: scope — the 8 changed source file(s), HEAD vs main (5 file(s) new on this branch — no base version, deferred to the baseline axis)
+chief quality: ratchet — measuring 17 changed path(s) on HEAD and at main
+quality: scope — the 7 changed source file(s), HEAD vs main (2 file(s) new on this branch — no base version, deferred to the baseline axis)
 quality:   ok     duplicate_blocks              0 -> 0        (delta 0      tol 0)
 quality:   ok     duplicate_line_pct            0 -> 0        (delta 0      tol 1)
-quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
-quality:   ok     function_length_max         968 -> 971      (delta +3     tol 15)
-quality:   ok     function_length_mean      24.55 -> 24.79    (delta +0.24  tol 5)
-quality:   ok     single_use_functions         72 -> 74       (delta +2     tol 2)
+quality:   ok     max_nesting_depth             5 -> 5        (delta 0      tol 1)
+quality:   ok     function_length_max         269 -> 243      (delta -26    tol 15)
+quality:   ok     function_length_mean      16.92 -> 17.63    (delta +0.71  tol 5)
+quality:   ok     single_use_functions         29 -> 31       (delta +2     tol 2)
 quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
 quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
 quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
@@ -21,10 +22,10 @@ quality: OK — no tracked metric regressed (allowing)
 verify: shell — bash -n
 verify: shellcheck not installed — skipping (CI enforces it)
 verify: policy — VERSION bump (test/version-bump.sh)
-VERSION-BUMP PASS — VERSION (0.8.81) covers every engine/bin change on HEAD
+VERSION-BUMP PASS — VERSION (0.8.82) covers every engine/bin change on HEAD
 verify: behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)
-bystander: decoy run up — driver pid 79155, agent pid 79159, run bystander-sibling-3778485133-1700-79155
-bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.pJi9vnfsCW/decoy/runs, which no test below can read
+bystander: decoy run up — driver pid 53861, agent pid 53866, run bystander-sibling-615120117-1700-53861
+bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.f6J904bHNx/decoy/runs, which no test below can read
 bystander: [1/43] test/smoke.sh
   smoke| SMOKE PASS — install → init → dry-run honoured → agent loop → verify → merge → completed + $HOME-init guard (offline)
 bystander: [2/43] test/provider-conformance.sh
@@ -53,7 +54,7 @@ bystander: [3/43] test/ratelimit.sh
   ratelimit|    ok  ~1min  ← retry in 30 seconds
   ratelimit|    ok  ~6min  ← try again in 5 min
   ratelimit|    ok  ~61min  ← reset in 1 hour
-  ratelimit|    ok  ~91min  ← clock time later today (9:40PM)
+  ratelimit|    ok  ~91min  ← clock time later today (7:10AM)
   ratelimit|    ok  ~60min  ← no window stated → fallback
   ratelimit|    ok  ~60min  ← prose duration must not arm the timer
   ratelimit| RATELIMIT PASS — parallel driver kept the sleeping worker alive; agent slept ~6s then resumed → merged
@@ -67,48 +68,52 @@ bystander: [5/43] test/limitresume.sh
   limitresume| LIMITRESUME PASS — the driver waits out a usage limit and re-dispatches (bounded, reset-aware, no thrash)
 bystander: [6/43] test/limitmonitor.sh
   limitmonitor| --- chief ps (synthetic paused run) ---
-  limitmonitor| CHIEF · 1 active run(s) · ⚠ 3 unregistered · 2026-08-21 20:10:42
+  limitmonitor| CHIEF · 1 active run(s) · ⚠ 2 unregistered · 2026-08-21 05:40:55
   limitmonitor| 
-  limitmonitor| repo  (pid 28557 · -p2 · claude · 0s · →main)
-  limitmonitor|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.pyZpzcF6Yf/repo
+  limitmonitor| repo  (pid 99282 · -p2 · claude · 0s · →main)
+  limitmonitor|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.2kSh7MJo0N/repo
   limitmonitor|    ⏸ pause-eta              paused    ?/?     chief/pause-eta
-  limitmonitor|        ↳ paused: usage limit — retry at 20:25 (15m) · re-dispatch 1/3
+  limitmonitor|        ↳ paused: usage limit — retry at 05:55 (15m) · re-dispatch 1/3
   limitmonitor|    ⏸ pause-noeta            paused    ?/?     chief/pause-noeta
   limitmonitor|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3
   limitmonitor|    ● work-run               running   ?/?     chief/work-run
   limitmonitor|    ✗ dead-fail              failed    ?/?     chief/dead-fail
   limitmonitor|    ⤬ dead-block             blocked   ?/?     chief/dead-block
   limitmonitor| 
-  limitmonitor| ⚠ 3 unregistered driver(s) — alive, but missing from the run registry (/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.pyZpzcF6Yf/runs):
-  limitmonitor|    ⚠ formant  (pid 74127 · run formant-1929182490-1787357147-74127)
-  limitmonitor|      /Users/dldekerlegand/Development/formant
-  limitmonitor|        ↳ in flight: 56-neural-synth-ship-flip failed
-  limitmonitor|        ↳ in flight: 64-faust-ir-emit-from-graph running
-  limitmonitor|        ↳ in flight: 65-faust-library-migration pending
-  limitmonitor|        ↳ in flight: 66-faust-differentiators-port pending
-  limitmonitor|        ↳ in flight: 67-faust-export-matrix pending
-  limitmonitor|        ↳ in flight: 68-plugin-framework-dpf-iplug2 pending
+  limitmonitor| ⚠ 2 unregistered driver(s) — alive, but missing from the run registry (/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.2kSh7MJo0N/runs):
+  limitmonitor|    ⚠ talos  (pid 8632 · run talos-423558440-1787303730-8632)
+  limitmonitor|      /Users/dldekerlegand/Development/talos
+  limitmonitor|        ↳ in flight: 51-conductor-verify-executor running
+  limitmonitor|        ↳ in flight: 52-argos-expectation-spec-evaluator pending
+  limitmonitor|        ↳ in flight: 53-content-missing-repo-symbol-provenance pending
+  limitmonitor|        ↳ in flight: 54-tbp-1.1-resume-and-step-forever pending
+  limitmonitor|        ↳ in flight: 55-dump-input-trace-verb pending
+  limitmonitor|        ↳ in flight: 56-headless-frame-tap-and-virtual-display pending
+  limitmonitor|        ↳ in flight: 57-watch-digest-push-and-other-engine-locomotion pending
+  limitmonitor|        ↳ in flight: 58-restore-budget-real-game-remeasure pending
+  limitmonitor|        ↳ in flight: 59-procgen-mode        pending
+  limitmonitor|        ↳ in flight: 60-prober-fleet-packaged-roots pending
+  limitmonitor|        ↳ in flight: 61-multi-genre-dogfood-roguelike pending
+  limitmonitor|        ↳ in flight: 62-uecp-as-client-spike pending
+  limitmonitor|        ↳ in flight: 64-soak-calibration-and-first-models pending
+  limitmonitor|        ↳ in flight: 68-supported-version-window-reconcile pending
+  limitmonitor|        ↳ in flight: 69-sli-dashboard-and-daily-dogfood pending
+  limitmonitor|        ↳ in flight: 71-real-game-supply-decision pending
+  limitmonitor|        ↳ in flight: 72-godot-ci-containerized-build-lane pending
+  limitmonitor|        ↳ in flight: 73-oracle-independence-measurement pending
+  limitmonitor|        ↳ in flight: 80-insimul-slice-fixture-lane pending
+  limitmonitor|        ↳ in flight: 81-devendor-test-frameworks-and-sarif pending
   limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
-  limitmonitor|        ↳ stop it:  kill 74127    then:  chief reap    (reaps whatever it leaves behind)
-  limitmonitor|    ⚠ praxis  (pid 74711 · run praxis-3493926705-1787359062-74711)
-  limitmonitor|      /Users/dldekerlegand/Development/praxis
-  limitmonitor|        ↳ in flight: 79-gating-backfill-by-domain pending
-  limitmonitor|        ↳ in flight: 80-gating-coverage-tracker pending
-  limitmonitor|        ↳ in flight: 81-gate-quality-anti-fabrication pending
-  limitmonitor|        ↳ in flight: 82-chief-powered-construction pending
-  limitmonitor|        ↳ in flight: 84-nbgrader-cell-schema-adoption running
-  limitmonitor|        ↳ in flight: 85-jupyterlite-delivery pending
+  limitmonitor|        ↳ stop it:  kill 8632    then:  chief reap    (reaps whatever it leaves behind)
+  limitmonitor|    ⚠ cuneiform  (pid 23175 · run cuneiform-2849022191-1787303092-23175)
+  limitmonitor|      /Users/dldekerlegand/Development/cuneiform
+  limitmonitor|        ↳ in flight: 351-exporter-registration awaiting-approval
+  limitmonitor|        ↳ in flight: 362-console-safety-modes awaiting-approval
+  limitmonitor|        ↳ in flight: 364-composer-as-control-surface pending
+  limitmonitor|        ↳ in flight: 365-transient-provider-failure-backoff running
   limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
-  limitmonitor|        ↳ stop it:  kill 74711    then:  chief reap    (reaps whatever it leaves behind)
-  limitmonitor|    ⚠ agora  (pid 79536 · run agora-2939700927-1787357174-79536)
-  limitmonitor|      /Users/dldekerlegand/Development/agora
-  limitmonitor|        ↳ in flight: 55-kcs-observability-rewrite done
-  limitmonitor|        ↳ in flight: 56-kmi-media-map-complete-predicate done
-  limitmonitor|        ↳ in flight: 63-studio-message-viewer-animated done
-  limitmonitor|        ↳ in flight: 64-studio-analytics-dashboards running
-  limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
-  limitmonitor|        ↳ stop it:  kill 79536    then:  chief reap    (reaps whatever it leaves behind)
-  limitmonitor| LIMITMONITOR PASS — a usage-limit pause renders as 'paused: usage limit — retry at 20:25 · re-dispatch 1/3', distinct from running/failed/blocked
+  limitmonitor|        ↳ stop it:  kill 23175    then:  chief reap    (reaps whatever it leaves behind)
+  limitmonitor| LIMITMONITOR PASS — a usage-limit pause renders as 'paused: usage limit — retry at 05:55 · re-dispatch 1/3', distinct from running/failed/blocked
 bystander: [7/43] test/pause.sh
   pause| pause: PART A — a pre-armed repo runs no agent turn
   pause|    ok  0 agent calls, exit 0, flag survived launch init, no retry budget spent
@@ -118,18 +123,18 @@ bystander: [7/43] test/pause.sh
   pause|    ok  resumed at story 2, verified, merged, retired
   pause| pause: PART D — chief ps distinguishes an operator pause from a usage limit
   pause| --- chief ps (both holds armed) ---
-  pause| CHIEF · 1 active run(s) · 2026-08-21 20:10:53
+  pause| CHIEF · 1 active run(s) · 2026-08-21 05:41:04
   pause| 
-  pause| mrepo  (pid 37212 · -p2 · claude · 1s · →main)
-  pause|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.KBAbvqmrIG/mrepo
-  pause|    ⏸ OPERATOR PAUSE armed 1s ago — no tasklist launches, no new agent iterations · lift: chief resume
+  pause| mrepo  (pid 8144 · -p2 · claude · 0s · →main)
+  pause|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.5aWOxMHEQJ/mrepo
+  pause|    ⏸ OPERATOR PAUSE armed 0s ago — no tasklist launches, no new agent iterations · lift: chief resume
   pause|      ↳ draining: work-run — each stops at its next iteration boundary, then parks
-  pause|    ⏸ usage-limit window until 20:25 (15m) — Chief waits this one out itself
+  pause|    ⏸ usage-limit window until 05:56 (15m) — Chief waits this one out itself
   pause|      ↳ BOTH holds are armed — lifting either one alone changes nothing
   pause|    ⏸ op-park                paused-op ?/?     chief/op-park
-  pause|        ↳ paused: operator hold (chief pause) — armed 20:10 · branch + worktree kept · resume: chief resume · usage-limit window also armed until 20:25
+  pause|        ↳ paused: operator hold (chief pause) — armed 05:41 · branch + worktree kept · resume: chief resume · usage-limit window also armed until 05:56
   pause|    ⏸ limit-wait             paused    ?/?     chief/limit-wait
-  pause|        ↳ paused: usage limit — retry at 20:25 (15m) · re-dispatch 0/3
+  pause|        ↳ paused: usage limit — retry at 05:56 (15m) · re-dispatch 0/3
   pause|    ● work-run               running   ?/?     chief/work-run
   pause|    ok  both ⏸, different notes, and the header names both holds
   pause| PAUSE PASS — an operator pause drains at a safe checkpoint, parks with branch + worktree kept, resumes from committed state, and is legible in chief ps
@@ -160,21 +165,21 @@ bystander: [10/43] test/liveliness.sh
   liveliness|    ok  post-run: state=done phase=merged, record uncommitted + gitignored
   liveliness| liveliness: part 3 — the rendering
   liveliness| --- chief ps (synthetic: fresh · stalled · paused · no-record) ---
-  liveliness| CHIEF · 1 active run(s) · 2026-08-21 20:11:38
+  liveliness| CHIEF · 1 active run(s) · 2026-08-21 05:41:42
   liveliness| 
-  liveliness| mrepo  (pid 72570 · -p4 · claude · 1s · →main)
-  liveliness|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.SscgZXb5uX/mrepo
+  liveliness| mrepo  (pid 37953 · -p4 · claude · 0s · →main)
+  liveliness|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.CVPcF1K9bx/mrepo
   liveliness|    ● work-fresh             running   2/4     chief/work-fresh
-  liveliness|        ↳ agent-turn for 1m · US-2 · iter 3 · 31s ago
+  liveliness|        ↳ agent-turn for 1m · US-2 · iter 3 · 30s ago
   liveliness|    ⚠ work-hung              running   1/5     chief/work-hung
   liveliness|        ↳ agent-turn for 40m · US-9 · iter 7 · no progress last iter (2) · ⚠ stalled in agent-turn — no activity for 40m, past its 15m limit
   liveliness|    ⏸ pause-eta              paused    1/4     chief/pause-eta
-  liveliness|        ↳ paused: usage limit — retry at 20:26 (15m) · re-dispatch 1/3 · paused 40m · 40m ago
+  liveliness|        ↳ paused: usage limit — retry at 05:56 (15m) · re-dispatch 1/3 · paused 40m · 40m ago
   liveliness|    ● norecord               running   ?/?     chief/norecord
-  liveliness| LIVELINESS PASS — record written atomically + emitted by a real run; `chief ps` shows phase/story/iter/age, flags a 40m-quiet run as stalled (knob: CHIEF_STALE_SECONDS), and keeps a usage-limit pause reading as 'paused … retry at 20:26'
+  liveliness| LIVELINESS PASS — record written atomically + emitted by a real run; `chief ps` shows phase/story/iter/age, flags a 40m-quiet run as stalled (knob: CHIEF_STALE_SECONDS), and keeps a usage-limit pause reading as 'paused … retry at 05:56'
 bystander: [11/43] test/teardown.sh
   teardown| teardown: part 1 — interrupt mid-iteration (reap first, forget second)
-  teardown|    ok  SIGINT to group 75745: tree reaped (agent.sh · tool · its child, TERM→KILL) then records released — 57 ordered samples, 0 violations
+  teardown|    ok  SIGINT to group 40292: tree reaped (agent.sh · tool · its child, TERM→KILL) then records released — 58 ordered samples, 0 violations
   teardown| teardown: part 2 — a SIGKILLed driver leaves a tree that argv cannot find
   teardown|    ok  orphaned agent.sh + tool + child: invisible to the old argv sweep, found and stopped by the reaper
   teardown| teardown: part 3 — a LIVE driver with no run file is reported, not hidden
@@ -204,18 +209,121 @@ bystander: [19/43] test/unverified-resume.sh
 bystander: [20/43] test/boundary-demotion.sh
   boundary-demotion| BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, the next turn's PROMPT names it and quotes its bar, an evidenced re-mark counts as progress, a story demoted twice running ends the run instead of spinning, and the merge floor still catches a last-turn marking
 bystander: [21/43] test/five-cases.sh
-  five-cases| five-cases: 9 replayed tasklists in 52s wall-clock (the gates' own share is milliseconds — see below)
+  five-cases| five-cases: 9 replayed tasklists in 49s wall-clock (the gates' own share is milliseconds — see below)
   five-cases| five-cases: 5 passes of measure_gate + criteria_scope_report over gr-104.json: 1s
   five-cases| FIVE-CASES PASS — all five recorded failures now fail (2 before any agent turn); 344/349 and a measured 104 still merge; 104-as-recorded is the one stated cost
 bystander: [22/43] test/stall-flag.sh
   stall-flag| stall-flag: part 1 — the exempt/flagged table
-  stall-flag| STALL-FLAG FAIL: engine publishes phase 'awaiting-decision' but no list here classifies it
+  stall-flag| stall-flag: part 2 — the exemption expires
+  stall-flag| stall-flag: part 3 — the flag names the state and its limit
+  stall-flag| stall-flag: part 4 — a dead worker is not a quiet one
+  stall-flag| stall-flag: part 5 — chief ps and chief monitor
+  stall-flag| --- chief ps (quiet-by-design · not-exempt · past-the-ceiling · re-tuned · gone) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 05:45:54
+  stall-flag| 
+  stall-flag| mrepo  (pid 73095 · -p3 · claude · 0s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.xvcPHA8aCu/mrepo
+  stall-flag|    ● limit-wait             running   1/4     chief/limit-wait
+  stall-flag|        ↳ rate-limited-waiting for 40m · US-1 · iter 2 · 40m ago
+  stall-flag|    ⚠ prov-wait              running   1/4     chief/prov-wait
+  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 2 · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
+  stall-flag|    ⚠ limit-dead             running   1/4     chief/limit-dead
+  stall-flag|        ↳ rate-limited-waiting for 6h40m · US-1 · iter 2 · ⚠ stalled in rate-limited-waiting — no activity for 6h40m, past its 6h30m limit
+  stall-flag|    ● gate-wait              running   1/4     chief/gate-wait
+  stall-flag|        ↳ verifying for 40m · US-1 · iter 2 · 40m ago
+  stall-flag|    ✗ worker-off             gone      1/4     chief/worker-off
+  stall-flag|        ↳ agent-turn for 1m · US-1 · iter 2 · ✗ dead — its worker pid is gone and left no verdict · chief reap
+  stall-flag| stall-flag: part 6 — elapsed-in-phase in every arm, from phase_since
+  stall-flag| --- chief ps (running · rate-limited · operator-paused · in-review · zone-hold) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 05:45:56
+  stall-flag| 
+  stall-flag| mrepo  (pid 73095 · -p3 · claude · 3s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.xvcPHA8aCu/mrepo
+  stall-flag|    ● held-run               running   1/4     chief/held-run
+  stall-flag|        ↳ agent-turn for 40m · US-3 · iter 2 · 1s ago
+  stall-flag|    ⏸ held-limit             paused    1/4     chief/held-limit
+  stall-flag|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3 · paused 25m · 1s ago
+  stall-flag|    ⏸ held-op                paused-op 1/4     chief/held-op
+  stall-flag|        ↳ paused: operator hold — the flag is already lifted; 'chief resume' re-arms this as pending · branch + worktree kept · resume: chief resume · parked 1h01m · 1s ago
+  stall-flag|    ⏸ held-review            in-review 1/4     chief/held-review
+  stall-flag|        ↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept · held 3h10m · approve it, then: chief run
+  stall-flag|    ⏸ held-zone              zone-hold 1/4     chief/held-zone
+  stall-flag|        ↳ awaiting approval: rebased + verified GREEN, held at engine (1 changed file(s)) · held 13m · approve: chief approve held-zone
+  stall-flag| stall-flag: part 7 — 'no progress last iter' vs the at-risk flag
+  stall-flag| --- chief ps (spent budget · early · no-budget · quiet-and-counting) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 05:45:58
+  stall-flag| 
+  stall-flag| mrepo  (pid 73095 · -p3 · claude · 5s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.xvcPHA8aCu/mrepo
+  stall-flag|    ● spent-budget           running   1/4     chief/spent-budget
+  stall-flag|        ↳ agent-turn for 31s · US-1 · iter 4 · no progress last iter (2/2) · 31s ago
+  stall-flag|    ● early-stall            running   1/4     chief/early-stall
+  stall-flag|        ↳ agent-turn for 31s · US-1 · iter 4 · no progress last iter (1/5) · 31s ago
+  stall-flag|    ● old-record             running   1/4     chief/old-record
+  stall-flag|        ↳ agent-turn for 31s · US-1 · iter 4 · no progress last iter (2) · 31s ago
+  stall-flag|    ⚠ really-quiet           running   1/4     chief/really-quiet
+  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 4 · no progress last iter (1/2) · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
+  stall-flag| stall-flag: part 8 — two no-progress iterations
+  stall-flag| agent-turn
+  stall-flag| provider-waiting
+  stall-flag| agent-turn
+  stall-flag| integrating
+  stall-flag| agent-turn
+  stall-flag| provider-waiting
+  stall-flag| agent-turn
+  stall-flag| stalled
+  stall-flag| integrating
+  stall-flag| STALL-FLAG FAIL: the boundary does not read stalled → integrating → agent-turn → the next turn
 BYSTANDER FAIL: test/stall-flag.sh failed (its output is above)
 verify: BLOCK — behavioral tests failed (see above)
 ```
 
-Verification follow-up: classified the newly published `awaiting-decision` phase as quiet-by-design in `test/stall-flag.sh`, matching `engine/monitor.sh` so the drift guard covers decision holds. `bash -n`, `test/stall-flag.sh`, `test/doc-sync.sh`, and `test/quality-ratchet.sh` are green.
+## ⚠️ BASE INTEGRATION REQUIRED — do this FIRST, before any user story
 
-Learnings for future iterations: When a new monitor phase is introduced, update the stall-policy fixture's explicit phase table in the same change; the drift guard intentionally rejects unclassified literals.
+`chief/107-list-and-ps-show-what-is-live` is **9 commit(s) behind** its base `main` (@67de550) and
+chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
+your branch is exactly as it was and nothing is lost — but it cannot merge
+until the base is integrated, and every commit that lands on `main` while
+this is unresolved makes it worse.
 
-Final verification: `.chief/verify.sh` completed with `BYSTANDER PASS` across 43 behavioral tests, `DOC-SYNC PASS`, tasklist JSON validation, and `verify: OK (allowing merge)`; shellcheck was unavailable and skipped as documented.
+**Your first task this iteration is to integrate the base yourself:**
+
+1. `git rebase main` in this worktree.
+2. At each stop, resolve the conflicts keeping BOTH sides' intent — the
+   `main` side is already-merged work, so never discard it, and never
+   discard your own — then `git add <files>` and `git rebase --continue`.
+   `git rebase --abort` returns you to exactly this state if you need it.
+3. Re-run the project's quality gates and make them green.
+
+Rebase, not `git merge main`: chief rebases this branch again at merge time,
+and a rebase drops merge commits and replays the originals — a resolution
+recorded in a merge commit would be thrown away and this conflict would come
+straight back. Resolving inside the rebase puts the fix in your own commits.
+
+Then continue the normal loop: pick the highest-priority story with
+`passes:false` and implement it. The integration is NOT a user story — do not
+flip any story's `passes` for it, and do not report completion until the
+stories themselves are really done.
+
+## Conflicting paths
+- .chief/state/prd.json
+- .chief/state/progress.txt
+
+base: main @67de550 · behind: 9 commit(s) · branch: chief/107-list-and-ps-show-what-is-live
+(full note: .chief/state/INTEGRATE-BASE.md)
+
+## Verification follow-up resolved
+
+Re-ran the previously failing `test/stall-flag.sh`; the two-iteration transcript now observed `stalled integrating agent-turn provider-waiting` in order, and the full script completed successfully. The branch was already aligned with `main`, so no conflict resolution was needed.
+
+### Learnings for future iterations
+
+The stall-flag integration fixture is timing-sensitive when run under load; rerun the focused script before changing engine behavior when its transcript assertion fails.
+
+## Verification follow-up resolved
+
+Committed the pending `test/status-json.sh` update so the machine-feed fixture asserts the live-by-default `chief list --plain` contract and normalizes temporary dependency paths. Re-ran `test/status-json.sh` and `test/stall-flag.sh`; both were green, including the two-iteration stall transcript and re-engagement assertion.
+
+### Learnings for future iterations
+
+When a list-format change updates a fixture, pin the parseable fields while normalizing only ephemeral temp paths; do not loosen the shape or fold aggregate status assertions into the list test.

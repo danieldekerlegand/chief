@@ -1,74 +1,62 @@
 {
   "project": "chief",
   "category": "feature",
-  "branchName": "chief/106-decision-tasklists-carry-a-verdict",
-  "description": "**Chief can prepare a decision and can hold for a human, but a decision has nowhere to LAND — so every one is settled by hand-editing JSON.**\n\nMeasured across the portfolio on 2026-08-20: **20 parked tasklists reference a decision, an ADR, or waiting for an answer, and NOT ONE of them sets `parkedReason`.** `chief status` already breaks parks down by that field and `driver.sh` already prints it; the reporting shipped in `97` and the data never followed. So the operator's real question — *which of these is waiting on ME, and which is waiting on a toolchain, a licence counterparty, or hardware I do not own* — cannot be answered without opening twenty files. Today it separates `talos/66-root-license-decision` (mine to make) from `talos/47-ue-toolchain-and-build-matrix` (provisioning-blocked, not a decision at all) only by reading prose.\n\n**The machinery to run a decision interactively already exists and is better than assumed.** `review.sh` hands a document to a reviewer program, blocks for a verdict, records it as a checksum-bound file, and — critically — **absence is detected, never assumed**: no reviewer on PATH parks the tasklist rather than approving it. `review_record` keeps `rounds` APPEND-ONLY because *\"the annotation history is the reviewer's side of the conversation and is what the next plan turn is briefed with.\"* `research: true` produces the reviewable, editable brief to decide FROM. That is a decision loop with a prose channel, already built.\n\n**What is missing is only the terminal state.** A tasklist ends when its stories pass and its branch merges. That fits *\"write the ADR\"*. It does not fit *\"choose between three options\"*, where the deliverable is a human's judgement and there may be no code at all. So the verdict has no home, and retiring the tasklist afterwards means hand-writing `supersededBy` with no `mergedToMain` — a filing whose one mis-step permanently blocks every dependent. That surgery was performed by hand on `koine/62` and `koine/63` on 2026-08-20, which is the immediate motivation for this work.\n\nBuild the smallest thing that closes it: make the park reason real, give a decision tasklist a shape, and give the verdict a command. Do NOT build a second review system — this rides the one in `review.sh`.",
+  "branchName": "chief/107-list-and-ps-show-what-is-live",
+  "description": "**`chief list` in this repo prints two live tasklists followed by ninety-four `done` ones, and nothing on screen distinguishes a park from a block from a ready.** The signal is 2% of the output and it is at the top only by luck of the sort. In `cuneiform` — 371 tasklists, 312 done — the live work is under 16% of the lines. An operator's actual question is *what can I run right now*, and the command named `list` answers it worst of the three commands that could.\n\n`97-tasklist-state-report` deliberately left this alone, and its reason is binding on how this is done rather than on whether: *\"`chief list` keeps working exactly as it does now. It is a different tool — per-tasklist story progress, not aggregate state — and scripts and habits depend on its output.\"* Both halves of that hold. `chief status` is the aggregate; `chief list` is per-tasklist and should stay per-tasklist. **So the change is presentation and default scope, not a merge of the two commands, and the script contract must survive it** — `scripts/tasklist-census.py --plain` in `~/Development` is the precedent for how: pretty for a human, stable and parseable on demand.\n\nSecond half, same complaint one level over: `chief ps` shows RUNNING drivers, which is correct and is why it is called `ps`. But there is no view of everything in flight — running plus ready plus blocked plus parked, minus the done — for a single repo. That is the thing an operator looks at before deciding what to start, and today it takes `chief list`, `chief status --blocked` and reading park prose to assemble.\n\nNothing here is new state. Every fact needed is already computed by `status.sh` for its own table, including the dependency verdicts behind BLOCKED and the park reasons behind PARKED. **This is a rendering and default-scope story; if it grows a new source of truth, it has gone wrong.**",
   "touches": [
     "bin/chief",
-    "engine/",
+    "engine/status.sh",
+    "engine/driver.sh",
     "docs/reference/",
     "test/"
   ],
-  "iters": 8,
+  "iters": 7,
   "warmup": [
-    "python3 -c \"import json,glob;print(sum(1 for f in glob.glob('../*/tasks/chief/*.json') if json.load(open(f)).get('parked')), 'parked;', sum(1 for f in glob.glob('../*/tasks/chief/*.json') if json.load(open(f)).get('parkedReason')), 'with parkedReason')\"",
-    "grep -n 'parkedReason' engine/driver.sh engine/status.sh | head",
-    "sed -n '1,120p' engine/review.sh",
-    "grep -n 'review_record\\|rounds' engine/review.sh | head -20",
-    "grep -n 'supersededBy\\|mergedToMain' engine/*.sh docs/reference/tasklist-schema.md | head"
+    "chief list | head -20; echo '---'; chief list | wc -l",
+    "chief status | head -30",
+    "chief ps | head -20",
+    "../scripts/tasklist-census.py | head -8",
+    "grep -n 'plain\\|bars\\|box\\|┌' ../scripts/tasklist-census.py | head -12",
+    "grep -n 'cmd_list\\|cmd_ps\\|cmd_status' bin/chief | head"
   ],
   "userStories": [
     {
       "id": "US-1",
-      "title": "A park says what KIND of park it is, and chief can filter to the ones awaiting a human",
+      "title": "`chief list` defaults to the work that is still live",
       "acceptanceCriteria": [
-        "`parkedReason` gains a recognized leading CLASS while remaining the opaque free-text field driver.sh already treats it as — at minimum distinguishing a park awaiting a HUMAN DECISION from one blocked on an external dependency, a toolchain, or a counterparty. Chief must keep printing an unrecognized reason verbatim: a class it does not know is not an error.",
-        "`chief lint` fails a tasklist that is `\"parked\": true` with no `parkedReason`. Twenty parks across the portfolio carry a decision in prose and none in the field, which is the exact gap `97`'s reporting cannot see through.",
-        "`chief status` can filter to the decision class, so 'what is waiting on me' is one command. Counterfactual: a run of that filter today would return the empty set from twenty genuine candidates, and the test asserts against a fixture that reproduces that shape.",
-        "The classes are documented in `tasklist-schema.md` with an example of each, including at least one park that is NOT a decision. A park blocked on an unprovisioned toolchain is the shape to keep out of the decision class — a lint that assumes every park is a question would sweep those in, and across the portfolio they outnumber the real decisions.",
-        "This story ships the CLASS, the lint and the filter. Backfilling the existing parked tasklists is a portfolio sweep in the repos that own them and is explicitly NOT done here."
+        "By default `chief list` omits completed tasklists. `-a`/`--all` restores them. In this repo that is 96 lines down to 2; in cuneiform, 371 down to 59.",
+        "The default must not hide anything an operator could act on. Ready, in-progress, blocked and PARKED all remain — parked especially, since a park is a decision waiting on a human and hiding it is how twenty of them accumulated unnoticed.",
+        "A count of what was omitted is printed, so the shorter output never reads as a smaller portfolio. Silent truncation is the failure mode.",
+        "The done-by-default change is documented in the CHANGELOG as a behaviour change to a long-stable command, not slipped in as a formatting tweak."
       ],
       "passes": true,
-      "notes": "bash -n + shellcheck (when available) + test/parked-decisions.sh + test/park-reasons.sh + status JSON/category regressions: green; focused test passed"
+      "notes": "Implemented live-by-default listing: completed tasklists are omitted with an explicit count, --all restores them, parked rows remain, and CHANGELOG.md documents the behavior change. Verified with bash -n, test/status-deps.sh, test/park-reasons.sh, test/doc-sync.sh, test/version-bump.sh, and git diff --check; all green (shellcheck unavailable)."
     },
     {
       "id": "US-2",
-      "title": "A decision tasklist's deliverable is the operator's verdict, not a merge",
+      "title": "It is formatted as a table, and machines get a stable contract",
       "acceptanceCriteria": [
-        "A tasklist may declare itself a DECISION. Its completion condition is a recorded human verdict, not passing stories plus a merged branch — a choice between three options may produce no code at all, and today such a tasklist can only end by lying about what it did.",
-        "It rides the EXISTING review gate in `review.sh` — the reviewer contract, the checksum binding, the append-only `rounds`, and the park-on-absence semantics are reused, not reimplemented. A second review system in this repo would be the wrong outcome of this story.",
-        "The decision brief is produced by the existing `research` phase so the operator decides from a mapped, editable document rather than from the tasklist description. The brief must state the options and what each one forecloses.",
-        "The verdict is durable across process death, a usage-limit sleep, and a rebuilt worktree, on the same guarantees the plan verdict already has. An approval given once is never asked for twice.",
-        "A decision tasklist on a host with no reviewer PARKS. It must never self-approve, and the test asserts that on a host with `CHIEF_REVIEW_NONINTERACTIVE=1`."
+        "Human output is a column-aligned table in the house style already set by `scripts/tasklist-census.py` and `chief status` — at minimum name, state, story progress, category, and for a park or a block the reason in the operator's terms. Reuse the existing rendering; a third table style in this codebase is a defect, not a feature.",
+        "STATE is visually distinguishable at a glance, not inferable from a progress fraction: today `0/3` is printed identically for a tasklist that is ready to run and one that is blocked on a dependency.",
+        "`--plain` emits stable, parseable, unaligned output for scripts, on the same rationale as the census script's flag. `97` declined to touch this command because 'scripts and habits depend on its output', and this flag is what makes that safe.",
+        "A test asserts `--plain` is stable across the formatting change — the counterfactual is a downstream script silently breaking on box-drawing characters.",
+        "Non-TTY output must not emit colour or box-drawing by default. A piped `chief list` that ships escape codes is the same bug in a different costume."
       ],
       "passes": true,
-      "notes": "bash -n engine/decision.sh engine/agent.sh engine/research.sh engine/driver.sh engine/monitor.sh bin/chief: green; VERSION-BUMP PASS; decision predicate and research brief assertions passed; inherited test/ratelimit.sh fixture hung and was stopped (prior verification blocker remains)"
+      "notes": "Implemented aligned human columns (name/state/progress/category/reason) and stable tab-delimited --plain output; status.sh JSON supplies blocked dependency reasons and parked rows retain reasons. status-deps fixture test: green; bash -n, doc-sync, version-bump, quality ratchet, doc-link ratchet, and git diff --check: green; shellcheck unavailable."
     },
     {
       "id": "US-3",
-      "title": "`chief decide` records the verdict and files the retirement correctly",
+      "title": "`chief ps -a` shows everything in flight, not only what has a driver",
       "acceptanceCriteria": [
-        "A command records an operator's verdict against a tasklist with a prose note — the note is the point, since a verdict without its reasoning is folklore in six months.",
-        "Where the verdict retires the tasklist, chief performs the `completed/` filing itself: `supersededBy` set, `mergedToMain` deliberately absent, moved to `completed/`. This is currently hand-edited JSON and it was hand-edited twice on 2026-08-20.",
-        "Chief REFUSES the retirement while any live tasklist still depends on it, naming the dependents. A `completed/` record with no `mergedToMain` permanently blocks every dependent — intended when the retirement is deliberate, catastrophic when a dependent was overlooked, and `~/Development/CLAUDE.md` states the ordering rule as 'repoint its dependents BEFORE filing it'.",
-        "Where the verdict instead UNPARKS, the park fields are cleared and the recorded verdict survives in the tasklist — a tasklist that was parked on a question should carry the answer that released it.",
-        "The verdict lands in the event stream like every other state transition, so a decision is visible in `chief events` and to any embedding host.",
-        "A test drives both outcomes end to end and asserts the resulting JSON against the retirement rules, including the refusal."
+        "`chief ps -a` shows all non-done tasklists — running, ready, blocked, parked — while bare `chief ps` keeps its current meaning of live drivers across all repos. A command called `ps` that stopped showing processes would be worse than the gap it closed.",
+        "The live-run detail `ps` already renders — zone-hold reasons, approval commands, diff-budget warnings, stall detection, the UNREGISTERED-driver flag — is preserved unchanged for the rows that have a driver. This story adds rows; it must not thin the ones that matter most.",
+        "A blocked row names what blocks it and a parked row names its reason, both from the verdicts `status.sh` already computes. No new dependency resolution is written for this view.",
+        "`chief monitor` renders the same view under `-a`, since a live-refreshing view of only the running subset has the same blind spot.",
+        "A test drives a fixture repo containing one of each state and asserts every one appears under `-a` and that the done ones do not."
       ],
       "passes": true,
-      "notes": "bash -n + test/decision.sh + test/parked-decisions.sh + test/status-json.sh + test/quality-ratchet.sh: green; fixture observed dependent refusal, durable sqlite verdict note, unpark clearing parked fields, completed/ retirement without mergedToMain, and tasklist.decision event"
-    },
-    {
-      "id": "US-4",
-      "title": "The agent prepares the decision and is structurally unable to make it",
-      "acceptanceCriteria": [
-        "No agent turn can produce a verdict. The agent researches, frames the options and drafts the record; the verdict enters only through the human path. A model that can write its own approval has turned a decision gate into a formality.",
-        "A test asserts an agent cannot reach the verdict — the counterfactual is an agent-authored verdict file being rejected rather than honoured.",
-        "Where a decision's outcome is an ADR, the agent may draft it, but the draft carries the operator's verdict rather than asserting one of its own. Several parked tasklists across the portfolio are exactly this shape — an ADR nobody can write until a person chooses.",
-        "Documented in `docs/reference/` as its own page, covering the decision class, the interactive loop, `chief decide`, and the retirement rules, and linked from `docs/README.md` per the documentation standard."
-      ],
-      "passes": true,
-      "notes": "bash -n + test/decision-agent.sh + test/decision.sh + test/parked-decisions.sh + test/doc-sync.sh: green; agent-authored verdict was ignored and the tasklist remained awaiting a human verdict"
+      "notes": "Implemented ps/monitor --all with repo-scoped ready, running, blocked, and parked rows sourced from status.sh JSON; fixture test green; monitor/status-deps/doc-sync/version-bump/quality checks green."
     }
   ]
 }

@@ -262,11 +262,11 @@ has "does not say why" "$D" \
   || fail "the all-parked message hides a park that records no reason:
 $D"
 
-# `chief list` says it too, and a park with no reason renders exactly as it always did.
+# `chief list` says it too, with the state and reason in their dedicated columns.
 L="$( cd "$ALLPARKED" && "$CHIEF" list 2>&1 )"
-has "(parked: wibble)" "$L" || fail "chief list does not report the reason a park carries:
+has "20-a" "$L" && has "parked" "$L" && has "wibble" "$L" || fail "chief list does not report the reason a park carries:
 $L"
-grep -q '21-b  (parked)$' <<<"$L" \
+grep -q '21-b.*parked.*(no reason given)' <<<"$L" \
   || fail "a park with no reason changed shape in chief list:
 $L"
 
