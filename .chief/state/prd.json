@@ -45,8 +45,8 @@
         "The elapsed timer reflects how long it has been WAITING, so `held 2h21m` reads as a queue age rather than as work in progress",
         "`chief ps` states plainly that approval alone does not merge, wherever it shows an approved-but-unmerged branch \u2014 the current `--list` wording (*\"the next run merges it\"*) is correct and is simply not where anyone is looking"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n and diff check green; test/stall-flag.sh green with awaiting-approval regression, held 13m timer, and approved-hold guidance; test/overlap-zones.sh green; quality-ratchet, doc-sync, and version-bump green at VERSION 0.8.85; shellcheck unavailable."
     },
     {
       "id": "US-3",
