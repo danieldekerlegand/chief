@@ -58,8 +58,8 @@
         "The sweep is BOUNDED and reports what it freed, and a `--dry-run`/plan mode prints the verdict set without deleting, so an operator can inspect before trusting it",
         "Deletion logic gets a PURE candidate function with adversarial tests (a path outside the worktree root, a symlink, a name with spaces, an empty string), so \"it can never walk outside `$WT_ROOT`\" is a property of the code rather than a comment \u2014 the `sweep_candidate` convention `cross_system_interop_smoke` already established"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n clean; shellcheck unavailable locally; test/sweep.sh green with 55 passed, 0 failed; startup dry-run and mutation tests preserved a referenced worktree and a live sibling-repo worktree while reclaiming an unreferenced one; VERSION 0.8.84 synced with README"
     }
   ]
 }

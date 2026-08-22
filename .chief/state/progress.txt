@@ -1,25 +1,43 @@
-# Chief Progress — 105-chief-usage-reports-spend-and-limits
-Started: Fri Aug 21 02:25:30 CDT 2026
+# Chief Progress — 109-reclaim-a-merged-tasklists-worktree
+Started: Fri Aug 21 23:56:56 CDT 2026
 ---
 
-Base integration preserved the main branch's prior verification follow-up and the
-US-2 progress below; no source intent from either side was discarded.
+## BASE INTEGRATION RESOLVED
 
-US-2 implemented: extended `chief usage` with `--days`, `--repo`/`--scope`, and `--json`, preserving nullable provider measurements and fixed-width human columns. Added the JSON contract at `docs/reference/usage.md`. Verified `bash -n bin/chief`, `test/usage.sh`, and `test/events.sh` (green); the no-log JSON case observed an empty report with null unavailable measurements.
+`chief/109-reclaim-a-merged-tasklists-worktree` is **31 commit(s) behind** its base `main` (@bebc6a3) and
+chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
+your branch is exactly as it was and nothing is lost — but it cannot merge
+until the base is integrated, and every commit that lands on `main` while
+this is unresolved makes it worse.
 
-Learnings for future iterations: usage aggregation can remain a passive projection over event logs; keep JSON and human output derived from the same filtered rows so null stays distinct from zero.
+**Your first task this iteration is to integrate the base yourself:**
 
-US-3 implemented: documented `chief usage` in the help roster and README, registered a dedicated fixture aggregation test in `test/all.sh` and CI, and bumped/synced VERSION 0.8.80. Files changed: README.md, VERSION, .github/workflows/ci.yml, test/all.sh, test/usage-report.sh. Verification observed all focused checks green; the fixture report contained 2 runs, 3 turns, 10/5/15 tokens, $0.25 cost, 1 limit incident, 60 seconds waiting, a reset ETA, and null usage for the unmeasured provider.
+1. `git rebase main` in this worktree.
+2. At each stop, resolve the conflicts keeping BOTH sides' intent — the
+   `main` side is already-merged work, so never discard it, and never
+   discard your own — then `git add <files>` and `git rebase --continue`.
+   `git rebase --abort` returns you to exactly this state if you need it.
+3. Re-run the project's quality gates and make them green.
 
-Learnings for future iterations: on macOS, canonicalize fixture repository paths with `cd -P` before testing `--repo`, because `/tmp` paths can differ from the resolved path chief records.
+Rebase, not `git merge main`: chief rebases this branch again at merge time,
+and a rebase drops merge commits and replays the originals — a resolution
+recorded in a merge commit would be thrown away and this conflict would come
+straight back. Resolving inside the rebase puts the fix in your own commits.
 
-## US-2 — removal failures are reported
+Then continue the normal loop: pick the highest-priority story with
+`passes:false` and implement it. The integration is NOT a user story — do not
+flip any story's `passes` for it, and do not report completion until the
+stories themselves are really done.
 
-Implemented `remove_worktree` in `engine/driver.sh` and routed every worktree-removal site, including merge-batch teardown, through it. Git diagnostics are retained; failed fallback deletion emits a WARNING with tasklist, path, measured standing bytes, and reason, records stranded bytes/counts for the run summary, and never fails the run. The summary now explicitly reports standing worktrees, including when reclaimed bytes are zero. Updated sweep documentation and VERSION/README to 0.8.82.
+## Conflicting paths
+- README.md
+- VERSION
 
-Verification observed: base rebase completed; bash -n clean; shellcheck unavailable locally; quality ratchet green; VERSION-BUMP PASS; DOC-SYNC PASS; full hermetic behavioral suite 43 passed/0 failed; sweep 47 passed/0 failed. An ad-hoc failure-injection wrapper interfered with smoke setup before reaching the agent run, so it was not recorded as a passing mutation test.
+base: main @bebc6a3 · behind: 31 commit(s) · branch: chief/109-reclaim-a-merged-tasklists-worktree
+(full note: .chief/state/INTEGRATE-BASE.md)
 
-### Learnings for future iterations
+## US-3 — startup reclamation of stranded worktrees
 
-- The quality ratchet counts normalized six-line blocks across `driver.sh` and `mergequeue.sh`; shared teardown context can trigger a duplicate-block regression even when behavior is correct.
-- Removal reporting must distinguish a recovered `git worktree remove` failure from an unrecovered directory: only the latter contributes standing bytes/counts and a WARNING.
+Rebased the branch onto main, preserving both branches' README/VERSION intent. Added a bounded host-wide startup sweep in `engine/sweep.sh`, invoked by `engine/driver.sh` after pruning. It prunes every known repository before collecting git worktree references, protects referenced and live sibling-repo worktrees, supports `CHIEF_SWEEP_STARTUP_DRY_RUN=1`, and uses a pure path candidate check before deleting unreferenced trees. Added adversarial and cross-repository fixtures to `test/sweep.sh`; VERSION/README are 0.8.84.
+
+Learnings for future iterations: startup cleanup must treat the shared worktree root as a fleet, not a repo-local directory; pruning and reference collection must happen for every registered repository before any deletion, and dry-run plus a bounded cap are essential safety controls.
