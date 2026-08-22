@@ -570,7 +570,7 @@ op_note() {   # $1 name  $2 stateroot -> one line
 # it is the same `phase_since` reading limit_note and op_note already print.
 # Prints the whole ↳ line (both arms are a hold, so both keep the row's ⏸ colouring).
 hold_note() { # $1 name $2 stateroot $3 coarse state -> one full '↳' line
-  local pa held zreq zz zf
+  local pa held zreq zz zf app change
   pa="$(live_phase_age "$1" "$2")"; held="${pa:+ · held $pa}"
   if [ "$3" = awaiting-review ]; then
     printf '       %s↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept%s · approve it, then: chief run%s\n' \
@@ -583,9 +583,17 @@ hold_note() { # $1 name $2 stateroot $3 coarse state -> one full '↳' line
   zreq="$2/parallel/$1.zone-request.json"
   zz="$(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$zreq" 2>/dev/null || echo)"
   zf="$(jq -r '(.files // []) | length' "$zreq" 2>/dev/null || echo)"
-  printf '       %s↳ awaiting approval: rebased + verified GREEN, held at %s%s%s · approve: chief approve %s%s\n' \
-    "$MAG" "${zz:-a review-policy overlap zone}" \
-    "$([ -n "$zf" ] && printf ' (%s changed file(s))' "$zf")" "$held" "$1" "$RST"
+  app="$2/parallel/$1.zone-approval.json"
+  change="$(jq -r '.change // empty' "$zreq" 2>/dev/null || echo)"
+  if [ -s "$app" ] && [ "$(jq -r '.decision // empty' "$app" 2>/dev/null || echo)" = approved ] \
+      && [ -n "$change" ] && [ "$(jq -r '.change // empty' "$app" 2>/dev/null || echo)" = "$change" ]; then
+    printf '       %s↳ awaiting-approval: APPROVED but not merged — approval alone does not merge; next run: chief run%s%s\n' \
+      "$MAG" "$held" "$RST"
+  else
+    printf '       %s↳ awaiting-approval: rebased + verified GREEN, held at %s%s%s · approve: chief approve %s%s\n' \
+      "$MAG" "${zz:-a review-policy overlap zone}" \
+      "$([ -n "$zf" ] && printf ' (%s changed file(s))' "$zf")" "$held" "$1" "$RST"
+  fi
 }
 
 # The run-level HOLDS banner: what is stopping this repo from launching anything,

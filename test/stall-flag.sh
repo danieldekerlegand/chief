@@ -376,6 +376,14 @@ held_check() {  # LABEL OUTPUT
 held_out="$(CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" ps)" || fail "chief ps (part 6) exited non-zero"
 echo "--- chief ps (running · rate-limited · operator-paused · in-review · zone-hold) ---"; printf '%s\n' "$held_out"
 held_check "chief ps" "$held_out"
+held_zone_row="$(row held-zone "$held_out")"
+case "$held_zone_row" in *awaiting-approval*) ;; *) fail "chief ps hid the awaiting-approval phase: $held_zone_row" ;; esac
+case "$held_zone_row" in *verifying*) fail "chief ps mislabeled an awaiting-approval hold as verifying: $held_zone_row" ;; esac
+
+printf '{"change":"held-change"}\n' > "$PAR/held-zone.zone-request.json"
+printf '{"decision":"approved","change":"held-change"}\n' > "$PAR/held-zone.zone-approval.json"
+approved_zone_note="$(hold_note held-zone "$STATE" awaiting-approval)"
+case "$approved_zone_note" in *'approval alone does not merge'*'chief run'*) ;; *) fail "approved hold did not explain that approval alone does not merge: $approved_zone_note" ;; esac
 
 mon2_log="$WORK/monitor2.out"
 CHIEF_RUNS="$RUNS" bash "$ROOT/bin/chief" monitor 1 > "$mon2_log" 2>&1 &
