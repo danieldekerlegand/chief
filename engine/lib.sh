@@ -129,6 +129,43 @@ run_verify() {
   verify_branch "$cwd"
 }
 
+# The merge gate's verdict cache. A rebase can rewrite commit ids without changing
+# the tree, so the tree is the correctness key. The base commit and verify-hook
+# blob are part of it too. Records are per repository and bounded.
+verify_cache_dir() {
+  local cwd="$1" root cache_repo="${VERIFY_CACHE_REPO:-$cwd}"
+  root="$(git -C "$cache_repo" rev-parse --show-toplevel 2>/dev/null || echo "$cache_repo")"
+  printf '%s/verify-cache/%s' "$STATE" "$(printf '%s' "$root" | cksum | awk '{print $1}')"
+}
+
+# Return 0 only for a recorded GREEN verdict. The message names the tree and
+# record source so a skip is distinguishable from a fresh pass in logs.
+verify_cache_try() {
+  local cwd="$1" name="$2" base="$3" dir key rec tree
+  [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 1
+  [ -z "$(jq -r '(.verify // [])[]' "$TASKS_DIR/$name.json" 2>/dev/null || true)" ] || return 1
+  dir="$(verify_cache_dir "$cwd")"
+  tree="$(git -C "$cwd" rev-parse HEAD^{tree} 2>/dev/null || echo)"
+  key="$tree.$(git -C "$cwd" rev-parse "$base" 2>/dev/null || echo).$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook)"
+  rec="$dir/$key"; [ -f "$rec" ] || return 1
+  [ "$(sed -n 's/^status=//p' "$rec" | head -1)" = 0 ] || return 1
+  [ "$(sed -n 's/^tree=//p' "$rec" | head -1)" = "$tree" ] || return 1
+  echo ">> verify SKIPPED: tree $tree (GREEN verdict from $rec; same base and verify hook)"
+  return 0
+}
+
+verify_cache_record() {
+  local cwd="$1" base="$2" status="$3" dir key rec tmp tree hook base_sha
+  [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
+  dir="$(verify_cache_dir "$cwd")"; mkdir -p "$dir" || return 0
+  tree="$(git -C "$cwd" rev-parse HEAD^{tree} 2>/dev/null || echo)"
+  base_sha="$(git -C "$cwd" rev-parse "$base" 2>/dev/null || echo)"
+  hook="$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook)"
+  key="$tree.$base_sha.$hook"; rec="$dir/$key"; tmp="$rec.tmp.$$"
+  { echo "status=$status"; echo "tree=$tree"; echo "base=$base_sha"; echo "hook=$hook"; } > "$tmp" && mv "$tmp" "$rec"
+  find "$dir" -type f -name '*.*.*' -print 2>/dev/null | sort -r | sed -n '33,$p' | while IFS= read -r old; do rm -f "$old"; done
+}
+
 # bump_submodule_chain PROJECT SUB NAME SHA — stage the submodule-pointer bump for SUB,
 # which may be NESTED (e.g. `babylon/packages/core`, a submodule OF a submodule).
 #

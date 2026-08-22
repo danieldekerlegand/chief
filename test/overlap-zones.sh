@@ -104,8 +104,9 @@ mkdir -p "$REPO"
 # hermetic fixture — one zone of each policy
 serialize  path:out/sz/    scheduled apart, merged as usual
 review     path:out/rz/    the shared design two branches must not diverge on
+review     path:out/ri/    the in-flight approval regression fixture
 CONF
-  for t in sz rz bw bb; do
+  for t in sz rz bw bb ri; do
     jq -n --arg n "$t" '
       { project:"oz", branchName:("chief/" + $n), description:("policy-layer fixture " + $n),
         iters:3, dependsOn:[], touches:["design-a-" + $n], warmup:[],
@@ -125,10 +126,10 @@ echo 450 > "$WORK/size.bw"; echo 450 > "$WORK/size.bb"
 run_chief() {   # $1 = log; rest = args to `chief run`
   local log="$1"; shift
   if [ -n "${OZ_BUDGET:-}" ]; then
-    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS=1 \
+    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS="${OZ_POLL:-1}" \
         CHIEF_DIFF_BUDGET="$OZ_BUDGET" "$CHIEF" run "$@" ) >"$log" 2>&1
   else
-    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS=1 \
+    ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" POLL_SECONDS="${OZ_POLL:-1}" \
         "$CHIEF" run "$@" ) >"$log" 2>&1
   fi
 }
@@ -213,6 +214,29 @@ if grep -q 'HELD BY THE MERGE POLICY LAYER' "$LOG"; then fail "an approved chang
 if [ -f "$(req rz)" ] || [ -f "$(appr rz)" ]; then fail "the request/verdict survived the merge they were about"; fi
 echo "   ok  merged on a banked verdict, no re-ask, no agent turn, artifacts cleared"
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PART C (cont.) — approval during the same run is consumed by that run.
+# The request is created after the worker's gate, while reap() still owns the
+# tasklist's transition from running to awaiting-approval.
+# ══════════════════════════════════════════════════════════════════════════════
+echo "overlap-zones: PART C (cont.) — an in-flight approval lands without a second run"
+LOG="$WORK/in-flight.log"
+OZ_POLL=5 run_chief "$LOG" ri & inflight_pid=$!
+for _ in $(seq 1 100); do
+  [ -s "$(req ri)" ] && break
+  sleep 0.1
+done
+[ -s "$(req ri)" ] || { cat "$LOG" >&2; fail "in-flight run never wrote its approval request"; }
+approve ri -m "approved while the run was still polling" > "$WORK/in-flight-approval.txt" 2>&1 \
+  || { cat "$WORK/in-flight-approval.txt" >&2; fail "in-flight approval failed"; }
+wait "$inflight_pid" || { cat "$LOG" >&2; fail "in-flight run exited non-zero"; }
+[ "$(state ri)" = "done" ] || fail "in-flight approval did not let the existing run merge (state $(state ri))"
+on_main "out/ri/US-1.txt" || fail "in-flight approval did not merge the branch"
+grep -q 'approved while this run was in flight' "$LOG" \
+  || fail "the run did not report consuming its in-flight approval"
+[ "$(calls ri)" = 1 ] || fail "in-flight approval spent another agent turn ($(calls ri))"
+echo "   ok  approval consumed by the in-flight run, no second agent turn"
+
 # ══ PART D — the diff-size budget: warn reports, block withholds ═════════════
 echo "overlap-zones: PART D — an oversized story is reported under warn and withheld under block"
 LOG="$WORK/d-warn.log"
@@ -250,5 +274,42 @@ OZ_BUDGET=block run_chief "$LOG" bb || fail "the approved block-mode run exited 
 [ "$(state bb)" = "done" ] || fail "bb state is '$(state bb)', want done after approval"
 on_main "out/bb/US-1.txt" || fail "the approved over-budget branch did not merge"
 echo "   ok  block: withheld after a green floor, released by the same one approval, merged"
+
+# ══ PART E — stale records are not actionable ================================
+# Exercise the listing independently of a run: these are the three states that
+# used to be rendered alike after a run died between merge, retire and cleanup.
+echo "overlap-zones: PART E — deleted, merged and pending approval records are distinct"
+mkdir -p "$S"
+head_sha="$(git -C "$REPO" rev-parse main)"
+pending_sha="$(printf 'pending branch\n' | git -C "$REPO" commit-tree "$(git -C "$REPO" rev-parse main^{tree})" -p "$head_sha")"
+git -C "$REPO" update-ref refs/heads/chief/pending "$pending_sha"
+for stale in deleted merged pending; do
+  case "$stale" in
+    deleted) branch=chief/deleted; base=main; decision=approved ;;
+    merged)  branch=main; base=main; decision=approved ;;
+    pending) branch=chief/pending; base=main; decision=pending ;;
+  esac
+  jq -n --arg branch "$branch" --arg base "$base" --arg decision "$decision" \
+    '{name:"\($branch)", branch:$branch, base:$base, change:"fixture-\($branch)", files:[], zones:[]}' \
+    > "$(req "$stale")"
+  if [ "$decision" = approved ]; then
+    jq '. + {decision:"approved"}' "$(req "$stale")" > "$(appr "$stale")"
+  fi
+done
+approve --list > "$WORK/stale-list.txt" 2>&1 || fail "stale approval listing exited non-zero"
+grep -q 'deleted.*STALE.*no longer resolves' "$WORK/stale-list.txt" \
+  || { cat "$WORK/stale-list.txt" >&2; fail "deleted branch was not reported STALE"; }
+grep -q 'merged.*STALE.*already merged' "$WORK/stale-list.txt" \
+  || { cat "$WORK/stale-list.txt" >&2; fail "already-merged branch was not reported STALE"; }
+grep -q 'pending.*awaiting approval' "$WORK/stale-list.txt" \
+  || { cat "$WORK/stale-list.txt" >&2; fail "genuinely pending branch was not listed as awaiting approval"; }
+if grep -q 'deleted.*APPROVED\|merged.*APPROVED' "$WORK/stale-list.txt"; then
+  fail "a stale record was rendered as an actionable approval"
+fi
+[ ! -e "$(req deleted)" ] && [ ! -e "$(appr deleted)" ] || fail "deleted branch record was not dropped"
+[ ! -e "$(req merged)" ] && [ ! -e "$(appr merged)" ] || fail "merged branch record was not dropped"
+[ -e "$(req pending)" ] || fail "pending approval was dangerously cleared"
+git -C "$REPO" update-ref -d refs/heads/chief/pending
+ echo "   ok  stale records reported and cleared; pending approval retained"
 
 echo "OVERLAP-ZONES PASS — the policy layer only ever WITHHOLDS: a serialize zone changes nothing, a review zone and an over-budget story hold a rebased + verified-GREEN branch for one durable approval, and warn reports without blocking"

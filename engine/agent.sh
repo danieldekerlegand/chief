@@ -635,6 +635,12 @@ _plan_prompt() {
 # has no live.sh — and losing the whole agent loop over a bookkeeping helper is not
 # a trade worth making. Same reason for the no-op stubs: liveliness is diagnostics.
 _AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STATE="${CHIEF_VERIFY_CACHE_STATE:-$STATE_DIR}"
+TASKS_DIR="${CHIEF_VERIFY_TASKS_DIR:-$CHIEF_PROJECT/${CHIEF_TASKS_DIR:-tasks/chief}}"
+VERIFY_HOOK="${CHIEF_VERIFY_HOOK:-$CHIEF_PROJECT/.chief/verify.sh}"
+VERIFY_CACHE_REPO="${CHIEF_VERIFY_REPO:-$CHIEF_PROJECT}"
+BASE_BRANCH="${CHIEF_VERIFY_BASE:-main}"
+work_base="$BASE_BRANCH"
 if [ -f "$_AGENT_DIR/live.sh" ]; then
   # shellcheck source=engine/live.sh
   . "$_AGENT_DIR/live.sh"
@@ -662,6 +668,10 @@ if [ -f "$_AGENT_DIR/measure.sh" ]; then
 else
   measure_gate() { return 0; }
 fi
+if [ -n "${CHIEF_VERIFY_CACHE_STATE:-}" ] && [ -f "$_AGENT_DIR/lib.sh" ]; then
+  # shellcheck source=engine/lib.sh
+  . "$_AGENT_DIR/lib.sh"
+fi
 # The HUMAN-APPROVAL half of the plan checkpoint (engine/review.sh), on the same
 # terms again — with one difference that matters: its absent-file fallback is not a
 # no-op. A plan-review tasklist running on an install that has no review.sh has no
@@ -688,6 +698,21 @@ _emit_story_events() {
       detail="iteration ${1:-?} — $(_passes)/$(_total) passing"
   done
   PASSED_IDS="$now"
+  return 0
+}
+_agent_verify_final() {
+  local output rc=0
+  [ -n "${CHIEF_VERIFY_CACHE_STATE:-}" ] || return 0
+  [ -n "${CHIEF_TASKLIST:-}" ] || return 0
+  [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
+  output="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1)" || rc=$?
+  printf '%s\n' "$output"
+  verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"
+  if [ "$rc" != 0 ]; then
+    echo "!! agent verification failed (exit $rc); completion will not be accepted"
+    return 1
+  fi
+  echo ">> agent verification passed and was recorded for the current tree"
   return 0
 }
 # _measure_boundary ITER — hold the turn that just returned to the BAR rule HERE, at
@@ -1480,10 +1505,12 @@ while :; do
   # exit 0 with no commits, which is the exact false-complete the no-work guard exists
   # to catch. Said out loud rather than swallowed: a plan turn emitting it means the
   # plan prompt is being misread, and that is worth seeing in the log.
+  COMPLETE_OK=1
   if printf '%s\n' "$OUTPUT" | grep -qE '^[[:space:]]*`?<promise>COMPLETE</promise>`?[[:space:]]*$'; then
+    [ "$TURN_MODE" = plan ] || _agent_verify_final || COMPLETE_OK=0
     if [ "$TURN_MODE" = plan ]; then
       echo "!! the PLAN turn emitted the completion token — IGNORED (a plan turn writes a plan, it never completes a tasklist)."
-    else
+    elif [ "$COMPLETE_OK" = 1 ]; then
       echo ""
       echo "Chief completed all tasks! (iteration $i)"
       live_set "$LIVE" phase=complete passing="$(_passes)" total="$(_total)" story=

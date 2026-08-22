@@ -2504,6 +2504,9 @@ run_worker() {
           CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" CHIEF_ACCOUNT_LABEL="$ACCOUNT_LABEL" \
           CHIEF_RESEARCH="${CHIEF_RESEARCH:-}" CHIEF_RESEARCH_FILE="$RESEARCH_DIR/$name.md" \
           CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" CHIEF_UNVERIFIED_FILE="$unvmark" \
+          CHIEF_VERIFY_CACHE_STATE="$STATE" CHIEF_VERIFY_TASKS_DIR="$TASKS_DIR" \
+          CHIEF_VERIFY_HOOK="$VERIFY_HOOK" CHIEF_VERIFY_BASE="$work_base" \
+          CHIEF_VERIFY_REPO="$work_repo" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a
@@ -2787,7 +2790,12 @@ run_worker() {
         echo ">> verifying $branch (rebased${sub:+, in $sub})"
         local vout vrc
         live_set "$live" phase=verifying
-        vout="$(run_verify "$work_repo" "$name" 2>&1)"; vrc=$?
+        if verify_cache_try "$work_repo" "$name" "$work_base"; then
+          vrc=0; vout=""
+        else
+          vout="$(run_verify "$work_repo" "$name" 2>&1)"; vrc=$?
+          verify_cache_record "$work_repo" "$work_base" "$vrc"
+        fi
         printf '%s\n' "$vout"
         if [ "$vrc" != "0" ]; then
           printf '%s\n' "$vout" > "$SNAP/$name.verify-failed.log"
@@ -2822,8 +2830,8 @@ run_worker() {
         # ON the base, and a verdict that outlived its subject can only mislead.
         rm -f "$SNAP/$name.verify-failed.log" "$(unverified_marker "$name")" \
               "$SNAP/$name.rebase-conflict.md" \
-              "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
-              "$(zones_request_file "$STATE" "$name")" "$(zones_approval_file "$STATE" "$name")" 2>/dev/null || true
+              "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
+        zones_clear_record "$STATE" "$name"
         live_set "$live" phase=merged story=
         event_emit tasklist.merged name="$name" state=done detail="$branch --no-ff into $work_base @$sha${sub:+ ($sub)}"
         echo "MERGED @$sha${sub:+ ($sub)}" > "$STATE/$name.status"; echo ">> $name MERGED @$sha${sub:+ in $sub}"
@@ -2967,6 +2975,14 @@ retryable_status() {
 retry_at_of()   { _int "$(cat "$STATE/$1.retry-at" 2>/dev/null)"; }
 pause_until()   { _int "$(cat "$LIMIT_PAUSE_FILE" 2>/dev/null)"; }
 eta()           { date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null || echo "$1"; }
+approval_ready() {
+  local n="$1" req app change
+  req="$(zones_request_file "$STATE" "$n")"
+  app="$(zones_approval_file "$STATE" "$n")"
+  [ -s "$req" ] || return 1
+  change="$(jq -r '.change // empty' "$req" 2>/dev/null || echo)"
+  zones_approved "$app" "$change"
+}
 
 # --- operator pause (see OPERATOR PAUSE in the header) -----------------------
 # PRESENCE is the gate, not the content: a truncated or garbled flag file must still
@@ -3073,9 +3089,17 @@ reap() {   # collect any finished workers, update state
       # Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
       # or an over-budget story (docs/reference/diff-budget.md). Non-terminal on the
       # same terms again — but note what is different: this branch already passed the
-      # whole merge floor. Nothing here re-arms it either; `chief approve` records the
-      # verdict and the next run reads it.
-      AWAITING-APPROVAL*) set_state "$n" awaiting-approval ;;
+      # whole merge floor. If approval arrived while this run was still draining the
+      # worker, re-arm it here so this run can finish the merge without a new run.
+      AWAITING-APPROVAL*)
+        if approval_ready "$n"; then
+          echo "  ✓ $n was approved while this run was in flight — continuing to merge"
+          set_state "$n" pending
+          live_set "$(live_of "$n")" phase=approved
+        else
+          set_state "$n" awaiting-approval
+        fi
+        ;;
       *) set_state "$n" failed ;;
     esac
     echo "  ● $n finished → $st"

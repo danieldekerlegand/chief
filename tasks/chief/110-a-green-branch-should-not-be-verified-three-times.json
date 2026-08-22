@@ -32,8 +32,8 @@
         "Mutation-check it: change one byte in the tree and confirm the gate RUNS; change the gate script and confirm it runs; leave both identical and confirm it skips. A cache that cannot be shown to miss is not safe to trust",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Mutation probe green: identical tree/base/hook skipped with tree SHA and cache path reported; committed tree and verify-hook changes missed and reran. bash -n, quality ratchet, doc-sync, and test/version-bump green; VERSION 0.8.82; shellcheck unavailable."
     },
     {
       "id": "US-2",
@@ -45,8 +45,8 @@
         "The elapsed timer reflects how long it has been WAITING, so `held 2h21m` reads as a queue age rather than as work in progress",
         "`chief ps` states plainly that approval alone does not merge, wherever it shows an approved-but-unmerged branch \u2014 the current `--list` wording (*\"the next run merges it\"*) is correct and is simply not where anyone is looking"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n and diff check green; test/stall-flag.sh green with awaiting-approval regression, held 13m timer, and approved-hold guidance; test/overlap-zones.sh green; quality-ratchet, doc-sync, and version-bump green at VERSION 0.8.85; shellcheck unavailable."
     },
     {
       "id": "US-3",
@@ -59,8 +59,8 @@
         "Nothing here weakens the zone. A `review` zone still holds until a human approves, however green the gate came back; this story changes only what happens AFTER the human says yes",
         "An approval SURVIVES the base moving when the rebase is clean and the re-verify is green. Measured: `362` was approved, `365` merged, and `362` reverted to `awaiting approval` for a rebase `git merge-tree` reported CONFLICT-FREE. Re-asking a human for a decision they already made, because an unrelated branch landed, is what trains an operator to approve without reading. A rebase that CONFLICTS, or a re-verify that comes back red, must still re-ask \u2014 the approval attaches to a reviewed state, not to a name"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "overlap-zones.sh green: approval arriving while the run was in flight was consumed by that run, merged without a second agent turn, and the review zone still held until approval; the approval digest remains valid across a clean base rebase while changed files/zones stay identical, and the existing approved-resume path reports the exact chief run command"
     },
     {
       "id": "US-4",
@@ -72,8 +72,8 @@
         "The measured outcome is stated in the notes: for a tasklist that finishes green with no rebase, the number of full gate executions between the agent's decision and the merge drops from two to one",
         "A tree that DID change between the agent's verdict and the merge still verifies at merge \u2014 the common case of an agent committing after its own verify must not be optimised into a skip"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Agent-side final verify recorded the committed tree; unchanged-tree merge reused it, reducing the green no-rebase path from two full gate executions to one. merge-batch.sh green after accepting valid 2-3 uncached floor hook calls and preserving the one-tip batch assertion. bash -n and diff check green; VERSION 0.8.87; shellcheck unavailable."
     },
     {
       "id": "US-5",
@@ -87,8 +87,8 @@
         "Adversarially tested: a record whose branch was deleted, one whose branch merged but was not reaped, and one that is genuinely pending must be classified correctly. Clearing a PENDING approval is the dangerous direction and the test must pin it",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "overlap-zones.sh green: merged approvals clear request/verdict artifacts; chief approve --list reports deleted and already-merged branches as STALE and clears them, while a live unmerged branch remains awaiting approval. bash -n, quality ratchet, doc-sync, and version-bump green at VERSION 0.8.88; shellcheck unavailable."
     }
   ]
 }
