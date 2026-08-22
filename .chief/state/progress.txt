@@ -217,3 +217,5 @@ verify: BLOCK — behavioral tests failed (see above)
 Verification follow-up: classified the newly published `awaiting-decision` phase as quiet-by-design in `test/stall-flag.sh`, matching `engine/monitor.sh` so the drift guard covers decision holds. `bash -n`, `test/stall-flag.sh`, `test/doc-sync.sh`, and `test/quality-ratchet.sh` are green.
 
 Learnings for future iterations: When a new monitor phase is introduced, update the stall-policy fixture's explicit phase table in the same change; the drift guard intentionally rejects unclassified literals.
+
+Final verification: `.chief/verify.sh` completed with `BYSTANDER PASS` across 43 behavioral tests, `DOC-SYNC PASS`, tasklist JSON validation, and `verify: OK (allowing merge)`; shellcheck was unavailable and skipped as documented.
