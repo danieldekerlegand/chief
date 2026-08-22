@@ -28,7 +28,8 @@
         "The count is reported in a way an operator can check, so 'why is my run holding' is answerable without reading source.",
         "A test drives fixture run records — including one stale — and asserts the derived count."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "test/concurrency.sh: green — fixture found 1 live run with 1 agent turn and 1 gate, and ignored 1 stale PID record; bash -n, version-bump, doc-sync, and smoke passed. test/ratelimit.sh has an unrelated existing epoch-form fixture failure (agent exited 0, expected 2)."
     },
     {
       "id": "US-2",
@@ -41,6 +42,8 @@
         "A test starts two fixture runs against a budget of one and asserts the second holds, then proceeds when the first finishes."
       ],
       "notes": null
+      ,"passes": true
+      ,"notes": "test/machine-budget.sh: green — two fixture runs held the second at 1/1 live agent turn and proceeded after the first finished; budget default derived from detected physical cores, CHIEF_MACHINE_BUDGET=0 opt-out recorded in registry and machine-budget.log; bash -n, version-bump, doc-sync, and smoke passed"
     },
     {
       "id": "US-3",
@@ -51,7 +54,8 @@
         "The stall/quiet thresholds account for contention rather than flagging a queued gate as hung. `monitor.sh` already tunes per-phase thresholds against measurements and this is the same idea: a gate waiting for cores is working, and must not be reported as stalled.",
         "Document the failure shape in `docs/reference/` with the numbers, so the next operator reading a slow run checks `uptime` before rebuilding their theory of the repo."
       ],
-      "notes": null
+      "notes": "test/concurrency-monitor.sh: green — chief ps rendered load average 62 against 14 physical cores as OVERSUBSCRIBED, marked a pending tasklist budget-hold with its waiting reason, and kept the budget-waiting phase below the 23,400-second stall threshold"
+      ,"passes": true
     }
   ]
 }

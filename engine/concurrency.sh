@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# engine/concurrency.sh — read the host-wide run registry for machine activity.
+#
+# This is deliberately a reader over the registry that `chief ps` already uses.
+# It owns no lock, daemon, or second state store.  A driver PID is the authority
+# for whether a registry record is live; tasklist live records then say whether
+# that driver is spending an agent turn or running a gate.
+
+# Sets globals rather than printing so callers in hot paths do not fork through
+# command substitution.  Bash 3.2 compatible: no associative arrays.
+CHIEF_MACHINE_RUNS=0
+CHIEF_MACHINE_AGENT_TURNS=0
+CHIEF_MACHINE_GATES=0
+CHIEF_MACHINE_STALE=0
+CHIEF_MACHINE_CORES=1
+CHIEF_MACHINE_BUDGET=1
+CHIEF_MACHINE_BUDGET_DISABLED=0
+CHIEF_MACHINE_LOAD_AVERAGE=""
+
+chief_machine_core_count() {
+  local n
+  n="$(sysctl -n hw.physicalcpu 2>/dev/null || echo)"
+  case "$n" in
+    ''|*[!0-9]*|0)
+      n="$(lscpu -p=CORE 2>/dev/null | awk '!/^#/ && !seen[$1]++ {n++} END {print n+0}')"
+      ;;
+  esac
+  case "$n" in ''|*[!0-9]*|0) n="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo)" ;; esac
+  case "$n" in ''|*[!0-9]*|0) n="$(nproc 2>/dev/null || echo)" ;; esac
+  case "$n" in ''|*[!0-9]*|0) n=1 ;; esac
+  printf '%s' "$n"
+}
+
+# CHIEF_MACHINE_BUDGET is the number of simultaneous agent turns allowed across
+# the host. Zero/off is the explicit escape hatch for the pre-budget behavior.
+chief_machine_budget_init() {
+  local requested="${CHIEF_MACHINE_BUDGET:-}"
+  CHIEF_MACHINE_CORES="$(chief_machine_core_count)"
+  CHIEF_MACHINE_BUDGET_DISABLED=0
+  case "$requested" in
+    0|off|false|none) CHIEF_MACHINE_BUDGET_DISABLED=1; CHIEF_MACHINE_BUDGET=0 ;;
+    ''|*[!0-9]*) CHIEF_MACHINE_BUDGET="$CHIEF_MACHINE_CORES" ;;
+    *) CHIEF_MACHINE_BUDGET="$requested" ;;
+  esac
+}
+
+chief_machine_budget_allows() {
+  [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ] || [ "$CHIEF_MACHINE_AGENT_TURNS" -lt "$CHIEF_MACHINE_BUDGET" ]
+}
+
+chief_machine_load_average() {
+  local load
+  load="${CHIEF_LOAD_AVERAGE:-}"
+  if [ -z "$load" ]; then
+    load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{gsub(/[{}]/, ""); print $1}' )"
+  fi
+  if [ -z "$load" ] && [ -r /proc/loadavg ]; then
+    load="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+  fi
+  case "$load" in
+    ''|*[!0-9.]*|*.*.*) printf '?'; return 0 ;;
+    *) printf '%s' "$load" ;;
+  esac
+}
+
+chief_machine_load_line() {
+  local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}" oversubscribed
+  [ -n "$load" ] || load="$(chief_machine_load_average)"
+  CHIEF_MACHINE_LOAD_AVERAGE="$load"
+  printf 'load average: %s / %s physical core(s)' "$load" "$CHIEF_MACHINE_CORES"
+  oversubscribed="$(awk -v load="$load" -v cores="$CHIEF_MACHINE_CORES" 'BEGIN { print (load != "?" && load > cores) ? 1 : 0 }' 2>/dev/null || echo 0)"
+  [ "$oversubscribed" = 1 ] && printf ' · OVERSUBSCRIBED'
+}
+
+chief_machine_budget_line() {
+  if [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ]; then
+    printf 'machine budget: disabled (CHIEF_MACHINE_BUDGET=0)'
+  else
+    printf 'machine budget: %s agent turn(s) across %s physical core(s)' "$CHIEF_MACHINE_BUDGET" "$CHIEF_MACHINE_CORES"
+  fi
+}
+
+concurrency_field() {
+  sed -n "s/^$1=//p" "${2:-}" 2>/dev/null | head -1
+}
+
+concurrency_pid_live() {
+  # reap.sh's predicate excludes zombies; using it here is important because
+  # kill -0 alone reports a reaped-but-unwaited worker as live.
+  if command -v chief_pid_alive >/dev/null 2>&1; then
+    chief_pid_alive "${1:-}"
+  else
+    case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$1" 2>/dev/null
+  fi
+}
+
+concurrency_phase_kind() {
+  case "${1:-}" in
+    agent-turn|provider-waiting|writing|integrating|re-dispatch|rate-limited-waiting)
+      printf agent ;;
+    worktree|warmup|reconcile|merge-wait|rebasing|verifying|zone-check|merging|merge-conflict)
+      printf gate ;;
+  esac
+}
+
+# chief_machine_activity [RUNS_DIR]
+# Sets CHIEF_MACHINE_* and leaves stale records untouched.  `chief ps` remains
+# responsible for pruning them; a budget reader must never delete state while
+# another run is starting.
+chief_machine_activity() {
+  local runs="${1:-${CHIEF_RUNS:-}}" f pid state names n lf phase kind
+  CHIEF_MACHINE_RUNS=0
+  CHIEF_MACHINE_AGENT_TURNS=0
+  CHIEF_MACHINE_GATES=0
+  CHIEF_MACHINE_STALE=0
+  [ -n "$runs" ] || return 0
+  for f in "$runs"/*.run; do
+    [ -e "$f" ] || continue
+    if command -v chief_ns_foreign >/dev/null 2>&1 && \
+       chief_ns_foreign "$(chief_run_file_ns "$f")"; then
+      continue
+    fi
+    pid="$(concurrency_field pid "$f")"
+    if ! concurrency_pid_live "$pid"; then
+      CHIEF_MACHINE_STALE=$(( CHIEF_MACHINE_STALE + 1 ))
+      continue
+    fi
+    CHIEF_MACHINE_RUNS=$(( CHIEF_MACHINE_RUNS + 1 ))
+    state="$(concurrency_field state "$f")"
+    names="$(concurrency_field names "$f")"
+    for n in $names; do
+      lf="$state/parallel/$n.live.json"
+      if command -v live_get >/dev/null 2>&1; then
+        phase="$(live_get "$lf" phase)"
+      else
+        phase="$(sed -n 's/.*"phase":[[:space:]]*"\([^"]*\)".*/\1/p' "$lf" 2>/dev/null | head -1)"
+      fi
+      kind="$(concurrency_phase_kind "$phase")"
+      case "$kind" in
+        agent) CHIEF_MACHINE_AGENT_TURNS=$(( CHIEF_MACHINE_AGENT_TURNS + 1 )) ;;
+        gate)  CHIEF_MACHINE_GATES=$(( CHIEF_MACHINE_GATES + 1 )) ;;
+      esac
+    done
+  done
+}
+
+chief_machine_activity_line() {
+  printf '%s live run(s) · %s agent turn(s) · %s gate(s) · %s' \
+    "$CHIEF_MACHINE_RUNS" "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_GATES" "$(chief_machine_load_line)"
+  [ "$CHIEF_MACHINE_STALE" -gt 0 ] && \
+    printf ' · %s stale record(s) ignored' "$CHIEF_MACHINE_STALE"
+}

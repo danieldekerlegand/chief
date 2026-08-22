@@ -478,6 +478,9 @@ source "$ENGINE/gitenv.sh"
 # Orphan identification + the bounded, reporting reap (engine/reap.sh). Shared with
 # `chief reap`, which is the same sweep on a path that does NOT need a new run.
 source "$ENGINE/reap.sh"
+# Host-wide activity reader. US-1 reports the work already consuming the machine
+# before this driver adds another tasklist; US-2 is the policy that will act on it.
+source "$ENGINE/concurrency.sh"
 # The DISK half of the same idea (engine/sweep.sh): reap.sh collects orphaned
 # PROCESSES, this collects the build directories they left behind. Shared with
 # `chief reap` for the same reason.
@@ -485,6 +488,7 @@ source "$ENGINE/sweep.sh"
 # Per-tasklist LIVELINESS record (engine/live.sh): phase + heartbeat next to the
 # coarse <name>.state, so `chief ps` can tell a working run from a hung one.
 source "$ENGINE/live.sh"
+chief_machine_budget_init
 live_of() { printf '%s' "$STATE/$1.live.json"; }   # the record for tasklist $1
 # Machine-readable EVENT STREAM (engine/events.sh): an append-only NDJSON projection
 # of the transitions written just below — subscribed to by chief-cloud and embedding
@@ -2047,6 +2051,8 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "repo=$REPO"
   echo "base=$BASE_BRANCH"
   echo "parallel=$PARALLEL"
+  echo "machinebudget=$CHIEF_MACHINE_BUDGET"
+  echo "machinebudgetdisabled=$CHIEF_MACHINE_BUDGET_DISABLED"
   echo "provider=$PROVIDER"
   echo "model=$MODEL"
   echo "tool=$TOOL"
@@ -2071,6 +2077,10 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
   echo "names=$NAMES"
 } > "$RUN_FILE" 2>/dev/null || true
+chief_machine_activity "$CHIEF_RUNS"
+echo "  machine activity before launch: $(chief_machine_activity_line)"
+echo "  $(chief_machine_budget_line)"
+printf '%s\n' "$(date +%s) $(chief_machine_budget_line)" > "$STATE/machine-budget.log" 2>/dev/null || true
 # The run file now exists, so the id a headless host reads here is immediately
 # resolvable in the registry. Emitted BEFORE the scheduler loop (and before the
 # orphan sweep below, which can spend seconds) so the parent can start correlating
@@ -2081,7 +2091,7 @@ headless_announce
 # are pruned first — they outlive their run by design, so nothing else bounds them.
 events_prune "$CHIEF_RUNS" "${CHIEF_EVENTS_KEEP_DAYS:-14}"
 event_emit run.started state=running \
-  detail="base=$BASE_BRANCH parallel=$PARALLEL provider=$PROVIDER automerge=$AUTO_MERGE_MAIN${ACCOUNT_LABEL:+ account=$ACCOUNT_LABEL} names:$NAMES"
+  detail="base=$BASE_BRANCH parallel=$PARALLEL machine_budget=$CHIEF_MACHINE_BUDGET machine_budget_disabled=$CHIEF_MACHINE_BUDGET_DISABLED provider=$PROVIDER automerge=$AUTO_MERGE_MAIN${ACCOUNT_LABEL:+ account=$ACCOUNT_LABEL} names:$NAMES"
 # Reap ORPHANED agent loops left by a prior crashed run on THIS repo. We hold the
 # driver lock, so nothing legitimate is using them.
 #
@@ -3055,6 +3065,7 @@ reap() {   # collect any finished workers, update state
 
 IN_SCHEDULER=1     # from here on, on_stop only RECORDS; stop_check does the work
 drain_said=""      # the mid-run "pause armed, draining" notice is said once
+machine_hold_said=""
 while :; do
   stop_check
   # Mark tasklists whose dep failed as blocked (they can never run).
@@ -3082,6 +3093,24 @@ while :; do
   # worker drains an operator pause at its own safe checkpoints.)
   while ! op_paused && [ "$(pause_until)" -le "$(date +%s)" ] && [ "$(n_running)" -lt "$PARALLEL" ]; do
     launched=""
+    chief_machine_activity "$CHIEF_RUNS"
+    if ! chief_machine_budget_allows; then
+      if [ -z "$machine_hold_said" ]; then
+        machine_hold_said=1
+        echo "  ⏸ machine budget hold — waiting for an agent turn ($CHIEF_MACHINE_AGENT_TURNS/$CHIEF_MACHINE_BUDGET live across the machine)"
+        printf '%s\n' "$(date +%s) HOLD machine budget: $CHIEF_MACHINE_AGENT_TURNS/$CHIEF_MACHINE_BUDGET agent turns live" >> "$STATE/machine-budget.log" 2>/dev/null || true
+      fi
+      # Keep dependency-blocked work distinguishable from work that is ready but
+      # waiting for a machine-wide slot. The live record is intentionally a hold
+      # marker while the coarse scheduler state remains pending.
+      for n in $NAMES; do
+        [ "$(get_state "$n")" = pending ] || continue
+        deps_satisfied "$n" || continue
+        touch_free "$n" || continue
+        live_set "$(live_of "$n")" name="$n" state=pending phase=machine-budget-waiting
+      done
+      break
+    fi
     for n in $NAMES; do
       [ "$(get_state "$n")" = "pending" ] || continue
       deps_satisfied "$n" || continue
@@ -3114,6 +3143,10 @@ while :; do
     # it on work the pause forbids launching would let a few manual pauses silently
     # exhaust the cap. Nothing is lost: branches and worktrees are kept for resume.
     op_paused && break
+    if [ -n "$machine_hold_said" ] && [ -n "$(pending_names)" ]; then
+      stop_sleep "$POLL_SECONDS"
+      continue
+    fi
     limit_resume && continue
     break
   fi
