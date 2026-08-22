@@ -72,8 +72,8 @@
         "The measured outcome is stated in the notes: for a tasklist that finishes green with no rebase, the number of full gate executions between the agent's decision and the merge drops from two to one",
         "A tree that DID change between the agent's verdict and the merge still verifies at merge \u2014 the common case of an agent committing after its own verify must not be optimised into a skip"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Agent-side final verify recorded the committed tree; unchanged-tree merge reused it, reducing the green no-rebase path from two full gate executions to one. bash -n and diff check green; VERSION 0.8.87; shellcheck unavailable."
     },
     {
       "id": "US-5",

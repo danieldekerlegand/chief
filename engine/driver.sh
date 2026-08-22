@@ -2504,6 +2504,9 @@ run_worker() {
           CHIEF_ACCOUNT_ENV_FILE="$ACCOUNT_ENV_FILE" CHIEF_ACCOUNT_LABEL="$ACCOUNT_LABEL" \
           CHIEF_RESEARCH="${CHIEF_RESEARCH:-}" CHIEF_RESEARCH_FILE="$RESEARCH_DIR/$name.md" \
           CHIEF_PRD_SNAPSHOT="$SNAP/$name.json" CHIEF_UNVERIFIED_FILE="$unvmark" \
+          CHIEF_VERIFY_CACHE_STATE="$STATE" CHIEF_VERIFY_TASKS_DIR="$TASKS_DIR" \
+          CHIEF_VERIFY_HOOK="$VERIFY_HOOK" CHIEF_VERIFY_BASE="$work_base" \
+          CHIEF_VERIFY_REPO="$work_repo" \
           "$ENGINE/agent.sh" "$iters" "--chief-run=$CHIEF_RUN_ID" ) && agent_rc=0 || agent_rc=$?
     fi
     # ISOLATION GUARD: the agent must only touch its runtime prd.json (and, for a

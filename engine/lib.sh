@@ -133,8 +133,8 @@ run_verify() {
 # the tree, so the tree is the correctness key. The base commit and verify-hook
 # blob are part of it too. Records are per repository and bounded.
 verify_cache_dir() {
-  local cwd="$1" root
-  root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")"
+  local cwd="$1" root cache_repo="${VERIFY_CACHE_REPO:-$cwd}"
+  root="$(git -C "$cache_repo" rev-parse --show-toplevel 2>/dev/null || echo "$cache_repo")"
   printf '%s/verify-cache/%s' "$STATE" "$(printf '%s' "$root" | cksum | awk '{print $1}')"
 }
 

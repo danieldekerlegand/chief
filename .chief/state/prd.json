@@ -60,7 +60,6 @@
       ],
       "passes": true,
       "notes": "overlap-zones.sh green: approval arriving while the run was in flight was consumed by that run, merged without a second agent turn, and the review zone still held until approval; the existing approved-resume path also reports the exact chief run command and reused the green verdict cache"
-
     },
     {
       "id": "US-4",
@@ -72,8 +71,8 @@
         "The measured outcome is stated in the notes: for a tasklist that finishes green with no rebase, the number of full gate executions between the agent's decision and the merge drops from two to one",
         "A tree that DID change between the agent's verdict and the merge still verifies at merge — the common case of an agent committing after its own verify must not be optimised into a skip"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Agent-side final verify recorded the committed tree; unchanged-tree merge reused it, reducing the green no-rebase path from two full gate executions to one. bash -n and diff check green; VERSION 0.8.87; shellcheck unavailable."
     }
   ]
 }

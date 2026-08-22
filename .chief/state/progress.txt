@@ -61,3 +61,7 @@ Learnings for future iterations: monitor rows must derive human-verdict state fr
 US-3 implemented: reap() now detects an approval written while a worker is still in flight and re-arms that tasklist directly, allowing the same run to rebuild the branch, reuse its green verdict cache, and merge without another agent turn or manually starting a second run. Added an end-to-end overlap-zone regression covering the in-flight approval path; bumped VERSION/README to 0.8.86.
 
 Learnings for future iterations: approval artifacts are the durable handoff between the CLI and scheduler; reap() must validate the request-bound checksum before treating an approval as ready, then requeue only that tasklist so unrelated holds remain parked.
+
+US-4 implemented: the agent now runs the configured final verify after the provider has committed, records its tree-keyed verdict in the shared per-repository cache, and refuses the completion signal when that check fails. The driver passes the merge repository, base, hook, tasklist directory, and cache state so the merge phase can reuse an unchanged green tree. Files changed: engine/agent.sh, engine/driver.sh, engine/lib.sh, VERSION, README.md, and the US-4 state in both PRD copies.
+
+Learnings for future iterations: agent-side cache records must use the worktree's tree SHA but the base repository's identity for the cache namespace; otherwise the merge worktree and agent worktree create separate caches.
