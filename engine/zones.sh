@@ -270,10 +270,51 @@ zones_merge_gate() {
 # Both are `chief approve`'s work, and both live here rather than in bin/chief so the
 # CLI never has to know how a request or a verdict is spelled — the same reason the
 # driver calls zones_merge_gate() instead of assembling the decision itself.
+# A request and its verdict are one durable pair. Removing both together is important:
+# a verdict without its request cannot be matched to a change, and a request without
+# its verdict makes a completed branch look actionable.
+zones_clear_record() {
+  local state="$1" name="$2"
+  rm -f "$(zones_request_file "$state" "$name")" \
+        "$(zones_approval_file "$state" "$name")" 2>/dev/null || true
+}
+
+# zones_branch_status REPO REQUEST — return 0 for a live, unmerged branch, 1 for a
+# stale/deleted branch, and 2 for a branch already contained in its recorded base.
+# This is deliberately checked from the approval listing, not just from the state
+# file: a completed run may leave state=awaiting-approval behind after its ref vanished.
+zones_branch_status() {
+  local repo="$1" req="$2" branch base commit base_commit
+  branch="$(jq -r '.branch // empty' "$req" 2>/dev/null || echo)"
+  base="$(jq -r '.base // empty' "$req" 2>/dev/null || echo)"
+  [ -n "$branch" ] || return 1
+  commit="$(git -C "$repo" rev-parse --verify "refs/heads/$branch^{commit}" 2>/dev/null || echo)"
+  [ -n "$commit" ] || return 1
+  [ -n "$base" ] || return 0
+  base_commit="$(git -C "$repo" rev-parse --verify "$base^{commit}" 2>/dev/null || echo)"
+  [ -n "$base_commit" ] || return 0
+  git -C "$repo" merge-base --is-ancestor "$commit" "$base_commit" 2>/dev/null && return 2
+  return 0
+}
+
 zones_show() {   # $1 = <state>/parallel, $2 = tasklist name
-  local req app change n
+  local req app change n status branch base repo
   req="$(zones_request_file "$1" "$2")"; app="$(zones_approval_file "$1" "$2")"
   [ -s "$req" ] || return 0
+  repo="${CHIEF_PROJECT:-.}"
+  status=0
+  zones_branch_status "$repo" "$req" || status=$?
+  branch="$(jq -r '.branch // "?"' "$req" 2>/dev/null || echo '?')"
+  base="$(jq -r '.base // "?"' "$req" 2>/dev/null || echo '?')"
+  if [ "$status" = 1 ]; then
+    printf '  ! %-28s STALE — branch %s no longer resolves; cleared\n' "$2" "$branch"
+    zones_clear_record "$1" "$2"
+    return 0
+  elif [ "$status" = 2 ]; then
+    printf '  ! %-28s STALE — branch %s is already merged into %s; cleared\n' "$2" "$branch" "$base"
+    zones_clear_record "$1" "$2"
+    return 0
+  fi
   change="$(jq -r '.change // empty' "$req" 2>/dev/null || echo)"
   n="$(cat "$1/$2.state" 2>/dev/null || echo)"
   if zones_approved "$app" "$change"; then

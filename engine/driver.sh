@@ -2830,8 +2830,8 @@ run_worker() {
         # ON the base, and a verdict that outlived its subject can only mislead.
         rm -f "$SNAP/$name.verify-failed.log" "$(unverified_marker "$name")" \
               "$SNAP/$name.rebase-conflict.md" \
-              "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
-              "$(zones_request_file "$STATE" "$name")" "$(zones_approval_file "$STATE" "$name")" 2>/dev/null || true
+              "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
+        zones_clear_record "$STATE" "$name"
         live_set "$live" phase=merged story=
         event_emit tasklist.merged name="$name" state=done detail="$branch --no-ff into $work_base @$sha${sub:+ ($sub)}"
         echo "MERGED @$sha${sub:+ ($sub)}" > "$STATE/$name.status"; echo ">> $name MERGED @$sha${sub:+ in $sub}"

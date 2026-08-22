@@ -87,8 +87,8 @@
         "Adversarially tested: a record whose branch was deleted, one whose branch merged but was not reaped, and one that is genuinely pending must be classified correctly. Clearing a PENDING approval is the dangerous direction and the test must pin it",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "overlap-zones.sh green: merged approvals clear request/verdict artifacts; chief approve --list reports deleted and already-merged branches as STALE and clears them, while a live unmerged branch remains awaiting approval. bash -n, quality ratchet, doc-sync, and version-bump green at VERSION 0.8.88; shellcheck unavailable."
     }
   ]
 }

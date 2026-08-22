@@ -2,7 +2,7 @@
   "project": "chief",
   "category": "fix",
   "branchName": "chief/110-a-green-branch-should-not-be-verified-three-times",
-  "description": "⏱️ **Three already-green branches took over two hours to merge, and nothing was wrong with any of them.** Measured on cuneiform 2026-08-21, a `-p1` run at 2h11m: `353-console-linear-order` merged after **~34 minutes** — a branch that was 4/4 and had been verified GREEN before the run started. `355-multimodal-ingest` sat at 3/3 with **2 merge-phase verifies and 6 agent iterations**; `363-composer-stop-control` at 3/3 with another. The operator's summary: *\"it takes hours and hours to simply complete one single tasklist. Other projects are not like this.\"*\n\n**Re-verification after a rebase is CORRECT and this tasklist does not remove it.** `engine/driver.sh`'s own header states the reason: a branch is *\"REBASED onto the latest main and RE-VERIFIED (verify_branch). File overlap surfaces as a rebase conflict; semantic staleness surfaces as a verify [failure]... There is no correctness knob to get wrong.\"* That is right, and this repo has paid for the alternative.\n\n**What is wasted is verifying a tree that DID NOT CHANGE.** There is no verify-result cache anywhere — `GATE_EXIT`/tree-sha caching appears **0 times** in `engine/driver.sh`. So a rebase that is a fast-forward, or that replays to a byte-identical tree, pays a full gate to re-derive a verdict that provably still holds. On cuneiform a full umbrella gate spans go + desktop + engine; the engine arm alone is the long pole.\n\n**Three multipliers stack on top, and together they are the hours.** (1) The AGENT runs its own full `.chief/verify.sh` to decide a story is done, then chief runs the merge-phase gate again — the same tree, twice, by two different callers. (2) An overlap-zone `review` hold parks the branch until `chief approve`, and **approval does not merge** — `chief approve --list` says *\"the next run merges it\"* — so landing it costs a SECOND run, which rebases onto a main that has since moved and verifies a THIRD time. (3) Merges are serialized on the merge lock, so each branch in a batch rebases onto the previous one's merge and re-verifies; N green branches cost N sequential gates, not one.\n\n**And the operator cannot see any of it.** `chief ps` reported `verifying for 10m` for a branch whose state was `awaiting-approval` — the opposite condition. That single mislabel cost an hour of waiting for something that was waiting on a human. `chief approve --list` had the truth (`state awaiting-approval`) the whole time.",
+  "description": "\u23f1\ufe0f **Three already-green branches took over two hours to merge, and nothing was wrong with any of them.** Measured on cuneiform 2026-08-21, a `-p1` run at 2h11m: `353-console-linear-order` merged after **~34 minutes** \u2014 a branch that was 4/4 and had been verified GREEN before the run started. `355-multimodal-ingest` sat at 3/3 with **2 merge-phase verifies and 6 agent iterations**; `363-composer-stop-control` at 3/3 with another. The operator's summary: *\"it takes hours and hours to simply complete one single tasklist. Other projects are not like this.\"*\n\n**Re-verification after a rebase is CORRECT and this tasklist does not remove it.** `engine/driver.sh`'s own header states the reason: a branch is *\"REBASED onto the latest main and RE-VERIFIED (verify_branch). File overlap surfaces as a rebase conflict; semantic staleness surfaces as a verify [failure]... There is no correctness knob to get wrong.\"* That is right, and this repo has paid for the alternative.\n\n**What is wasted is verifying a tree that DID NOT CHANGE.** There is no verify-result cache anywhere \u2014 `GATE_EXIT`/tree-sha caching appears **0 times** in `engine/driver.sh`. So a rebase that is a fast-forward, or that replays to a byte-identical tree, pays a full gate to re-derive a verdict that provably still holds. On cuneiform a full umbrella gate spans go + desktop + engine; the engine arm alone is the long pole.\n\n**Three multipliers stack on top, and together they are the hours.** (1) The AGENT runs its own full `.chief/verify.sh` to decide a story is done, then chief runs the merge-phase gate again \u2014 the same tree, twice, by two different callers. (2) An overlap-zone `review` hold parks the branch until `chief approve`, and **approval does not merge** \u2014 `chief approve --list` says *\"the next run merges it\"* \u2014 so landing it costs a SECOND run, which rebases onto a main that has since moved and verifies a THIRD time. (3) Merges are serialized on the merge lock, so each branch in a batch rebases onto the previous one's merge and re-verifies; N green branches cost N sequential gates, not one.\n\n**And the operator cannot see any of it.** `chief ps` reported `verifying for 10m` for a branch whose state was `awaiting-approval` \u2014 the opposite condition. That single mislabel cost an hour of waiting for something that was waiting on a human. `chief approve --list` had the truth (`state awaiting-approval`) the whole time.\n\n**Two more bookkeeping defects, measured on cuneiform 2026-08-22 while landing the eight-tasklist render batch (351/353/355/361/362/363/364/365).** (1) A hold record OUTLIVES its branch: `361-run-budget-and-bounce-termination` merged at `dfe69a08c`, was filed to `completed/` and had its branch reaped \u2014 and `chief approve --list` still prints it as `\u2713 APPROVED \u2026 the next run merges it`, quoting a `branch chief/361-\u2026` line for a ref that no longer resolves. It merges nothing and it never clears, so it accumulates: every future listing carries it, and an operator reading the list cannot tell a real pending merge from a fossil. (2) An approval does NOT survive main moving: `362-console-safety-modes` was approved, `365` then merged, and 362 reverted to `awaiting approval` \u2014 a second human decision for a branch already approved, whose rebase onto the new main was CLEAN (`git merge-tree` reported no conflict) and whose re-verify came back GREEN. Both defects push the operator toward approving without reading, which is the one failure mode a review zone exists to prevent.",
   "dependsOn": [],
   "touches": [
     "engine/driver.sh",
@@ -11,7 +11,7 @@
     "docs",
     "VERSION"
   ],
-  "iters": 7,
+  "iters": 9,
   "warmup": [
     "sed -n '20,35p' engine/driver.sh",
     "grep -n 'verify_branch\\|verifying \\$branch\\|phase=verifying' engine/driver.sh",
@@ -25,10 +25,10 @@
       "title": "An unchanged tree is not re-verified",
       "description": "The one safe reduction. A rebase that produces a tree identical to the one already verified cannot have changed the verdict, so re-deriving it is pure cost.",
       "acceptanceCriteria": [
-        "A verify verdict is recorded against the TREE it was computed on (`git rev-parse HEAD^{tree}`, not the commit sha — a rebase rewrites commit shas while leaving the tree identical, which is exactly the case worth catching), together with the base it was verified against and the gate's exit status",
-        "When a branch reaches the merge phase and its post-rebase tree matches a recorded GREEN verdict for the same base, the gate is SKIPPED and the run says so — naming the tree and where the verdict came from, so a reader can tell a skip from a pass",
+        "A verify verdict is recorded against the TREE it was computed on (`git rev-parse HEAD^{tree}`, not the commit sha \u2014 a rebase rewrites commit shas while leaving the tree identical, which is exactly the case worth catching), together with the base it was verified against and the gate's exit status",
+        "When a branch reaches the merge phase and its post-rebase tree matches a recorded GREEN verdict for the same base, the gate is SKIPPED and the run says so \u2014 naming the tree and where the verdict came from, so a reader can tell a skip from a pass",
         "Any difference re-verifies: a different tree, a different base, a non-green prior verdict, or no record at all. The cache is an optimisation over an unchanged input and must never be the reason a real failure is missed",
-        "The record is per-repo and BOUNDED, and is invalidated when `.chief/verify.sh` itself changes — a verdict computed by a different gate is not a verdict about this one. That file's own mtime/sha is part of the key",
+        "The record is per-repo and BOUNDED, and is invalidated when `.chief/verify.sh` itself changes \u2014 a verdict computed by a different gate is not a verdict about this one. That file's own mtime/sha is part of the key",
         "Mutation-check it: change one byte in the tree and confirm the gate RUNS; change the gate script and confirm it runs; leave both identical and confirm it skips. A cache that cannot be shown to miss is not safe to trust",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
@@ -40,10 +40,10 @@
       "title": "`chief ps` never reports a waiting branch as working",
       "description": "The mislabel that cost an hour. The state was `awaiting-approval` and the display said `verifying`.",
       "acceptanceCriteria": [
-        "A branch held at an overlap zone reports a state that names the hold and the action — `awaiting-approval`, with the `chief approve <name>` invocation — in `chief ps`, not only in `chief approve --list`. `ps` is the view an operator watches; a hold invisible there is a hold nobody clears",
+        "A branch held at an overlap zone reports a state that names the hold and the action \u2014 `awaiting-approval`, with the `chief approve <name>` invocation \u2014 in `chief ps`, not only in `chief approve --list`. `ps` is the view an operator watches; a hold invisible there is a hold nobody clears",
         "The phase shown is the phase the branch is IN. `verifying` is never displayed for a branch that is not running a gate, and a test asserts the specific regression: a branch parked at a review zone renders as awaiting approval, never as verifying",
         "The elapsed timer reflects how long it has been WAITING, so `held 2h21m` reads as a queue age rather than as work in progress",
-        "`chief ps` states plainly that approval alone does not merge, wherever it shows an approved-but-unmerged branch — the current `--list` wording (*\"the next run merges it\"*) is correct and is simply not where anyone is looking"
+        "`chief ps` states plainly that approval alone does not merge, wherever it shows an approved-but-unmerged branch \u2014 the current `--list` wording (*\"the next run merges it\"*) is correct and is simply not where anyone is looking"
       ],
       "passes": true,
       "notes": "bash -n and diff check green; test/stall-flag.sh green with awaiting-approval regression, held 13m timer, and approved-hold guidance; test/overlap-zones.sh green; quality-ratchet, doc-sync, and version-bump green at VERSION 0.8.85; shellcheck unavailable."
@@ -51,15 +51,16 @@
     {
       "id": "US-3",
       "title": "Approving a held branch does not require a whole second run to land it",
-      "description": "The third gate per branch comes from the approve→run→rebase→re-verify round trip, on a main that moved while the branch was parked.",
+      "description": "The third gate per branch comes from the approve\u2192run\u2192rebase\u2192re-verify round trip, on a main that moved while the branch was parked.",
       "acceptanceCriteria": [
-        "An APPROVED branch is merged by the run that is already in flight when approval happens, if one is — rather than requiring a fresh `chief run` naming it. The round trip is what forces the extra rebase and the third gate",
+        "An APPROVED branch is merged by the run that is already in flight when approval happens, if one is \u2014 rather than requiring a fresh `chief run` naming it. The round trip is what forces the extra rebase and the third gate",
         "If no run is in flight, `chief approve` states the exact command that will land it, so the two-step is explicit rather than discovered. Silence after an approval is the current behaviour and it reads as done",
-        "A branch approved and then merged in the same run is verified ONCE if its tree did not change (US-1's cache is what makes this true) — the acceptance is on the observable gate count for a batch of N approved green branches, which must not be N gates when nothing moved between them",
-        "Nothing here weakens the zone. A `review` zone still holds until a human approves, however green the gate came back; this story changes only what happens AFTER the human says yes"
+        "A branch approved and then merged in the same run is verified ONCE if its tree did not change (US-1's cache is what makes this true) \u2014 the acceptance is on the observable gate count for a batch of N approved green branches, which must not be N gates when nothing moved between them",
+        "Nothing here weakens the zone. A `review` zone still holds until a human approves, however green the gate came back; this story changes only what happens AFTER the human says yes",
+        "An approval SURVIVES the base moving when the rebase is clean and the re-verify is green. Measured: `362` was approved, `365` merged, and `362` reverted to `awaiting approval` for a rebase `git merge-tree` reported CONFLICT-FREE. Re-asking a human for a decision they already made, because an unrelated branch landed, is what trains an operator to approve without reading. A rebase that CONFLICTS, or a re-verify that comes back red, must still re-ask \u2014 the approval attaches to a reviewed state, not to a name"
       ],
       "passes": true,
-      "notes": "overlap-zones.sh green: approval arriving while the run was in flight was consumed by that run, merged without a second agent turn, and the review zone still held until approval; the existing approved-resume path also reports the exact chief run command and reused the green verdict cache"
+      "notes": "overlap-zones.sh green: approval arriving while the run was in flight was consumed by that run, merged without a second agent turn, and the review zone still held until approval; the approval digest remains valid across a clean base rebase while changed files/zones stay identical, and the existing approved-resume path reports the exact chief run command"
     },
     {
       "id": "US-4",
@@ -67,12 +68,27 @@
       "description": "An agent runs `.chief/verify.sh` to decide a story is done; chief then runs it again at merge. Same script, same tree, two callers.",
       "acceptanceCriteria": [
         "An agent-side verify records its verdict in the same tree-keyed store US-1 introduces, so the merge phase can reuse it when the tree is unchanged rather than re-running the identical gate",
-        "The agent's verify remains available and unchanged in behaviour — it is how a story is decided, and removing it would make the agent guess. This story removes the DUPLICATION, not the check",
+        "The agent's verify remains available and unchanged in behaviour \u2014 it is how a story is decided, and removing it would make the agent guess. This story removes the DUPLICATION, not the check",
         "The measured outcome is stated in the notes: for a tasklist that finishes green with no rebase, the number of full gate executions between the agent's decision and the merge drops from two to one",
-        "A tree that DID change between the agent's verdict and the merge still verifies at merge — the common case of an agent committing after its own verify must not be optimised into a skip"
+        "A tree that DID change between the agent's verdict and the merge still verifies at merge \u2014 the common case of an agent committing after its own verify must not be optimised into a skip"
       ],
       "passes": true,
       "notes": "Agent-side final verify recorded the committed tree; unchanged-tree merge reused it, reducing the green no-rebase path from two full gate executions to one. bash -n and diff check green; VERSION 0.8.87; shellcheck unavailable."
+    },
+    {
+      "id": "US-5",
+      "title": "A hold record does not outlive the branch it holds",
+      "description": "A merged, retired, reaped tasklist still listed as an approved pending merge. The record has no owner and nothing clears it.",
+      "acceptanceCriteria": [
+        "A hold/approval record is CLEARED when its tasklist merges and retires \u2014 at the same site that files the `completed/` record and reaps the worktree, so the three cannot drift apart. `361` merged at `dfe69a08c`, filed, and reaped, and its approval row survived all three",
+        "`chief approve --list` never prints a row whose branch does not resolve. A record whose ref is gone is reported as STALE and dropped, never rendered as `\u2713 APPROVED \u2014 the next run merges it`, which states something the tool cannot do",
+        "The listing distinguishes what a reader needs to act on from what is merely recorded: a row that no run will act on must not look identical to one that the next run merges",
+        "A record for a branch that exists but is ALREADY merged into the base is likewise cleared \u2014 merged-ness is the condition, not branch existence, since a merge that does not reap still leaves nothing to approve",
+        "Adversarially tested: a record whose branch was deleted, one whose branch merged but was not reaped, and one that is genuinely pending must be classified correctly. Clearing a PENDING approval is the dangerous direction and the test must pin it",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
+      ],
+      "passes": true,
+      "notes": "overlap-zones.sh green: merged approvals clear request/verdict artifacts; chief approve --list reports deleted and already-merged branches as STALE and clears them, while a live unmerged branch remains awaiting approval. bash -n, quality ratchet, doc-sync, and version-bump green at VERSION 0.8.88; shellcheck unavailable."
     }
   ]
 }

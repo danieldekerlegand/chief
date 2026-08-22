@@ -275,4 +275,41 @@ OZ_BUDGET=block run_chief "$LOG" bb || fail "the approved block-mode run exited 
 on_main "out/bb/US-1.txt" || fail "the approved over-budget branch did not merge"
 echo "   ok  block: withheld after a green floor, released by the same one approval, merged"
 
+# ══ PART E — stale records are not actionable ================================
+# Exercise the listing independently of a run: these are the three states that
+# used to be rendered alike after a run died between merge, retire and cleanup.
+echo "overlap-zones: PART E — deleted, merged and pending approval records are distinct"
+mkdir -p "$S"
+head_sha="$(git -C "$REPO" rev-parse main)"
+pending_sha="$(printf 'pending branch\n' | git -C "$REPO" commit-tree "$(git -C "$REPO" rev-parse main^{tree})" -p "$head_sha")"
+git -C "$REPO" update-ref refs/heads/chief/pending "$pending_sha"
+for stale in deleted merged pending; do
+  case "$stale" in
+    deleted) branch=chief/deleted; base=main; decision=approved ;;
+    merged)  branch=main; base=main; decision=approved ;;
+    pending) branch=chief/pending; base=main; decision=pending ;;
+  esac
+  jq -n --arg branch "$branch" --arg base "$base" --arg decision "$decision" \
+    '{name:"\($branch)", branch:$branch, base:$base, change:"fixture-\($branch)", files:[], zones:[]}' \
+    > "$(req "$stale")"
+  if [ "$decision" = approved ]; then
+    jq '. + {decision:"approved"}' "$(req "$stale")" > "$(appr "$stale")"
+  fi
+done
+approve --list > "$WORK/stale-list.txt" 2>&1 || fail "stale approval listing exited non-zero"
+grep -q 'deleted.*STALE.*no longer resolves' "$WORK/stale-list.txt" \
+  || { cat "$WORK/stale-list.txt" >&2; fail "deleted branch was not reported STALE"; }
+grep -q 'merged.*STALE.*already merged' "$WORK/stale-list.txt" \
+  || { cat "$WORK/stale-list.txt" >&2; fail "already-merged branch was not reported STALE"; }
+grep -q 'pending.*awaiting approval' "$WORK/stale-list.txt" \
+  || { cat "$WORK/stale-list.txt" >&2; fail "genuinely pending branch was not listed as awaiting approval"; }
+if grep -q 'deleted.*APPROVED\|merged.*APPROVED' "$WORK/stale-list.txt"; then
+  fail "a stale record was rendered as an actionable approval"
+fi
+[ ! -e "$(req deleted)" ] && [ ! -e "$(appr deleted)" ] || fail "deleted branch record was not dropped"
+[ ! -e "$(req merged)" ] && [ ! -e "$(appr merged)" ] || fail "merged branch record was not dropped"
+[ -e "$(req pending)" ] || fail "pending approval was dangerously cleared"
+git -C "$REPO" update-ref -d refs/heads/chief/pending
+ echo "   ok  stale records reported and cleared; pending approval retained"
+
 echo "OVERLAP-ZONES PASS — the policy layer only ever WITHHOLDS: a serialize zone changes nothing, a review zone and an over-budget story hold a rebased + verified-GREEN branch for one durable approval, and warn reports without blocking"
