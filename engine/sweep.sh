@@ -10,12 +10,11 @@
 # own. Chief creates the conditions for all of it and had no matching teardown.
 #
 # The leak is not that `rm -rf $wt` fails to remove a build directory — it removes
-# everything under it. The leak is that worktree removal is BEST-EFFORT at every
-# call site (`wt_git remove --force … 2>/dev/null || true`), and a removal that
-# fails leaves the whole tree standing, build directory included, behind a run that
-# has already finished. Sweeping the heavy directories FIRST means the bytes are
-# reclaimed even when the git removal that follows loses, and it makes that removal
-# cheap instead of a walk over three-quarters of a million files.
+# everything under it. The leak was that worktree removal discarded its diagnostic
+# when it failed, leaving the whole tree standing behind a run that had finished.
+# Sweeping the heavy directories FIRST means the bytes are reclaimed even when the
+# git removal that follows loses, and it makes that removal cheap instead of a walk
+# over three-quarters of a million files; the driver reports any tree still standing.
 #
 # THE RULE — what chief created with the worktree goes with the worktree; what the
 # OPERATOR put there does not. Deliberately NOT Rust-specific: the shape is general
@@ -361,5 +360,80 @@ chief_sweep_disk() {
   else
     echo "chief reap: no collectable build artifacts (${CHIEF_SWEEP_DISK_LIVE} worktree(s) behind a live run, ${CHIEF_SWEEP_DISK_YOUNG} too recently active)"
   fi
+  return 0
+}
+
+# chief_sweep_reclaim_candidate ROOT WORKTREE
+#   Pure path verdict for the startup debt sweep. Only a direct child of a repo
+#   directory under ROOT can be a chief-created worktree; everything else is refused.
+chief_sweep_reclaim_candidate() {
+  local root="${1:-}" wt="${2:-}" rootc wtc rel
+  [ -n "$root" ] && [ -n "$wt" ] || { echo "refuse empty-argument"; return 1; }
+  case "$root:$wt" in /*:/*) ;; *) echo "refuse relative-path"; return 1 ;; esac
+  rootc="$(chief_sweep_canon "$root")"
+  [ -n "$rootc" ] || { echo "refuse invalid-root"; return 1; }
+  [ -L "$wt" ] && { echo "refuse symlink"; return 1; }
+  wtc="$(chief_sweep_canon "$wt")"
+  [ -n "$wtc" ] || { echo "refuse missing"; return 1; }
+  chief_sweep_under "$wtc" "$rootc" || { echo "refuse outside-root"; return 1; }
+  rel="${wtc#"$rootc"/}"
+  case "$rel" in */*/*|''|*/) echo "refuse invalid-worktree-depth"; return 1 ;; esac
+  echo "reclaim $wtc"
+}
+
+# chief_sweep_startup ROOT REPOS CURRENT DRY LIVEFN [MAX]
+# Reclaims complete worktree directories left by earlier runs. REPOS is the
+# host-wide registry; CURRENT is included even when an old registry lacks it.
+# Every repository is pruned before its worktree list is read. The live predicate
+# is injected by reap.sh so a sibling repo's active run is protected too.
+chief_sweep_startup() {
+  local root="${1:-}" repos="${2:-}" current="${3:-}" dry="${4:-}" livefn="${5:-}" max="${6:-${CHIEF_SWEEP_MAX:-100}}"
+  local rootc repo wt refs="" verdict path n=0 bytes=0
+  [ -n "$livefn" ] || return 0
+  rootc="$(chief_sweep_canon "$root")"
+  [ -n "$rootc" ] || return 0
+  case "$max" in ''|*[!0-9]*) max=100 ;; esac
+  for repo in "$current"; do
+    [ -n "$repo" ] && git -C "$repo" worktree prune 2>/dev/null || true
+  done
+  if [ -f "$repos" ]; then
+    while IFS= read -r repo; do
+      [ -n "$repo" ] && git -C "$repo" worktree prune 2>/dev/null || true
+    done < "$repos"
+  fi
+  for repo in "$current"; do
+    [ -n "$repo" ] || continue
+    refs="${refs}$(git -C "$repo" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')"$'\n'
+  done
+  if [ -f "$repos" ]; then
+    while IFS= read -r repo; do
+      [ -n "$repo" ] || continue
+      refs="${refs}$(git -C "$repo" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')"$'\n'
+    done < "$repos"
+  fi
+  for repo in "$rootc"/*; do
+    [ -d "$repo" ] && [ ! -L "$repo" ] || continue
+    for wt in "$repo"/*; do
+      [ -e "$wt" ] || continue
+      verdict="$(chief_sweep_reclaim_candidate "$rootc" "$wt")"
+      case "$verdict" in
+        reclaim\ *)
+          path="${verdict#* }"
+          if printf '%s\n' "$refs" | grep -F -x "$path" >/dev/null 2>&1; then
+            echo ">> startup: $path — LEFT ALONE, referenced by git"; continue
+          fi
+          if "$livefn" "$path"; then echo ">> startup: $path — LEFT ALONE, a live run is behind it"; continue; fi
+          if [ "$n" -ge "$max" ]; then echo ">> startup: bounded at $max worktree(s); left $path"; continue; fi
+          bytes=$(( bytes + $(chief_sweep_bytes "$path") ))
+          echo ">> startup: $([ "$dry" = "-n" ] && echo WOULD-RECLAIM || echo reclaiming) $path"
+          [ "$dry" = "-n" ] || rm -rf -- "$path" 2>/dev/null || true
+          n=$(( n + 1 ))
+          ;;
+        *) echo ">> startup: $wt — ${verdict#* }" ;;
+      esac
+    done
+  done
+  echo "chief startup sweep: $([ "$dry" = "-n" ] && echo WOULD free || echo freed) $(chief_sweep_human "$bytes") across $n unreferenced worktree(s)"
+  CHIEF_SWEEP_STARTUP_BYTES="$bytes"; CHIEF_SWEEP_STARTUP_COUNT="$n"
   return 0
 }

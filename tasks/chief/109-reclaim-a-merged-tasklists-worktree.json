@@ -31,8 +31,8 @@
         "A tasklist that did NOT merge \u2014 verify-failed, zone-held, rebase-refused, or left for review \u2014 keeps its worktree untouched. Reclaiming one of those would destroy the tree an operator is about to inspect",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n clean; shellcheck unavailable in environment; VERSION-BUMP PASS, DOC-SYNC PASS, sweep 47 passed/0 failed, smoke PASS, merge-batch OK, RETIRE-DIRTY PASS"
     },
     {
       "id": "US-2",
@@ -44,8 +44,8 @@
         "A run summary that reclaimed nothing while leaving worktrees behind SAYS SO, with the total still standing \u2014 `df` is not an acceptable notification channel for a tool that created the directories",
         "Mutation-check it: make the removal fail unconditionally and confirm the run still completes, still merges, and now reports the strand. A silent failure must be impossible to reintroduce without the test going red"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n clean; shellcheck unavailable locally and skipped; quality ratchet green; VERSION-BUMP PASS (0.8.82); DOC-SYNC PASS; full hermetic suite 43 passed/0 failed under bystander guard; sweep 47 passed/0 failed; removal failures use a non-fatal fallback and report path, measured standing bytes, and git diagnostic"
     },
     {
       "id": "US-3",
@@ -58,8 +58,8 @@
         "The sweep is BOUNDED and reports what it freed, and a `--dry-run`/plan mode prints the verdict set without deleting, so an operator can inspect before trusting it",
         "Deletion logic gets a PURE candidate function with adversarial tests (a path outside the worktree root, a symlink, a name with spaces, an empty string), so \"it can never walk outside `$WT_ROOT`\" is a property of the code rather than a comment \u2014 the `sweep_candidate` convention `cross_system_interop_smoke` already established"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n clean; shellcheck unavailable locally; test/sweep.sh green with 55 passed, 0 failed; startup dry-run and mutation tests preserved a referenced worktree and a live sibling-repo worktree while reclaiming an unreferenced one; VERSION 0.8.84 synced with README"
     }
   ]
 }

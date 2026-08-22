@@ -163,5 +163,31 @@ CHIEF_SWEEP=0 chief_sweep_disk "$DWTS" 0 '' fake_live >/dev/null 2>&1
 CHIEF_SWEEP_STAT_MODE="-" chief_sweep_disk "$DWTS" 0 '' fake_live >/dev/null 2>&1
 [ -f "$DWTS/repo-77/stale-tl/target/blob" ] && ok || fail "an unknowable mtime was read as old"
 
-echo "sweep: $pass passed, $nfail failed"
+# ── 7. startup debt: references are collected across every repository ─────────
+SW="$WORK/startup"; mkdir -p "$SW/root/repo-a" "$SW/root/repo-b" "$SW/repo-a"
+GITREPO="$SW/repo-a/source"; mkdir -p "$GITREPO"
+git -C "$GITREPO" init -q
+ git -C "$GITREPO" config user.email test@example.invalid
+ git -C "$GITREPO" config user.name test
+printf source > "$GITREPO/file"; git -C "$GITREPO" add file; git -C "$GITREPO" commit -qm initial
+REF="$SW/root/repo-a/live with spaces"; git -C "$GITREPO" worktree add -q "$REF" -b startup-ref HEAD
+mkdir -p "$SW/root/repo-a/stale/target" "$SW/root/repo-b/live-other/target"
+printf stale > "$SW/root/repo-a/stale/target/blob"
+printf live > "$SW/root/repo-b/live-other/target/blob"
+REPOS="$SW/repos"; printf '%s\n' "$GITREPO" > "$REPOS"
+startup_live() { case "${1##*/}" in live-other) return 0 ;; *) return 1 ;; esac; }
+out="$(chief_sweep_startup "$SW/root" "$REPOS" '' -n startup_live 20 2>&1)"
+case "$out" in *WOULD-RECLAIM*stale*) ok ;; *) fail "startup dry run did not name stale worktree: $out" ;; esac
+[ -d "$SW/root/repo-a/stale" ] && ok || fail "startup dry run deleted stale worktree"
+[ -d "$REF" ] && ok || fail "startup dry run lost referenced worktree"
+chief_sweep_startup "$SW/root" "$REPOS" '' '' startup_live 20 >/dev/null 2>&1
+[ -d "$SW/root/repo-a/stale" ] && fail "startup sweep left unreferenced worktree" || ok
+[ -d "$REF" ] && ok || fail "startup sweep deleted referenced worktree"
+[ -d "$SW/root/repo-b/live-other" ] && ok || fail "startup sweep deleted sibling live worktree"
+# Pure candidate adversarial paths, including a symlink and an empty argument.
+ln -s "$REF" "$SW/root/repo-a/link"
+expect "refuse worktree-is-a-symlink" "startup symlink" "$SW/root" "$SW/root/repo-a/link" "$SW/root/repo-a/link"
+expect "refuse empty-argument" "startup empty path" "$SW/root" "$REF" ""
+
+ echo "sweep: $pass passed, $nfail failed"
 [ "$nfail" -eq 0 ] || exit 1

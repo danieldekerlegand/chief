@@ -1,301 +1,43 @@
-# Chief Progress — 108-concurrency-is-machine-wide
-Started: Fri Aug 21 23:27:42 CDT 2026
+# Chief Progress — 109-reclaim-a-merged-tasklists-worktree
+Started: Fri Aug 21 23:56:56 CDT 2026
 ---
 
-## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
-```
-doc-links: 0 dead vs 0 on main
-verify: quality — ratchet (engine/quality.sh, deltas vs main)
-chief quality: ratchet — measuring 11 changed path(s) on HEAD and at main
-quality: scope — the 7 changed source file(s), HEAD vs main (5 file(s) new on this branch — no base version, deferred to the baseline axis)
-quality:   ok     duplicate_blocks              0 -> 0        (delta 0      tol 0)
-quality:   ok     duplicate_line_pct            0 -> 0        (delta 0      tol 1)
-quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
-quality:   ok     function_length_max         557 -> 557      (delta 0      tol 15)
-quality:   ok     function_length_mean      20.96 -> 20.67    (delta -0.29  tol 5)
-quality:   ok     single_use_functions         58 -> 57       (delta -1     tol 2)
-quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
-quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
-quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
-quality: OK — no tracked metric regressed (allowing)
-verify: shell — bash -n
-verify: shellcheck not installed — skipping (CI enforces it)
-verify: policy — VERSION bump (test/version-bump.sh)
-VERSION-BUMP PASS — VERSION (0.8.83) covers every engine/bin change on HEAD
-verify: behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)
-bystander: decoy run up — driver pid 22135, agent pid 22146, run bystander-sibling-3853995723-1700-22135
-bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.rYAuoMfIEI/decoy/runs, which no test below can read
-bystander: [1/43] test/smoke.sh
-  smoke| SMOKE PASS — install → init → dry-run honoured → agent loop → verify → merge → completed + $HOME-init guard (offline)
-bystander: [2/43] test/provider-conformance.sh
-  provider-conformance| provider-conformance: roster-drift guard OK — agent.sh, bin/chief and this harness agree: amp claude codex devin opencode 
-  provider-conformance| provider-conformance: claude — argv · stdin prompt · model:wired
-  provider-conformance| provider-conformance: devin — argv · prompt-file prompt · model:wired
-  provider-conformance| provider-conformance: opencode — argv · stdin prompt · model:wired
-  provider-conformance| provider-conformance: amp — argv · stdin prompt · model:unwired
-  provider-conformance| provider-conformance: codex — argv · stdin prompt · model:wired
-  provider-conformance| provider-conformance: CLI surface OK — a --<provider> shorthand for each, and every unwired provider refuses --model
-  provider-conformance| PROVIDER-CONFORMANCE PASS — 5 providers: argv, prompt channel, model stance (wired propagates, unwired refuses), shorthand, completion; validators in lockstep
-bystander: [3/43] test/ratelimit.sh
-  ratelimit| ratelimit: detection fixtures (exit 2 = limit, exit 1 = stall)
-  ratelimit|    ok  exit 2  ← --print epoch form
-  ratelimit|    ok  exit 2  ← reset-time sentence
-  ratelimit|    ok  exit 2  ← 5-hour window
-  ratelimit|    ok  exit 2  ← weekly window
-  ratelimit|    ok  exit 2  ← second person
-  ratelimit|    ok  exit 2  ← structured 429 body
-  ratelimit|    ok  exit 2  ← terse 429 + rc!=0
-  ratelimit|    ok  exit 1  ← no-progress turn
-  ratelimit|    ok  exit 1  ← non-limit CLI error
-  ratelimit|    ok  exit 1  ← 429 text, rc=0
-  ratelimit| ratelimit: reset-ETA parse (relative windows must not sleep the 60min fallback)
-  ratelimit|    ok  ~17min  ← devin throughput window (16 min)
-  ratelimit|    ok  ~1min  ← retry in 30 seconds
-  ratelimit|    ok  ~6min  ← try again in 5 min
-  ratelimit|    ok  ~61min  ← reset in 1 hour
-  ratelimit|    -- skipped: within 2h of midnight, 'later today' is not assertable
-  ratelimit|    ok  ~60min  ← no window stated → fallback
-  ratelimit|    ok  ~60min  ← prose duration must not arm the timer
-  ratelimit| RATELIMIT PASS — parallel driver kept the sleeping worker alive; agent slept ~6s then resumed → merged
-bystander: [4/43] test/limitstate.sh
-  limitstate| LIMITSTATE PASS — usage limit → 'rate-limited' (dependent stays schedulable); genuine stall → 'failed' (dependent blocked)
-bystander: [5/43] test/limitresume.sh
-  limitresume| limitresume: PART A — a limit-interrupted run heals itself
-  limitresume|    ok  paused, waited ~10s, resumed at story 2, merged
-  limitresume| limitresume: PART B — a limit that never lifts is bounded, not a hang
-  limitresume|    ok  backed off once, capped at 1 re-dispatch each, ended cleanly in 10s
-  limitresume| LIMITRESUME PASS — the driver waits out a usage limit and re-dispatches (bounded, reset-aware, no thrash)
-bystander: [6/43] test/limitmonitor.sh
-  limitmonitor| --- chief ps (synthetic paused run) ---
-  limitmonitor| CHIEF · 1 active run(s) · ⚠ 1 unregistered · 2026-08-21 23:21:48
-  limitmonitor| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 3.48 / 1 physical core(s) · OVERSUBSCRIBED
-  limitmonitor| 
-  limitmonitor| repo  (pid 86381 · -p2 · claude · 0s · →main)
-  limitmonitor|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.PPBCmfclXu/repo
-  limitmonitor|    ⏸ pause-eta              paused    ?/?     chief/pause-eta
-  limitmonitor|        ↳ paused: usage limit — retry at 23:36 (15m) · re-dispatch 1/3
-  limitmonitor|    ⏸ pause-noeta            paused    ?/?     chief/pause-noeta
-  limitmonitor|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3
-  limitmonitor|    ● work-run               running   ?/?     chief/work-run
-  limitmonitor|    ✗ dead-fail              failed    ?/?     chief/dead-fail
-  limitmonitor|    ⤬ dead-block             blocked   ?/?     chief/dead-block
-  limitmonitor| 
-  limitmonitor| ⚠ 1 unregistered driver(s) — alive, but missing from the run registry (/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.PPBCmfclXu/runs):
-  limitmonitor|    ⚠ cuneiform  (pid 72315 · run cuneiform-2849022191-1787368190-72315)
-  limitmonitor|      /Users/dldekerlegand/Development/cuneiform
-  limitmonitor|        ↳ in flight: 201-tool-grant-deployment-validator done
-  limitmonitor|        ↳ in flight: 210-run-step-through-and-state-inspect running
-  limitmonitor|        ↳ in flight: 211-runtime-cost-caps  pending
-  limitmonitor|        ↳ in flight: 212-durable-hashchain-audit-log pending
-  limitmonitor|        ↳ in flight: 213-agent-eval-ab-harness pending
-  limitmonitor|        ↳ in flight: 215-policy-as-code-governance pending
-  limitmonitor|        ↳ in flight: 220-model-router       pending
-  limitmonitor|        ↳ in flight: 221-inference-server-pool-mgmt pending
-  limitmonitor|        ↳ in flight: 222-hf-hub-discovery-and-bulk-models pending
-  limitmonitor|        ↳ in flight: 223-inference-dashboard-playground pending
-  limitmonitor|        ↳ in flight: 232-org-state-backup-dr pending
-  limitmonitor|        ↳ in flight: 233-ir-schema-versioning-migration pending
-  limitmonitor|        ↳ in flight: 234-agent-versioning-conflict-adr pending
-  limitmonitor|        ↳ in flight: 241-coding-session-sso-provisioning pending
-  limitmonitor|        ↳ in flight: 243-agent-sandboxing-security-gate pending
-  limitmonitor|        ↳ in flight: 265-offline-resilience-hardening pending
-  limitmonitor|        ↳ in flight: 281-hardware-constraint-solver-binpacking pending
-  limitmonitor|        ↳ in flight: 282-ir-retarget-contract-and-conformance pending
-  limitmonitor|        ↳ in flight: 283-nixos-bare-metal-vpn-topology-target pending
-  limitmonitor|        ↳ in flight: 284-k8s-target-helm-crossplane pending
-  limitmonitor|        ↳ in flight: 285-score-workload-spec-adoption pending
-  limitmonitor|        ↳ in flight: 290-per-language-sandbox-agent-provisioning pending
-  limitmonitor|        ↳ in flight: 291-roadmap-to-chief-tasklists pending
-  limitmonitor|        ↳ in flight: 292-chief-run-opencode-local-inference pending
-  limitmonitor|        ↳ in flight: 293-tasklist-to-pm-kanban-sync pending
-  limitmonitor|        ↳ in flight: 294-coding-agents-chat-a2a-coordination pending
-  limitmonitor|        ↳ in flight: 295-chief-cloud-cross-container-progress pending
-  limitmonitor|        ↳ in flight: 317-workforce-adopt-sdk-and-clients pending
-  limitmonitor|        ↳ in flight: 330-tessera-ir-surfaces pending
-  limitmonitor|        ↳ in flight: 331-tessera-mesh-a2a-transport pending
-  limitmonitor|        ↳ in flight: 332-tessera-partitioning pending
-  limitmonitor|        ↳ in flight: 333-tessera-edge-node-nix pending
-  limitmonitor|        ↳ in flight: 334-tessera-probe-publication pending
-  limitmonitor|        ↳ in flight: 335-tessera-escalation-executor pending
-  limitmonitor|        ↳ in flight: 336-tessera-context-adoption pending
-  limitmonitor|        ↳ in flight: 341-nixos-fleet-deploy-leg pending
-  limitmonitor|        ↳ in flight: 366-entry-stage-reads-an-empty-artifact-map pending
-  limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
-  limitmonitor|        ↳ stop it:  kill 72315    then:  chief reap    (reaps whatever it leaves behind)
-  limitmonitor| LIMITMONITOR PASS — a usage-limit pause renders as 'paused: usage limit — retry at 23:36 · re-dispatch 1/3', distinct from running/failed/blocked
-bystander: [7/43] test/pause.sh
-  pause| pause: PART A — a pre-armed repo runs no agent turn
-  pause|    ok  0 agent calls, exit 0, flag survived launch init, no retry budget spent
-  pause| pause: PART B — a pause armed mid-run drains, it does not kill
-  pause|    ok  1 iteration ran to completion, committed, parked with branch + worktree kept
-  pause| pause: PART C — resume re-arms the park and continues where it stopped
-  pause|    ok  resumed at story 2, verified, merged, retired
-  pause| pause: PART D — chief ps distinguishes an operator pause from a usage limit
-  pause| --- chief ps (both holds armed) ---
-  pause| CHIEF · 1 active run(s) · 2026-08-21 23:21:59
-  pause| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 5.15 / 1 physical core(s) · OVERSUBSCRIBED
-  pause| 
-  pause| mrepo  (pid 98926 · -p2 · claude · 0s · →main)
-  pause|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.iFodcZjVwD/mrepo
-  pause|    ⏸ OPERATOR PAUSE armed 0s ago — no tasklist launches, no new agent iterations · lift: chief resume
-  pause|      ↳ draining: work-run — each stops at its next iteration boundary, then parks
-  pause|    ⏸ usage-limit window until 23:36 (15m) — Chief waits this one out itself
-  pause|      ↳ BOTH holds are armed — lifting either one alone changes nothing
-  pause|    ⏸ op-park                paused-op ?/?     chief/op-park
-  pause|        ↳ paused: operator hold (chief pause) — armed 23:21 · branch + worktree kept · resume: chief resume · usage-limit window also armed until 23:36
-  pause|    ⏸ limit-wait             paused    ?/?     chief/limit-wait
-  pause|        ↳ paused: usage limit — retry at 23:36 (15m) · re-dispatch 0/3
-  pause|    ● work-run               running   ?/?     chief/work-run
-  pause|    ok  both ⏸, different notes, and the header names both holds
-  pause| PAUSE PASS — an operator pause drains at a safe checkpoint, parks with branch + worktree kept, resumes from committed state, and is legible in chief ps
-bystander: [8/43] test/plan-review.sh
-  plan-review| plan-review: PART A — no reviewer parks the tasklist and never blocks the scheduler
-  plan-review|    ok  1 plan turn, no code, parked awaiting-review, plan banked, sibling merged
-  plan-review| plan-review: PART B — an approval implements exactly that plan, and is asked for once
-  plan-review|    ok  asked once, implemented the approved plan, verified, merged, verdict banked
-  plan-review| plan-review: PART C — a rejection re-plans with the annotations, bounded by the budget
-  plan-review|    ok  re-planned with the annotations, stopped at 2 rounds, parked, no code written
-  plan-review| plan-review: PART D — what counts as 'no reviewer', and what an approval covers
-  plan-review|    ok  five ways to have no reviewer, and an approval that covers exactly one plan
-  plan-review| PLAN-REVIEW PASS — an unapproved plan never becomes code: it parks (siblings run on), a later approval resumes it, and a rejection re-plans within its budget
-bystander: [9/43] test/research.sh
-  research| research: PART A — produced once, persisted, and carried into both stories
-  research|    ok  1 research turn, 4 sections, persisted, both stories briefed, opt-out paid nothing
-  research| research: PART B — reused on resume (zero second turn), and hand-editable
-  research|    ok  resumed with zero research turns, and the hand-edited map is what US-2 read
-  research| research: PART C — what validates, what does not, and who decides to run it
-  research|    ok  empty sections fail, a prefix heading passes, and the override beats the tasklist both ways
-  research| RESEARCH PASS — the map is bought once per tasklist, validated against its four required sections, banked outside the worktree, reused by every story and by a resumed run, and a hand-edited map is what the next story reads
-bystander: [10/43] test/liveliness.sh
-  liveliness| liveliness: part 1 — the record
-  liveliness|    ok  atomic write · unquoted numbers · heartbeat bumps · phase_since pinned to the phase
-  liveliness| liveliness: part 2 — a real run
-  liveliness|    ok  mid-turn record: state=running phase=provider-waiting story=US-1 iter=1
-  liveliness|    ok  mid-run `chief ps`: phase · story · iter · age, ANSI-free when piped
-  liveliness|    ok  post-run: state=done phase=merged, record uncommitted + gitignored
-  liveliness| liveliness: part 3 — the rendering
-  liveliness| --- chief ps (synthetic: fresh · stalled · paused · no-record) ---
-  liveliness| CHIEF · 1 active run(s) · 2026-08-21 23:22:55
-  liveliness| Machine activity: 1 live run(s) · 2 agent turn(s) · 0 gate(s) · load average: 13.42 / 1 physical core(s) · OVERSUBSCRIBED
-  liveliness| 
-  liveliness| mrepo  (pid 50207 · -p4 · claude · 0s · →main)
-  liveliness|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.3sJyBHfJfB/mrepo
-  liveliness|    ● work-fresh             running   2/4     chief/work-fresh
-  liveliness|        ↳ agent-turn for 1m · US-2 · iter 3 · 30s ago
-  liveliness|    ⚠ work-hung              running   1/5     chief/work-hung
-  liveliness|        ↳ agent-turn for 40m · US-9 · iter 7 · no progress last iter (2) · ⚠ stalled in agent-turn — no activity for 40m, past its 15m limit
-  liveliness|    ⏸ pause-eta              paused    1/4     chief/pause-eta
-  liveliness|        ↳ paused: usage limit — retry at 23:37 (15m) · re-dispatch 1/3 · paused 40m · 40m ago
-  liveliness|    ● norecord               running   ?/?     chief/norecord
-  liveliness| LIVELINESS PASS — record written atomically + emitted by a real run; `chief ps` shows phase/story/iter/age, flags a 40m-quiet run as stalled (knob: CHIEF_STALE_SECONDS), and keeps a usage-limit pause reading as 'paused … retry at 23:37'
-bystander: [11/43] test/teardown.sh
-  teardown| teardown: part 1 — interrupt mid-iteration (reap first, forget second)
-  teardown|    ok  SIGINT to group 52346: tree reaped (agent.sh · tool · its child, TERM→KILL) then records released — 61 ordered samples, 0 violations
-  teardown| teardown: part 2 — a SIGKILLed driver leaves a tree that argv cannot find
-  teardown|    ok  orphaned agent.sh + tool + child: invisible to the old argv sweep, found and stopped by the reaper
-  teardown| teardown: part 3 — a LIVE driver with no run file is reported, not hidden
-  teardown|    ok  unregistered driver named with its repo + in-flight tasklist; a second driver refused; SIGTERM reaped the tree
-  teardown| teardown: part 4 — an escaped, detached descendant, reaped by the inherited marker
-  teardown|    ..  this platform will not show another process's environment; the platform READ is scripted from the decoys' own $CHIEF_RUN_ID, every gate below it is real
-  teardown|    ok  live registered run: its tree and the marker-carrying escapee are all protected
-  teardown|    ok  escaped descendant found by $CHIEF_RUN_ID alone and stopped; its unmarked twin and an operator's shell untouched
-  teardown| TEARDOWN PASS — Ctrl-C reaps the tree before releasing the records (never the reverse); a SIGKILLed run's boring-argv tree is still found and stopped; a live driver with no run file is reported, not hidden; and the descendant that walked out of the worktree is reaped by the marker it inherited
-bystander: [12/43] test/reapscope.sh
-  reapscope| REAPSCOPE PASS — orphans found by cwd + run marker (never by argv paths); live runs, lock-holding drivers and a developer's own claude untouched; repo scoping holds; an unscoped sweep out of a foreign registry is refused; the disk pass collects a stale worktree's build dirs and spares a live run's
-bystander: [13/43] test/reapenv.sh
-  reapenv| REAPENV SKIP (end-to-end) — this platform will not show another process's environment, so key 3 is inert here and cannot be exercised. The gates were still checked as units above; CI runs the full half on Linux.
-  reapenv| REAPENV PASS — the inherited marker reaps only what it names: a live run's marker, an unparseable one and an operator's shell are all spared; cwd matches and the before/after protected set are untouched
-bystander: [14/43] test/sweep.sh
-  sweep| sweep: 47 passed, 0 failed
-bystander: [15/43] test/noworkguard.sh
-  noworkguard| NOWORK PASS — false-complete (COMPLETE + zero commits) caught as EMPTY-NO-WORK; not merged, not retired
-bystander: [16/43] test/evidence-gate.sh
-  evidence-gate| EVIDENCE PASS — a force-passed story with empty notes fails as UNVERIFIED (story + criterion quoted); self-reported and evidenced work still merges
-bystander: [17/43] test/criteria-scope.sh
-  criteria-scope| SCOPE PASS — an undeclared cross-repo criterion fails as UNSATISFIABLE before any agent turn (story + criterion + hatch named); declared and local work still merges
-bystander: [18/43] test/measured-bars.sh
-  measured-bars| MEASURE PASS — a claimed bar with no observed value is 'unverified', not passing (story + bar + criterion quoted); the stop is recorded for the resume, re-engages the agent on exactly those bars, and is cleared by the merge, while an all-pass branch with no marker still merges agent-free
-bystander: [19/43] test/unverified-resume.sh
-  unverified-resume| UNVERIFIED-RESUME PASS — reproduced on the un-fixed engine (re-run: 0 agent turns, UNVERIFIED twice), closed on the shipped one (re-engaged, told the bar, MERGED), with a finished all-pass branch still merging agent-free and a never-recorded value bounded by the demote limit
-bystander: [20/43] test/boundary-demotion.sh
-  boundary-demotion| BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, the next turn's PROMPT names it and quotes its bar, an evidenced re-mark counts as progress, a story demoted twice running ends the run instead of spinning, and the merge floor still catches a last-turn marking
-bystander: [21/43] test/five-cases.sh
-  five-cases| five-cases: 9 replayed tasklists in 50s wall-clock (the gates' own share is milliseconds — see below)
-  five-cases| five-cases: 5 passes of measure_gate + criteria_scope_report over gr-104.json: 1s
-  five-cases| FIVE-CASES PASS — all five recorded failures now fail (2 before any agent turn); 344/349 and a measured 104 still merge; 104-as-recorded is the one stated cost
-bystander: [22/43] test/stall-flag.sh
-  stall-flag| stall-flag: part 1 — the exempt/flagged table
-  stall-flag| stall-flag: part 2 — the exemption expires
-  stall-flag| stall-flag: part 3 — the flag names the state and its limit
-  stall-flag| stall-flag: part 4 — a dead worker is not a quiet one
-  stall-flag| stall-flag: part 5 — chief ps and chief monitor
-  stall-flag| --- chief ps (quiet-by-design · not-exempt · past-the-ceiling · re-tuned · gone) ---
-  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 23:27:27
-  stall-flag| Machine activity: 1 live run(s) · 4 agent turn(s) · 1 gate(s) · load average: 4.80 / 1 physical core(s) · OVERSUBSCRIBED
-  stall-flag| 
-  stall-flag| mrepo  (pid 82232 · -p3 · claude · 0s · →main)
-  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.8OHYrR5hL8/mrepo
-  stall-flag|    ● limit-wait             running   1/4     chief/limit-wait
-  stall-flag|        ↳ rate-limited-waiting for 40m · US-1 · iter 2 · 40m ago
-  stall-flag|    ⚠ prov-wait              running   1/4     chief/prov-wait
-  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 2 · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
-  stall-flag|    ⚠ limit-dead             running   1/4     chief/limit-dead
-  stall-flag|        ↳ rate-limited-waiting for 6h40m · US-1 · iter 2 · ⚠ stalled in rate-limited-waiting — no activity for 6h40m, past its 6h30m limit
-  stall-flag|    ● gate-wait              running   1/4     chief/gate-wait
-  stall-flag|        ↳ verifying for 40m · US-1 · iter 2 · 40m ago
-  stall-flag|    ✗ worker-off             gone      1/4     chief/worker-off
-  stall-flag|        ↳ agent-turn for 1m · US-1 · iter 2 · ✗ dead — its worker pid is gone and left no verdict · chief reap
-  stall-flag| stall-flag: part 6 — elapsed-in-phase in every arm, from phase_since
-  stall-flag| --- chief ps (running · rate-limited · operator-paused · in-review · zone-hold) ---
-  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 23:27:29
-  stall-flag| Machine activity: 1 live run(s) · 2 agent turn(s) · 0 gate(s) · load average: 4.98 / 1 physical core(s) · OVERSUBSCRIBED
-  stall-flag| 
-  stall-flag| mrepo  (pid 82232 · -p3 · claude · 2s · →main)
-  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.8OHYrR5hL8/mrepo
-  stall-flag|    ● held-run               running   1/4     chief/held-run
-  stall-flag|        ↳ agent-turn for 40m · US-3 · iter 2 · 0s ago
-  stall-flag|    ⏸ held-limit             paused    1/4     chief/held-limit
-  stall-flag|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3 · paused 25m · 0s ago
-  stall-flag|    ⏸ held-op                paused-op 1/4     chief/held-op
-  stall-flag|        ↳ paused: operator hold — the flag is already lifted; 'chief resume' re-arms this as pending · branch + worktree kept · resume: chief resume · parked 1h01m · 0s ago
-  stall-flag|    ⏸ held-review            in-review 1/4     chief/held-review
-  stall-flag|        ↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept · held 3h10m · approve it, then: chief run
-  stall-flag|    ⏸ held-zone              zone-hold 1/4     chief/held-zone
-  stall-flag|        ↳ awaiting approval: rebased + verified GREEN, held at engine (1 changed file(s)) · held 13m · approve: chief approve held-zone
-  stall-flag| stall-flag: part 7 — 'no progress last iter' vs the at-risk flag
-  stall-flag| --- chief ps (spent budget · early · no-budget · quiet-and-counting) ---
-  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 23:27:31
-  stall-flag| Machine activity: 1 live run(s) · 4 agent turn(s) · 0 gate(s) · load average: 4.98 / 1 physical core(s) · OVERSUBSCRIBED
-  stall-flag| 
-  stall-flag| mrepo  (pid 82232 · -p3 · claude · 4s · →main)
-  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.8OHYrR5hL8/mrepo
-  stall-flag|    ● spent-budget           running   1/4     chief/spent-budget
-  stall-flag|        ↳ agent-turn for 30s · US-1 · iter 4 · no progress last iter (2/2) · 30s ago
-  stall-flag|    ● early-stall            running   1/4     chief/early-stall
-  stall-flag|        ↳ agent-turn for 30s · US-1 · iter 4 · no progress last iter (1/5) · 30s ago
-  stall-flag|    ● old-record             running   1/4     chief/old-record
-  stall-flag|        ↳ agent-turn for 30s · US-1 · iter 4 · no progress last iter (2) · 30s ago
-  stall-flag|    ⚠ really-quiet           running   1/4     chief/really-quiet
-  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 4 · no progress last iter (1/2) · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
-  stall-flag| stall-flag: part 8 — two no-progress iterations
-  stall-flag| agent-turn
-  stall-flag| provider-waiting
-  stall-flag| agent-turn
-  stall-flag| integrating
-  stall-flag| agent-turn
-  stall-flag| provider-waiting
-  stall-flag| agent-turn
-  stall-flag| stalled
-  stall-flag| integrating
-  stall-flag| STALL-FLAG FAIL: the boundary does not read stalled → integrating → agent-turn → the next turn
-BYSTANDER FAIL: test/stall-flag.sh failed (its output is above)
-verify: BLOCK — behavioral tests failed (see above)
-```
+## BASE INTEGRATION RESOLVED
 
-## Verification repair
-Updated `test/stall-flag.sh` so the phase drift table classifies `machine-budget-waiting` as quiet by design, matching `engine/monitor.sh`. This clears the prior verification failure without changing the completed stories.
+`chief/109-reclaim-a-merged-tasklists-worktree` is **31 commit(s) behind** its base `main` (@bebc6a3) and
+chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
+your branch is exactly as it was and nothing is lost — but it cannot merge
+until the base is integrated, and every commit that lands on `main` while
+this is unresolved makes it worse.
 
-Learnings for future iterations: when adding a live-record phase, update the monitor policy's quiet/flagged classification table and its drift-guard fixture together; otherwise the behavior can be correct while the exhaustive stall test rejects the new phase.
+**Your first task this iteration is to integrate the base yourself:**
 
-## Verification repair confirmed
-The previously recorded `test/stall-flag.sh` failure is cleared: `.chief/verify.sh` completed the full 43-test behavioral gate, including stall-flag, with quality, version, documentation, and tasklist checks all green. No unfinished stories remain.
+1. `git rebase main` in this worktree.
+2. At each stop, resolve the conflicts keeping BOTH sides' intent — the
+   `main` side is already-merged work, so never discard it, and never
+   discard your own — then `git add <files>` and `git rebase --continue`.
+   `git rebase --abort` returns you to exactly this state if you need it.
+3. Re-run the project's quality gates and make them green.
+
+Rebase, not `git merge main`: chief rebases this branch again at merge time,
+and a rebase drops merge commits and replays the originals — a resolution
+recorded in a merge commit would be thrown away and this conflict would come
+straight back. Resolving inside the rebase puts the fix in your own commits.
+
+Then continue the normal loop: pick the highest-priority story with
+`passes:false` and implement it. The integration is NOT a user story — do not
+flip any story's `passes` for it, and do not report completion until the
+stories themselves are really done.
+
+## Conflicting paths
+- README.md
+- VERSION
+
+base: main @bebc6a3 · behind: 31 commit(s) · branch: chief/109-reclaim-a-merged-tasklists-worktree
+(full note: .chief/state/INTEGRATE-BASE.md)
+
+## US-3 — startup reclamation of stranded worktrees
+
+Rebased the branch onto main, preserving both branches' README/VERSION intent. Added a bounded host-wide startup sweep in `engine/sweep.sh`, invoked by `engine/driver.sh` after pruning. It prunes every known repository before collecting git worktree references, protects referenced and live sibling-repo worktrees, supports `CHIEF_SWEEP_STARTUP_DRY_RUN=1`, and uses a pure path candidate check before deleting unreferenced trees. Added adversarial and cross-repository fixtures to `test/sweep.sh`; VERSION/README are 0.8.84.
+
+Learnings for future iterations: startup cleanup must treat the shared worktree root as a fleet, not a repo-local directory; pruning and reference collection must happen for every registered repository before any deletion, and dry-run plus a bounded cap are essential safety controls.
