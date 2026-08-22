@@ -67,7 +67,8 @@
         "Where a decision's outcome is an ADR, the agent may draft it, but the draft carries the operator's verdict rather than asserting one of its own. Several parked tasklists across the portfolio are exactly this shape — an ADR nobody can write until a person chooses.",
         "Documented in `docs/reference/` as its own page, covering the decision class, the interactive loop, `chief decide`, and the retirement rules, and linked from `docs/README.md` per the documentation standard."
       ],
-      "notes": null
+      "passes": true,
+      "notes": "bash -n + test/decision-agent.sh + test/decision.sh + test/parked-decisions.sh + test/doc-sync.sh: green; agent-authored verdict was ignored and the tasklist remained awaiting a human verdict"
     }
   ]
 }
