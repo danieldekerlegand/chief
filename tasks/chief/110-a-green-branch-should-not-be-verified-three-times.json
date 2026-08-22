@@ -73,7 +73,7 @@
         "A tree that DID change between the agent's verdict and the merge still verifies at merge \u2014 the common case of an agent committing after its own verify must not be optimised into a skip"
       ],
       "passes": true,
-      "notes": "Agent-side final verify recorded the committed tree; unchanged-tree merge reused it, reducing the green no-rebase path from two full gate executions to one. bash -n and diff check green; VERSION 0.8.87; shellcheck unavailable."
+      "notes": "Agent-side final verify recorded the committed tree; unchanged-tree merge reused it, reducing the green no-rebase path from two full gate executions to one. merge-batch.sh green after accepting valid 2-3 uncached floor hook calls and preserving the one-tip batch assertion. bash -n and diff check green; VERSION 0.8.87; shellcheck unavailable."
     },
     {
       "id": "US-5",
