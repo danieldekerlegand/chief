@@ -1,19 +1,19 @@
 # Chief Progress — 108-concurrency-is-machine-wide
-Started: Fri Aug 21 23:18:12 CDT 2026
+Started: Fri Aug 21 23:27:42 CDT 2026
 ---
 
 ## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
 ```
 doc-links: 0 dead vs 0 on main
 verify: quality — ratchet (engine/quality.sh, deltas vs main)
-chief quality: ratchet — measuring 10 changed path(s) on HEAD and at main
-quality: scope — the 6 changed source file(s), HEAD vs main (5 file(s) new on this branch — no base version, deferred to the baseline axis)
+chief quality: ratchet — measuring 11 changed path(s) on HEAD and at main
+quality: scope — the 7 changed source file(s), HEAD vs main (5 file(s) new on this branch — no base version, deferred to the baseline axis)
 quality:   ok     duplicate_blocks              0 -> 0        (delta 0      tol 0)
 quality:   ok     duplicate_line_pct            0 -> 0        (delta 0      tol 1)
 quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
 quality:   ok     function_length_max         557 -> 557      (delta 0      tol 15)
-quality:   ok     function_length_mean      22.11 -> 21.78    (delta -0.33  tol 5)
-quality:   ok     single_use_functions         57 -> 56       (delta -1     tol 2)
+quality:   ok     function_length_mean      20.96 -> 20.67    (delta -0.29  tol 5)
+quality:   ok     single_use_functions         58 -> 57       (delta -1     tol 2)
 quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
 quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
 quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
@@ -23,8 +23,8 @@ verify: shellcheck not installed — skipping (CI enforces it)
 verify: policy — VERSION bump (test/version-bump.sh)
 VERSION-BUMP PASS — VERSION (0.8.83) covers every engine/bin change on HEAD
 verify: behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)
-bystander: decoy run up — driver pid 89548, agent pid 89748, run bystander-sibling-3688412927-1700-89548
-bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.nXSq5uCZr5/decoy/runs, which no test below can read
+bystander: decoy run up — driver pid 22135, agent pid 22146, run bystander-sibling-3853995723-1700-22135
+bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.rYAuoMfIEI/decoy/runs, which no test below can read
 bystander: [1/43] test/smoke.sh
   smoke| SMOKE PASS — install → init → dry-run honoured → agent loop → verify → merge → completed + $HOME-init guard (offline)
 bystander: [2/43] test/provider-conformance.sh
@@ -61,35 +61,26 @@ bystander: [4/43] test/limitstate.sh
   limitstate| LIMITSTATE PASS — usage limit → 'rate-limited' (dependent stays schedulable); genuine stall → 'failed' (dependent blocked)
 bystander: [5/43] test/limitresume.sh
   limitresume| limitresume: PART A — a limit-interrupted run heals itself
-  limitresume|    ok  paused, waited ~11s, resumed at story 2, merged
+  limitresume|    ok  paused, waited ~10s, resumed at story 2, merged
   limitresume| limitresume: PART B — a limit that never lifts is bounded, not a hang
   limitresume|    ok  backed off once, capped at 1 re-dispatch each, ended cleanly in 10s
   limitresume| LIMITRESUME PASS — the driver waits out a usage limit and re-dispatches (bounded, reset-aware, no thrash)
 bystander: [6/43] test/limitmonitor.sh
   limitmonitor| --- chief ps (synthetic paused run) ---
-  limitmonitor| CHIEF · 1 active run(s) · ⚠ 2 unregistered · 2026-08-21 23:12:56
-  limitmonitor| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 4.89 / 1 physical core(s) · OVERSUBSCRIBED
+  limitmonitor| CHIEF · 1 active run(s) · ⚠ 1 unregistered · 2026-08-21 23:21:48
+  limitmonitor| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 3.48 / 1 physical core(s) · OVERSUBSCRIBED
   limitmonitor| 
-  limitmonitor| repo  (pid 88270 · -p2 · claude · 0s · →main)
-  limitmonitor|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.BHAEbFqbud/repo
+  limitmonitor| repo  (pid 86381 · -p2 · claude · 0s · →main)
+  limitmonitor|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.PPBCmfclXu/repo
   limitmonitor|    ⏸ pause-eta              paused    ?/?     chief/pause-eta
-  limitmonitor|        ↳ paused: usage limit — retry at 23:27 (15m) · re-dispatch 1/3
+  limitmonitor|        ↳ paused: usage limit — retry at 23:36 (15m) · re-dispatch 1/3
   limitmonitor|    ⏸ pause-noeta            paused    ?/?     chief/pause-noeta
   limitmonitor|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3
   limitmonitor|    ● work-run               running   ?/?     chief/work-run
   limitmonitor|    ✗ dead-fail              failed    ?/?     chief/dead-fail
   limitmonitor|    ⤬ dead-block             blocked   ?/?     chief/dead-block
   limitmonitor| 
-  limitmonitor| ⚠ 2 unregistered driver(s) — alive, but missing from the run registry (/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.BHAEbFqbud/runs):
-  limitmonitor|    ⚠ pinakes  (pid 57164 · run pinakes-3107762049-1787363875-57164)
-  limitmonitor|      /Users/dldekerlegand/Development/pinakes
-  limitmonitor|        ↳ in flight: 119-retire-handcuration-into-ingest done
-  limitmonitor|        ↳ in flight: 121-wikibase-property-ontology done
-  limitmonitor|        ↳ in flight: 122-wikibase-corpus-import done
-  limitmonitor|        ↳ in flight: 123-derived-read-index-rebuild done
-  limitmonitor|        ↳ in flight: 124-wikibase-cutover   running
-  limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
-  limitmonitor|        ↳ stop it:  kill 57164    then:  chief reap    (reaps whatever it leaves behind)
+  limitmonitor| ⚠ 1 unregistered driver(s) — alive, but missing from the run registry (/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.PPBCmfclXu/runs):
   limitmonitor|    ⚠ cuneiform  (pid 72315 · run cuneiform-2849022191-1787368190-72315)
   limitmonitor|      /Users/dldekerlegand/Development/cuneiform
   limitmonitor|        ↳ in flight: 201-tool-grant-deployment-validator done
@@ -131,7 +122,7 @@ bystander: [6/43] test/limitmonitor.sh
   limitmonitor|        ↳ in flight: 366-entry-stage-reads-an-empty-artifact-map pending
   limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
   limitmonitor|        ↳ stop it:  kill 72315    then:  chief reap    (reaps whatever it leaves behind)
-  limitmonitor| LIMITMONITOR PASS — a usage-limit pause renders as 'paused: usage limit — retry at 23:27 · re-dispatch 1/3', distinct from running/failed/blocked
+  limitmonitor| LIMITMONITOR PASS — a usage-limit pause renders as 'paused: usage limit — retry at 23:36 · re-dispatch 1/3', distinct from running/failed/blocked
 bystander: [7/43] test/pause.sh
   pause| pause: PART A — a pre-armed repo runs no agent turn
   pause|    ok  0 agent calls, exit 0, flag survived launch init, no retry budget spent
@@ -141,19 +132,19 @@ bystander: [7/43] test/pause.sh
   pause|    ok  resumed at story 2, verified, merged, retired
   pause| pause: PART D — chief ps distinguishes an operator pause from a usage limit
   pause| --- chief ps (both holds armed) ---
-  pause| CHIEF · 1 active run(s) · 2026-08-21 23:13:06
-  pause| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 4.30 / 1 physical core(s) · OVERSUBSCRIBED
+  pause| CHIEF · 1 active run(s) · 2026-08-21 23:21:59
+  pause| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 5.15 / 1 physical core(s) · OVERSUBSCRIBED
   pause| 
-  pause| mrepo  (pid 376 · -p2 · claude · 0s · →main)
-  pause|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.fP12Xdynxu/mrepo
+  pause| mrepo  (pid 98926 · -p2 · claude · 0s · →main)
+  pause|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.iFodcZjVwD/mrepo
   pause|    ⏸ OPERATOR PAUSE armed 0s ago — no tasklist launches, no new agent iterations · lift: chief resume
   pause|      ↳ draining: work-run — each stops at its next iteration boundary, then parks
-  pause|    ⏸ usage-limit window until 23:28 (15m) — Chief waits this one out itself
+  pause|    ⏸ usage-limit window until 23:36 (15m) — Chief waits this one out itself
   pause|      ↳ BOTH holds are armed — lifting either one alone changes nothing
   pause|    ⏸ op-park                paused-op ?/?     chief/op-park
-  pause|        ↳ paused: operator hold (chief pause) — armed 23:13 · branch + worktree kept · resume: chief resume · usage-limit window also armed until 23:28
+  pause|        ↳ paused: operator hold (chief pause) — armed 23:21 · branch + worktree kept · resume: chief resume · usage-limit window also armed until 23:36
   pause|    ⏸ limit-wait             paused    ?/?     chief/limit-wait
-  pause|        ↳ paused: usage limit — retry at 23:28 (15m) · re-dispatch 0/3
+  pause|        ↳ paused: usage limit — retry at 23:36 (15m) · re-dispatch 0/3
   pause|    ● work-run               running   ?/?     chief/work-run
   pause|    ok  both ⏸, different notes, and the header names both holds
   pause| PAUSE PASS — an operator pause drains at a safe checkpoint, parks with branch + worktree kept, resumes from committed state, and is legible in chief ps
@@ -184,22 +175,22 @@ bystander: [10/43] test/liveliness.sh
   liveliness|    ok  post-run: state=done phase=merged, record uncommitted + gitignored
   liveliness| liveliness: part 3 — the rendering
   liveliness| --- chief ps (synthetic: fresh · stalled · paused · no-record) ---
-  liveliness| CHIEF · 1 active run(s) · 2026-08-21 23:13:45
-  liveliness| Machine activity: 1 live run(s) · 2 agent turn(s) · 0 gate(s) · load average: 4.16 / 1 physical core(s) · OVERSUBSCRIBED
+  liveliness| CHIEF · 1 active run(s) · 2026-08-21 23:22:55
+  liveliness| Machine activity: 1 live run(s) · 2 agent turn(s) · 0 gate(s) · load average: 13.42 / 1 physical core(s) · OVERSUBSCRIBED
   liveliness| 
-  liveliness| mrepo  (pid 47883 · -p4 · claude · 0s · →main)
-  liveliness|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.aVFfJQyCv6/mrepo
+  liveliness| mrepo  (pid 50207 · -p4 · claude · 0s · →main)
+  liveliness|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.3sJyBHfJfB/mrepo
   liveliness|    ● work-fresh             running   2/4     chief/work-fresh
   liveliness|        ↳ agent-turn for 1m · US-2 · iter 3 · 30s ago
   liveliness|    ⚠ work-hung              running   1/5     chief/work-hung
   liveliness|        ↳ agent-turn for 40m · US-9 · iter 7 · no progress last iter (2) · ⚠ stalled in agent-turn — no activity for 40m, past its 15m limit
   liveliness|    ⏸ pause-eta              paused    1/4     chief/pause-eta
-  liveliness|        ↳ paused: usage limit — retry at 23:28 (15m) · re-dispatch 1/3 · paused 40m · 40m ago
+  liveliness|        ↳ paused: usage limit — retry at 23:37 (15m) · re-dispatch 1/3 · paused 40m · 40m ago
   liveliness|    ● norecord               running   ?/?     chief/norecord
-  liveliness| LIVELINESS PASS — record written atomically + emitted by a real run; `chief ps` shows phase/story/iter/age, flags a 40m-quiet run as stalled (knob: CHIEF_STALE_SECONDS), and keeps a usage-limit pause reading as 'paused … retry at 23:28'
+  liveliness| LIVELINESS PASS — record written atomically + emitted by a real run; `chief ps` shows phase/story/iter/age, flags a 40m-quiet run as stalled (knob: CHIEF_STALE_SECONDS), and keeps a usage-limit pause reading as 'paused … retry at 23:37'
 bystander: [11/43] test/teardown.sh
   teardown| teardown: part 1 — interrupt mid-iteration (reap first, forget second)
-  teardown|    ok  SIGINT to group 50368: tree reaped (agent.sh · tool · its child, TERM→KILL) then records released — 61 ordered samples, 0 violations
+  teardown|    ok  SIGINT to group 52346: tree reaped (agent.sh · tool · its child, TERM→KILL) then records released — 61 ordered samples, 0 violations
   teardown| teardown: part 2 — a SIGKILLed driver leaves a tree that argv cannot find
   teardown|    ok  orphaned agent.sh + tool + child: invisible to the old argv sweep, found and stopped by the reaper
   teardown| teardown: part 3 — a LIVE driver with no run file is reported, not hidden
@@ -230,11 +221,73 @@ bystander: [20/43] test/boundary-demotion.sh
   boundary-demotion| BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, the next turn's PROMPT names it and quotes its bar, an evidenced re-mark counts as progress, a story demoted twice running ends the run instead of spinning, and the merge floor still catches a last-turn marking
 bystander: [21/43] test/five-cases.sh
   five-cases| five-cases: 9 replayed tasklists in 50s wall-clock (the gates' own share is milliseconds — see below)
-  five-cases| five-cases: 5 passes of measure_gate + criteria_scope_report over gr-104.json: 0s
+  five-cases| five-cases: 5 passes of measure_gate + criteria_scope_report over gr-104.json: 1s
   five-cases| FIVE-CASES PASS — all five recorded failures now fail (2 before any agent turn); 344/349 and a measured 104 still merge; 104-as-recorded is the one stated cost
 bystander: [22/43] test/stall-flag.sh
   stall-flag| stall-flag: part 1 — the exempt/flagged table
-  stall-flag| STALL-FLAG FAIL: engine publishes phase 'machine-budget-waiting' but no list here classifies it
+  stall-flag| stall-flag: part 2 — the exemption expires
+  stall-flag| stall-flag: part 3 — the flag names the state and its limit
+  stall-flag| stall-flag: part 4 — a dead worker is not a quiet one
+  stall-flag| stall-flag: part 5 — chief ps and chief monitor
+  stall-flag| --- chief ps (quiet-by-design · not-exempt · past-the-ceiling · re-tuned · gone) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 23:27:27
+  stall-flag| Machine activity: 1 live run(s) · 4 agent turn(s) · 1 gate(s) · load average: 4.80 / 1 physical core(s) · OVERSUBSCRIBED
+  stall-flag| 
+  stall-flag| mrepo  (pid 82232 · -p3 · claude · 0s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.8OHYrR5hL8/mrepo
+  stall-flag|    ● limit-wait             running   1/4     chief/limit-wait
+  stall-flag|        ↳ rate-limited-waiting for 40m · US-1 · iter 2 · 40m ago
+  stall-flag|    ⚠ prov-wait              running   1/4     chief/prov-wait
+  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 2 · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
+  stall-flag|    ⚠ limit-dead             running   1/4     chief/limit-dead
+  stall-flag|        ↳ rate-limited-waiting for 6h40m · US-1 · iter 2 · ⚠ stalled in rate-limited-waiting — no activity for 6h40m, past its 6h30m limit
+  stall-flag|    ● gate-wait              running   1/4     chief/gate-wait
+  stall-flag|        ↳ verifying for 40m · US-1 · iter 2 · 40m ago
+  stall-flag|    ✗ worker-off             gone      1/4     chief/worker-off
+  stall-flag|        ↳ agent-turn for 1m · US-1 · iter 2 · ✗ dead — its worker pid is gone and left no verdict · chief reap
+  stall-flag| stall-flag: part 6 — elapsed-in-phase in every arm, from phase_since
+  stall-flag| --- chief ps (running · rate-limited · operator-paused · in-review · zone-hold) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 23:27:29
+  stall-flag| Machine activity: 1 live run(s) · 2 agent turn(s) · 0 gate(s) · load average: 4.98 / 1 physical core(s) · OVERSUBSCRIBED
+  stall-flag| 
+  stall-flag| mrepo  (pid 82232 · -p3 · claude · 2s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.8OHYrR5hL8/mrepo
+  stall-flag|    ● held-run               running   1/4     chief/held-run
+  stall-flag|        ↳ agent-turn for 40m · US-3 · iter 2 · 0s ago
+  stall-flag|    ⏸ held-limit             paused    1/4     chief/held-limit
+  stall-flag|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3 · paused 25m · 0s ago
+  stall-flag|    ⏸ held-op                paused-op 1/4     chief/held-op
+  stall-flag|        ↳ paused: operator hold — the flag is already lifted; 'chief resume' re-arms this as pending · branch + worktree kept · resume: chief resume · parked 1h01m · 0s ago
+  stall-flag|    ⏸ held-review            in-review 1/4     chief/held-review
+  stall-flag|        ↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept · held 3h10m · approve it, then: chief run
+  stall-flag|    ⏸ held-zone              zone-hold 1/4     chief/held-zone
+  stall-flag|        ↳ awaiting approval: rebased + verified GREEN, held at engine (1 changed file(s)) · held 13m · approve: chief approve held-zone
+  stall-flag| stall-flag: part 7 — 'no progress last iter' vs the at-risk flag
+  stall-flag| --- chief ps (spent budget · early · no-budget · quiet-and-counting) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-08-21 23:27:31
+  stall-flag| Machine activity: 1 live run(s) · 4 agent turn(s) · 0 gate(s) · load average: 4.98 / 1 physical core(s) · OVERSUBSCRIBED
+  stall-flag| 
+  stall-flag| mrepo  (pid 82232 · -p3 · claude · 4s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.8OHYrR5hL8/mrepo
+  stall-flag|    ● spent-budget           running   1/4     chief/spent-budget
+  stall-flag|        ↳ agent-turn for 30s · US-1 · iter 4 · no progress last iter (2/2) · 30s ago
+  stall-flag|    ● early-stall            running   1/4     chief/early-stall
+  stall-flag|        ↳ agent-turn for 30s · US-1 · iter 4 · no progress last iter (1/5) · 30s ago
+  stall-flag|    ● old-record             running   1/4     chief/old-record
+  stall-flag|        ↳ agent-turn for 30s · US-1 · iter 4 · no progress last iter (2) · 30s ago
+  stall-flag|    ⚠ really-quiet           running   1/4     chief/really-quiet
+  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 4 · no progress last iter (1/2) · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
+  stall-flag| stall-flag: part 8 — two no-progress iterations
+  stall-flag| agent-turn
+  stall-flag| provider-waiting
+  stall-flag| agent-turn
+  stall-flag| integrating
+  stall-flag| agent-turn
+  stall-flag| provider-waiting
+  stall-flag| agent-turn
+  stall-flag| stalled
+  stall-flag| integrating
+  stall-flag| STALL-FLAG FAIL: the boundary does not read stalled → integrating → agent-turn → the next turn
 BYSTANDER FAIL: test/stall-flag.sh failed (its output is above)
 verify: BLOCK — behavioral tests failed (see above)
 ```
@@ -243,3 +296,6 @@ verify: BLOCK — behavioral tests failed (see above)
 Updated `test/stall-flag.sh` so the phase drift table classifies `machine-budget-waiting` as quiet by design, matching `engine/monitor.sh`. This clears the prior verification failure without changing the completed stories.
 
 Learnings for future iterations: when adding a live-record phase, update the monitor policy's quiet/flagged classification table and its drift-guard fixture together; otherwise the behavior can be correct while the exhaustive stall test rejects the new phase.
+
+## Verification repair confirmed
+The previously recorded `test/stall-flag.sh` failure is cleared: `.chief/verify.sh` completed the full 43-test behavioral gate, including stall-flag, with quality, version, documentation, and tasklist checks all green. No unfinished stories remain.
