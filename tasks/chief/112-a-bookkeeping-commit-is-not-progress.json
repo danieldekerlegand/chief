@@ -1,0 +1,55 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/112-a-bookkeeping-commit-is-not-progress",
+  "description": "**A tasklist with nothing left to do ran to iteration 11 of a 5-iteration budget, and every extension was bought with a commit that changed nothing but chief's own state files.**\n\nMeasured in `formant` on 2026-08-24. `56-neural-synth-ship-flip` is blocked on a measurement only a human can take. The agent understood that perfectly and said so every time — its closing note reads *\"further iterations on this tasklist can only add churn; re-parking it would be the honest call.\"* It nevertheless kept being re-driven, because each iteration wrote a notes stamp into `.chief/state/prd.json` and `.chief/state/progress.txt` and committed it. Chief saw a commit, scored the iteration `progress (0/2 passing). Continuing...`, reset the stall counter and extended the budget. **Five consecutive commits whose entire content was a re-check stamp.**\n\nThe stall counter is the mechanism that is supposed to stop exactly this, and it is trivially defeated by writing to a state file. Note the asymmetry with the guard on the other side: chief is rigorous about a FALSE CLAIM OF COMPLETION — `100-evidence-checked-at-the-iteration-boundary` and the no-work guard both refuse to merge a tasklist that says it is done without commits behind it — but it accepts a false claim of PROGRESS without checking anything at all. One end of the loop is defended and the other is open.\n\nThe cost is not only wasted budget. `0/2 passing` printed beside the word `progress` is actively misleading in the one place an operator looks to decide whether to intervene, and it is the reason this ran for 1h32m after it had stopped being able to accomplish anything.\n\nRelated but distinct from `111`: that one is chief mis-classifying an iteration that never reached the model, which stops a run too EARLY. This is chief mis-classifying an iteration that reached the model and did nothing, which lets a run go on FOREVER. Same family — the iteration-outcome classifier — opposite failure directions, and the fix for one should not quietly redefine the other.",
+  "touches": [
+    "engine/driver.sh",
+    "engine/agent.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
+  "iters": 6,
+  "warmup": [
+    "grep -n 'progress (\\|stall\\|no progress' engine/agent.sh | head -20",
+    "grep -rn 'STATE_DIR\\|\\.chief/state' engine/agent.sh | head -10",
+    "cd ../formant && git log --oneline -8 chief/56-neural-synth-ship-flip",
+    "cd ../formant && git show --stat chief/56-neural-synth-ship-flip | head -12",
+    "grep -n 'iters\\|budget' engine/agent.sh | head -12"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Progress means a story moved or the PRODUCT changed",
+      "acceptanceCriteria": [
+        "An iteration counts as progress only if a story's `passes` advanced, or the commit touched something outside chief's own state directory. A commit whose entire diff is `.chief/state/**` is bookkeeping and must score as NO PROGRESS.",
+        "The stall counter increments on such an iteration exactly as it does on one with no commit at all, so a tasklist that cannot advance stops at the threshold instead of extending its budget indefinitely.",
+        "The rule is stated in terms of the diff, not the message. An agent that writes a plausible commit subject over a state-only diff must still be scored as stalled — this is the same discipline the false-complete guard already applies to a claim of completion.",
+        "Counterfactual test: replay the formant shape — N consecutive commits touching only `.chief/state/` with the story count unmoved — and assert the run stops at the stall threshold rather than extending. Today it reaches iteration 11 of a 5-iteration budget."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "A legitimate bookkeeping commit is still allowed to happen",
+      "acceptanceCriteria": [
+        "Writing notes and progress records stays SUPPORTED — those files are how a later iteration and a human reader learn what was tried. This story removes their power to extend a budget, not their existence.",
+        "An iteration that makes real progress AND updates the state files scores as progress on the strength of the real change. A test covers this pairing explicitly, because the naive fix — ignore any commit touching `.chief/state/` — would break the normal case where both happen together.",
+        "Where a tasklist's `touches` legitimately includes chief's own state layout, that is not silently reclassified. If this repo cannot express such a tasklist, say so in the docs rather than leaving it to be discovered."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "The operator can see the difference without reading the log",
+      "acceptanceCriteria": [
+        "`progress (0/2 passing). Continuing...` must not be printable. Either the line reports what actually advanced, or it reports no progress — the current output states progress and zero passing in the same breath, which is the sentence that let this run for 1h32m unexamined.",
+        "A tasklist stopped this way says WHY in the run summary, distinguishably from a tasklist that failed its gate and from one stopped by provider unavailability (`111`). Three different causes reported identically is what sends an operator to re-scope work that was never the problem.",
+        "Where an agent's own output asks to be stopped — formant's said `re-parking it would be the honest call` — that is worth surfacing rather than burying at iteration 10 of a log. Judge whether chief can act on it at all; if it cannot be detected reliably, record that finding rather than implementing a fragile prose match, and do not let it become the kind of undated grep `111` is fixing.",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
+      ],
+      "notes": null
+    }
+  ]
+}
