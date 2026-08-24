@@ -1,0 +1,65 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/111-an-api-error-is-not-a-stall",
+  "description": "🌐 **A provider outage burns the stall budget and marks sound work INCOMPLETE.** Measured on talos, 2026-08-24. `71-real-game-supply-decision` ran three consecutive iterations whose ENTIRE output was `API Error: 529 Overloaded. This is a server-side issue, usually temporary`. Chief counted each as *\"no progress\"*, hit `stall 3/2`, printed *\"Chief stalled 3 iterations after its 5-iter budget without completing. Stopping.\"* and left the branch INCOMPLETE. `72-godot-ci-containerized-build-lane` died the same way two iterations later.\n\n**The agent never ran.** A 529 is the API refusing the request — no turn was taken, no tool was called, nothing was attempted. Counting it as a failed attempt conflates *\"the agent tried and got nowhere\"* with *\"the agent was never given a chance\"*, and only the first is evidence about the work.\n\n**The cost is real and it is silent.** `71` was 1/2 with its remaining story most of the way done — the adopted game (`lampe-games/godot-open-rts @ a628ad3`, decided and recorded in US-001) had already been fetched into `dogfood/open-rts/`, 2,029 files, correctly placed and not gitignored. The run died before any of it could be committed, so `chief ps` reported `✗ failed`, `no progress last iter`, on a tasklist whose work was sitting intact in the worktree. An operator reading that display would reasonably conclude the tasklist was broken and re-scope it.\n\n**This is distinct from the stall the counter exists for.** A genuine stall — the agent runs, produces a turn, and the story count does not move — is exactly the signal chief should act on, and `71`'s own iteration 2 (`progress (1/2 passing)`) shows the mechanism works when the agent actually runs. Nothing here weakens that. What must change is that an iteration which never reached the model is not counted as one that did.\n\n**Retry is the other half.** The message itself says *\"usually temporary — try again in a moment\"*, and chief has no backoff for it: three iterations fired into an overloaded API back to back, wasting the budget in the time a single wait would have covered. The repo already reasoned this through for a DIFFERENT surface — `cuneiform/365-transient-provider-failure-backoff` split provider failures into transient vs permanent and honoured `Retry-After` — and the same distinction applies to chief's own driver.",
+  "dependsOn": [],
+  "touches": [
+    "engine/driver.sh",
+    "engine/agent.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
+  "iters": 6,
+  "warmup": [
+    "grep -n 'stall' engine/driver.sh | head -20",
+    "grep -n 'API Error\\|529\\|Overloaded\\|no progress' engine/driver.sh engine/agent.sh",
+    "sed -n '395,415p' engine/driver.sh",
+    "grep -n 'HL_RC_FAILED\\|exit-code contract' engine/driver.sh | head",
+    "ls test/"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "An iteration that never reached the model does not count as an attempt",
+      "description": "The core defect. A 529 means no turn was taken; counting it as a failed attempt is a category error.",
+      "acceptanceCriteria": [
+        "An iteration whose agent invocation failed BEFORE the model produced a turn — provider unavailable (429/500/502/503/529), a connection failure, or an auth/quota refusal — does not increment the stall counter and does not count against the iteration budget. The tasklist's state is unchanged by it, because nothing happened",
+        "The condition is detected from the invocation's OUTCOME, not by grepping prose for `API Error`. A vendor rewording its message must not silently re-break this; if a text match is unavoidable it is a documented list with the observed message recorded beside each entry, the rule `cuneiform/365` US-3 already established",
+        "A genuine stall is UNCHANGED: the agent runs, produces a turn, and the story count does not move — that still increments the counter and still stops the run at the threshold. `71`'s iteration 2 (`progress (1/2 passing)`) and iterations 3-5 (529, no turn) must be classified differently, and a test asserts exactly that pair",
+        "The run summary distinguishes the two in its OUTPUT: a tasklist stopped by provider unavailability is not reported as `✗ failed … no progress last iter`, which is what sent an operator to re-scope a tasklist whose work was intact",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "A transient provider failure is WAITED OUT, not fired into three times",
+      "description": "The message says \"try again in a moment\" and chief has no backoff. Three iterations were spent inside the window a single wait would have covered.",
+      "acceptanceCriteria": [
+        "A provider-unavailable outcome is retried with exponential backoff and jitter under a stated cap, and `Retry-After` is honoured when the provider sends one, in both its forms (delta-seconds and HTTP-date) — the provider naming its own interval is better information than any backoff computed here",
+        "The wait is OBSERVABLE in `chief ps` and in the run log: a tasklist waiting on the provider says so, with the delay and the attempt count, rather than appearing to work or appearing hung",
+        "The cap and the retry limit together bound the worst-case wall time to a figure recorded in the story notes, and `0` disables waiting so the pre-fix behaviour stays reachable for debugging",
+        "A permanent refusal — bad credentials, a revoked key, a quota that will not replenish — FAILS FAST with its reason rather than sleeping through a budget it cannot satisfy. Where the two cannot be told apart the run treats it as transient and says so, the fail direction chosen from cost: waiting on a permanent error wastes minutes, while failing fast on an outage loses the tasklist",
+        "Driven against a stub that returns 529 with `Retry-After`, 529 without it, a connection reset, and a 401 — asserting the measured elapsed wait (not a mocked clock), the stall counter staying at zero across all the transient cases, and the fail-fast on 401"
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "Work already on disk is never described as no work",
+      "description": "`71` reported `✗ failed` while 2,029 correctly-placed files sat uncommitted in its worktree. The display drove the wrong conclusion.",
+      "acceptanceCriteria": [
+        "When a run ends INCOMPLETE, the summary reports whether the worktree holds UNCOMMITTED changes and roughly how much — so `left in worktree for review` names what is actually there instead of leaving an operator to discover 2,029 files by hand",
+        "`chief ps` distinguishes `no work produced` from `work produced but not committed`. The first is a real signal and the second is a recoverable state, and today they render identically",
+        "The check is cheap and never fails the run: a `git status --porcelain` in the worktree, reported best-effort, with any error swallowed. This is a reporting improvement and must not become a new way for a run to die",
+        "A test asserts the specific regression: a worktree with staged and unstaged changes, whose run ended INCOMPLETE, renders as work-pending rather than as no-work"
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
