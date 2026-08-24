@@ -31,8 +31,8 @@
         "The run summary distinguishes the two in its OUTPUT: a tasklist stopped by provider unavailability is not reported as `✗ failed … no progress last iter`, which is what sent an operator to re-scope a tasklist whose work was intact",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "bash -n clean on bin/chief + engine/*.sh + install.sh + test/*.sh + templates/verify.sh. shellcheck -S error (0.10.0): 0 errors on every file this story touched (engine/quality.sh + engine/sweep.sh report 3 errors that are pre-existing on main). VERSION 0.8.88 -> 0.8.89 + README bold v0.8.89; test/version-bump.sh PASS, test/doc-sync.sh PASS. NEW test/provider-unavailable.sh PASS, 3 parts: (1) 14 classification fixtures — 529 observed message / structured overloaded_error / pretty-printed \"status\":503 / 502 / 500 / ECONNRESET / socket hang up / 401 all exit 8, while the no-progress turn, a non-provider crash and 529-text-with-rc-0 still exit 1 and a 429 rate_limit_error + usage-limit prose still exit 2, and PROVIDER_NOTURN_LIMIT=0 restores exit 1. (2) THE PAIR in one run: iteration 1 scored 'progress (1/2 passing)', the 529 iterations produced ZERO 'no progress (stall' lines, iteration 2 was announced 3x (budget uncharged), 4 provider calls, exit 8, committed work + banked pass-state intact. (3) Under the real driver: status 'PROVIDER-UNAVAILABLE 0/1', scheduler state 'provider-unavailable', summary says 'PROVIDER UNAVAILABLE ... not failed and not stalled', neither run log nor worker log contains 'no progress' or 'INCOMPLETE', branch kept and nothing retired. Regression sweep green: smoke, ratelimit, limitstate, limitresume, limitmonitor, headless, events, liveliness, noworkguard, stall-flag, doc-sync, version-bump = 12 PASS, 0 FAIL."
     },
     {
       "id": "US-2",

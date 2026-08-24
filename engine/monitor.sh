@@ -110,7 +110,7 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
 #                      wedged one from out here, so: a longer threshold, not silence.
-STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting '
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting provider-unavailable '
 
 # The CEILING on that exemption — quiet by design is not quiet forever. A usage window
 # that never reopens is exactly what an operator has to be told about, so the exemption
@@ -439,6 +439,12 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     failed)          printf '%s✗%s|failed'  "$RED" "$RST" ;;
     blocked)         printf '%s⤬%s|blocked' "$RED" "$RST" ;;
     rate-limited)    printf '%s⏸%s|paused'  "$CYN" "$RST" ;;
+    # The API never served us (agent.sh exit 8). A HOLD, so the same ⏸ and never
+    # a failure glyph — that render is the bug: a tasklist whose work is intact
+    # in its worktree used to appear here as '✗ failed · no progress last iter'.
+    # Its own label, because the row's one job is to say WHO is holding the work,
+    # and 'the provider would not answer' is not 'the account is out of quota'.
+    provider-unavailable) printf '%s⏸%s|no-api' "$CYN" "$RST" ;;
     # The OPERATOR pause. Same ⏸ (it is a pause, not a fault — never a failure
     # glyph), a distinct label so `chief ps | grep` can tell the two apart, and a
     # distinct note below.

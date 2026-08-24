@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS. The scheduler persists exactly ONE coarse word per tasklist
 # ($STATE/<name>.state: pending|running|done|failed|blocked|rate-limited|paused|
-# awaiting-review|awaiting-approval). Everything
+# awaiting-review|awaiting-approval|provider-unavailable). Everything
 # that answers "is this 'running' tasklist WORKING or HUNG?" — which iteration it is
 # on, which story, what it is doing right now, when it last did anything — only ever
 # reached the worker's stdout and was lost. That is how a tasklist sat for ~2h with no
@@ -28,10 +28,14 @@
 #   agent.sh   agent-turn · provider-waiting · writing · integrating ·
 #              rate-limited-waiting · stalled · operator-paused · research ·
 #              research-failed · plan-turn · plan-ready · plan-invalid ·
-#              review-wait · awaiting-review
+#              review-wait · awaiting-review · provider-unavailable
 #   driver.sh  worktree · re-engaging · warmup · reconcile · merge-wait · rebasing ·
 #              verifying · zone-check · merging · merged · done · operator-paused ·
-#              research-failed · plan-invalid · awaiting-review · awaiting-approval
+#              research-failed · plan-invalid · awaiting-review · awaiting-approval ·
+#              provider-unavailable
+# `provider-waiting` and `provider-unavailable` are one letter apart and mean opposite
+# things: the first is a request IN FLIGHT (the healthy state of a turn that takes
+# minutes), the second is a request the API REFUSED before any turn was taken.
 # EVERY PHASE IS A STATEMENT ABOUT NOW. That is the whole contract of this field, and
 # 'stalled' is where it was broken: agent.sh publishes it at an iteration boundary that
 # advanced neither a passing story nor HEAD — a true statement about the iteration that

@@ -79,7 +79,8 @@ echo "stall-flag: part 1 — the exempt/flagged table"
 . "$ROOT/engine/monitor.sh" lib
 
 # QUIET — silence here is the state, and chief printed the reason for it already.
-QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting'
+QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting
+  provider-unavailable'
 # FLAGGED — every other phase the engine publishes, each against ITS OWN threshold.
 # `provider-waiting` heads the list on purpose: it is the whole duration of an agent
 # turn and so is quiet MOST of the time, but a provider that never returns is a real

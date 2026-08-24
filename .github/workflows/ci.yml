@@ -59,6 +59,9 @@ jobs:
       - name: Token-limit pause+resume under the parallel driver
         run: bash test/ratelimit.sh
 
+      - name: A refused request is not a stall (529/5xx/transport/auth never reached the model)
+        run: bash test/provider-unavailable.sh
+
       - name: Usage-limit pause is a distinct state (never 'failed', never blocks dependents)
         run: bash test/limitstate.sh
 
