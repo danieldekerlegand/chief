@@ -1215,79 +1215,50 @@ _provider_error_type() {
   printf '%s\n' "$1" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[a-z_]*error"' \
     | tail -1 | grep -oE '[a-z_]*error' || echo ""
 }
-# _retry_after_seconds OUTPUT -> the delay the PROVIDER asked for, in seconds from
-# now ('' when it sent none, or sent one this host cannot read). RFC 9110 allows two
-# forms and providers use both, so both are read: delta-seconds (`Retry-After: 30`,
-# and the `"retry-after": 30` an SDK prints when it dumps the response headers) and
-# an HTTP-date (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`).
-#
-# The date form is converted with WHATEVER date(1) the host has — GNU takes -d, BSD
-# rejects it outright and needs -j -f with an explicit format — the same two-arm
-# idiom _clock_to_epoch already uses, and for the same reason: trying only the GNU
-# form means this arm silently produces nothing on a Mac. The zone suffix is stripped
-# and the parse is pinned to UTC, because BSD `date`'s %Z does not honour it and
-# would otherwise read a GMT timestamp as local time.
-#
-# A date already in the PAST reads as ABSENT, not as 0: a skewed clock must fall back
-# to the computed backoff rather than silence the wait entirely.
-_retry_after_seconds() {
-  local out="$1" raw d e now
-  # The value runs to the end of the line (or to the next quote, which is where a
-  # JSON one ends). It may NOT stop at a comma: an HTTP-date carries one right after
-  # the weekday — `Wed, 21 Oct 2015 …` — and a pattern that excluded commas read
-  # every date form as the three letters `Wed`.
-  raw="$(printf '%s\n' "$out" \
-    | grep -oiE 'retry[-_]?after"?[[:space:]]*[:=][[:space:]]*"?[^"]{1,45}' \
-    | tail -1 || echo "")"
-  [ -n "$raw" ] || return 0
-  raw="$(printf '%s' "$raw" | sed -E 's/^[^:=]*[:=][[:space:]]*"?//; s/[[:space:]",;}]*$//')"
-  case "$raw" in
-    '') return 0 ;;
-    *[!0-9]*) ;;                                  # not a bare number -> the date form
-    *) printf '%s' "$raw"; return 0 ;;
-  esac
-  d="$(printf '%s' "$raw" | sed -E 's/[[:space:]]*(GMT|UTC)[[:space:]]*$//')"
-  e="$(date -u -d "$raw" +%s 2>/dev/null)" || e=""
-  [ -n "$e" ] || e="$(TZ=UTC date -j -f '%a, %d %b %Y %H:%M:%S' "$d" +%s 2>/dev/null)" || e=""
-  case "$e" in ''|*[!0-9]*) return 0 ;; esac
-  now="$(date +%s)"
-  [ "$e" -gt "$now" ] || return 0
-  printf '%s' "$(( e - now ))"
-}
-
-# _provider_refusal_kind OUTPUT -> `permanent` | `transient`. The ACTION half of the
-# classification: _is_no_turn already decided the request was never served, this
-# decides whether WAITING can possibly help. Read off the same two structured facts,
-# never off the prose.
-#
-# Everything unrecognised is `transient` on purpose — see the cost argument beside
-# $PROVIDER_BACKOFF. The 5xx arm is listed explicitly ahead of the permanent one so
-# an envelope that carries both a server-side status and a stray auth-shaped type
-# resolves on the status, which is the fact the server actually stated.
-_provider_refusal_kind() {
-  local out="$1" code type
-  code="$(_provider_status_code "$out")"
-  case "$code" in
-    500|502|503|504|529) printf 'transient'; return 0 ;;
-    401|402|403)         printf 'permanent'; return 0 ;;
-  esac
-  type="$(_provider_error_type "$out")"
-  case "$type" in
-    authentication_error|permission_error) printf 'permanent'; return 0 ;;
-  esac
-  printf 'transient'
-}
-
 # _provider_wait_seconds ATTEMPT OUTPUT -> "<seconds> <source>" — how long to wait
 # before re-running a turn the provider refused, and WHICH rule produced the figure
 # (`retry-after` = the provider named it, `backoff` = we computed it). Both halves
 # are returned because the log line differs: "the provider asked for it" and "capped
 # exponential backoff" are different claims and a reader has to be able to tell them
 # apart. 0 seconds means do not wait at all ($PROVIDER_BACKOFF=0).
+#
+# THE PROVIDER'S OWN FIGURE WINS, so reading Retry-After is the first thing it does.
+# RFC 9110 allows two forms and providers use both: delta-seconds (`Retry-After: 30`,
+# and the `"retry-after": 30` an SDK prints when it dumps the response headers) and an
+# HTTP-date (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`). The date form is converted
+# with WHATEVER date(1) the host has — GNU takes -d, BSD rejects it outright and needs
+# -j -f with an explicit format — the same two-arm idiom _clock_to_epoch uses, and for
+# the same reason: trying only the GNU form means this arm silently produces nothing
+# on a Mac. The zone suffix is stripped and the parse is pinned to UTC, because BSD
+# `date`'s %Z does not honour it and would read a GMT timestamp as local time. A date
+# already in the PAST reads as ABSENT, not as 0: a skewed clock must fall back to the
+# computed backoff rather than silence the wait entirely.
 _provider_wait_seconds() {
-  local n="$1" out="$2" secs ra half
+  local n="$1" out="$2" secs ra half raw d e now
   [ "$PROVIDER_BACKOFF" -gt 0 ] || { printf '0 disabled'; return 0; }
-  ra="$(_retry_after_seconds "$out")"
+  # The value runs to the end of the line (or to the next quote, which is where a JSON
+  # one ends). It may NOT stop at a comma: an HTTP-date carries one right after the
+  # weekday — `Wed, 21 Oct 2015 …` — and a pattern that excluded commas read every
+  # date form as the three letters `Wed`.
+  ra=""
+  raw="$(printf '%s\n' "$out" \
+    | grep -oiE 'retry[-_]?after"?[[:space:]]*[:=][[:space:]]*"?[^"]{1,45}' \
+    | tail -1 || echo "")"
+  if [ -n "$raw" ]; then
+    raw="$(printf '%s' "$raw" | sed -E 's/^[^:=]*[:=][[:space:]]*"?//; s/[[:space:]",;}]*$//')"
+    case "$raw" in
+      '') ;;
+      *[!0-9]*)                                   # not a bare number -> the date form
+        d="$(printf '%s' "$raw" | sed -E 's/[[:space:]]*(GMT|UTC)[[:space:]]*$//')"
+        e="$(date -u -d "$raw" +%s 2>/dev/null)" || e=""
+        [ -n "$e" ] || e="$(TZ=UTC date -j -f '%a, %d %b %Y %H:%M:%S' "$d" +%s 2>/dev/null)" || e=""
+        case "$e" in ''|*[!0-9]*) e="" ;; esac
+        now="$(date +%s)"
+        [ -n "$e" ] && [ "$e" -gt "$now" ] && ra="$(( e - now ))"
+        ;;
+      *) ra="$raw" ;;
+    esac
+  fi
   if [ -n "$ra" ] && [ "$ra" -gt 0 ]; then
     # Clamped, and the cap is what makes the worst case a stated number rather than
     # whatever interval the far end happens to name. A clamped wait that is still too
@@ -1357,7 +1328,18 @@ _provider_unavailable() {
   elif [ -n "$type" ]; then why="$type"
   else why="connection failure (no HTTP status)"
   fi
-  kind="$(_provider_refusal_kind "$out")"
+  # …and whether WAITING can possibly help, off those SAME two structured facts and
+  # never off the prose. _is_no_turn has already decided the request was never served;
+  # this is the ACTION half. Everything unrecognised is `transient` on purpose (the
+  # cost argument beside $PROVIDER_BACKOFF), and the 5xx arm is tested ahead of the
+  # permanent one so an envelope carrying both a server-side status and a stray
+  # auth-shaped type resolves on the status — the fact the server actually stated.
+  kind=transient
+  case "$code" in
+    401|402|403) kind=permanent ;;
+    500|502|503|504|529) ;;
+    *) case "$type" in authentication_error|permission_error) kind=permanent ;; esac ;;
+  esac
   echo ""
 
   # PERMANENT — a bad key, a revoked one, a quota that will not replenish. Stopping on
@@ -1665,6 +1647,21 @@ if research_enabled "$PRD_FILE"; then
           fi
           exit 2
         fi
+        # THE PROVIDER NEVER SERVED THIS ONE EITHER. The same pair as the story loop
+        # (_is_no_turn / _provider_unavailable) for the same reason, and this is the
+        # surface where getting it wrong is sharpest: a research attempt that never
+        # reached the model would otherwise burn one of $RESEARCH_MAX_ATTEMPTS and end
+        # as RESEARCH-FAILED — "chief could not draw the map", which is a claim about
+        # the CODEBASE that nothing was learned about. No branch-state check here (the
+        # story loop's `HEAD unmoved, no story flipped`): a research turn commits
+        # nothing and flips nothing, so there is no trace it could have left.
+        if _is_no_turn "$OUTPUT" "$TOOL_RC"; then
+          noturn=$(( noturn + 1 ))
+          _provider_unavailable "$OUTPUT" 0 "$noturn" || exit 8
+          ra=$(( ra - 1 ))   # the attempt never happened, so it costs no attempt
+          continue
+        fi
+        noturn=0
         research_validate "$RESEARCH_DOC" && break
         echo "Research attempt $ra produced no usable document (missing: $(research_missing "$RESEARCH_DOC" | tr '\n' ' '))."
       done

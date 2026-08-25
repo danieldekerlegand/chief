@@ -272,4 +272,60 @@ echo "   ok  reported as a block, never as a failure or a stall"
 git show-ref --verify --quiet refs/heads/chief/pu || fail "the branch was not kept"
 echo "   ok  branch kept, nothing merged or retired"
 
+# ══ PART 4 — THE RESEARCH PHASE, on the same terms as the story loop ══════════
+# The phase runs BEFORE the first story and had its own copy of the problem: it took
+# the rate-limit path but not this one, so a 529 there burned one of
+# $RESEARCH_MAX_ATTEMPTS and the run ended exit 6 RESEARCH-FAILED — "chief could not
+# draw the map", a claim about the CODEBASE from a turn that never reached the model.
+mkdir -p "$WORK/rsbin"
+cat > "$WORK/rsbin/claude" <<'RSCLAUDE'
+#!/usr/bin/env bash
+set -eu
+cat >/dev/null
+: "${RS_COUNTER:?}"
+n=$(( $(cat "$RS_COUNTER" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$RS_COUNTER"
+echo 'API Error: 529 Overloaded. This is a server-side issue, usually temporary'
+exit 1
+RSCLAUDE
+chmod +x "$WORK/rsbin/claude"
+
+RSREPO="$WORK/rsrepo"; mkdir -p "$RSREPO/.chief/state"
+git -C "$RSREPO" init -q -b main 2>/dev/null || { git -C "$RSREPO" init -q; }
+git -C "$RSREPO" commit -q --allow-empty -m init
+cat > "$RSREPO/.chief/state/prd.json" <<'JSON'
+{ "project":"rs","branchName":"chief/rs","research":true,"userStories":[
+  {"id":"US-1","title":"one","description":"","acceptanceCriteria":[],"passes":false,"notes":""}] }
+JSON
+
+export RS_COUNTER="$WORK/rs-calls"; printf '0' > "$RS_COUNTER"
+rs_rc=0
+( cd "$RSREPO" && PATH="$WORK/rsbin:$PATH" CHIEF_PROJECT="$RSREPO" \
+    CHIEF_RESEARCH=1 CHIEF_RESEARCH_MAX_ATTEMPTS=2 \
+    RATE_LIMIT_RETRY=0 PROVIDER_NOTURN_LIMIT=3 PROVIDER_BACKOFF=0 \
+    bash "$AGENT" 5 ) \
+  >"$WORK/rs.log" 2>&1 || rs_rc=$?
+RS="$WORK/rs.log"
+
+echo "provider-unavailable: the research phase"
+# EXIT 8, NOT 6. The distinction is the entire point: 6 says the map could not be
+# drawn, 8 says nobody was ever asked to draw one.
+[ "$rs_rc" = "8" ] || { tail -30 "$RS" >&2
+  fail "a 529 in the research phase must exit 8 (never served), not $rs_rc (6 = RESEARCH FAILED)"; }
+grep -q 'RESEARCH FAILED' "$RS" && { tail -30 "$RS" >&2
+  fail "the run blamed the research phase for a request the provider never served"; }
+echo "   ok  exit 8, and never reported as RESEARCH FAILED"
+
+# AND IT COST NO ATTEMPT. $CHIEF_RESEARCH_MAX_ATTEMPTS is 2, so if refusals were
+# charged the loop would stop after two provider calls; the counter bounding it here
+# is PROVIDER_NOTURN_LIMIT (3), which is the one that should be.
+[ "$(cat "$RS_COUNTER")" = "3" ] || { grep -n 'attempt' "$RS" >&2
+  fail "expected 3 provider calls (PROVIDER_NOTURN_LIMIT), got $(cat "$RS_COUNTER") — refusals were charged to the research attempt budget"; }
+grep -q 'attempt 1/2' "$RS" || { tail -30 "$RS" >&2; fail "the research attempt was never announced"; }
+[ "$(grep -c 'attempt 2/2' "$RS" || true)" = "0" ] || { grep -n 'attempt .../2' "$RS" >&2
+  fail "the research attempt budget advanced on a turn that never reached the model"; }
+echo "   ok  3 calls bounded by PROVIDER_NOTURN_LIMIT; the attempt budget was untouched"
+grep -q 'never reached the model' "$RS" \
+  || { tail -30 "$RS" >&2; fail "the refused research turn was not named as such"; }
+echo "   ok  named as a refusal, not as a phase that failed"
+
 echo "PROVIDER-UNAVAILABLE PASS — a request the API refused is not an attempt the agent made"

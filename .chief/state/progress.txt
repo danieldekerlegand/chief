@@ -1,179 +1,32 @@
 # Chief Progress — 111-an-api-error-is-not-a-stall
-Started: Mon Aug 24 18:19:27 CDT 2026
+Started: Mon Aug 24 19:32:02 CDT 2026
 ---
 
-## Codebase Patterns
-
-- **A new agent.sh exit code is ~8 edit sites, and they are all findable from one
-  grep.** `grep -n 'AGENT_RC_LIMIT\|RATE-LIMITED\|rate-limited'` across `engine/` gives
-  the complete list: agent.sh's exit-code header + the loop arm; driver.sh's
-  `AGENT_RC_*` constant, its `run_worker` arm (**above** the EMPTY-NO-WORK guard),
-  `tasklist_outcome`, `reap()`, the summary accumulator + block, and the headless
-  `hl_*` mapping; plus live.sh's state/phase vocabulary comments and monitor.sh's
-  `glyph_for` + `STALE_QUIET_PHASES`. Model the whole thing on `RATE-LIMITED` — it is
-  the closest existing shape (a non-failure block that keeps branch + worktree).
-- **`test/stall-flag.sh` is a DRIFT GUARD on the phase vocabulary.** Any new
-  `live_set … phase=<x>` literal in `engine/` must be classified in exactly one of its
-  `QUIET_PHASES` / `FLAGGED_PHASES` lists or the test fails by name. That is the point:
-  "a new state classified nowhere is exactly how a false stall gets reintroduced."
-- **Braces around any `$var` butted against a multibyte character — in TESTS too.**
-  `"$iter2× — …"` made bash read the `×` bytes as part of the identifier and die under
-  `set -u` with `iter2\xd7: unbound variable`. `${iter2}×` fixes it. CLAUDE.md records
-  this for em-dashes in the engine; it bit a test on a `×` here.
-- **`shellcheck` is installable without brew.** `curl -fsSL
-  https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.darwin.aarch64.tar.xz`
-  → a standalone binary. Note 0.10.0 flags 3 errors in `engine/quality.sh` +
-  `engine/sweep.sh` that are **pre-existing on `main`** (CI's version does not), so
-  scope the check to the files you touched.
-
----
-
-## US-1 — An iteration that never reached the model does not count as an attempt
-
-**What was wrong.** `_is_rate_limit` was the only pre-accounting classifier, so a
-`529 Overloaded` fell straight through to the progress/stall check, was scored
-"no progress", and tripped `stall 3/2`. The stall counter answers "is the agent
-getting anywhere" — a refused request is not an answer to it.
-
-**The shape of the fix.** A second classifier in the same window, `_is_no_turn`,
-requiring THREE facts: the provider exited non-zero, the invocation left no trace
-(HEAD unmoved + no story flipped, read off the branch at the call site), and the
-failure names itself as a request-level refusal (a status code or an error type out
-of the provider's own envelope; text arms only when there is no structure at all,
-and those are a dated observation list). A refused iteration is rolled back
-(`i=$((i-1))`, the `_rate_limit_wait` idiom) so it charges nothing; a consecutive
-counter `PROVIDER_NOTURN_LIMIT` (default 3) bounds it, because a stop that costs no
-budget also ends no run. Exit 8 → `PROVIDER-UNAVAILABLE`, scheduler state
-`provider-unavailable`, reported with the other holds and never among the failures.
-
-**Files:** `engine/agent.sh` (config + `_provider_status_code` / `_provider_error_type`
-/ `_is_no_turn` / `_noturn_reason` / `_provider_unavailable` + the loop arm),
-`engine/driver.sh` (`AGENT_RC_UNAVAILABLE`, the run_worker arm, outcome/reap/summary/
-headless), `engine/monitor.sh`, `engine/live.sh`, `test/provider-unavailable.sh` (new,
-registered in verify.sh + all.sh + ci.yml), `test/stall-flag.sh`,
-`docs/reference/provider-unavailability.md` (new) + README/events/headless/providers
-docs, `VERSION` 0.8.88→0.8.89.
-
-**Learnings for future iterations.**
-- `overloaded_error` was moved OUT of `RATE_LIMIT_STATUS_PATTERN`. It was latent
-  breakage: a structured 529 matched the limit path, whose reset parser finds nothing
-  in an overload and falls back to sleeping `RATE_LIMIT_WAIT` — an hour. If US-2 needs
-  to route something between the two paths, the fork is `_is_rate_limit` first (there
-  is a window to wait out), `_is_no_turn` second.
-- **The hook US-2 lands on is `_provider_unavailable`.** It is the single decision
-  point ("retry or stop") and already writes the live record + event + the
-  `$NOTURN_FILE` reason the driver reports. Backoff/`Retry-After` goes inside it; the
-  `sleep 2` before the `continue` at the call site is a placeholder for exactly that.
-  `_is_no_turn` already separates 5xx/529/transport from 401/402/403, so US-2's
-  transient-vs-permanent split has its classifier — it needs the ACTION, not new
-  detection.
-- **US-3's reporting hook is the same file the driver already reads.** `run_worker`'s
-  exit-8 arm writes `$STATE/<name>.unavailable`; the INCOMPLETE arm two blocks below
-  is where the `git status --porcelain` count belongs, and `.chief/state/parallel/<n>.status`
-  is what `chief ps` renders from.
-- The test's Part 2 is the one worth copying: assert the PAIR in one run. A test that
-  only pins the new classification cannot show the two are told apart, which is
-  literally what the acceptance criterion asked for.
-
----
-
-## US-2 — A transient provider failure is WAITED OUT, not fired into three times
-
-**The shape of the fix.** US-1 left `_provider_unavailable` as the single decision
-point ("retry or stop"); this story gave it the ACTION it was missing. Two forks, both
-read off the structure `_is_no_turn` already had:
-
-- **transient vs permanent** — `_provider_refusal_kind` returns one word. 5xx/529 and
-  the transport arm are transient; 401/402/403 · `authentication_error` ·
-  `permission_error` are permanent and reach exit 8 on the FIRST refusal, because no
-  delay makes a revoked key usable. Everything unrecognised is transient AND the log
-  says it could not tell — the fail direction is chosen from cost, and a guess that
-  reads as a diagnosis is worse than the guess.
-- **how long** — `_provider_wait_seconds` returns `"<secs> <source>"`, because the log
-  line differs: "the provider asked for it (Retry-After)" and "exponential backoff +
-  jitter" are different claims. `Retry-After` wins when present, clamped to the cap,
-  never jittered. Otherwise `PROVIDER_BACKOFF` doubling per consecutive refusal,
-  clamped, with equal jitter (bottom half fixed, top half `$RANDOM`).
-
-**Files:** `engine/agent.sh` (three knobs + `_retry_after_seconds` /
-`_provider_refusal_kind` / `_provider_wait_seconds`, `_provider_unavailable` rewritten,
-the call site's placeholder `sleep 2` removed), `engine/live.sh` (`noturn`/`noturn_limit`
-fields + the `provider-backoff` phase), `engine/monitor.sh` (`live_note`'s
-provider-backoff arm), `engine/driver.sh` (the summary trailer),
-`test/provider-backoff.sh` (new, registered in verify.sh + all.sh + ci.yml),
-`test/stall-flag.sh`, `test/provider-unavailable.sh` (`PROVIDER_BACKOFF=0` throughout —
-it asserts classification, not the clock), `docs/reference/provider-unavailability.md`
-+ events/monitoring docs, `VERSION` 0.8.89→0.8.90.
-
-**Learnings for future iterations.**
-- **A test helper that MEASURES cannot be a `$(…)` helper.** `rc="$(drive …)"` runs the
-  whole thing in a subshell, so every measurement it took (`$ELAPSED`, `$CALLS`) is
-  discarded and the first use dies under `set -u`. Call it bare and let it set globals.
-- **An HTTP-date contains a comma.** The first `Retry-After` pattern used
-  `[^",}]{1,40}` for the value — sensible for a JSON envelope, and it silently read
-  every `Retry-After: Wed, 21 Oct 2015 …` as the three letters `Wed`. The value runs to
-  the end of the line (or to the next quote); trailing `,;}"` are stripped afterwards.
-  And put the optional opening quote in the PATTERN (`[:=][[:space:]]*"?[^"]{1,45}`),
-  or `"retry_after":"12"` matches nothing at all.
-- **BSD `date` will not parse `%Z`.** `date -j -f '… %Z' 'Wed, … GMT'` reads it as
-  LOCAL time. Strip the zone suffix and parse under `TZ=UTC` — the same two-arm
-  GNU-then-BSD idiom `_clock_to_epoch` already uses, plus the TZ pin.
-- **US-3's reporting hook is unchanged** and still where US-1 left it: `run_worker`'s
-  INCOMPLETE arm in `driver.sh`, with `.chief/state/parallel/<n>.status` as what
-  `chief ps` renders from. Note `live_note` now has a per-phase arm — that is the
-  pattern to copy if the work-pending state wants numbers of its own in the row.
-
----
-
-## US-3 — Work already on disk is never described as no work
-
-**What was wrong.** Two stops keep a worktree and say nothing about what is in it:
-INCOMPLETE (`left in worktree for review` — naming nothing) and EMPTY-NO-WORK (which
-is a claim about COMMITS that reads as a claim about WORK). `chief ps` rendered both
-as `✗ failed`, so "produced nothing" and "produced 2,029 files and committed none of
-them" were the same row — a real signal and a RECOVERABLE state, indistinguishable.
-
-**The shape of the fix.** One read, one writer, two renderers.
-
-- `worktree_pending WT` (**engine/lib.sh** — a pure function of one path, which is
-  why it is there and not in driver.sh) → one human phrase off a single
-  `git status --porcelain -uall`, or `''`. `-uall` is load-bearing: git's default
-  collapses an untracked DIRECTORY into one porcelain line, so tasklist 71's whole
-  adopted game would have reported as "1 uncommitted file". Ignored trees are never
-  walked, so the `-uall` is cheap where it would otherwise be expensive.
-- `pending_record NAME WT PHRASE HAS_COMMITS` (driver.sh) writes
-  `$STATE/<name>.pending` — the ONE decision, so the summary and `chief ps` cannot
-  disagree. Three outcomes: `work pending:` / `no uncommitted work:` / `no work
-  produced:`. Cleared next to `<name>.status` at the top of `run_worker`, because that
-  worker is about to `rm -rf` the worktree the file describes.
-- Both call sites (the INCOMPLETE arm and the EMPTY-NO-WORK arm) also fold it into
-  their `event_emit … detail=` and their worker-log line; the summary prints the
-  record under every row AND gathers the `work pending:` ones into a
-  `📂 WORK LEFT UNCOMMITTED` block; `monitor.sh` renders the file verbatim as a `↳`
-  line at the END of the row loop (state-agnostic, silent when the file is absent).
-
-**Files:** `engine/lib.sh` (`worktree_pending`), `engine/driver.sh` (`pending_record`,
-the two arms, the `.pending` clear, the summary row + block), `engine/monitor.sh` (the
-row's `↳`), `test/worktree-pending.sh` (new, registered in verify.sh + all.sh +
-ci.yml), `docs/guides/monitoring.md` + `docs/reference/events.md`,
-`VERSION` 0.8.90→0.8.91 + README bold.
-
-**Learnings for future iterations.**
-- **`run_worker`'s echoes go to the WORKER log, not the run log.** The test asserted
-  `holds UNCOMMITTED work` against `$WORK/run.log` and failed while the string was
-  sitting in `$STATE/parallel/<name>.log`. The split is: everything inside
-  `run_worker`'s `{ … }` block → `<name>.log`; the summary → the run's stdout. Assert
-  each against the file it actually lands in.
-- **The monitor's per-row extras go OUTSIDE the state arms.** The `elif [ "$st" = … ]`
-  chain in `render()` is exclusive, so anything added inside it is invisible on every
-  other state. The diff-budget note was already parked after the chain for exactly
-  this reason, and that is the slot to copy.
-- **`printf` a colour chosen by `case`, not by an inline `$( … )`.** A row render
-  runs once per tasklist per second in `watch`; a subshell per row per tick is the
-  cost the `dep_record_set`/`dep_record` pairs in crossrepo.sh exist to avoid.
-- **`git status --porcelain` is not one line per file by default.** If a count is
-  going to be quoted at a person, it has to be `-uall`, and the test has to plant an
-  untracked DIRECTORY or it will pass against the collapsed form.
-- `LC_ALL=C` on the awk was not optional here: it parses agent-authored PATHS with
-  `substr()`, and CLAUDE.md's BSD-awk rule bites the same way for a `dogfood/ém—dash/`
-  as it does for an em-dash in prose.
+## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
+```
+doc-links: 0 dead vs 0 on main
+verify: quality — ratchet (engine/quality.sh, deltas vs main)
+chief quality: ratchet — measuring 19 changed path(s) on HEAD and at main
+quality: scope — the 9 changed source file(s), HEAD vs main (4 file(s) new on this branch — no base version, deferred to the baseline axis)
+quality:   ok     duplicate_blocks              0 -> 0        (delta 0      tol 0)
+quality:   ok     duplicate_line_pct            0 -> 0        (delta 0      tol 1)
+quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
+quality:   BLOCK  function_length_max    base 563 -> branch 603 (delta +40, tolerance 15)
+quality:            top contributors by function_length_max (base -> branch):
+quality:              engine/driver.sh                               563 -> 603 (+40)
+quality:              engine/monitor.sh                              253 -> 271 (+18)
+quality:              engine/agent.sh                                75 -> 78 (+3)
+quality:   ok     function_length_mean      16.67 -> 17.53    (delta +0.86  tol 5)
+quality:   BLOCK  single_use_functions   base 57 -> branch 62 (delta +5, tolerance 2)
+quality:            top contributors by functions (base -> branch):
+quality:              engine/agent.sh                                33 -> 40 (+7)
+quality:              engine/driver.sh                               76 -> 77 (+1)
+quality:              engine/lib.sh                                  11 -> 12 (+1)
+quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
+quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
+quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
+quality: BLOCKED — a tracked metric regressed past its tolerance.
+quality:   Fix the named files, loosen the tolerance in .chief/quality.conf (a
+quality:   reviewable diff), or re-baseline deliberately with --write-baseline.
+verify: BLOCK — code-quality ratchet: a tracked metric regressed (see above)
+```

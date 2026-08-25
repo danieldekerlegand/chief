@@ -173,8 +173,11 @@ echo "   ok  $pend"
 # THE SUMMARY. `left in worktree for review` used to name nothing; it must now say
 # whether the worktree holds uncommitted changes and roughly how much.
 WL="$PAR/wp.log"
-grep -q 'holds UNCOMMITTED work' "$WL" || { tail -40 "$WL" >&2
-  fail "the worker never said the INCOMPLETE worktree holds uncommitted work"; }
+# The worker log RENDERS THE RECORD rather than carrying a second, hand-written
+# phrasing of it — same rule as the summary and the `chief ps` row below. Asserted as
+# a verbatim match, because "they cannot disagree" is only true if nobody re-words it.
+grep -qF "$pend" "$WL" || { tail -40 "$WL" >&2
+  fail "the worker log does not render the pending record verbatim (record: $pend)"; }
 grep -q 'nothing is lost' "$WL" || fail "the worker log does not say the work is recoverable"
 grep -q 'WORK LEFT UNCOMMITTED' "$RL" || { tail -40 "$RL" >&2
   fail "the run summary has no block naming the work left on disk"; }
@@ -222,7 +225,7 @@ case "$pend" in "no uncommitted work:"*) ;; *) tail -40 "$CL" >&2
   fail "a clean INCOMPLETE worktree must SAY it is clean, got: $pend" ;; esac
 grep -q 'WORK LEFT UNCOMMITTED' "$CL" \
   && fail "a clean worktree must not be reported as work left uncommitted"
-grep -q 'no uncommitted changes in' "$PAR/wp.log" || { tail -40 "$PAR/wp.log" >&2
+grep -qF "$pend" "$PAR/wp.log" || { tail -40 "$PAR/wp.log" >&2
   fail "the run did not report the clean worktree either way"; }
 grep -q 'no uncommitted work:' "$CL" || { tail -40 "$CL" >&2
   fail "the summary went silent about the clean worktree"; }

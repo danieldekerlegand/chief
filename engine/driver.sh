@@ -674,22 +674,36 @@ branch_has_real_work() {
     -- . ":(exclude)$TASKS_REL/$2.json" 2>/dev/null | head -1
 }
 
-# The other half of the pair — worktree_pending() (engine/lib.sh) reads the worktree;
-# this decides what the readers are told about it.
-# THE ONE PLACE THAT DECIDES, so `chief ps` and the run summary cannot disagree: both
-# read this file and render it verbatim. Written by every stop that KEEPS a worktree,
-# with exactly three outcomes —
+# pending_record NAME WORKTREE HAS_COMMITS — what a stop that KEPT its worktree says
+# about what is standing in it. Reads the tree (worktree_pending, engine/lib.sh),
+# records the verdict, renders it, and leaves the phrase in $PENDING_PHRASE for the
+# caller's event detail. HAS_COMMITS is non-empty when the branch carries commits.
+#
+# THE ONE PLACE THAT DECIDES, so the run log, the run summary and `chief ps` cannot
+# disagree: all three render this one file rather than re-phrasing the same three
+# outcomes at each site, which is what they did until the wording drifted —
 #   work pending:        produced but not committed. RECOVERABLE, and the row says so.
 #   no uncommitted work: the branch already holds everything this run produced.
 #   no work produced:    nothing committed and nothing on disk. The real signal.
-# $1 name · $2 worktree · $3 the worktree_pending phrase ('' = clean) · $4 non-empty
-# when the branch carries commits.
+#
+# WHY THE THREE ARE KEPT APART. Two callers, two different misreads, one cause. The
+# INCOMPLETE arm used to say only `left in worktree for review`, naming nothing — that
+# is the stop tasklist 71 ended on, with the 2,029 files it had already fetched
+# discoverable only by hand. The no-work guard has the sharper version of the same
+# problem: it fires both on an agent that produced NOTHING and on a run whose output
+# is sitting right there, one `git add` from being real, and those are a misbehaving
+# agent and a recoverable state respectively.
+#
+# Best-effort throughout, and that is a requirement rather than a courtesy: this is a
+# REPORTING step bolted onto stops that have already decided the outcome, and it must
+# never become a new way for a run to die. Returns 0 unconditionally.
 pending_record() {
   local f="$STATE/$1.pending"
-  if [ -n "${3:-}" ]; then
+  PENDING_PHRASE="$(worktree_pending "$2")"
+  if [ -n "$PENDING_PHRASE" ]; then
     printf 'work pending: %s — produced but NOT committed; nothing is lost (git -C %s status)\n' \
-      "$3" "$2" > "$f" 2>/dev/null || true
-  elif [ -n "${4:-}" ]; then
+      "$PENDING_PHRASE" "$2" > "$f" 2>/dev/null || true
+  elif [ -n "${3:-}" ]; then
     printf 'no uncommitted work: everything this run produced is committed on the branch\n' \
       > "$f" 2>/dev/null || true
   else
@@ -698,6 +712,11 @@ pending_record() {
   fi
   return 0
 }
+# …and the render of it. A separate call ONLY because of ordering: every stop prints
+# its own headline first and this is the ↳ under it, so recording (which the event
+# detail above needs) cannot be the same step as saying. Both the run summary and
+# `chief ps` print this same file, which is the point.
+pending_say() { sed 's/^/   ↳ /' "$STATE/$1.pending" 2>/dev/null || true; }
 
 # EVIDENCE GATE — a story CHIEF promotes must say how it was done.
 #
@@ -2275,9 +2294,10 @@ done
 # worker_park OUTCOME DETAIL MESSAGE — record a worker that stopped with its branch
 # intact, and say so four ways at once.
 #
-# Five arms of run_worker end this way (an operator pause, an unformable plan, an
-# unapproved one, a research phase that could not draw the map, and a branch held at
-# an overlap zone), and each of them used to spell out the same five lines. They are
+# Seven arms of run_worker end this way (an operator pause, an unformable plan, an
+# unapproved one, a research phase that could not draw the map, a branch held at an
+# overlap zone, a provider that never served a request, and a spent iteration
+# budget), and each of them used to spell out the same five lines. They are
 # the same transition, so they are
 # one function: the four surfaces a stop has to
 # reach — the liveliness record `chief ps` renders, the event a subscriber sees, the
@@ -2307,6 +2327,17 @@ worker_park() {
     # removes it to free the branch — so unlike its four siblings what is kept is
     # the BRANCH, rebased onto the latest base and verified.
     awaiting-approval) phase=awaiting-approval; status=AWAITING-APPROVAL; ev=tasklist.awaiting-approval; state=awaiting-approval ;;
+    # The provider never served a request (agent.sh exit 8). A stop with the branch
+    # AND the worktree intact, which is exactly what this helper records — and the
+    # only scheduler state here that is neither a park nor a failure, because nothing
+    # was learned about the work at all. It names its story: unlike the research
+    # phase there WAS a story in hand, and which one the outage caught is the first
+    # thing a re-run wants.
+    provider-unavailable) phase=provider-unavailable; status=PROVIDER-UNAVAILABLE; ev=tasklist.provider-unavailable; state=provider-unavailable ;;
+    # Budget spent with stories still open. Not a park — the run is over — but the
+    # same five surfaces, written the same way, and hand-rolling them here is how the
+    # <name>.status line and the event drifted apart in the first place.
+    incomplete)      phase=incomplete;      status=INCOMPLETE;      ev=tasklist.incomplete;      state=failed ;;
     *) return 0 ;;
   esac
   live_set "$live" phase="$phase" story="$story"
@@ -2361,10 +2392,7 @@ run_worker() {
   local live; live="$(live_of "$name")"
   CHIEF_LIVE_FILE="$live"; export CHIEF_LIVE_FILE
   : > "$STATE/$name.status"
-  # Last run's worktree report, cleared with the status it belongs to: this worker is
-  # about to `rm -rf` the worktree it describes, so a surviving file would tell
-  # `chief ps` about files that no longer exist (pending_record above).
-  rm -f "$STATE/$name.pending" 2>/dev/null || true
+  rm -f "$STATE/$name.pending" 2>/dev/null || true   # stale: the tree it describes is about to go
   {
     echo "### worker $name  (branch $branch, iters $iters${sub:+, repo $sub})  $(date)"
     live_set "$live" name="$name" phase=worktree story= iter=0 stall=0 waits=0 retry_at=0
@@ -2600,7 +2628,7 @@ run_worker() {
     # stories it left stale-false as passed so the branch proceeds to the verify gate
     # (verify — not the pass-flags — is the real merge bar). Not unconditionally —
     # evidence_gate promotes only the ones whose `notes` say how, and reports the rest.
-    local unevidenced="" unmeasured="" pending=""
+    local unevidenced="" unmeasured=""
     if [ "$agent_rc" = "0" ] && [ "$skip_agent" != "1" ] && [ -n "$has_work" ]; then
       unevidenced="$(evidence_gate "$wtstate/prd.json")"
     fi
@@ -2685,19 +2713,12 @@ run_worker() {
         "!! $name RESEARCH FAILED — nothing was implemented. Write or repair $RESEARCH_REL/$name.md by hand (it is reused as-is), or re-run with CHIEF_RESEARCH=0 to skip the phase"
       return 0
     fi
-    # PROVIDER UNAVAILABLE (agent.sh exit 8 — SCHEDULER STATES in the header, and
-    # docs/reference/provider-unavailability.md). Above the no-work guard for the parks'
-    # reason and then some: this is the ONLY stop that guarantees the agent was never
-    # given a chance, so EMPTY-NO-WORK here would fire the guard on a run that never ran.
+    # PROVIDER UNAVAILABLE — agent.sh exit 8; the why is beside $AGENT_RC_UNAVAILABLE.
     if [ "$agent_rc" = "$AGENT_RC_UNAVAILABLE" ]; then
-      local unavail_why; unavail_why="$(cat "$wtstate/.provider-unavailable" 2>/dev/null || echo)"
-      [ -n "$unavail_why" ] || unavail_why="the provider refused the request"
+      local unavail_why; unavail_why="$(cat "$wtstate/.provider-unavailable" 2>/dev/null || true)"; : "${unavail_why:=the provider refused the request}"
       printf '%s' "$unavail_why" > "$STATE/$name.unavailable" 2>/dev/null || true
-      live_set "$live" phase=provider-unavailable
-      event_emit tasklist.provider-unavailable name="$name" state=provider-unavailable \
-        detail="$unavail_why — no turn was taken; branch + worktree kept"
-      echo "PROVIDER-UNAVAILABLE $(( total - remaining ))/$total" > "$STATE/$name.status"
-      echo "!! $name BLOCKED — the provider never served a request ($unavail_why); NO agent turn was taken, so nothing is known about the work. Branch $branch and its worktree are kept; re-run to resume."
+      worker_park provider-unavailable "$unavail_why — no turn was taken; branch + worktree kept" \
+        "!! $name BLOCKED — the provider never served a request ($unavail_why); NO agent turn was taken, so nothing is known about the work. Branch $branch and its worktree are kept; re-run to resume."
       return 0
     fi
     # UNVERIFIED IN-RUN — agent.sh stopped ITSELF at an iteration boundary, having
@@ -2715,17 +2736,11 @@ run_worker() {
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
     if [ -z "$has_work" ]; then
       live_set "$live" phase=empty-no-work
-      # NO COMMITS is not the same finding as NOTHING AT ALL. This guard fires on both,
-      # and the second is a misbehaving agent while the first is a run whose output is
-      # sitting right there, one `git add` from being real.
-      pending="$(worktree_pending "$wt")"
-      pending_record "$name" "$wt" "$pending" ""
-      event_emit tasklist.no-work name="$name" state=failed \
-        detail="false-complete guard: no commits vs $work_base${pending:+ — but the worktree holds $pending}"
+      pending_record "$name" "$wt" ""   # NO COMMITS is not the finding NOTHING AT ALL is
+      event_emit tasklist.no-work name="$name" state=failed detail="false-complete guard: no commits vs $work_base${PENDING_PHRASE:+ — but the worktree holds $PENDING_PHRASE}"
       echo "EMPTY-NO-WORK 0/$total" > "$STATE/$name.status"
       echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"
-      [ -n "$pending" ] && echo "   ↳ its worktree is NOT empty, though: $pending — uncommitted, in $wt"
-      return 0
+      pending_say "$name"; return 0
     fi
     # EVIDENCE + BAR GUARDS: a story the COMPLETE path wanted promoted that says
     # nothing about how it was done, and one claiming a bar with no value measured
@@ -2733,23 +2748,11 @@ run_worker() {
     [ -n "$unevidenced" ] && { unverified_stop "$unevidenced"; return 0; }
     [ -n "$unmeasured" ] && { unmeasured_stop "$unmeasured"; return 0; }
     if [ "$remaining" != "0" ]; then
-      live_set "$live" phase=incomplete
-      # "left in worktree for review" used to name nothing. Say WHAT is in there: this
-      # is the stop tasklist 71 ended on, and the 2,029 files it had already fetched
-      # were discoverable only by hand.
-      pending="$(worktree_pending "$wt")"
-      pending_record "$name" "$wt" "$pending" 1
-      event_emit tasklist.incomplete name="$name" state=failed \
-        detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out${pending:+ — worktree holds $pending}"
-      echo "INCOMPLETE $(( total - remaining ))/$total" > "$STATE/$name.status"
-      echo "!! $name INCOMPLETE — branch $branch left in worktree for review"
-      if [ -n "$pending" ]; then
-        echo "   ↳ and it holds UNCOMMITTED work: $pending"
-        echo "   ↳ nothing is lost — review it with: git -C $wt status"
-      else
-        echo "   ↳ no uncommitted changes in $wt — everything it produced is committed on $branch"
-      fi
-      return 0
+      pending_record "$name" "$wt" 1   # "left in worktree for review" used to name nothing
+      worker_park incomplete \
+        "$(( total - remaining ))/$total stories passing when the iteration budget ran out${PENDING_PHRASE:+ — worktree holds $PENDING_PHRASE}" \
+        "!! $name INCOMPLETE — branch $branch left in worktree for review"
+      pending_say "$name"; return 0
     fi
     # Passing stories prepare a decision brief; they are not the operator's
     # verdict. Keep the branch and worktree available for `chief decide` rather
