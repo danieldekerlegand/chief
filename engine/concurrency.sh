@@ -21,6 +21,7 @@ CHIEF_MACHINE_CORES=1
 CHIEF_MACHINE_BUDGET_REQUESTED="${CHIEF_MACHINE_BUDGET-}"
 CHIEF_MACHINE_BUDGET=1
 CHIEF_MACHINE_BUDGET_DISABLED=0
+CHIEF_MACHINE_BUDGET_READY=0
 CHIEF_MACHINE_LOAD_AVERAGE=""
 
 chief_machine_core_count() {
@@ -48,9 +49,20 @@ chief_machine_budget_init() {
     ''|*[!0-9]*) CHIEF_MACHINE_BUDGET="$CHIEF_MACHINE_CORES" ;;
     *) CHIEF_MACHINE_BUDGET="$requested" ;;
   esac
+  CHIEF_MACHINE_BUDGET_READY=1
+}
+
+# Resolve cores/budget on FIRST USE. `chief ps` (engine/monitor.sh) sources this file
+# but never called the init, so every reader there rendered the file-level defaults --
+# printing "1 physical core(s)" on a 14-core host while the driver, which DOES init,
+# printed 14 in the same session. A display that depends on each caller remembering to
+# initialise will drift again, so make it self-initialising instead.
+chief_machine_budget_ensure() {
+  [ "${CHIEF_MACHINE_BUDGET_READY:-0}" = 1 ] || chief_machine_budget_init
 }
 
 chief_machine_budget_allows() {
+  chief_machine_budget_ensure
   [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ] || [ "$CHIEF_MACHINE_AGENT_TURNS" -lt "$CHIEF_MACHINE_BUDGET" ]
 }
 
@@ -70,6 +82,7 @@ chief_machine_load_average() {
 }
 
 chief_machine_load_line() {
+  chief_machine_budget_ensure
   local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}" oversubscribed
   [ -n "$load" ] || load="$(chief_machine_load_average)"
   CHIEF_MACHINE_LOAD_AVERAGE="$load"
@@ -79,6 +92,7 @@ chief_machine_load_line() {
 }
 
 chief_machine_budget_line() {
+  chief_machine_budget_ensure
   if [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ]; then
     printf 'machine budget: disabled (CHIEF_MACHINE_BUDGET=0)'
   else
