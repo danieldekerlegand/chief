@@ -1,5 +1,5 @@
 # Chief Progress — 111-an-api-error-is-not-a-stall
-Started: Mon Aug 24 19:32:02 CDT 2026
+Started: Mon Aug 24 21:08:28 CDT 2026
 ---
 
 ## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
@@ -30,3 +30,49 @@ quality:   Fix the named files, loosen the tolerance in .chief/quality.conf (a
 quality:   reviewable diff), or re-baseline deliberately with --write-baseline.
 verify: BLOCK — code-quality ratchet: a tracked metric regressed (see above)
 ```
+
+---
+
+## Re-verification after the PRIOR VERIFICATION FAILED block above (2026-08-24)
+
+All three stories were already `passes: true` on this branch (US-1, US-2, US-3 —
+committed as b7ce330, cd1392f, 6e4f933). The block above was the *merge-time* gate
+failing afterwards on the code-quality ratchet, and 453a0f3 was the fix for it. This
+iteration implemented no new story; it re-ran the gate end to end to confirm the
+branch is mergeable, which is what the block asks for.
+
+**Observed — `bash .chief/verify.sh`, exit 0, "verify: OK (allowing merge)".**
+
+- doc-links: 0 dead vs 0 on main
+- quality ratchet (the previous blocker), both metrics now inside tolerance:
+  - `function_length_max`  563 -> 575  (delta +12, tol 15)   — was +40
+  - `single_use_functions`  56 ->  58  (delta  +2, tol  2)   — was +5
+  - duplicate_blocks 0->0, duplicate_line_pct 0->0, max_nesting_depth 6->6,
+    function_length_mean 16.03 -> 16.87 (+0.84, tol 5) — all ok
+- `bash -n`: clean across bin/chief, engine/*.sh, install.sh, templates/*.sh, test/*.sh
+- shellcheck: NOT INSTALLED on this host, so the gate skipped it (CI enforces it).
+  Earlier story notes on this branch record a clean `shellcheck -S error` run, but
+  that was a different host — this run did not re-measure it.
+- test/version-bump.sh: PASS — VERSION 0.8.92 covers every engine/bin change on HEAD
+- behavioral subset under test/bystander.sh: 46/46 ran, none signalled; the decoy
+  run from the other install stayed alive ("one sweep, both directions: orphan
+  15138 reaped, bystander 90411 left alone")
+- test/doc-sync.sh: PASS · tasklist jq parse: PASS
+
+### Learnings for future iterations
+
+- **A `PRIOR VERIFICATION FAILED` block is host state, not branch state.** The driver
+  re-seeds it into a fresh `progress.txt` from `$SNAP/<name>.verify-failed.log` at the
+  top of every run (`engine/driver.sh:2529`), which lives OUTSIDE the worktree. Fixing
+  the failure does not clear the block — only a green merge-time verify does. So when
+  every story already passes and the block is present, the correct iteration is
+  *re-run `.chief/verify.sh` and record what it printed*, not go looking for more work.
+- **`✗ … failed` in the behavioral log is usually a FIXTURE, not a failure.** The
+  worktree-pending and stall-flag tests render synthetic `chief ps` rows, so a naive
+  `grep -i fail` over the verify log reports ~26 "failures" on a fully green run.
+  Match `FAIL:` / `BLOCK —` instead.
+- **The ratchet is a delta gate with a narrow tolerance** (`single_use_functions` tol
+  2). A branch that adds a family of small helpers will trip it even when each helper
+  is reasonable — the fix that worked here was folding single-caller helpers into
+  their only caller and routing duplicated arms through the existing `worker_park` /
+  `pending_record`, not loosening the tolerance.
