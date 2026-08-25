@@ -63,3 +63,81 @@ stories themselves are really done.
 
 base: main @04f5534 · behind: 2 commit(s) · branch: chief/111-an-api-error-is-not-a-stall
 (full note: .chief/state/INTEGRATE-BASE.md)
+
+---
+
+## 2026-08-24 — base integrated, gate re-verified GREEN (no story work)
+
+Every user story on 111 was already `passes:true` (US-1, US-2, US-3). This iteration
+had two outstanding non-story items, both now cleared.
+
+**1. BASE INTEGRATION — already done.** `git rev-list --count HEAD..main` = 0; the
+VERSION ladder was replayed to 0.8.94 above `main@04f5534` in e162b43 and README's
+bold version follows it. Nothing to do.
+
+**2. PRIOR VERIFICATION FAILED — the quality ratchet is green, but the gate had gone
+red somewhere else.** The block in this file names the band-88 ratchet
+(`function_length_max` +40, `single_use_functions` +5); 9940b32 fixed that and it now
+measures +12 (tol 15) and +2 (tol 2). Re-running the WHOLE gate surfaced a different,
+newer failure: `test/merge-batch.sh` PART D.
+
+  BISECT points at member #4 of 4 — charlie   (expected: member #3 of 4)
+
+**It was not this branch's doing.** Proven by bisecting the ENGINE, not the test: the
+same PART D script run against a `git archive main` export fails identically, and
+against the branch's previous base (`f0c0cb9`) it passes. What changed is main's own
+concurrency fix (7b8b9ad / 04f5534) — the machine agent-turn budget used to shadow its
+own default and cap every host at 1 (`machine budget: 1 agent turn(s) across 14
+physical core(s)`), so PART D's four workers never actually ran in parallel and the
+fake agent's 2s stagger decided the batch order on its own.
+
+With the cap lifted, the culprit's real handicap shows. Since band 110 the agent runs
+the project's verify hook ITSELF before accepting a completion, and PART D's fixture
+hook is red on any tree holding charlie's artifact — charlie's own worktree included.
+So charlie's completion is refused (`!! agent verification failed (exit 1); completion
+will not be accepted`), it spends its whole stall budget (2 no-progress iterations,
+~3s each) and only then enqueues — behind delta, at member #4, where there is no
+survivor and the bisect's re-form path goes unrun (`batchpoison.verifies` 4, not 5).
+
+Fix (354ffda, `test/merge-batch.sh` only): delta's wait absorbs the culprit's handicap
+explicitly rather than the test assuming every branch enqueues in the order the fake
+agent was told to. Measured on the fixed run, from the run's own event stream:
+enqueue at +0s / +2s / +9s / +18s — 7s and 9s of margin either side of the culprit.
+
+### Verification observed
+`bash .chief/verify.sh` → exit 0, `verify: OK (allowing merge)`
+  - quality ratchet: duplicate_blocks 0, duplicate_line_pct -0.02, max_nesting_depth 0,
+    function_length_max +12 (tol 15), function_length_mean +0.81 (tol 5),
+    single_use_functions +2 (tol 2) — OK, no tracked metric regressed
+  - doc-links: 0 dead vs 0 on main
+  - `bash -n`: clean over bin/chief + engine/*.sh + install.sh + templates/*.sh + test/*.sh
+  - shellcheck: NOT INSTALLED on this host — the gate skipped it and said so; CI enforces it
+  - version-bump: PASS (VERSION 0.8.94 covers every engine/bin change on HEAD)
+  - behavioral: 46/46 under the bystander guard, none signalled the decoy run
+  - doc-sync: PASS (README states v0.8.94)
+`bash test/merge-batch.sh` standalone → EXIT 0, all six parts (A–F), 106s.
+
+## Learnings for future iterations
+
+- **A green `test/*.sh` is not evidence the ENGINE is green — bisect the engine, not
+  the test.** `git archive <ref> | tar -x -C /tmp/chief-<ref>` gives a throwaway ROOT,
+  and every hermetic test here takes its engine from `ROOT="$(cd "$(dirname
+  "${BASH_SOURCE[0]}")/.." && pwd)"`. Copy the test to /tmp, pin `ROOT=` to the export
+  and neuter its `trap ... rm -rf "$WORK"` to `echo "WORK=$WORK"` — now the same
+  fixture can be run against main, against the old base, and against the branch, and
+  "did this branch break it" stops being an argument and becomes a measurement.
+- **A behavioural test that races real workers may have been passing for the wrong
+  reason.** PART D's ordering assumption only ever held because the machine budget bug
+  serialized every agent turn. Fixing a CONCURRENCY bug retroactively un-fixes every
+  test whose determinism was quietly resting on the absence of concurrency — expect a
+  crop of them, and read a newly-red test as "what did parallelism just expose" before
+  reading it as "what did I break".
+- **In `test/merge-batch.sh` the verify counter is keyed by `basename "$PWD"`,** so the
+  merge-gate runs land in `$OZ_WORK/<repo>.verifies` and the band-110 agent-side
+  pre-completion runs land in `$OZ_WORK/<tasklist>.verifies`. Two different counters,
+  which is why the exact `verifies == 5` assertions still model only the merge gate.
+- **The run's own event stream is the timing oracle.**
+  `jq -r 'select(.event=="tasklist.queued")|[.ts,.name]|@tsv'` over
+  `$CHIEF_RUNS/<run-id>.events.jsonl` reads out enqueue order and the real margins
+  between workers — far better than inferring order from a worker log with no
+  per-line timestamps.
