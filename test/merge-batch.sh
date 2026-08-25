@@ -285,10 +285,24 @@ echo "merge-batch: PART C ok — the zoned branch took the floor and was held; i
 # the flag, so the culprit's end state can be COMPARED rather than described.
 echo "merge-batch: PART D — a batch of four with one bad branch bisects to it"
 no_payloads
-# The culprit must be at a KNOWN index: batch order is completion order, so the four
-# finish two seconds apart and charlie is member #3 of 4. That makes the whole
-# arithmetic below exact — probes, survivors and all — instead of a range.
+# The culprit must be at a KNOWN index: batch order is completion order, and charlie
+# must be member #3 of 4 — the one position that exercises BOTH halves of a bisect
+# (a green prefix to merge and a survivor to re-form). That makes the whole arithmetic
+# below exact — probes, survivors and all — instead of a range.
+#
+# THE CULPRIT IS HANDICAPPED, so the stagger cannot simply be uniform. Since band 110
+# the agent runs the project's verify hook ITSELF, in its own worktree, before it
+# accepts a completion — and this fixture's hook is red on any tree holding charlie's
+# artifact, charlie's own included. So charlie's completion is refused, it spends its
+# whole stall budget ($STALL_LIMIT no-progress iterations, ~3s each here) before it
+# gives up, and only then does it enqueue. Uniform 2s spacing put it BEHIND delta and
+# made it member #4, where there is no survivor and the re-form path goes unrun. The
+# handicap belongs to the culprit alone, so delta's wait absorbs it explicitly rather
+# than the test assuming every branch enqueues in the order the fake agent was told to.
+# (Before 2026-08-24 this passed on uniform spacing for the wrong reason: the machine
+# agent-turn budget was capped at 1, so the four never actually ran in parallel.)
 stagger alpha bravo charlie delta
+printf '%s' 18 > "$WORK/delay/delta"
 poison_repo() {
   local repo="$1"
   make_repo "$repo" alpha bravo charlie delta

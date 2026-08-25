@@ -106,11 +106,17 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      phase having produced 0 bytes and never reached iteration 1;
 #                      an exemption would have hidden the only genuine anomalies of
 #                      that night. It wants a LONGER threshold, not silence.
+#   provider-backoff   the bounded sleep between a transient refusal and the retry.
+#                      Quiet is what it IS, but it is quiet for at most
+#                      $PROVIDER_BACKOFF_CAP seconds (60 by default) and the row
+#                      already carries its wake time, so the default 15m threshold is
+#                      never reached by a backoff that is working. Silence past it
+#                      means the sleep did not return, and that is worth the flag.
 #   verifying · warmup a non-tty `cargo test` block-buffers its output, so a gate can
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
 #                      wedged one from out here, so: a longer threshold, not silence.
-STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting '
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting provider-unavailable '
 
 # The CEILING on that exemption — quiet by design is not quiet forever. A usage window
 # that never reopens is exactly what an operator has to be told about, so the exemption
@@ -335,7 +341,7 @@ flag_fallback() { # $1 dead-flag $2 age $3 elapsed-in-phase ('' unknown) -> the 
 # last activity. Empty when there is no record or no phase, which is what makes the
 # fallback automatic. With $3=stale the trailing age becomes the at-risk flag instead.
 live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to add)
-  local lf note phase story iter stall slimit age pa
+  local lf note phase story iter stall slimit age pa at left nt ntl
   lf="$(live_file "$1" "$2")"
   [ -f "$lf" ] || return 0
   phase="$(live_get "$lf" phase)"
@@ -362,6 +368,26 @@ live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to 
       *)             note="$note · no progress last iter ($stall/$slimit)" ;;
     esac ;;
   esac
+  # A PROVIDER BACKOFF is a deliberate SLEEP, and the phase word alone cannot carry
+  # the two numbers that make it legible: how long the wait is, and which attempt this
+  # is out of how many. Without them the row is indistinguishable from a tasklist that
+  # is merely quiet — which is exactly the render the wait exists to avoid ("rather
+  # than appearing to work or appearing hung"). Both are optional: a record written by
+  # an older engine, or one whose retry_at has already elapsed, still renders.
+  if [ "$phase" = provider-backoff ]; then
+    at="$(live_get "$lf" retry_at)"
+    case "$at" in ''|0|*[!0-9]*) ;; *)
+      left=$(( at - $(date +%s) )); [ "$left" -lt 0 ] && left=0
+      note="$note · retry at $(clock "$at") (in ${left}s)" ;;
+    esac
+    nt="$(live_get "$lf" noturn)"; ntl="$(live_get "$lf" noturn_limit)"
+    case "$nt" in ''|0|*[!0-9]*) ;; *)
+      case "$ntl" in
+        ''|0|*[!0-9]*) note="$note · provider attempt $nt" ;;
+        *)             note="$note · provider attempt $nt/$ntl" ;;
+      esac ;;
+    esac
+  fi
   # The caller asks for the flag; this asks the POLICY whether this phase has earned
   # it. Same predicate the row's glyph uses, so the two halves of the line always
   # agree — and a caller that has not consulted the policy cannot reintroduce
@@ -439,6 +465,12 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     failed)          printf '%s✗%s|failed'  "$RED" "$RST" ;;
     blocked)         printf '%s⤬%s|blocked' "$RED" "$RST" ;;
     rate-limited)    printf '%s⏸%s|paused'  "$CYN" "$RST" ;;
+    # The API never served us (agent.sh exit 8). A HOLD, so the same ⏸ and never
+    # a failure glyph — that render is the bug: a tasklist whose work is intact
+    # in its worktree used to appear here as '✗ failed · no progress last iter'.
+    # Its own label, because the row's one job is to say WHO is holding the work,
+    # and 'the provider would not answer' is not 'the account is out of quota'.
+    provider-unavailable) printf '%s⏸%s|no-api' "$CYN" "$RST" ;;
     # The OPERATOR pause. Same ⏸ (it is a pause, not a fault — never a failure
     # glyph), a distinct label so `chief ps | grep` can tell the two apart, and a
     # distinct note below.
@@ -781,7 +813,7 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph
+    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph pw pwc
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
       lf="$(live_file "$n" "$state")"
@@ -858,6 +890,24 @@ render() {
                + " · budget " + (.limit.lines | tostring) + "L/" + (.limit.files | tostring) + "F per story ("
                + (.mode // "warn") + ")"' "$state/parallel/$n.budget.json" 2>/dev/null || echo)"
       [ -n "$bo" ] && printf '       %s↳ %s%s\n' "$YEL" "$bo" "$RST"
+      # WORK PRODUCED BUT NOT COMMITTED vs NO WORK PRODUCED. Two findings an operator
+      # acts on differently — the first is recoverable by reading a directory, the
+      # second is a real signal about the agent — and until now they rendered
+      # identically as `✗ failed · no progress last iter`. That row is what sent
+      # someone to re-scope tasklist 71 (talos, 2026-08-24) while 2,029 correctly
+      # placed files sat uncommitted in its worktree.
+      #
+      # The driver DECIDED this (pending_record in engine/driver.sh) and the monitor
+      # renders it verbatim — the same discipline as the phase field: one writer, no
+      # allow-list here, and no second `git status` from a view that refreshes every
+      # second. Outside the state arms above because a stop that keeps a worktree can
+      # wear more than one coarse state, and silent unless the file exists, so every
+      # row that never stopped renders exactly as before.
+      pw="$(head -1 "$state/parallel/$n.pending" 2>/dev/null || echo)"
+      if [ -n "$pw" ]; then
+        case "$pw" in "work pending:"*) pwc="$YEL" ;; *) pwc="$DIM" ;; esac
+        printf '       %s↳ %s%s\n' "$pwc" "$pw" "$RST"
+      fi
     done
   done
   [ "$UNREG_N" -gt 0 ] && unreg_render

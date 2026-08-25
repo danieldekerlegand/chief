@@ -60,11 +60,12 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 
 | Field | Shown as | Written by |
 |---|---|---|
-| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
+| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-backoff`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
 | `phase_since` | `verifying for 41m` — elapsed **in this phase** | bumped only when the phase actually changes |
 | `story` / `iter` | `US-3 · iter 5` | the agent loop, each iteration |
 | `stall` / `stall_limit` | `no progress last iter (1/2)` | the agent loop's no-progress counter and the budget it is spent against |
 | `waits` | the limit-wait count | the agent loop's usage-limit sleeps |
+| `noturn` / `noturn_limit` | `provider attempt 2/3` | consecutive requests the provider **refused before any turn was taken**, and the budget they are counted against. Deliberately not `stall`: one counts iterations the agent ran and got nowhere in, the other counts iterations it was never given |
 | `passing` / `total` | the progress column, when no `prd.json` is readable | agent + driver |
 | `retry_at` | the retry ETA on a paused row | the driver's usage-limit self-heal |
 | `heartbeat` | `12s ago` — time since the run last did *anything* | **every** write; an in-turn ticker keeps it moving through a long `claude` call |
@@ -126,6 +127,35 @@ that already claims to be done, because its verify failed post-rebase, its pass-
 were a misfire, or it will not rebase). On 2026-08-17 a tasklist read `stalled` for
 ~25 minutes while it was doing exactly the first of those, and another read it with a
 2-second heartbeat while it was working.
+
+### "Produced nothing" is not "committed nothing"
+
+A row that ends `✗ failed` says nothing about whether there is anything to salvage,
+and there very often is. On 2026-08-24 tasklist 71 ended `INCOMPLETE` with the game it
+had adopted — 2,029 files — already fetched into `dogfood/open-rts/`, correctly placed
+and not gitignored, and *never committed*. `chief ps` showed `✗ failed · no progress
+last iter`, the summary said `left in worktree for review`, and neither named the work.
+Whoever read that had no reason to look.
+
+So every stop that keeps a worktree now runs one `git status --porcelain -uall` in it
+and publishes one line, which `chief ps` and the run summary both render verbatim:
+
+| Line | What it means |
+|---|---|
+| `work pending: 2029 uncommitted file(s) (2021 untracked, 5 modified, 3 staged) · dogfood/ — …` | **recoverable.** The branch and worktree are kept; read it, keep what is good, re-run |
+| `no uncommitted work: everything this run produced is committed on the branch` | the stop is what it looks like — the branch holds it all |
+| `no work produced: nothing committed, and nothing uncommitted in the worktree either` | the real signal about the agent |
+
+The counts are per **file**, not per porcelain line: git's default collapses an
+untracked directory into one entry, which would have reported tasklist 71's whole game
+as *1 uncommitted file*. Ignored trees (`target/`, `node_modules/`) are never walked.
+The read is **best-effort by construction** — a missing worktree, a broken gitdir link
+or an unreadable index all resolve to silence, because this is a report and must never
+become a new way for a run to die.
+
+The run summary also gathers every `work pending:` tasklist into one block
+(`📂 WORK LEFT UNCOMMITTED`), because a twenty-tasklist summary scrolls and this is the
+one failure state that is fixed by reading a directory.
 
 ### One threshold could not be right for every phase
 

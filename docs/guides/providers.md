@@ -227,9 +227,20 @@ _is_rate_limit(out, status):
 Both patterns live at the top of [`engine/agent.sh`](../../engine/agent.sh) and are
 overridable from the environment. `RATE_LIMIT_PATTERN` covers prose phrasings
 ("usage limit reached", "your limit will reset at", "5-hour limit reached ∙ resets
-3pm"); `RATE_LIMIT_STATUS_PATTERN` is deliberately weaker (`429`, `rate_limit_error`,
-`overloaded_error`) and only counts when the CLI **also exited non-zero** — which is
-why invariant 2 above matters.
+3pm"); `RATE_LIMIT_STATUS_PATTERN` is deliberately weaker (`429`, `rate_limit_error`) and
+only counts when the CLI **also exited non-zero** — which is why invariant 2 above
+matters.
+
+> **A usage limit is not an outage.** `overloaded_error` used to live in
+> `RATE_LIMIT_STATUS_PATTERN` and is deliberately gone from it: an overload publishes
+> no reset time, so the parsing above found nothing and fell back to sleeping
+> `RATE_LIMIT_WAIT` — an hour, on a condition the provider itself calls temporary. A
+> `529`/`5xx`/dropped connection is classified separately as *the request was never
+> served* (`_is_no_turn`, agent exit 8), which charges the iteration to nothing at
+> all — see [provider-unavailability.md](../reference/provider-unavailability.md).
+> When onboarding a provider, a phrasing that means "your quota is spent, come back
+> at <time>" belongs in the patterns below; one that means "we could not serve this
+> request" belongs in that classifier instead.
 
 **The defaults were written against the Claude Code CLI's phrasings.** A new
 provider that says it differently ("quota exhausted", "plan limit hit — try again

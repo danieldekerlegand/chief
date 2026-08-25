@@ -79,7 +79,8 @@ echo "stall-flag: part 1 — the exempt/flagged table"
 . "$ROOT/engine/monitor.sh" lib
 
 # QUIET — silence here is the state, and chief printed the reason for it already.
-QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting'
+QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting
+  provider-unavailable'
 # FLAGGED — every other phase the engine publishes, each against ITS OWN threshold.
 # `provider-waiting` heads the list on purpose: it is the whole duration of an agent
 # turn and so is quiet MOST of the time, but a provider that never returns is a real
@@ -88,7 +89,11 @@ QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review 
 # agent.sh's `_beat_start` ticks the record every ~15s for the whole provider call, so
 # 15m of silence there is ~60 missed beats — a dead ticker, not a long turn — and a
 # longer threshold would hide exactly those two runs. Never an exemption, either.
-FLAGGED_PHASES='provider-waiting agent-turn writing integrating stalled unverified
+# `provider-backoff` is FLAGGED for the same reason and with the same shape of
+# argument: it is a deliberate sleep, but a BOUNDED one — no single wait may exceed
+# $PROVIDER_BACKOFF_CAP (60s by default), so 15m of silence in it is not a long wait,
+# it is a sleep that never returned.
+FLAGGED_PHASES='provider-waiting provider-backoff agent-turn writing integrating stalled unverified
   complete research research-failed plan-turn plan-ready plan-invalid review-wait
   approved worktree re-engaging seeded warmup reconcile merge-wait merge-queued
   batch-stacking rebasing rebase-conflict rebase-refused verifying verify-failed

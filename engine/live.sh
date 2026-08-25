@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS. The scheduler persists exactly ONE coarse word per tasklist
 # ($STATE/<name>.state: pending|running|done|failed|blocked|rate-limited|paused|
-# awaiting-review|awaiting-approval). Everything
+# awaiting-review|awaiting-approval|provider-unavailable). Everything
 # that answers "is this 'running' tasklist WORKING or HUNG?" — which iteration it is
 # on, which story, what it is doing right now, when it last did anything — only ever
 # reached the worker's stdout and was lost. That is how a tasklist sat for ~2h with no
@@ -28,10 +28,20 @@
 #   agent.sh   agent-turn · provider-waiting · writing · integrating ·
 #              rate-limited-waiting · stalled · operator-paused · research ·
 #              research-failed · plan-turn · plan-ready · plan-invalid ·
-#              review-wait · awaiting-review
+#              review-wait · awaiting-review · provider-unavailable ·
+#              provider-backoff
 #   driver.sh  worktree · re-engaging · warmup · reconcile · merge-wait · rebasing ·
 #              verifying · zone-check · merging · merged · done · operator-paused ·
-#              research-failed · plan-invalid · awaiting-review · awaiting-approval
+#              research-failed · plan-invalid · awaiting-review · awaiting-approval ·
+#              provider-unavailable
+# `provider-waiting` and `provider-unavailable` are one letter apart and mean opposite
+# things: the first is a request IN FLIGHT (the healthy state of a turn that takes
+# minutes), the second is a request the API REFUSED before any turn was taken.
+# `provider-backoff` is the third of that family and the only one that is a SLEEP:
+# the bounded wait between a transient refusal and the retry, carrying `retry_at` (the
+# epoch it wakes at) and the `noturn`/`noturn_limit` pair. It is the state a run is in
+# while it is deliberately doing nothing, and it is published BEFORE the sleep starts
+# — the whole point being that a wait must never render as work or as a hang.
 # EVERY PHASE IS A STATEMENT ABOUT NOW. That is the whole contract of this field, and
 # 'stalled' is where it was broken: agent.sh publishes it at an iteration boundary that
 # advanced neither a passing story nor HEAD — a true statement about the iteration that
@@ -76,8 +86,13 @@
 # because the count alone cannot tell an operator whether a run is one iteration from
 # stopping or has barely started, and because that pair is the ONLY place "no progress
 # last iteration" belongs: it is a fact about the last boundary, never about now.
-LIVE_FIELDS='name state phase story iter passing total stall stall_limit waits retry_at phase_since heartbeat'
-LIVE_NUMERIC=' iter passing total stall stall_limit waits retry_at phase_since heartbeat '
+# `noturn` and `noturn_limit` are the SAME shape for the other counter: consecutive
+# requests the provider refused before any turn was taken, and the budget they are
+# counted against ($PROVIDER_NOTURN_LIMIT). Kept apart from `stall` on purpose — one
+# counts iterations the agent RAN and got nowhere in, the other counts iterations the
+# agent was never given, and conflating them is the whole defect this pair exists for.
+LIVE_FIELDS='name state phase story iter passing total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat'
+LIVE_NUMERIC=' iter passing total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat '
 
 # live_get FILE KEY -> the raw value ('' when the file or key is absent).
 # The writer's format is rigid (one `  "key": value,` per line), so a sed reader is
@@ -116,7 +131,8 @@ live_set() {
   # Listed explicitly (not `eval local`) so the per-field scratch vars stay OUT of
   # the caller's globals — driver.sh and agent.sh both source this file.
   local _lv_name _lv_state _lv_phase _lv_story _lv_iter _lv_passing _lv_total \
-        _lv_stall _lv_stall_limit _lv_waits _lv_retry_at _lv_phase_since _lv_heartbeat
+        _lv_stall _lv_stall_limit _lv_waits _lv_noturn _lv_noturn_limit \
+        _lv_retry_at _lv_phase_since _lv_heartbeat
   dir="$(dirname "$f")"
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
   now="$(date +%s)"

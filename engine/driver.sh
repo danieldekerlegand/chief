@@ -33,8 +33,8 @@
 #
 # SCHEDULER STATES (per tasklist, in $STATE/<name>.state):
 #   pending · running · done · failed · blocked · rate-limited · paused ·
-#   awaiting-review · awaiting-approval
-# FOUR of these are NON-TERMINAL, and none of them is a failure:
+#   awaiting-review · awaiting-approval · provider-unavailable
+# FIVE of these are NON-TERMINAL, and none of them is a failure:
 #   · 'rate-limited' — the worker's agent loop exited 2, i.e. it stopped on a Claude
 #     usage/session limit (see engine/agent.sh's exit-code contract). Nothing is
 #     wrong with that branch — it is merely blocked until the limit window resets —
@@ -65,6 +65,19 @@
 #     disk and merges. This is the one park where the branch's worktree is already
 #     gone (the merge phase removes it before checking out): the BRANCH is what is
 #     kept, rebased and green, and a resumed run rebuilds the rest.
+#   · 'provider-unavailable' — the worker's agent loop exited 8: the API refused the
+#     REQUEST (a 529 overload, a 5xx, a dropped connection, a revoked key) for
+#     $PROVIDER_NOTURN_LIMIT consecutive attempts, so NO TURN WAS EVER TAKEN. The
+#     distinction this state exists to make is the one the run summary has to publish:
+#     'failed' is a claim about the WORK, and a run that never reached the model has
+#     learned nothing about the work. Branch, commits and worktree are all kept and a
+#     re-run resumes. Unlike 'rate-limited' it arms NO wait window — an overload
+#     publishes no reset time, and inventing an account-wide ETA to hold the run behind
+#     would be worse than ending it and letting the next run try. Each attempt inside
+#     the worker IS waited out, though ($PROVIDER_BACKOFF — Retry-After when the
+#     provider sends one, else capped exponential backoff with jitter), so the three
+#     tries are spread across the outage rather than fired into it; a PERMANENT
+#     refusal reaches this state on the first try, without waiting.
 # dep_broken() treats NONE of them as broken: the dependents of a tasklist that is
 # only waiting stay 'pending' (schedulable) instead of cascading to 'blocked'.
 #
@@ -335,6 +348,7 @@ tasklist_outcome() {
     REBASE-CONFLICT*|MERGE-CONFLICT*) printf 'conflict' ;;
     REBASE-REFUSED*)                  printf 'rebase-refused' ;;
     RATE-LIMITED*)                    printf 'rate-limited' ;;
+    PROVIDER-UNAVAILABLE*)            printf 'provider-unavailable' ;;
     PAUSED*)                          printf 'paused' ;;
     EMPTY-NO-WORK*)                   printf 'no-work' ;;
     PLAN-INVALID*)                    printf 'plan-invalid' ;;
@@ -351,6 +365,7 @@ tasklist_outcome() {
          pending)      printf 'not-launched' ;;
          done)         printf 'merged' ;;
          rate-limited) printf 'rate-limited' ;;
+         provider-unavailable) printf 'provider-unavailable' ;;
          paused)          printf 'paused' ;;
          awaiting-review) printf 'awaiting-review' ;;
          awaiting-decision) printf 'awaiting-decision' ;;
@@ -412,6 +427,14 @@ AGENT_RC_PLAN=4
 AGENT_RC_REVIEW=5
 AGENT_RC_RESEARCH=6
 AGENT_RC_UNVERIFIED=7
+# 8 IS THE OTHER "NOTHING WAS ATTEMPTED" CODE, and the one that used to be invisible:
+# the provider refused the REQUEST — a 529 overload, a 5xx, a dropped connection, a
+# revoked key — for $PROVIDER_NOTURN_LIMIT consecutive attempts, so no turn was ever
+# taken. Before it existed those iterations were scored as no-progress, tripped the
+# stall counter and ended as INCOMPLETE, which is a claim about the WORK that nothing
+# had been learned about (talos 2026-08-24, tasklists 71 and 72). Like 2 it is a
+# BLOCK, not a failure: branch, commits and worktree are all kept.
+AGENT_RC_UNAVAILABLE=8
 # Driver-level usage-limit self-heal (see SCHEDULER STATES above). Deliberately a
 # separate family from agent.sh's RATE_LIMIT_* per-worker knobs: those govern how
 # long ONE agent loop sleeps mid-story, these govern how many times the SCHEDULER
@@ -650,6 +673,50 @@ branch_has_real_work() {
   git -C "${work_repo:-$REPO}" diff --name-only "${work_base:-$BASE_BRANCH}...$1" \
     -- . ":(exclude)$TASKS_REL/$2.json" 2>/dev/null | head -1
 }
+
+# pending_record NAME WORKTREE HAS_COMMITS — what a stop that KEPT its worktree says
+# about what is standing in it. Reads the tree (worktree_pending, engine/lib.sh),
+# records the verdict, renders it, and leaves the phrase in $PENDING_PHRASE for the
+# caller's event detail. HAS_COMMITS is non-empty when the branch carries commits.
+#
+# THE ONE PLACE THAT DECIDES, so the run log, the run summary and `chief ps` cannot
+# disagree: all three render this one file rather than re-phrasing the same three
+# outcomes at each site, which is what they did until the wording drifted —
+#   work pending:        produced but not committed. RECOVERABLE, and the row says so.
+#   no uncommitted work: the branch already holds everything this run produced.
+#   no work produced:    nothing committed and nothing on disk. The real signal.
+#
+# WHY THE THREE ARE KEPT APART. Two callers, two different misreads, one cause. The
+# INCOMPLETE arm used to say only `left in worktree for review`, naming nothing — that
+# is the stop tasklist 71 ended on, with the 2,029 files it had already fetched
+# discoverable only by hand. The no-work guard has the sharper version of the same
+# problem: it fires both on an agent that produced NOTHING and on a run whose output
+# is sitting right there, one `git add` from being real, and those are a misbehaving
+# agent and a recoverable state respectively.
+#
+# Best-effort throughout, and that is a requirement rather than a courtesy: this is a
+# REPORTING step bolted onto stops that have already decided the outcome, and it must
+# never become a new way for a run to die. Returns 0 unconditionally.
+pending_record() {
+  local f="$STATE/$1.pending"
+  PENDING_PHRASE="$(worktree_pending "$2")"
+  if [ -n "$PENDING_PHRASE" ]; then
+    printf 'work pending: %s — produced but NOT committed; nothing is lost (git -C %s status)\n' \
+      "$PENDING_PHRASE" "$2" > "$f" 2>/dev/null || true
+  elif [ -n "${3:-}" ]; then
+    printf 'no uncommitted work: everything this run produced is committed on the branch\n' \
+      > "$f" 2>/dev/null || true
+  else
+    printf 'no work produced: nothing committed, and nothing uncommitted in the worktree either\n' \
+      > "$f" 2>/dev/null || true
+  fi
+  return 0
+}
+# …and the render of it. A separate call ONLY because of ordering: every stop prints
+# its own headline first and this is the ↳ under it, so recording (which the event
+# detail above needs) cannot be the same step as saying. Both the run summary and
+# `chief ps` print this same file, which is the point.
+pending_say() { sed 's/^/   ↳ /' "$STATE/$1.pending" 2>/dev/null || true; }
 
 # EVIDENCE GATE — a story CHIEF promotes must say how it was done.
 #
@@ -1576,10 +1643,11 @@ deps_satisfied() {
   return 0
 }
 dep_broken() {   # a dep failed/blocked -> this tasklist can never run
-  # 'rate-limited', 'paused', 'awaiting-review' and 'awaiting-approval' are
-  # deliberately absent: a dep waiting out a usage limit, parked by an operator
-  # pause, waiting on a human's plan verdict, or held by the merge policy layer for a
-  # human's approval is not broken — it is unfinished work with its branch intact that the next
+  # 'rate-limited', 'paused', 'awaiting-review', 'awaiting-approval' and
+  # 'provider-unavailable' are deliberately absent: a dep waiting out a usage limit,
+  # parked by an operator pause, waiting on a human's plan verdict, held by the merge
+  # policy layer for a human's approval, or blocked by an API that never answered, is
+  # not broken — it is unfinished work with its branch intact that the next
   # run resumes. Its dependents must therefore stay pending (schedulable on resume)
   # rather than cascade to 'blocked'.
   local d
@@ -2226,9 +2294,10 @@ done
 # worker_park OUTCOME DETAIL MESSAGE — record a worker that stopped with its branch
 # intact, and say so four ways at once.
 #
-# Five arms of run_worker end this way (an operator pause, an unformable plan, an
-# unapproved one, a research phase that could not draw the map, and a branch held at
-# an overlap zone), and each of them used to spell out the same five lines. They are
+# Seven arms of run_worker end this way (an operator pause, an unformable plan, an
+# unapproved one, a research phase that could not draw the map, a branch held at an
+# overlap zone, a provider that never served a request, and a spent iteration
+# budget), and each of them used to spell out the same five lines. They are
 # the same transition, so they are
 # one function: the four surfaces a stop has to
 # reach — the liveliness record `chief ps` renders, the event a subscriber sees, the
@@ -2258,6 +2327,17 @@ worker_park() {
     # removes it to free the branch — so unlike its four siblings what is kept is
     # the BRANCH, rebased onto the latest base and verified.
     awaiting-approval) phase=awaiting-approval; status=AWAITING-APPROVAL; ev=tasklist.awaiting-approval; state=awaiting-approval ;;
+    # The provider never served a request (agent.sh exit 8). A stop with the branch
+    # AND the worktree intact, which is exactly what this helper records — and the
+    # only scheduler state here that is neither a park nor a failure, because nothing
+    # was learned about the work at all. It names its story: unlike the research
+    # phase there WAS a story in hand, and which one the outage caught is the first
+    # thing a re-run wants.
+    provider-unavailable) phase=provider-unavailable; status=PROVIDER-UNAVAILABLE; ev=tasklist.provider-unavailable; state=provider-unavailable ;;
+    # Budget spent with stories still open. Not a park — the run is over — but the
+    # same five surfaces, written the same way, and hand-rolling them here is how the
+    # <name>.status line and the event drifted apart in the first place.
+    incomplete)      phase=incomplete;      status=INCOMPLETE;      ev=tasklist.incomplete;      state=failed ;;
     *) return 0 ;;
   esac
   live_set "$live" phase="$phase" story="$story"
@@ -2312,6 +2392,7 @@ run_worker() {
   local live; live="$(live_of "$name")"
   CHIEF_LIVE_FILE="$live"; export CHIEF_LIVE_FILE
   : > "$STATE/$name.status"
+  rm -f "$STATE/$name.pending" 2>/dev/null || true   # stale: the tree it describes is about to go
   {
     echo "### worker $name  (branch $branch, iters $iters${sub:+, repo $sub})  $(date)"
     live_set "$live" name="$name" phase=worktree story= iter=0 stall=0 waits=0 retry_at=0
@@ -2632,6 +2713,14 @@ run_worker() {
         "!! $name RESEARCH FAILED — nothing was implemented. Write or repair $RESEARCH_REL/$name.md by hand (it is reused as-is), or re-run with CHIEF_RESEARCH=0 to skip the phase"
       return 0
     fi
+    # PROVIDER UNAVAILABLE — agent.sh exit 8; the why is beside $AGENT_RC_UNAVAILABLE.
+    if [ "$agent_rc" = "$AGENT_RC_UNAVAILABLE" ]; then
+      local unavail_why; unavail_why="$(cat "$wtstate/.provider-unavailable" 2>/dev/null || true)"; : "${unavail_why:=the provider refused the request}"
+      printf '%s' "$unavail_why" > "$STATE/$name.unavailable" 2>/dev/null || true
+      worker_park provider-unavailable "$unavail_why — no turn was taken; branch + worktree kept" \
+        "!! $name BLOCKED — the provider never served a request ($unavail_why); NO agent turn was taken, so nothing is known about the work. Branch $branch and its worktree are kept; re-run to resume."
+      return 0
+    fi
     # UNVERIFIED IN-RUN — agent.sh stopped ITSELF at an iteration boundary, having
     # demoted the same story MEASURE_DEMOTE_LIMIT times running (its _measure_boundary).
     # Above the no-work guard for the mirror of the parks' reason: the stop can leave
@@ -2647,9 +2736,11 @@ run_worker() {
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
     if [ -z "$has_work" ]; then
       live_set "$live" phase=empty-no-work
-      event_emit tasklist.no-work name="$name" state=failed detail="false-complete guard: no commits vs $work_base"
+      pending_record "$name" "$wt" ""   # NO COMMITS is not the finding NOTHING AT ALL is
+      event_emit tasklist.no-work name="$name" state=failed detail="false-complete guard: no commits vs $work_base${PENDING_PHRASE:+ — but the worktree holds $PENDING_PHRASE}"
       echo "EMPTY-NO-WORK 0/$total" > "$STATE/$name.status"
-      echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"; return 0
+      echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"
+      pending_say "$name"; return 0
     fi
     # EVIDENCE + BAR GUARDS: a story the COMPLETE path wanted promoted that says
     # nothing about how it was done, and one claiming a bar with no value measured
@@ -2657,10 +2748,11 @@ run_worker() {
     [ -n "$unevidenced" ] && { unverified_stop "$unevidenced"; return 0; }
     [ -n "$unmeasured" ] && { unmeasured_stop "$unmeasured"; return 0; }
     if [ "$remaining" != "0" ]; then
-      live_set "$live" phase=incomplete
-      event_emit tasklist.incomplete name="$name" state=failed detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out"
-      echo "INCOMPLETE $(( total - remaining ))/$total" > "$STATE/$name.status"
-      echo "!! $name INCOMPLETE — branch $branch left in worktree for review"; return 0
+      pending_record "$name" "$wt" 1   # "left in worktree for review" used to name nothing
+      worker_park incomplete \
+        "$(( total - remaining ))/$total stories passing when the iteration budget ran out${PENDING_PHRASE:+ — worktree holds $PENDING_PHRASE}" \
+        "!! $name INCOMPLETE — branch $branch left in worktree for review"
+      pending_say "$name"; return 0
     fi
     # Passing stories prepare a decision brief; they are not the operator's
     # verdict. Keep the branch and worktree available for `chief decide` rather
@@ -3076,6 +3168,13 @@ reap() {   # collect any finished workers, update state
       # it so dependents stay pending instead of cascading to 'blocked'. limit_pause
       # arms the reset-aware window the scheduler re-dispatches it after.
       RATE-LIMITED*) set_state "$n" rate-limited; limit_pause "$n" ;;
+      # The provider never served the request (agent.sh exit 8). Non-terminal on
+      # exactly the same terms as the limit above — dep_broken() ignores anything
+      # that is not failed/blocked, so dependents stay pending — but deliberately
+      # NOT limit_pause'd: there is no reset window to wait out, and holding the
+      # whole run behind an account-wide ETA that no provider published would be
+      # inventing one. The tasklist is recorded and the run ends; a re-run resumes it.
+      PROVIDER-UNAVAILABLE*) set_state "$n" provider-unavailable ;;
       # Drained on an OPERATOR pause: parked, never failed. Non-terminal in the same
       # way, and dep_broken() ignores it too — but nothing here re-arms it, because
       # nothing in this run may. Only `chief resume` lifts a human's hold; the
@@ -3220,14 +3319,21 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
   [ -f "$STATE/$n.why" ] && sed 's/^/       ↳ /' "$STATE/$n.why"
+  # WHAT IS IN THE WORKTREE — written by every stop that kept one (pending_record).
+  # Printed for the clean case too: the criterion is that the summary says WHETHER
+  # there are uncommitted changes, and silence is what an operator has to go and
+  # check by hand.
+  [ -s "$STATE/$n.pending" ] && sed 's/^/       ↳ /' "$STATE/$n.pending"
+  case "$(head -1 "$STATE/$n.pending" 2>/dev/null || echo)" in "work pending:"*) workleft="$workleft $n" ;; esac
   case "$(get_state "$n")" in
     done|failed) ran=1 ;;
     rate-limited) ran=1; paused="$paused $n" ;;   # it ran; it is paused, not failed
+    provider-unavailable) ran=1; unserved="$unserved $n" ;;  # it ran; the API never answered
     paused) ran=1; parked="$parked $n" ;;         # it ran; the operator stopped it
     awaiting-review) ran=1; inreview="$inreview $n" ;;  # it ran; a human hasn't approved its plan
     awaiting-decision) ran=1; inreview="$inreview $n" ;;
@@ -3295,6 +3401,20 @@ if [ -n "$stashed" ]; then
   echo "    chief parked it to merge, and the merge changed the same lines — so it replayed with"
   echo "    conflicts and the entry was KEPT rather than dropped. Nothing is lost."
 fi
+# WORK THAT EXISTS AND IS NOT COMMITTED. Its own block, for the reason the per-row ↳
+# line is not enough: a run of twenty tasklists scrolls, and this is the one failure
+# state that is RECOVERABLE by reading a directory. On 2026-08-24 tasklist 71 ended
+# INCOMPLETE with its adopted game — 2,029 files — fetched and correctly placed in its
+# worktree, and the summary said only `left in worktree for review`. Whoever read that
+# had no reason to look, and re-scoping the tasklist would have thrown the work away.
+if [ -n "$workleft" ]; then
+  echo "   📂 WORK LEFT UNCOMMITTED — $(set -- $workleft; echo $#) tasklist(s) produced changes that were never committed:"
+  for n in $workleft; do
+    printf '    · %-30s %s\n' "$n" "$(sed 's/^work pending: //' "$STATE/$n.pending" | head -1)"
+  done
+  echo "    NOTHING IS LOST — each branch and its worktree are kept exactly as they were. This is"
+  echo "    a recoverable state, not an empty one: read the worktree, keep what is good, re-run."
+fi
 # A usage-limit pause is not a failure and must not read like one: say plainly that
 # the branch is intact, how much of the self-heal budget it spent, and that a re-run
 # picks up where it stopped. A run that ends here ran out of RE-DISPATCHES, not road.
@@ -3316,6 +3436,28 @@ if [ -n "$paused" ]; then
   # lookup of a name that never existed, which under `set -u` kills the run in
   # its own summary. Brace any $var butted against non-ASCII punctuation.
   [ -n "$still" ] && echo "    (never launched, held by the limit pause: ${still}— they run on the next 'chief run')"
+fi
+# THE PROVIDER NEVER SERVED US. Reported here, next to the other holds and never among
+# the failures, because that is precisely the misread this exists to stop: on
+# 2026-08-24 tasklists 71 and 72 ended `✗ failed … no progress last iter` on an
+# outage, and an operator reading that would reasonably re-scope a tasklist whose work
+# was sitting intact in its worktree. Nothing is wrong with the branch and nothing is
+# known about the work — no turn was taken — so say both, name what the API answered
+# with, and say that a re-run is the whole fix.
+if [ -n "$unserved" ]; then
+  echo "   ⏸ PROVIDER UNAVAILABLE — $(set -- $unserved; echo $#) tasklist(s) BLOCKED by the API, not failed and not stalled:$unserved"
+  for n in $unserved; do
+    printf '    · %-30s %s\n' "$n" "$(cat "$STATE/$n.unavailable" 2>/dev/null || echo 'the provider refused the request')"
+  done
+  echo "    NO agent turn was taken on these, so the run learned nothing about their work —"
+  echo "    their branches, commits and worktrees are all kept exactly as they were."
+  echo "    Re-run once the provider is back; each resumes from its committed passes state."
+  echo "    (PROVIDER_NOTURN_LIMIT=${PROVIDER_NOTURN_LIMIT:-3} consecutive refusals is what stops a worker; each"
+  echo "     TRANSIENT one is waited out first — Retry-After when the provider sends one, else"
+  echo "     backoff from ${PROVIDER_BACKOFF:-5}s doubling to a ${PROVIDER_BACKOFF_CAP:-60}s cap — so the worst case before this"
+  echo "     report is bounded by (PROVIDER_NOTURN_LIMIT-1) x PROVIDER_BACKOFF_CAP. A PERMANENT"
+  echo "     refusal — a bad or revoked key, a quota that will not replenish — is not waited on"
+  echo "     at all and says so above.)"
 fi
 # An OPERATOR pause is a DECISION, not a fault, and the summary is where that has to
 # be unmistakable: parked tasklists are listed here, never among the failures. Say
@@ -3434,6 +3576,7 @@ for n in $NAMES; do
     conflict)                 hl_conflict=1 ;;
     verify-failed)            hl_verify=1 ;;
     paused|rate-limited)      hl_held=1 ;;
+    provider-unavailable)     hl_held=1 ;;   # the API never served us — withheld, not failed
     awaiting-review)          hl_held=1 ;;   # withheld pending a human verdict, not failed
     awaiting-approval)        hl_held=1 ;;   # withheld pending a human approval, not failed
     blocked|not-launched)     ;;   # never ran — the no-work rule below covers these

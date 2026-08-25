@@ -56,9 +56,24 @@
 #      real work, and it is kept, along with its worktree. The driver reports the
 #      same UNVERIFIED status, in the same words, that the merge floor would have
 #      reported hours later; re-running resumes once the value is in `notes`.
+#   8  THE PROVIDER NEVER SERVED THE REQUEST — the invocation failed BEFORE the
+#      model produced a turn (a 5xx/529 overload, a dropped connection, a refused
+#      key), for $PROVIDER_NOTURN_LIMIT consecutive attempts. NOT a stall and not a
+#      failure: no turn was taken, no tool was called, nothing was attempted, so the
+#      run learned nothing about the work. Like 2 it is a BLOCK — the branch, its
+#      commits and its worktree are all kept and a re-run resumes from the committed
+#      passes state. It exists because the alternative is what 71 and 72 did on
+#      2026-08-24: charge three refused requests to the stall counter and report a
+#      branch with intact work as INCOMPLETE (see PROVIDER UNAVAILABILITY below).
+#      A TRANSIENT refusal is WAITED OUT first (Retry-After when the provider sends
+#      one, else capped exponential backoff with jitter), so the three attempts are
+#      spread across the outage instead of fired into it back to back. A PERMANENT
+#      one — a bad or revoked key, a quota that will not replenish — reaches this
+#      exit on the FIRST refusal, because no delay makes an unusable key usable.
 # A usage limit is detected BEFORE the progress/stall accounting (see
 # _is_rate_limit below), so a limit-blocked turn can never be misread as a
-# no-progress iteration that trips STALL_LIMIT and exits 1.
+# no-progress iteration that trips STALL_LIMIT and exits 1. A request the provider
+# never served is detected in the same window and for the same reason (_is_no_turn).
 
 set -e
 
@@ -179,6 +194,12 @@ LAST_BRANCH_FILE="$STATE_DIR/.last-branch"
 # and the scheduler agree on the ETA instead of parsing the message twice.
 LIMIT_RETRY_FILE="$STATE_DIR/.limit-retry-at"
 rm -f "$LIMIT_RETRY_FILE"
+# Written ONLY on an exit-8 stop: the one-line reason the provider gave for refusing
+# the request, so the driver can NAME what blocked the tasklist instead of reporting
+# it as a nameless failure. Same durability contract as the file above — the driver
+# reads it out of the worktree's state dir the moment the worker returns.
+NOTURN_FILE="$STATE_DIR/.provider-unavailable"
+rm -f "$NOTURN_FILE"
 # THE RESEARCH DOCUMENT, in its two locations — declared HERE rather than beside the
 # RESEARCH PHASE below because _compose_prompt (next) reads it, and every story turn
 # is composed through that one function.
@@ -483,7 +504,107 @@ RATE_LIMIT_RETRY="${RATE_LIMIT_RETRY:-1}"
 RATE_LIMIT_WAIT="${RATE_LIMIT_WAIT:-3600}"
 RATE_LIMIT_MAX_WAITS="${RATE_LIMIT_MAX_WAITS:-8}"
 RATE_LIMIT_PATTERN="${RATE_LIMIT_PATTERN:-(usage limit reached|session limit reached|((5|five)[ -]hour|weekly|daily|monthly|hourly|plan|account|output|token)[ -]limit reached|(hit|reached|exceeded) (your|the) ([a-z0-9-]+ )?(session|usage|rate|weekly|daily|monthly|plan|output|token) limit|(your|the) limit will reset (at|in)|rate limit exceeded|rate_limit_error|too many requests|upgrade to increase your usage limit)}"
-RATE_LIMIT_STATUS_PATTERN="${RATE_LIMIT_STATUS_PATTERN:-(429|rate[_ -]?limit|usage limit|session limit|overloaded_error)}"
+RATE_LIMIT_STATUS_PATTERN="${RATE_LIMIT_STATUS_PATTERN:-(429|rate[_ -]?limit|usage limit|session limit)}"
+
+# --- PROVIDER UNAVAILABILITY (an iteration that never reached the model) ------
+# A 529, a 503, a dropped connection, a refused key: the API declined the REQUEST.
+# No turn was taken, no tool was called, nothing was attempted — so counting it as a
+# no-progress iteration conflates "the agent tried and got nowhere" with "the agent
+# was never given a chance", and only the first is evidence about the work.
+#
+# Measured on talos 2026-08-24: tasklists 71 and 72 each spent three consecutive
+# iterations whose ENTIRE output was `API Error: 529 Overloaded. This is a
+# server-side issue, usually temporary`. Each was scored "no progress", the third
+# tripped `stall 3/2`, and the run reported INCOMPLETE with 2,029 correctly-placed
+# files sitting uncommitted in the worktree — a display that reads as "this tasklist
+# is broken, re-scope it".
+#
+# `overloaded_error` USED TO LIVE IN $RATE_LIMIT_STATUS_PATTERN and is deliberately
+# gone from it. An overload is not a quota: there is no window to wait out, so the
+# limit path's reset parsing has nothing to read and falls back to sleeping
+# $RATE_LIMIT_WAIT — an hour, on a condition the provider itself calls temporary.
+#
+# CLASSIFIED FROM THE OUTCOME, not from prose. Three facts, all of which must hold:
+#   1. the provider process exited NON-ZERO — a turn that returned 0 was taken;
+#   2. the invocation left NO TRACE — HEAD did not move and no story flipped (read
+#      off the branch at the call site, not believed from the output);
+#   3. the failure NAMES ITSELF as a request-level refusal — a status code or an
+#      error type read out of the provider's own structured error envelope.
+# Only when (3) finds no structure at all do the text arms run, and the rule for
+# those is below.
+#
+# THE TEXT ARMS ARE A DOCUMENTED, DATED LIST. A match-on-prose rule whose
+# observations are not written down cannot be audited when it stops firing, and a
+# silently-stopped classifier reads exactly like the bug this block fixes. So every
+# entry here is a message someone actually saw, recorded with the date they saw it:
+#
+#   2026-08-24  talos · `claude` CLI · tasklists 71 and 72, three iterations each:
+#               "API Error: 529 Overloaded. This is a server-side issue, usually
+#                temporary — try again in a moment"
+#               -> matched by the `API Error: <code>` arm of _provider_status_code.
+#               No JSON envelope was printed; the code is the only structure in it.
+#
+# A transport failure never reaches HTTP at all, so it has no code and no envelope
+# and is text by construction. These are node/undici and curl phrasings, kept narrow
+# on purpose — they are matched only after conditions 1 and 2 already hold, so an
+# agent writing the words "connection refused" into a file cannot trip them.
+PROVIDER_TRANSPORT_PATTERN="${PROVIDER_TRANSPORT_PATTERN:-(econn(reset|refused|aborted)|enotfound|etimedout|eai_again|socket hang up|connection (reset|refused|closed|timed out)|network (error|is unreachable)|could not resolve host|fetch failed|tls handshake)}"
+# Consecutive refused requests before the loop stops. It STOPS rather than spinning:
+# an iteration that costs no budget also ends no run, so something has to bound it.
+# 3 = enough to ride out a blip, few enough that a real outage is reported in
+# seconds instead of grinding through $HARD_MAX. 0 disables the classification
+# entirely and restores the pre-fix behaviour (every refusal scored as a stall).
+PROVIDER_NOTURN_LIMIT="${PROVIDER_NOTURN_LIMIT:-3}"
+
+# --- WAITING A TRANSIENT REFUSAL OUT (the other half of the same defect) ------
+# The message says so itself: "usually temporary — try again in a moment". Chief had
+# no wait for it, so 71 and 72 fired three iterations into an overloaded API back to
+# back and spent the whole budget inside a window a single pause would have covered.
+#
+# TRANSIENT vs PERMANENT is the fork, and _is_no_turn already carries the evidence
+# for it (a status code or an error type out of the provider's own envelope):
+#   transient  5xx · 529 · overloaded_error · api_error · any transport failure — and
+#              ANY refusal this cannot classify. The fail direction is chosen from
+#              COST, not from likelihood: waiting on a permanent error wastes minutes,
+#              failing fast on an outage loses the tasklist. So ambiguity waits, and
+#              the log SAYS it could not tell rather than implying it knew.
+#   permanent  401/402/403 · authentication_error · permission_error — a bad key, a
+#              revoked one, a quota that will not replenish. No amount of sleeping
+#              fixes any of those, so the loop stops on the FIRST one, with its
+#              reason, instead of sleeping through a budget it cannot satisfy.
+#
+# THE PROVIDER'S OWN INTERVAL WINS. `Retry-After` is the server naming the moment it
+# expects to be able to serve us — better information than any backoff computed here
+# — and RFC 9110 allows two forms, both of which are seen in the wild:
+#   delta-seconds  `Retry-After: 30`                              (and `"retry-after": 30`)
+#   HTTP-date      `Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`
+# It is taken verbatim (clamped to the cap below, which is what keeps the worst case
+# bounded) and deliberately NOT jittered: jitter exists to de-phase clients that are
+# all guessing, and a client that was told the interval is not guessing.
+#
+# Otherwise: exponential from $PROVIDER_BACKOFF, doubling once per consecutive
+# refusal, clamped to $PROVIDER_BACKOFF_CAP, with EQUAL JITTER — a uniform draw over
+# the top half of the interval. Half-fixed keeps the wait meaningful; half-random
+# de-phases the N chief workers that tripped the same outage in the same second, so
+# they do not retry in the same second too (under `-p N` they all fail together).
+#
+# THE WORST CASE IS BOUNDED, AND IT IS THE TWO KNOBS MULTIPLIED. The loop stops after
+# $PROVIDER_NOTURN_LIMIT consecutive refusals, so it sleeps at most LIMIT-1 times and
+# no single sleep may exceed the cap: with the defaults (3, 5s, 60s) that is at most
+# 2 waits of at most 60s = 120s of waiting before the run reports the block. Raising
+# either knob raises that product, and nothing else does.
+#
+# PROVIDER_BACKOFF=0 disables waiting entirely — retries fire back to back, which is
+# the pre-fix behaviour, kept reachable for debugging. (It does not disable the
+# CLASSIFICATION; that is PROVIDER_NOTURN_LIMIT=0.)
+PROVIDER_BACKOFF="${PROVIDER_BACKOFF:-5}"
+PROVIDER_BACKOFF_CAP="${PROVIDER_BACKOFF_CAP:-60}"
+PROVIDER_BACKOFF_JITTER="${PROVIDER_BACKOFF_JITTER:-1}"
+# A knob is only a bound if it is a number. Anything else falls back to the default
+# rather than reaching `sleep` or `$(( ))` as garbage.
+case "$PROVIDER_BACKOFF"     in ''|*[!0-9]*) PROVIDER_BACKOFF=5  ;; esac
+case "$PROVIDER_BACKOFF_CAP" in ''|*[!0-9]*) PROVIDER_BACKOFF_CAP=60 ;; esac
+[ "$PROVIDER_BACKOFF_CAP" -lt "$PROVIDER_BACKOFF" ] && PROVIDER_BACKOFF_CAP="$PROVIDER_BACKOFF"
 
 # --- OPERATOR PAUSE (the drain checkpoint; see engine/driver.sh's header) -----
 # The driver hands us the path of its operator-pause flag ($STATE/.paused, armed by
@@ -1064,6 +1185,229 @@ _rate_limit_wait() {
   return 1
 }
 
+# --- PROVIDER UNAVAILABILITY: the classifier (see the block beside its knobs) ---
+#
+# _provider_status_code OUTPUT -> the HTTP status the invocation ended on ('' if none).
+# STRUCTURED FIRST: a `"status": 529` / `"status_code": 503` key is the provider
+# stating what it did, and it survives any rewording of the prose beside it. Read by
+# KEY rather than by position, so a pretty-printed envelope and a one-line one both
+# answer. The `API Error: <code>` prefix is the CLI's own error line — the text arm,
+# recorded in the dated observation table above — and is read only when no envelope
+# was printed at all.
+_provider_status_code() {
+  local out="$1" code=""
+  code="$(printf '%s\n' "$out" \
+    | grep -oE '"(status|status_code|statusCode)"[[:space:]]*:[[:space:]]*[0-9]{3}' \
+    | tail -1 | grep -oE '[0-9]{3}$' || echo "")"
+  if [ -z "$code" ]; then
+    code="$(printf '%s\n' "$out" | grep -oiE 'api error:?[[:space:]]*[0-9]{3}' \
+      | tail -1 | grep -oE '[0-9]{3}' || echo "")"
+  fi
+  case "$code" in ''|*[!0-9]*) code="" ;; esac
+  printf '%s' "$code"
+}
+# _provider_error_type OUTPUT -> the error TYPE an Anthropic-shaped envelope names
+# ('' if none). `{"type":"error","error":{"type":"overloaded_error",…}}` -> the LAST
+# match, i.e. the inner and more specific one. This is the arm that keeps working
+# when a vendor reworders the human sentence: the machine-readable type is the
+# contract, the sentence beside it is not.
+_provider_error_type() {
+  printf '%s\n' "$1" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[a-z_]*error"' \
+    | tail -1 | grep -oE '[a-z_]*error' || echo ""
+}
+# _provider_wait_seconds ATTEMPT OUTPUT -> "<seconds> <source>" — how long to wait
+# before re-running a turn the provider refused, and WHICH rule produced the figure
+# (`retry-after` = the provider named it, `backoff` = we computed it). Both halves
+# are returned because the log line differs: "the provider asked for it" and "capped
+# exponential backoff" are different claims and a reader has to be able to tell them
+# apart. 0 seconds means do not wait at all ($PROVIDER_BACKOFF=0).
+#
+# THE PROVIDER'S OWN FIGURE WINS, so reading Retry-After is the first thing it does.
+# RFC 9110 allows two forms and providers use both: delta-seconds (`Retry-After: 30`,
+# and the `"retry-after": 30` an SDK prints when it dumps the response headers) and an
+# HTTP-date (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`). The date form is converted
+# with WHATEVER date(1) the host has — GNU takes -d, BSD rejects it outright and needs
+# -j -f with an explicit format — the same two-arm idiom _clock_to_epoch uses, and for
+# the same reason: trying only the GNU form means this arm silently produces nothing
+# on a Mac. The zone suffix is stripped and the parse is pinned to UTC, because BSD
+# `date`'s %Z does not honour it and would read a GMT timestamp as local time. A date
+# already in the PAST reads as ABSENT, not as 0: a skewed clock must fall back to the
+# computed backoff rather than silence the wait entirely.
+_provider_wait_seconds() {
+  local n="$1" out="$2" secs ra half raw d e now
+  [ "$PROVIDER_BACKOFF" -gt 0 ] || { printf '0 disabled'; return 0; }
+  # The value runs to the end of the line (or to the next quote, which is where a JSON
+  # one ends). It may NOT stop at a comma: an HTTP-date carries one right after the
+  # weekday — `Wed, 21 Oct 2015 …` — and a pattern that excluded commas read every
+  # date form as the three letters `Wed`.
+  ra=""
+  raw="$(printf '%s\n' "$out" \
+    | grep -oiE 'retry[-_]?after"?[[:space:]]*[:=][[:space:]]*"?[^"]{1,45}' \
+    | tail -1 || echo "")"
+  if [ -n "$raw" ]; then
+    raw="$(printf '%s' "$raw" | sed -E 's/^[^:=]*[:=][[:space:]]*"?//; s/[[:space:]",;}]*$//')"
+    case "$raw" in
+      '') ;;
+      *[!0-9]*)                                   # not a bare number -> the date form
+        d="$(printf '%s' "$raw" | sed -E 's/[[:space:]]*(GMT|UTC)[[:space:]]*$//')"
+        e="$(date -u -d "$raw" +%s 2>/dev/null)" || e=""
+        [ -n "$e" ] || e="$(TZ=UTC date -j -f '%a, %d %b %Y %H:%M:%S' "$d" +%s 2>/dev/null)" || e=""
+        case "$e" in ''|*[!0-9]*) e="" ;; esac
+        now="$(date +%s)"
+        [ -n "$e" ] && [ "$e" -gt "$now" ] && ra="$(( e - now ))"
+        ;;
+      *) ra="$raw" ;;
+    esac
+  fi
+  if [ -n "$ra" ] && [ "$ra" -gt 0 ]; then
+    # Clamped, and the cap is what makes the worst case a stated number rather than
+    # whatever interval the far end happens to name. A clamped wait that is still too
+    # early just costs one more refusal, which is bounded by PROVIDER_NOTURN_LIMIT.
+    [ "$ra" -gt "$PROVIDER_BACKOFF_CAP" ] && ra="$PROVIDER_BACKOFF_CAP"
+    printf '%s retry-after' "$ra"; return 0
+  fi
+  secs="$PROVIDER_BACKOFF"
+  while [ "$n" -gt 1 ] && [ "$secs" -lt "$PROVIDER_BACKOFF_CAP" ]; do
+    secs=$(( secs * 2 )); n=$(( n - 1 ))
+  done
+  [ "$secs" -gt "$PROVIDER_BACKOFF_CAP" ] && secs="$PROVIDER_BACKOFF_CAP"
+  # EQUAL JITTER: keep the bottom half, draw the top half uniformly. $RANDOM is a
+  # bash builtin, so this needs no /dev/urandom and no external tool.
+  if [ "$PROVIDER_BACKOFF_JITTER" = 1 ] && [ "$secs" -gt 1 ]; then
+    half=$(( secs / 2 ))
+    secs=$(( half + RANDOM % (secs - half + 1) ))
+  fi
+  printf '%s backoff' "$secs"
+}
+
+# _is_no_turn OUTPUT STATUS -> 0 when the invocation failed BEFORE the model produced
+# a turn. Conditions 1 and 3 of the classification live here; condition 2 ("it left no
+# trace") is checked at the call site, where HEAD and the pass-count are already known.
+#
+# The status codes are split by what they MEAN, not by how they read: 5xx and 529 are
+# the API unable to serve the request, 401/402/403 the API unwilling to. Both are
+# refusals of the REQUEST, so both are "no turn was taken" — what to DO about them
+# differs, and that decision is not made here.
+_is_no_turn() {
+  local out="$1" status="$2" code type
+  [ "$PROVIDER_NOTURN_LIMIT" -gt 0 ] || return 1
+  # A provider that exited 0 produced a turn, whatever its text says. This is the
+  # condition that keeps an agent WRITING about a 529 from being classified as one.
+  [ "$status" = "0" ] && return 1
+  code="$(_provider_status_code "$out")"
+  case "$code" in
+    500|502|503|504|529) return 0 ;;   # could not serve it
+    401|402|403)         return 0 ;;   # would not serve it
+  esac
+  type="$(_provider_error_type "$out")"
+  case "$type" in
+    overloaded_error|api_error|authentication_error|permission_error) return 0 ;;
+  esac
+  printf '%s\n' "$out" | grep -qiE "$PROVIDER_TRANSPORT_PATTERN" && return 0
+  return 1
+}
+# _provider_unavailable OUTPUT ITER ATTEMPT — what to DO about a request the provider
+# never served.
+#   returns 0  the caller should re-run the same turn, charging it to NOTHING (having
+#              first WAITED, unless the refusal is permanent or waiting is disabled)
+#   returns 1  the refusal is permanent, or the consecutive limit is spent; the
+#              caller must exit 8
+# The counter is the only thing bounding a stop that costs no budget, so it is the
+# only thing that can end this. Nothing here touches $stall: that counter answers
+# "is the agent getting anywhere", and an unserved request is not an answer to it.
+#
+# THE WAIT LIVES HERE because this is the single decision point — retry or stop — and
+# a backoff written at the call site would be a second place that knows the rule.
+_provider_unavailable() {
+  local out="$1" iter="$2" n="$3" code type why kind ws secs src wake how
+  # The REASON, in one line: what the provider refused with, and whether waiting can
+  # help. Goes in the log, the live record and the file the driver reports from;
+  # nothing ever parses it back.
+  code="$(_provider_status_code "$out")"; type="$(_provider_error_type "$out")"
+  if   [ -n "$code" ]; then why="HTTP $code${type:+ ($type)}"
+  elif [ -n "$type" ]; then why="$type"
+  else why="connection failure (no HTTP status)"
+  fi
+  # …and whether WAITING can possibly help, off those SAME two structured facts and
+  # never off the prose. _is_no_turn has already decided the request was never served;
+  # this is the ACTION half. Everything unrecognised is `transient` on purpose (the
+  # cost argument beside $PROVIDER_BACKOFF), and the 5xx arm is tested ahead of the
+  # permanent one so an envelope carrying both a server-side status and a stray
+  # auth-shaped type resolves on the status — the fact the server actually stated.
+  kind=transient
+  case "$code" in
+    401|402|403) kind=permanent ;;
+    500|502|503|504|529) ;;
+    *) case "$type" in authentication_error|permission_error) kind=permanent ;; esac ;;
+  esac
+  echo ""
+
+  # PERMANENT — a bad key, a revoked one, a quota that will not replenish. Stopping on
+  # the FIRST one is the point: every second spent sleeping on this is a second spent
+  # on a condition no amount of time changes, which is the mirror image of the bug the
+  # rest of this module fixes.
+  if [ "$kind" = permanent ]; then
+    printf '%s — PERMANENT refusal, not retried — %s\n' "$why" "$(date '+%Y-%m-%d %H:%M:%S')" \
+      > "$NOTURN_FILE" 2>/dev/null || true
+    echo "Iteration $iter never reached the model — the provider REFUSED the request: $why."
+    echo "That refusal is PERMANENT (bad or revoked credentials, or a quota that will not replenish), so chief is not waiting on it: no delay makes an unusable key usable."
+    echo "$(_passes)/$(_total) stories pass; everything committed so far is kept on the branch, and so is the worktree."
+    echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. Fix the credential, then re-run to resume from the committed passes state."
+    live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
+      passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
+      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+    event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=provider-unavailable \
+      detail="$why — permanent refusal, failed fast without retrying"
+    return 1
+  fi
+
+  printf '%s — %s\n' "$why" "$(date '+%Y-%m-%d %H:%M:%S')" > "$NOTURN_FILE" 2>/dev/null || true
+  if [ "$n" -lt "$PROVIDER_NOTURN_LIMIT" ]; then
+    echo "Iteration $iter never reached the model — the provider refused the request: $why."
+    echo "Not counted as an iteration and not counted as a stall (nothing was attempted). Retrying — attempt $n/$PROVIDER_NOTURN_LIMIT."
+    # Chief could not tell transient from permanent, and says so rather than implying
+    # it knew: the ambiguous case is TREATED as transient (see the cost argument
+    # beside $PROVIDER_BACKOFF), and a reader has to be able to see that it guessed.
+    [ -z "$code" ] && [ -z "$type" ] && \
+      echo "No status code and no error envelope, so transient vs permanent could not be told apart — treating it as transient, because waiting on a permanent error costs minutes and failing fast on an outage costs the tasklist."
+    live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
+      passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
+      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+    event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=running \
+      detail="$why — attempt $n/$PROVIDER_NOTURN_LIMIT; no turn was taken, so the iteration is not charged"
+    ws="$(_provider_wait_seconds "$n" "$out")"; secs="${ws%% *}"; src="${ws##* }"
+    case "$secs" in ''|*[!0-9]*) secs=0 ;; esac
+    if [ "$secs" -gt 0 ]; then
+      case "$src" in
+        retry-after) how="the provider asked for it (Retry-After), capped at ${PROVIDER_BACKOFF_CAP}s" ;;
+        *)           how="exponential backoff + jitter from ${PROVIDER_BACKOFF}s, capped at ${PROVIDER_BACKOFF_CAP}s" ;;
+      esac
+      wake=$(( $(date +%s) + secs ))
+      echo "Waiting ${secs}s before attempt $(( n + 1 ))/$PROVIDER_NOTURN_LIMIT — $how."
+      # Publish the wait BEFORE sleeping, exactly as the usage-limit path does: a
+      # heartbeat that stops advancing must read as 'waiting until <eta>', never as
+      # the hang it looks like — and never as work, either.
+      live_set "$LIVE" phase=provider-backoff iter="$iter" story="$(_story)" \
+        passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
+        noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at="$wake"
+      event_emit tasklist.provider-backoff name="${CHIEF_TASKLIST:-}" state=running \
+        retry_at="$wake" \
+        detail="$why — waiting ${secs}s before attempt $(( n + 1 ))/$PROVIDER_NOTURN_LIMIT ($src)"
+      sleep "$secs"
+    fi
+    return 0
+  fi
+  echo "Chief is stopping: the provider refused $n consecutive requests ($why) and no turn was ever taken."
+  echo "$(_passes)/$(_total) stories pass; everything committed so far is kept on the branch, and so is the worktree."
+  echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. Re-run to resume from the committed passes state."
+  live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
+    passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
+    noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+  event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=provider-unavailable \
+    detail="$why — $n consecutive requests refused before any turn was taken"
+  return 1
+}
+
 # ACCOUNT CREDENTIAL SEAM (docs/reference/account-credentials.md) — read the designated
 # KEY=VALUE file and export its pairs into the CURRENT shell. Called only from the
 # provider subshell below, so nothing outside the provider invocation ever sees the
@@ -1195,7 +1539,7 @@ echo "Starting Chief — Provider: $PROVIDER${MODEL:+ (model: $MODEL)} — budge
 # hit during research goes through the same _rate_limit_wait as a story turn, and
 # that helper reads and advances $waits. Resetting the counters after research would
 # hand the story loop a fresh wait budget it has already partly spent.
-i=0; stall=0; waits=0
+i=0; stall=0; waits=0; noturn=0
 
 # --- RESEARCH PHASE (engine/research.sh) --------------------------------------
 # ONCE per tasklist, BEFORE the first story: map the code into a structured document
@@ -1303,6 +1647,21 @@ if research_enabled "$PRD_FILE"; then
           fi
           exit 2
         fi
+        # THE PROVIDER NEVER SERVED THIS ONE EITHER. The same pair as the story loop
+        # (_is_no_turn / _provider_unavailable) for the same reason, and this is the
+        # surface where getting it wrong is sharpest: a research attempt that never
+        # reached the model would otherwise burn one of $RESEARCH_MAX_ATTEMPTS and end
+        # as RESEARCH-FAILED — "chief could not draw the map", which is a claim about
+        # the CODEBASE that nothing was learned about. No branch-state check here (the
+        # story loop's `HEAD unmoved, no story flipped`): a research turn commits
+        # nothing and flips nothing, so there is no trace it could have left.
+        if _is_no_turn "$OUTPUT" "$TOOL_RC"; then
+          noturn=$(( noturn + 1 ))
+          _provider_unavailable "$OUTPUT" 0 "$noturn" || exit 8
+          ra=$(( ra - 1 ))   # the attempt never happened, so it costs no attempt
+          continue
+        fi
+        noturn=0
         research_validate "$RESEARCH_DOC" && break
         echo "Research attempt $ra produced no usable document (missing: $(research_missing "$RESEARCH_DOC" | tr '\n' ' '))."
       done
@@ -1528,6 +1887,31 @@ while :; do
     fi
     exit 2
   fi
+
+  # THE PROVIDER NEVER SERVED THE REQUEST (see PROVIDER UNAVAILABILITY beside the
+  # knobs, and _is_no_turn). Checked in the same window as the limit above and for
+  # the same reason: the progress/stall accounting below is a judgement about the
+  # WORK, and an iteration in which no turn was taken is not evidence about the work.
+  # AFTER the limit check on purpose — a 429 has a reset window to wait out, and the
+  # limit path is the one that knows how to read it.
+  #
+  # The two extra conditions are the "nothing happened" half of the classification,
+  # and they are READ OFF THE BRANCH rather than believed from the output: HEAD is
+  # where it was and no story flipped. So the sentence "the tasklist's state is
+  # unchanged by it" is checked, not asserted.
+  if _is_no_turn "$OUTPUT" "$TOOL_RC" \
+     && [ "$(_head)" = "$prev_head" ] && [ "$(_passes)" -le "$prev_pass" ]; then
+    noturn=$(( noturn + 1 ))
+    _provider_unavailable "$OUTPUT" "$i" "$noturn" || exit 8
+    i=$((i-1))   # the iteration never happened, so it costs no budget
+    # No sleep here: _provider_unavailable already waited (Retry-After, or capped
+    # exponential backoff with jitter — $PROVIDER_BACKOFF). It is the one place that
+    # knows whether waiting can help at all, so it is the one place that waits.
+    continue
+  fi
+  # A turn returned. The count is CONSECUTIVE — an outage that clears mid-run must
+  # not leave a charge behind for a later blip to trip over.
+  noturn=0
 
   # PLAN TURN OUTCOME. Placed AFTER the limit check on purpose — a plan turn blocked
   # by a usage limit produced no artifact for a reason that has nothing to do with the
