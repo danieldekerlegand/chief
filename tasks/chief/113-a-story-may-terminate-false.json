@@ -54,7 +54,7 @@
       "acceptanceCriteria": [
         "A command retires a tasklist whose delivered stories passed and whose remaining story terminated false — filing the `completed/` record, recording WHICH story terminated negative and its finding, and stopping the tasklist being re-driven",
         "It REFUSES a tasklist whose stories are merely unfinished. The distinction is the whole point: `283` had two passing stories and one measured negative, which is not the same as a tasklist that stopped halfway, and a command that cannot tell them apart is a way to bury incomplete work",
-        "The `completed/` record carries the negative finding in a form a successor tasklist can cite — `283`'s closing action (`implement a MaaS client…`) became `cuneiform/368`, and that link should be expressible rather than left to prose",
+        "The `completed/` record carries the negative finding in a form a successor tasklist can cite. A story that terminates false often names the thing to do instead — that closing action is the most valuable output of the whole tasklist, and it must survive in the record rather than only in a run log, so whoever authors the successor can point at it.",
         "Mutation-check it: a tasklist with an ordinary unfinished story is refused; one with a declared terminal-false story is retired; a tasklist with NO evidence on the terminal-false story is refused. A retirement path that cannot be shown to refuse is a way to lose work"
       ],
       "passes": false,
