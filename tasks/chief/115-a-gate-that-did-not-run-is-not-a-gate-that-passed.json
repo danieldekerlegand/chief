@@ -1,0 +1,56 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/115-a-gate-that-did-not-run-is-not-a-gate-that-passed",
+  "description": "**Every private repository in this portfolio has had dead CI for an unknown period, and nothing anywhere said so.** Measured 2026-08-25.\n\n```\npraxis      PUBLIC    success  2026-08-15\npinakes     PUBLIC    success  2026-08-25\ntalos       PRIVATE   failure  2026-08-24\ncuneiform   PRIVATE   failure  2026-08-25\nvita        PRIVATE   failure  2026-08-25\n```\n\nAll three private failures are byte-identical and none is a code problem: *\"The job was not started because recent account payments have failed or your spending limit needs to be increased.\"* GitHub Actions minutes are free for public repositories and billed for private ones, so the account-level block silently killed CI on every private repo while the public ones kept working.\n\n**vita carried a second, independent version of the same fault.** Its workflow triggers only `on: pull_request` and `workflow_dispatch`. chief merges branches into main LOCALLY and pushes main — it never opens a pull request — so no event that chief generates could ever start that workflow. vita's CI had therefore never run once in the repository's history, and a tasklist (`72`) was unparked and merged as `auto-verified` on the premise that it had.\n\n**This is the generalized form of two failures already recorded in this portfolio.** `amphora` merged three tasklists against a `.chief/verify.sh` that ran one unrelated check and then `exit 0`. `145-forge-harness-gate` was written because *\"a green gate that cannot go red is worse than no gate.\"* Both concern a gate that CANNOT FAIL. This one is worse: a gate that **never executes** is indistinguishable, from every surface chief offers, from one that ran and passed.\n\n**Scope discipline.** chief must not become a CI client, must not require a network call on the merge path, and must not fail a merge because a third-party service is down. What it can do is refuse to let ABSENCE read as SUCCESS — the same distinction `.chief/verify.sh` already draws locally between a skipped check and a passing one, applied to the gate a repo claims to have but does not run.",
+  "touches": [
+    "engine",
+    "bin/chief",
+    "docs",
+    "test",
+    "VERSION"
+  ],
+  "iters": 7,
+  "warmup": [
+    "grep -rn 'skip\\|SKIP' engine/*.sh | head -12",
+    "sed -n '1,40p' ../vita/.github/workflows/ci.yml",
+    "cd ../cuneiform && gh run list --limit 2 2>&1 | head -3",
+    "grep -rn 'verify.sh' engine/driver.sh | head -8",
+    "sed -n '/doc-sync/,+15p' test/doc-sync.sh 2>/dev/null | head -20"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A declared gate that never ran is reported, not assumed",
+      "acceptanceCriteria": [
+        "chief can tell an operator, per repo, that the repository DECLARES a CI gate (a `.github/workflows/*.yml` or equivalent) whose most recent run is absent, failed to start, or is older than the commit being merged. Reporting is the deliverable; blocking is explicitly not.",
+        "The check is OFFLINE-SAFE and never on the merge critical path. An unreachable network, an absent `gh`, or a repo with no remote produces an UNKNOWN verdict that is stated as unknown — never a pass. `check-engine-pin.sh`'s loud-SKIP discipline is the precedent: a run that could not measure must not read as a pass.",
+        "A repo that legitimately has no CI (no workflows at all) is NOT flagged. The finding is a declared-but-dead gate, not the absence of one — those are different situations and conflating them would make the check noise.",
+        "A test drives fixtures for each case: no workflows, workflows with a recent green run, workflows whose runs all failed to start, and workflows with no runs ever."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "The trigger mismatch is detectable, because it is invisible otherwise",
+      "acceptanceCriteria": [
+        "chief detects the vita shape: a workflow whose triggers cannot be produced by how chief lands work. chief merges locally and pushes the base branch, so a `pull_request`-only workflow is dead by construction under it, and nothing about the file looks wrong.",
+        "The report names the mismatch in the operator's terms — which trigger the workflow waits for, and what chief actually does — rather than printing YAML. 'Your CI waits for a pull request; chief pushes to main' is actionable, 'on: pull_request' is not.",
+        "Detection is textual and offline. Do not add a YAML dependency or a network call to the engine for this.",
+        "Counterfactual: pointing the check at vita's workflow as it stood on 2026-08-25 reports the mismatch. That file is the fixture."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "The distinction is stated once, and reused",
+      "acceptanceCriteria": [
+        "The three states are named and used consistently wherever chief reports a gate: RAN AND PASSED, RAN AND FAILED, DID NOT RUN. `.chief/verify.sh` already draws the skipped-vs-passed line locally; this extends the same idea outward rather than inventing a second vocabulary.",
+        "`docs/reference/verify-hook.md` records the rule and the measurement behind it, including that GitHub Actions is free for public repos and billed for private ones — the asymmetry that let this hide, since the public repos kept working and looked normal.",
+        "A merge record can be read afterwards to see which gates actually executed. A tasklist that merged while its declared CI never ran should be answerable from the record, because three of them already exist across this portfolio and were only found by hand.",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
+      ],
+      "notes": null
+    }
+  ]
+}
