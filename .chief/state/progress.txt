@@ -74,3 +74,51 @@ docs, `VERSION` 0.8.88→0.8.89.
 - The test's Part 2 is the one worth copying: assert the PAIR in one run. A test that
   only pins the new classification cannot show the two are told apart, which is
   literally what the acceptance criterion asked for.
+
+---
+
+## US-2 — A transient provider failure is WAITED OUT, not fired into three times
+
+**The shape of the fix.** US-1 left `_provider_unavailable` as the single decision
+point ("retry or stop"); this story gave it the ACTION it was missing. Two forks, both
+read off the structure `_is_no_turn` already had:
+
+- **transient vs permanent** — `_provider_refusal_kind` returns one word. 5xx/529 and
+  the transport arm are transient; 401/402/403 · `authentication_error` ·
+  `permission_error` are permanent and reach exit 8 on the FIRST refusal, because no
+  delay makes a revoked key usable. Everything unrecognised is transient AND the log
+  says it could not tell — the fail direction is chosen from cost, and a guess that
+  reads as a diagnosis is worse than the guess.
+- **how long** — `_provider_wait_seconds` returns `"<secs> <source>"`, because the log
+  line differs: "the provider asked for it (Retry-After)" and "exponential backoff +
+  jitter" are different claims. `Retry-After` wins when present, clamped to the cap,
+  never jittered. Otherwise `PROVIDER_BACKOFF` doubling per consecutive refusal,
+  clamped, with equal jitter (bottom half fixed, top half `$RANDOM`).
+
+**Files:** `engine/agent.sh` (three knobs + `_retry_after_seconds` /
+`_provider_refusal_kind` / `_provider_wait_seconds`, `_provider_unavailable` rewritten,
+the call site's placeholder `sleep 2` removed), `engine/live.sh` (`noturn`/`noturn_limit`
+fields + the `provider-backoff` phase), `engine/monitor.sh` (`live_note`'s
+provider-backoff arm), `engine/driver.sh` (the summary trailer),
+`test/provider-backoff.sh` (new, registered in verify.sh + all.sh + ci.yml),
+`test/stall-flag.sh`, `test/provider-unavailable.sh` (`PROVIDER_BACKOFF=0` throughout —
+it asserts classification, not the clock), `docs/reference/provider-unavailability.md`
++ events/monitoring docs, `VERSION` 0.8.89→0.8.90.
+
+**Learnings for future iterations.**
+- **A test helper that MEASURES cannot be a `$(…)` helper.** `rc="$(drive …)"` runs the
+  whole thing in a subshell, so every measurement it took (`$ELAPSED`, `$CALLS`) is
+  discarded and the first use dies under `set -u`. Call it bare and let it set globals.
+- **An HTTP-date contains a comma.** The first `Retry-After` pattern used
+  `[^",}]{1,40}` for the value — sensible for a JSON envelope, and it silently read
+  every `Retry-After: Wed, 21 Oct 2015 …` as the three letters `Wed`. The value runs to
+  the end of the line (or to the next quote); trailing `,;}"` are stripped afterwards.
+  And put the optional opening quote in the PATTERN (`[:=][[:space:]]*"?[^"]{1,45}`),
+  or `"retry_after":"12"` matches nothing at all.
+- **BSD `date` will not parse `%Z`.** `date -j -f '… %Z' 'Wed, … GMT'` reads it as
+  LOCAL time. Strip the zone suffix and parse under `TZ=UTC` — the same two-arm
+  GNU-then-BSD idiom `_clock_to_epoch` already uses, plus the TZ pin.
+- **US-3's reporting hook is unchanged** and still where US-1 left it: `run_worker`'s
+  INCOMPLETE arm in `driver.sh`, with `.chief/state/parallel/<n>.status` as what
+  `chief ps` renders from. Note `live_note` now has a per-phase arm — that is the
+  pattern to copy if the work-pending state wants numbers of its own in the row.

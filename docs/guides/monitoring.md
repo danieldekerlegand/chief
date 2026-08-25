@@ -60,11 +60,12 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 
 | Field | Shown as | Written by |
 |---|---|---|
-| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
+| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-backoff`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
 | `phase_since` | `verifying for 41m` — elapsed **in this phase** | bumped only when the phase actually changes |
 | `story` / `iter` | `US-3 · iter 5` | the agent loop, each iteration |
 | `stall` / `stall_limit` | `no progress last iter (1/2)` | the agent loop's no-progress counter and the budget it is spent against |
 | `waits` | the limit-wait count | the agent loop's usage-limit sleeps |
+| `noturn` / `noturn_limit` | `provider attempt 2/3` | consecutive requests the provider **refused before any turn was taken**, and the budget they are counted against. Deliberately not `stall`: one counts iterations the agent ran and got nowhere in, the other counts iterations it was never given |
 | `passing` / `total` | the progress column, when no `prd.json` is readable | agent + driver |
 | `retry_at` | the retry ETA on a paused row | the driver's usage-limit self-heal |
 | `heartbeat` | `12s ago` — time since the run last did *anything* | **every** write; an in-turn ticker keeps it moving through a long `claude` call |

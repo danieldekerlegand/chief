@@ -29,6 +29,7 @@ WORK="$(mktemp -d)"
 # may itself be running inside a chief worktree whose driver exported a pause flag.
 unset CHIEF_PAUSE_FILE
 unset CHIEF_PROVIDER CHIEF_TOOL CHIEF_MODEL CHIEF_PRESET
+unset PROVIDER_BACKOFF PROVIDER_BACKOFF_CAP PROVIDER_NOTURN_LIMIT
 export CHIEF_PROVIDER=claude CHIEF_TOOL=claude
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=pu GIT_AUTHOR_EMAIL=pu@test GIT_COMMITTER_NAME=pu GIT_COMMITTER_EMAIL=pu@test
@@ -70,7 +71,7 @@ agent_exit_for() {  # <claude-rc> <fixture-text> [env…]
   local rc="$1" text="$2" code=0; shift 2
   printf '%s\n' "$text" > "$FIX_TEXT"; printf '%s\n' "$rc" > "$FIX_RC"
   if ( cd "$FIXREPO" && PATH="$WORK/fixbin:$PATH" CHIEF_PROJECT="$FIXREPO" \
-         RATE_LIMIT_RETRY=0 STALL_LIMIT=1 PROVIDER_NOTURN_LIMIT=1 \
+         RATE_LIMIT_RETRY=0 STALL_LIMIT=1 PROVIDER_NOTURN_LIMIT=1 PROVIDER_BACKOFF=0 \
          env "$@" bash "$AGENT" 1 ) >"$WORK/fix/agent.log" 2>&1
   then code=0; else code=$?; fi
   echo "$code"
@@ -156,8 +157,12 @@ JSON
 
 export PU_COUNTER="$WORK/pu-calls"
 pair_rc=0
+# PROVIDER_BACKOFF=0 throughout this file: what it asserts is CLASSIFICATION, and the
+# wait between refusals is test/provider-backoff.sh's subject. Leaving the default on
+# would add ~20s of real sleeping to a file that never looks at the clock.
 ( cd "$PAIRREPO" && PATH="$WORK/pairbin:$PATH" CHIEF_PROJECT="$PAIRREPO" \
-    RATE_LIMIT_RETRY=0 STALL_LIMIT=2 PROVIDER_NOTURN_LIMIT=3 bash "$AGENT" 5 ) \
+    RATE_LIMIT_RETRY=0 STALL_LIMIT=2 PROVIDER_NOTURN_LIMIT=3 PROVIDER_BACKOFF=0 \
+    bash "$AGENT" 5 ) \
   >"$WORK/pair.log" 2>&1 || pair_rc=$?
 PL="$WORK/pair.log"
 
@@ -233,7 +238,7 @@ chmod +x .chief/verify.sh
 git add -A && git commit -q -m "pu setup"
 
 run_rc=0
-PATH="$WORK/downbin:$PATH" PROVIDER_NOTURN_LIMIT=2 \
+PATH="$WORK/downbin:$PATH" PROVIDER_NOTURN_LIMIT=2 PROVIDER_BACKOFF=0 \
   "$CHIEF" run >"$WORK/run.log" 2>&1 || run_rc=$?
 RL="$WORK/run.log"
 

@@ -106,6 +106,12 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      phase having produced 0 bytes and never reached iteration 1;
 #                      an exemption would have hidden the only genuine anomalies of
 #                      that night. It wants a LONGER threshold, not silence.
+#   provider-backoff   the bounded sleep between a transient refusal and the retry.
+#                      Quiet is what it IS, but it is quiet for at most
+#                      $PROVIDER_BACKOFF_CAP seconds (60 by default) and the row
+#                      already carries its wake time, so the default 15m threshold is
+#                      never reached by a backoff that is working. Silence past it
+#                      means the sleep did not return, and that is worth the flag.
 #   verifying · warmup a non-tty `cargo test` block-buffers its output, so a gate can
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
@@ -335,7 +341,7 @@ flag_fallback() { # $1 dead-flag $2 age $3 elapsed-in-phase ('' unknown) -> the 
 # last activity. Empty when there is no record or no phase, which is what makes the
 # fallback automatic. With $3=stale the trailing age becomes the at-risk flag instead.
 live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to add)
-  local lf note phase story iter stall slimit age pa
+  local lf note phase story iter stall slimit age pa at left nt ntl
   lf="$(live_file "$1" "$2")"
   [ -f "$lf" ] || return 0
   phase="$(live_get "$lf" phase)"
@@ -362,6 +368,26 @@ live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to 
       *)             note="$note · no progress last iter ($stall/$slimit)" ;;
     esac ;;
   esac
+  # A PROVIDER BACKOFF is a deliberate SLEEP, and the phase word alone cannot carry
+  # the two numbers that make it legible: how long the wait is, and which attempt this
+  # is out of how many. Without them the row is indistinguishable from a tasklist that
+  # is merely quiet — which is exactly the render the wait exists to avoid ("rather
+  # than appearing to work or appearing hung"). Both are optional: a record written by
+  # an older engine, or one whose retry_at has already elapsed, still renders.
+  if [ "$phase" = provider-backoff ]; then
+    at="$(live_get "$lf" retry_at)"
+    case "$at" in ''|0|*[!0-9]*) ;; *)
+      left=$(( at - $(date +%s) )); [ "$left" -lt 0 ] && left=0
+      note="$note · retry at $(clock "$at") (in ${left}s)" ;;
+    esac
+    nt="$(live_get "$lf" noturn)"; ntl="$(live_get "$lf" noturn_limit)"
+    case "$nt" in ''|0|*[!0-9]*) ;; *)
+      case "$ntl" in
+        ''|0|*[!0-9]*) note="$note · provider attempt $nt" ;;
+        *)             note="$note · provider attempt $nt/$ntl" ;;
+      esac ;;
+    esac
+  fi
   # The caller asks for the flag; this asks the POLICY whether this phase has earned
   # it. Same predicate the row's glyph uses, so the two halves of the line always
   # agree — and a caller that has not consulted the policy cannot reintroduce

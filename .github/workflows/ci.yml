@@ -62,6 +62,9 @@ jobs:
       - name: A refused request is not a stall (529/5xx/transport/auth never reached the model)
         run: bash test/provider-unavailable.sh
 
+      - name: A transient refusal is waited out (Retry-After/backoff), a permanent one fails fast
+        run: bash test/provider-backoff.sh
+
       - name: Usage-limit pause is a distinct state (never 'failed', never blocks dependents)
         run: bash test/limitstate.sh
 

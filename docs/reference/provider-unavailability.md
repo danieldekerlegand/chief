@@ -81,6 +81,80 @@ behind for a later blip to trip over.
 `PROVIDER_NOTURN_LIMIT=0` disables the classification entirely and restores the
 pre-fix behaviour, where every refusal is scored as a stall.
 
+## Waiting it out
+
+The message chief used to throw its budget at says so itself — *"usually temporary —
+try again in a moment"* — and chief had no wait for it. `71` and `72` fired three
+iterations into an overloaded API back to back, spending the whole budget inside a
+window a single pause would have covered. So a refusal is **waited out** before the
+retry, and the fork is transient vs permanent:
+
+| kind | what it is | what chief does |
+|---|---|---|
+| **transient** | `500 502 503 504 529` · `overloaded_error` · `api_error` · any transport failure · **anything unrecognised** | wait, then re-run the same turn |
+| **permanent** | `401 402 403` · `authentication_error` · `permission_error` | **stop on the first one**, with the reason |
+
+Read off the same two structured facts the classifier uses — a status code or an
+error type out of the provider's own envelope — never off the prose.
+
+**Ambiguity waits, and says that it guessed.** A dropped connection carries no status
+and no envelope, so the two cannot be told apart. The fail direction is chosen from
+**cost**, not from likelihood: waiting on a permanent error wastes minutes, failing
+fast on an outage loses the tasklist. The log says so in as many words rather than
+implying chief knew which it was.
+
+**A permanent refusal is not slept on.** No delay makes a revoked key usable, so
+sleeping through a budget it cannot satisfy is the mirror image of the bug the rest of
+this page is about. The stop names the reason and the driver reports it — `HTTP 401
+(authentication_error) — PERMANENT refusal, not retried`.
+
+### How long
+
+`Retry-After` wins when the provider sends one, in **both** the forms RFC 9110 allows
+— delta-seconds (`Retry-After: 30`) and an HTTP-date (`Retry-After: Wed, 21 Oct 2015
+07:28:00 GMT`). The server naming its own interval is better information than any
+backoff computed here, so it is taken verbatim (clamped to the cap) and deliberately
+**not** jittered: jitter exists to de-phase clients that are all guessing, and a
+client that was told the interval is not guessing.
+
+Otherwise the wait is exponential from `PROVIDER_BACKOFF`, doubling once per
+consecutive refusal, clamped to `PROVIDER_BACKOFF_CAP`, with **equal jitter** — the
+bottom half fixed, the top half drawn uniformly, so the N workers that tripped the
+same outage in the same second do not retry in the same second too.
+
+**The worst case is the two knobs multiplied.** The loop stops after
+`PROVIDER_NOTURN_LIMIT` consecutive refusals, so it sleeps at most `LIMIT - 1` times
+and no single sleep may exceed the cap. With the defaults that is **at most 2 waits of
+at most 60s = 120s** of waiting before the run reports the block.
+
+`PROVIDER_BACKOFF=0` disables waiting entirely — the retries fire back to back, which
+is the pre-fix behaviour, kept reachable for debugging. (That is a different switch
+from `PROVIDER_NOTURN_LIMIT=0`, which disables the *classification*.)
+
+### Watching it wait
+
+A wait must never render as work, and never as a hang. While it sleeps the tasklist
+publishes phase **`provider-backoff`** with the epoch it wakes at, and `chief ps`
+renders both numbers a reader needs — how long, and which attempt:
+
+```
+   ● 71-real-game-supply-decision  running   1/2   chief/71-real-game-supply-decision
+       ↳ provider-backoff for 3s · US-2 · iter 4 · retry at 14:07 (in 9s) · provider attempt 2/3
+```
+
+The same lines are in the run log, naming the delay, the attempt and **which rule**
+produced the figure:
+
+```
+Iteration 4 never reached the model — the provider refused the request: HTTP 529 (overloaded_error).
+Not counted as an iteration and not counted as a stall (nothing was attempted). Retrying — attempt 2/3.
+Waiting 9s before attempt 3/3 — exponential backoff + jitter from 5s, capped at 60s.
+```
+
+`provider-backoff` is **not** on the monitor's quiet-by-design list: no single wait may
+exceed the cap, so silence past the default 15-minute threshold means the sleep did
+not return, and that is worth flagging.
+
 ## What the run reports
 
 Exit 8 is a **block**, not a failure. `engine/driver.sh` records the tasklist as
@@ -130,3 +204,6 @@ one is evidence about the work.
 |---|---|---|
 | `PROVIDER_NOTURN_LIMIT` | `3` | consecutive refused requests before the loop stops with exit 8. `0` disables the classification |
 | `PROVIDER_TRANSPORT_PATTERN` | see `engine/agent.sh` | the text arm for failures that never reached HTTP and so carry no status code |
+| `PROVIDER_BACKOFF` | `5` | seconds of backoff after the first transient refusal, doubling per consecutive one. `0` disables **waiting** (not the classification) |
+| `PROVIDER_BACKOFF_CAP` | `60` | ceiling on a single wait, including one a `Retry-After` asked for. With `PROVIDER_NOTURN_LIMIT` this is what bounds the worst case: `(LIMIT - 1) x CAP` |
+| `PROVIDER_BACKOFF_JITTER` | `1` | equal jitter on a computed backoff. `0` makes the wait exact — a `Retry-After` is never jittered either way |

@@ -73,7 +73,11 @@
 #     learned nothing about the work. Branch, commits and worktree are all kept and a
 #     re-run resumes. Unlike 'rate-limited' it arms NO wait window — an overload
 #     publishes no reset time, and inventing an account-wide ETA to hold the run behind
-#     would be worse than ending it and letting the next run try.
+#     would be worse than ending it and letting the next run try. Each attempt inside
+#     the worker IS waited out, though ($PROVIDER_BACKOFF — Retry-After when the
+#     provider sends one, else capped exponential backoff with jitter), so the three
+#     tries are spread across the outage rather than fired into it; a PERMANENT
+#     refusal reaches this state on the first try, without waiting.
 # dep_broken() treats NONE of them as broken: the dependents of a tasklist that is
 # only waiting stay 'pending' (schedulable) instead of cascading to 'blocked'.
 #
@@ -3375,7 +3379,12 @@ if [ -n "$unserved" ]; then
   echo "    NO agent turn was taken on these, so the run learned nothing about their work —"
   echo "    their branches, commits and worktrees are all kept exactly as they were."
   echo "    Re-run once the provider is back; each resumes from its committed passes state."
-  echo "    (PROVIDER_NOTURN_LIMIT=${PROVIDER_NOTURN_LIMIT:-3} consecutive refusals is what stops a worker.)"
+  echo "    (PROVIDER_NOTURN_LIMIT=${PROVIDER_NOTURN_LIMIT:-3} consecutive refusals is what stops a worker; each"
+  echo "     TRANSIENT one is waited out first — Retry-After when the provider sends one, else"
+  echo "     backoff from ${PROVIDER_BACKOFF:-5}s doubling to a ${PROVIDER_BACKOFF_CAP:-60}s cap — so the worst case before this"
+  echo "     report is bounded by (PROVIDER_NOTURN_LIMIT-1) x PROVIDER_BACKOFF_CAP. A PERMANENT"
+  echo "     refusal — a bad or revoked key, a quota that will not replenish — is not waited on"
+  echo "     at all and says so above.)"
 fi
 # An OPERATOR pause is a DECISION, not a fault, and the summary is where that has to
 # be unmistakable: parked tasklists are listed here, never among the failures. Say
