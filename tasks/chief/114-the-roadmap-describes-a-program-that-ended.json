@@ -1,0 +1,55 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/114-the-roadmap-describes-a-program-that-ended",
+  "description": "**`ROADMAP.md` documents the `77`–`92` era and is silent on roughly 60% of the merged program.** Audited 2026-08-25 against disk.\n\nIts banner reads *\"Shipping & self-hosting (v0.8.0 — see VERSION)\"*; `VERSION` is `0.8.94`. Line 55 says *\"1/1 built-program tasklists merged (`77`); 15 proposed forward tasklists authored … the runnable head is the agent-output quality & alignment band (`88`–`91`)\"* — that band shipped between 08-12 and 08-18. Line 153 says *\"remaining work is hardening and breadth … numbered from the current max, `77`.\"* `77` stopped being the max on 2026-08-01.\n\n**Bands `93`–`113` do not appear in the file at all.** A grep for `9[3-9]|1[01][0-9]` returns nothing; the highest number present is `92`. Concept greps for `chief usage`, `chief decide`, `chief status`, `machine-wide` and `iteration-outcome` all return zero. The CLI roster at line 20 lists twelve subcommands; `bin/chief` dispatches eight more (`status · lint · gen · events · usage · quality · approve · decide`).\n\n**Two coherent programmes are missing, and they deserve naming rather than a list of numbers.** `104`–`109` are OPERATOR ERGONOMICS — usage reporting, decision tasklists, list/ps, machine-wide concurrency. `110`–`113` are one thesis, *chief learning to tell real progress from motion*: a green branch verified three times, a 529 misread as a usage wall, a bookkeeping commit scored as progress, a story that may terminate false. That is an ITERATION-OUTCOME TAXONOMY and the roadmap has no vocabulary for it.\n\n**The mechanism is on the record inside this repo.** `86-doc-sync-gate` shipped and `test/doc-sync.sh` enforces README ↔ VERSION ↔ subcommand parity — and does not cover `ROADMAP.md`. That is precisely why `README.md:347` correctly says `v0.8.94` while the roadmap says `v0.8.0`. Fixing the text without closing that gap re-runs this audit in a fortnight; the measured portfolio drift rate is about two weeks.",
+  "touches": [
+    "ROADMAP.md",
+    "test",
+    "docs"
+  ],
+  "iters": 6,
+  "warmup": [
+    "grep -n 'Last updated\\|v0\\.8\\.0' ROADMAP.md | head -5; cat VERSION",
+    "grep -nE '\\b(9[3-9]|1[01][0-9])\\b' ROADMAP.md | head",
+    "ls tasks/chief/completed/ | sed 's/-.*//' | sort -n | uniq | tail -25 | tr '\\n' ' '",
+    "sed -n '/doc-sync/,+25p' test/doc-sync.sh | head -40",
+    "grep -n 'ROADMAP' test/doc-sync.sh || echo 'ROADMAP.md is NOT covered by the doc-sync gate'"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "The roadmap states what is true today",
+      "acceptanceCriteria": [
+        "The banner, the Current State block and every phase row are rewritten against `tasks/chief/completed/`. All 35 records carry a real `mergedToMain` — verify rather than assume, and cite shas for the bands you mark done.",
+        "The version claim is derived from `VERSION`, not restated. A roadmap asserting `v0.8.0` beside a `VERSION` of `0.8.94` is the specific failure this tasklist exists to end.",
+        "The CLI roster matches `bin/chief`'s dispatch table. Eight subcommands are currently missing from it.",
+        "Internal contradictions are resolved: the file currently says five first-class providers in one place, four in another and three in a third. Pick the true one and state it once."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "The two unnamed programmes get names and rows",
+      "acceptanceCriteria": [
+        "`104`–`109` are recorded as a coherent OPERATOR ERGONOMICS phase, not as a list of merged numbers.",
+        "`110`–`113` are recorded as one thesis about iteration-outcome honesty, with the measurement behind each: three verifies of an already-green branch; a 529 Overloaded slept on as a usage wall; five bookkeeping commits scoring as progress and stretching a 5-iteration budget to 11; a story re-driven 63 commits whose right answer was `passes:false`.",
+        "The `93`–`103` band is placed too — merge safety, worktree reaping, `chief status`, reap orphanhood. Roughly 21 merged tasklists are currently invisible.",
+        "`docs/decisions/conflict-predictor-adoption-decision.md` and the two active tasklists are reflected, so the 'Loose wishlist — Empty. No future threads are parked' line stops being false."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "The gate that would have caught this covers the file",
+      "acceptanceCriteria": [
+        "`test/doc-sync.sh` is extended to cover `ROADMAP.md`. At minimum it fails when the roadmap's stated version disagrees with `VERSION`, and when a tasklist stem in `completed/` is absent from the roadmap — the two checks that would each independently have caught this drift.",
+        "The check is cheap and offline, in keeping with the gate it joins. It must not require a network call or a model.",
+        "It is proven able to FAIL: a negative-control fixture drives it red, in the same shape the rest of this repo's guards use. A gate nobody has watched fail is indistinguishable from one that always passes.",
+        "The rationale is recorded where the next reader looks: this repo shipped a doc-sync gate that deliberately did not cover the roadmap, and the roadmap is the file that rotted.",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
+      ],
+      "notes": null
+    }
+  ]
+}
