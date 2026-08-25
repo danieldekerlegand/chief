@@ -13,6 +13,12 @@ CHIEF_MACHINE_AGENT_TURNS=0
 CHIEF_MACHINE_GATES=0
 CHIEF_MACHINE_STALE=0
 CHIEF_MACHINE_CORES=1
+# The OPERATOR's requested budget, captured BEFORE the safe default below shadows it.
+# `-` rather than `:-` so an explicitly empty value is still distinguishable from unset.
+# Without this capture, `chief_machine_budget_init` read its own default back as if the
+# operator had asked for it, the core-count branch became unreachable, and every machine
+# ran at a budget of 1 agent turn no matter how many cores it had.
+CHIEF_MACHINE_BUDGET_REQUESTED="${CHIEF_MACHINE_BUDGET-}"
 CHIEF_MACHINE_BUDGET=1
 CHIEF_MACHINE_BUDGET_DISABLED=0
 CHIEF_MACHINE_LOAD_AVERAGE=""
@@ -34,7 +40,7 @@ chief_machine_core_count() {
 # CHIEF_MACHINE_BUDGET is the number of simultaneous agent turns allowed across
 # the host. Zero/off is the explicit escape hatch for the pre-budget behavior.
 chief_machine_budget_init() {
-  local requested="${CHIEF_MACHINE_BUDGET:-}"
+  local requested="${CHIEF_MACHINE_BUDGET_REQUESTED-}"
   CHIEF_MACHINE_CORES="$(chief_machine_core_count)"
   CHIEF_MACHINE_BUDGET_DISABLED=0
   case "$requested" in
