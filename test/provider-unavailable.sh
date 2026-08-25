@@ -30,6 +30,10 @@ WORK="$(mktemp -d)"
 unset CHIEF_PAUSE_FILE
 unset CHIEF_PROVIDER CHIEF_TOOL CHIEF_MODEL CHIEF_PRESET
 unset PROVIDER_BACKOFF PROVIDER_BACKOFF_CAP PROVIDER_NOTURN_LIMIT
+# …and the research phase's, for PART 4. $CHIEF_RESEARCH_FILE is a path OUTSIDE the
+# worktree, so an inherited one would have the phase seed itself from — and promote
+# into — the real checkout's research document instead of this test's.
+unset CHIEF_RESEARCH CHIEF_RESEARCH_FILE CHIEF_RESEARCH_MAX_ATTEMPTS
 export CHIEF_PROVIDER=claude CHIEF_TOOL=claude
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=pu GIT_AUTHOR_EMAIL=pu@test GIT_COMMITTER_NAME=pu GIT_COMMITTER_EMAIL=pu@test

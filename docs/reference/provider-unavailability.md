@@ -81,6 +81,21 @@ behind for a later blip to trip over.
 `PROVIDER_NOTURN_LIMIT=0` disables the classification entirely and restores the
 pre-fix behaviour, where every refusal is scored as a stall.
 
+### Both surfaces that call a provider
+
+The **research phase** takes this path on the same terms as the story loop, and for
+the same reason. A research attempt that never reached the model would otherwise burn
+one of `CHIEF_RESEARCH_MAX_ATTEMPTS` and end the run at **exit 6, RESEARCH-FAILED** —
+*"chief could not draw the map"*, which is a claim about the **codebase** made from a
+turn nobody ever took. It is the story loop's bug wearing a different exit code, so a
+refusal there is uncharged and retried identically, and the run ends at exit 8 if the
+provider never comes back.
+
+The only difference is what "nothing happened" is checked against. The story loop
+also confirms the branch is untouched — HEAD unmoved, no story flipped — before
+accepting that a turn was never taken. A research turn commits nothing and flips
+nothing, so there is no trace it could have left and nothing to check.
+
 ## Waiting it out
 
 The message chief used to throw its budget at says so itself — *"usually temporary —

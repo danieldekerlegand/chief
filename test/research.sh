@@ -36,7 +36,7 @@ export GIT_AUTHOR_NAME=rs GIT_AUTHOR_EMAIL=rs@test GIT_COMMITTER_NAME=rs GIT_COM
 export CHIEF_PREFIX="$WORK/ch" CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos"
 # The phase is opt-in per tasklist; an inherited override from the developer's own
 # shell would decide PART A's skip assertion for it.
-unset CHIEF_RESEARCH CHIEF_RESEARCH_MAX_ATTEMPTS CHIEF_REVIEW CHIEF_REVIEWER 2>/dev/null || true
+unset CHIEF_RESEARCH CHIEF_RESEARCH_FILE CHIEF_RESEARCH_MAX_ATTEMPTS CHIEF_REVIEW CHIEF_REVIEWER 2>/dev/null || true
 CHIEF="$ROOT/bin/chief"
 LOG=""
 fail() { echo "RESEARCH FAIL: $*" >&2; [ -n "$LOG" ] && [ -f "$LOG" ] && tail -60 "$LOG" >&2; exit 1; }
