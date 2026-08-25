@@ -122,3 +122,58 @@ it asserts classification, not the clock), `docs/reference/provider-unavailabili
   INCOMPLETE arm in `driver.sh`, with `.chief/state/parallel/<n>.status` as what
   `chief ps` renders from. Note `live_note` now has a per-phase arm — that is the
   pattern to copy if the work-pending state wants numbers of its own in the row.
+
+---
+
+## US-3 — Work already on disk is never described as no work
+
+**What was wrong.** Two stops keep a worktree and say nothing about what is in it:
+INCOMPLETE (`left in worktree for review` — naming nothing) and EMPTY-NO-WORK (which
+is a claim about COMMITS that reads as a claim about WORK). `chief ps` rendered both
+as `✗ failed`, so "produced nothing" and "produced 2,029 files and committed none of
+them" were the same row — a real signal and a RECOVERABLE state, indistinguishable.
+
+**The shape of the fix.** One read, one writer, two renderers.
+
+- `worktree_pending WT` (**engine/lib.sh** — a pure function of one path, which is
+  why it is there and not in driver.sh) → one human phrase off a single
+  `git status --porcelain -uall`, or `''`. `-uall` is load-bearing: git's default
+  collapses an untracked DIRECTORY into one porcelain line, so tasklist 71's whole
+  adopted game would have reported as "1 uncommitted file". Ignored trees are never
+  walked, so the `-uall` is cheap where it would otherwise be expensive.
+- `pending_record NAME WT PHRASE HAS_COMMITS` (driver.sh) writes
+  `$STATE/<name>.pending` — the ONE decision, so the summary and `chief ps` cannot
+  disagree. Three outcomes: `work pending:` / `no uncommitted work:` / `no work
+  produced:`. Cleared next to `<name>.status` at the top of `run_worker`, because that
+  worker is about to `rm -rf` the worktree the file describes.
+- Both call sites (the INCOMPLETE arm and the EMPTY-NO-WORK arm) also fold it into
+  their `event_emit … detail=` and their worker-log line; the summary prints the
+  record under every row AND gathers the `work pending:` ones into a
+  `📂 WORK LEFT UNCOMMITTED` block; `monitor.sh` renders the file verbatim as a `↳`
+  line at the END of the row loop (state-agnostic, silent when the file is absent).
+
+**Files:** `engine/lib.sh` (`worktree_pending`), `engine/driver.sh` (`pending_record`,
+the two arms, the `.pending` clear, the summary row + block), `engine/monitor.sh` (the
+row's `↳`), `test/worktree-pending.sh` (new, registered in verify.sh + all.sh +
+ci.yml), `docs/guides/monitoring.md` + `docs/reference/events.md`,
+`VERSION` 0.8.90→0.8.91 + README bold.
+
+**Learnings for future iterations.**
+- **`run_worker`'s echoes go to the WORKER log, not the run log.** The test asserted
+  `holds UNCOMMITTED work` against `$WORK/run.log` and failed while the string was
+  sitting in `$STATE/parallel/<name>.log`. The split is: everything inside
+  `run_worker`'s `{ … }` block → `<name>.log`; the summary → the run's stdout. Assert
+  each against the file it actually lands in.
+- **The monitor's per-row extras go OUTSIDE the state arms.** The `elif [ "$st" = … ]`
+  chain in `render()` is exclusive, so anything added inside it is invisible on every
+  other state. The diff-budget note was already parked after the chain for exactly
+  this reason, and that is the slot to copy.
+- **`printf` a colour chosen by `case`, not by an inline `$( … )`.** A row render
+  runs once per tasklist per second in `watch`; a subshell per row per tick is the
+  cost the `dep_record_set`/`dep_record` pairs in crossrepo.sh exist to avoid.
+- **`git status --porcelain` is not one line per file by default.** If a count is
+  going to be quoted at a person, it has to be `-uall`, and the test has to plant an
+  untracked DIRECTORY or it will pass against the collapsed form.
+- `LC_ALL=C` on the awk was not optional here: it parses agent-authored PATHS with
+  `substr()`, and CLAUDE.md's BSD-awk rule bites the same way for a `dogfood/ém—dash/`
+  as it does for an em-dash in prose.

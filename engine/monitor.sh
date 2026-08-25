@@ -813,7 +813,7 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph
+    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph pw pwc
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
       lf="$(live_file "$n" "$state")"
@@ -890,6 +890,24 @@ render() {
                + " · budget " + (.limit.lines | tostring) + "L/" + (.limit.files | tostring) + "F per story ("
                + (.mode // "warn") + ")"' "$state/parallel/$n.budget.json" 2>/dev/null || echo)"
       [ -n "$bo" ] && printf '       %s↳ %s%s\n' "$YEL" "$bo" "$RST"
+      # WORK PRODUCED BUT NOT COMMITTED vs NO WORK PRODUCED. Two findings an operator
+      # acts on differently — the first is recoverable by reading a directory, the
+      # second is a real signal about the agent — and until now they rendered
+      # identically as `✗ failed · no progress last iter`. That row is what sent
+      # someone to re-scope tasklist 71 (talos, 2026-08-24) while 2,029 correctly
+      # placed files sat uncommitted in its worktree.
+      #
+      # The driver DECIDED this (pending_record in engine/driver.sh) and the monitor
+      # renders it verbatim — the same discipline as the phase field: one writer, no
+      # allow-list here, and no second `git status` from a view that refreshes every
+      # second. Outside the state arms above because a stop that keeps a worktree can
+      # wear more than one coarse state, and silent unless the file exists, so every
+      # row that never stopped renders exactly as before.
+      pw="$(head -1 "$state/parallel/$n.pending" 2>/dev/null || echo)"
+      if [ -n "$pw" ]; then
+        case "$pw" in "work pending:"*) pwc="$YEL" ;; *) pwc="$DIM" ;; esac
+        printf '       %s↳ %s%s\n' "$pwc" "$pw" "$RST"
+      fi
     done
   done
   [ "$UNREG_N" -gt 0 ] && unreg_render

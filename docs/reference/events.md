@@ -134,11 +134,11 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `tasklist.rebase-refused` | `failed` | the rebase was refused by a safety check |
 | `tasklist.merge-conflict` | `failed` | the merge itself conflicted |
 | `tasklist.checkout-failed` | `failed` | the branch could not be checked out for the merge phase |
-| `tasklist.no-work` | `failed` | the false-complete guard fired: COMPLETE with no commits |
+| `tasklist.no-work` | `failed` | the false-complete guard fired: COMPLETE with no commits. `detail` also reports what is UNCOMMITTED in the worktree when there is anything — "no commits" and "nothing at all" are different findings |
 | `tasklist.unverified` | `failed` | the evidence gate fired: chief was asked to force-pass a story whose `notes` say nothing about how it was done (`detail` counts them; the run log quotes the criteria) |
 | `tasklist.research` | `running` | the up-front research document was produced (and persisted) or reused from a previous run / a human's edit — `detail` carries the path |
 | `tasklist.research-failed` | `failed` | the research phase's bounded attempts ran out without a document carrying every required section; **nothing was implemented** |
-| `tasklist.incomplete` | `failed` | the iteration budget ran out with stories still unpassed |
+| `tasklist.incomplete` | `failed` | the iteration budget ran out with stories still unpassed. `detail` names what the worktree holds UNCOMMITTED when it holds anything (file count, staged/modified/untracked split, and the top-level paths) — the branch is kept, so that work is recoverable rather than lost |
 | `tasklist.rate-limited` | `rate-limited` | a provider usage limit paused it; branch kept, `detail` carries the reset ETA when known — carries `limit` |
 | `tasklist.rate-limit-wait` | `rate-limited` | the agent loop hit a limit mid-turn and is **sleeping** until the window reopens, then retrying in place — carries `limit` |
 | `tasklist.provider-unavailable` | `running` / `provider-unavailable` | the API refused the **request** — a 529 overload, a 5xx, a dropped connection, a revoked key — so **no turn was taken**. `state=running` on each retry (the iteration is charged to nothing), `state=provider-unavailable` on the stop after `PROVIDER_NOTURN_LIMIT` consecutive refusals. A **block, not a failure**: branch, commits and worktree kept, and nothing is known about the work (see [provider-unavailability.md](provider-unavailability.md)) |

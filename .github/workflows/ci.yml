@@ -65,6 +65,9 @@ jobs:
       - name: A transient refusal is waited out (Retry-After/backoff), a permanent one fails fast
         run: bash test/provider-backoff.sh
 
+      - name: Work already on disk is never described as no work (INCOMPLETE + chief ps)
+        run: bash test/worktree-pending.sh
+
       - name: Usage-limit pause is a distinct state (never 'failed', never blocks dependents)
         run: bash test/limitstate.sh
 

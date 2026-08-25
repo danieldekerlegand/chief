@@ -128,6 +128,35 @@ were a misfire, or it will not rebase). On 2026-08-17 a tasklist read `stalled` 
 ~25 minutes while it was doing exactly the first of those, and another read it with a
 2-second heartbeat while it was working.
 
+### "Produced nothing" is not "committed nothing"
+
+A row that ends `✗ failed` says nothing about whether there is anything to salvage,
+and there very often is. On 2026-08-24 tasklist 71 ended `INCOMPLETE` with the game it
+had adopted — 2,029 files — already fetched into `dogfood/open-rts/`, correctly placed
+and not gitignored, and *never committed*. `chief ps` showed `✗ failed · no progress
+last iter`, the summary said `left in worktree for review`, and neither named the work.
+Whoever read that had no reason to look.
+
+So every stop that keeps a worktree now runs one `git status --porcelain -uall` in it
+and publishes one line, which `chief ps` and the run summary both render verbatim:
+
+| Line | What it means |
+|---|---|
+| `work pending: 2029 uncommitted file(s) (2021 untracked, 5 modified, 3 staged) · dogfood/ — …` | **recoverable.** The branch and worktree are kept; read it, keep what is good, re-run |
+| `no uncommitted work: everything this run produced is committed on the branch` | the stop is what it looks like — the branch holds it all |
+| `no work produced: nothing committed, and nothing uncommitted in the worktree either` | the real signal about the agent |
+
+The counts are per **file**, not per porcelain line: git's default collapses an
+untracked directory into one entry, which would have reported tasklist 71's whole game
+as *1 uncommitted file*. Ignored trees (`target/`, `node_modules/`) are never walked.
+The read is **best-effort by construction** — a missing worktree, a broken gitdir link
+or an unreadable index all resolve to silence, because this is a report and must never
+become a new way for a run to die.
+
+The run summary also gathers every `work pending:` tasklist into one block
+(`📂 WORK LEFT UNCOMMITTED`), because a twenty-tasklist summary scrolls and this is the
+one failure state that is fixed by reading a directory.
+
 ### One threshold could not be right for every phase
 
 15 minutes is alarming for an agent turn and unremarkable for a usage window, so the

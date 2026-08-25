@@ -72,6 +72,63 @@ chief_scan_descendants() {
   return 0
 }
 
+# WHAT IS SITTING IN THE WORKTREE, UNCOMMITTED — the other half of the question
+# branch_has_real_work() answers. That one asks about COMMITS, and a run that stops
+# without committing answers it `no` while its whole output sits on disk: talos,
+# 2026-08-24, tasklist 71 rendered `✗ failed · no progress last iter` with 2,029
+# correctly-placed files staged and untracked in its worktree, and an operator reading
+# that row would reasonably conclude the tasklist was broken and re-scope it. "No work
+# produced" and "work produced but never committed" are a real signal and a
+# RECOVERABLE state, and until now they printed the same.
+#
+# BEST-EFFORT BY CONSTRUCTION, and that is a requirement rather than a nicety: this is
+# a reporting improvement and must never become a new way for a run to die. A missing
+# worktree, a broken gitdir link, an unreadable index, an awk that chokes — every one
+# of them resolves to an empty string, which reads as "nothing to add" at both call
+# sites. One `git status` and one awk pass, run once per stop, never in a loop.
+#
+# `-uall` on purpose: git's default collapses an untracked directory into ONE porcelain
+# line, so tasklist 71 would have reported "1 uncommitted file" for its 2,029. Git does
+# not descend into IGNORED directories either way, so the expensive trees (target/,
+# node_modules/ — engine/sweep.sh's whole table) are skipped, not walked.
+#
+# LC_ALL=C because agent-authored paths are UTF-8 and this awk uses substr() — see
+# CLAUDE.md; BSD awk aborts on a multi-byte character in a UTF-8 locale.
+#
+# $1 = the worktree. Prints ONE human phrase, or '' when the tree is clean or unreadable.
+worktree_pending() {
+  [ -d "${1:-}" ] || return 0
+  LC_ALL=C git -C "$1" status --porcelain -uall 2>/dev/null | LC_ALL=C awk '
+    {
+      n++
+      x = substr($0, 1, 1); y = substr($0, 2, 1)
+      if (x == "?") untracked++
+      else { if (x != " ") staged++; if (y != " ") unstaged++ }
+      # The TOP-LEVEL prefix, in first-seen order. "2,029 files" is a number;
+      # "dogfood/open-rts/" is where to look — the criterion is that the report NAMES
+      # what is there. A rename prints `old -> new`; the destination is what is on disk.
+      p = substr($0, 4)
+      i = index(p, " -> "); if (i > 0) p = substr(p, i + 4)
+      sub(/^"/, "", p)
+      j = index(p, "/"); top = (j > 0) ? substr(p, 1, j) : p
+      if (!(top in seen)) {
+        seen[top] = 1; ntop++
+        if (ntop <= 3) tops = tops (tops == "" ? "" : ", ") top
+      }
+    }
+    END {
+      if (n == 0) exit 0
+      if (untracked) parts = untracked " untracked"
+      if (unstaged)  parts = parts (parts == "" ? "" : ", ") unstaged " modified"
+      if (staged)    parts = parts (parts == "" ? "" : ", ") staged " staged"
+      printf "%d uncommitted file(s)", n
+      if (parts != "") printf " (%s)", parts
+      if (tops  != "") { printf " · %s", tops; if (ntop > 3) printf " +%d more", ntop - 3 }
+      printf "\n"
+    }' 2>/dev/null
+  return 0
+}
+
 # verify_branch [cwd] — run the project's verify hook for the CURRENTLY checked-out
 # branch. Contract: exit 0 = pass, non-zero = fail. Runs with cwd = $1 (default
 # $CHIEF_PROJECT; the driver passes the submodule work-repo for `repo:<sub>`

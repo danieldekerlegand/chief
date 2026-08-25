@@ -674,6 +674,31 @@ branch_has_real_work() {
     -- . ":(exclude)$TASKS_REL/$2.json" 2>/dev/null | head -1
 }
 
+# The other half of the pair — worktree_pending() (engine/lib.sh) reads the worktree;
+# this decides what the readers are told about it.
+# THE ONE PLACE THAT DECIDES, so `chief ps` and the run summary cannot disagree: both
+# read this file and render it verbatim. Written by every stop that KEEPS a worktree,
+# with exactly three outcomes —
+#   work pending:        produced but not committed. RECOVERABLE, and the row says so.
+#   no uncommitted work: the branch already holds everything this run produced.
+#   no work produced:    nothing committed and nothing on disk. The real signal.
+# $1 name · $2 worktree · $3 the worktree_pending phrase ('' = clean) · $4 non-empty
+# when the branch carries commits.
+pending_record() {
+  local f="$STATE/$1.pending"
+  if [ -n "${3:-}" ]; then
+    printf 'work pending: %s — produced but NOT committed; nothing is lost (git -C %s status)\n' \
+      "$3" "$2" > "$f" 2>/dev/null || true
+  elif [ -n "${4:-}" ]; then
+    printf 'no uncommitted work: everything this run produced is committed on the branch\n' \
+      > "$f" 2>/dev/null || true
+  else
+    printf 'no work produced: nothing committed, and nothing uncommitted in the worktree either\n' \
+      > "$f" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # EVIDENCE GATE — a story CHIEF promotes must say how it was done.
 #
 # The COMPLETE path trusts an agent that committed real work and marks every story
@@ -2336,6 +2361,10 @@ run_worker() {
   local live; live="$(live_of "$name")"
   CHIEF_LIVE_FILE="$live"; export CHIEF_LIVE_FILE
   : > "$STATE/$name.status"
+  # Last run's worktree report, cleared with the status it belongs to: this worker is
+  # about to `rm -rf` the worktree it describes, so a surviving file would tell
+  # `chief ps` about files that no longer exist (pending_record above).
+  rm -f "$STATE/$name.pending" 2>/dev/null || true
   {
     echo "### worker $name  (branch $branch, iters $iters${sub:+, repo $sub})  $(date)"
     live_set "$live" name="$name" phase=worktree story= iter=0 stall=0 waits=0 retry_at=0
@@ -2571,7 +2600,7 @@ run_worker() {
     # stories it left stale-false as passed so the branch proceeds to the verify gate
     # (verify — not the pass-flags — is the real merge bar). Not unconditionally —
     # evidence_gate promotes only the ones whose `notes` say how, and reports the rest.
-    local unevidenced="" unmeasured=""
+    local unevidenced="" unmeasured="" pending=""
     if [ "$agent_rc" = "0" ] && [ "$skip_agent" != "1" ] && [ -n "$has_work" ]; then
       unevidenced="$(evidence_gate "$wtstate/prd.json")"
     fi
@@ -2686,9 +2715,17 @@ run_worker() {
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
     if [ -z "$has_work" ]; then
       live_set "$live" phase=empty-no-work
-      event_emit tasklist.no-work name="$name" state=failed detail="false-complete guard: no commits vs $work_base"
+      # NO COMMITS is not the same finding as NOTHING AT ALL. This guard fires on both,
+      # and the second is a misbehaving agent while the first is a run whose output is
+      # sitting right there, one `git add` from being real.
+      pending="$(worktree_pending "$wt")"
+      pending_record "$name" "$wt" "$pending" ""
+      event_emit tasklist.no-work name="$name" state=failed \
+        detail="false-complete guard: no commits vs $work_base${pending:+ — but the worktree holds $pending}"
       echo "EMPTY-NO-WORK 0/$total" > "$STATE/$name.status"
-      echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"; return 0
+      echo "!! $name produced NO commits vs $work_base${sub:+ in $sub} — not merging/retiring (false-complete guard)"
+      [ -n "$pending" ] && echo "   ↳ its worktree is NOT empty, though: $pending — uncommitted, in $wt"
+      return 0
     fi
     # EVIDENCE + BAR GUARDS: a story the COMPLETE path wanted promoted that says
     # nothing about how it was done, and one claiming a bar with no value measured
@@ -2697,9 +2734,22 @@ run_worker() {
     [ -n "$unmeasured" ] && { unmeasured_stop "$unmeasured"; return 0; }
     if [ "$remaining" != "0" ]; then
       live_set "$live" phase=incomplete
-      event_emit tasklist.incomplete name="$name" state=failed detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out"
+      # "left in worktree for review" used to name nothing. Say WHAT is in there: this
+      # is the stop tasklist 71 ended on, and the 2,029 files it had already fetched
+      # were discoverable only by hand.
+      pending="$(worktree_pending "$wt")"
+      pending_record "$name" "$wt" "$pending" 1
+      event_emit tasklist.incomplete name="$name" state=failed \
+        detail="$(( total - remaining ))/$total stories passing when the iteration budget ran out${pending:+ — worktree holds $pending}"
       echo "INCOMPLETE $(( total - remaining ))/$total" > "$STATE/$name.status"
-      echo "!! $name INCOMPLETE — branch $branch left in worktree for review"; return 0
+      echo "!! $name INCOMPLETE — branch $branch left in worktree for review"
+      if [ -n "$pending" ]; then
+        echo "   ↳ and it holds UNCOMMITTED work: $pending"
+        echo "   ↳ nothing is lost — review it with: git -C $wt status"
+      else
+        echo "   ↳ no uncommitted changes in $wt — everything it produced is committed on $branch"
+      fi
+      return 0
     fi
     # Passing stories prepare a decision brief; they are not the operator's
     # verdict. Keep the branch and worktree available for `chief decide` rather
@@ -3266,11 +3316,17 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
   [ -f "$STATE/$n.why" ] && sed 's/^/       ↳ /' "$STATE/$n.why"
+  # WHAT IS IN THE WORKTREE — written by every stop that kept one (pending_record).
+  # Printed for the clean case too: the criterion is that the summary says WHETHER
+  # there are uncommitted changes, and silence is what an operator has to go and
+  # check by hand.
+  [ -s "$STATE/$n.pending" ] && sed 's/^/       ↳ /' "$STATE/$n.pending"
+  case "$(head -1 "$STATE/$n.pending" 2>/dev/null || echo)" in "work pending:"*) workleft="$workleft $n" ;; esac
   case "$(get_state "$n")" in
     done|failed) ran=1 ;;
     rate-limited) ran=1; paused="$paused $n" ;;   # it ran; it is paused, not failed
@@ -3341,6 +3397,20 @@ if [ -n "$stashed" ]; then
   done
   echo "    chief parked it to merge, and the merge changed the same lines — so it replayed with"
   echo "    conflicts and the entry was KEPT rather than dropped. Nothing is lost."
+fi
+# WORK THAT EXISTS AND IS NOT COMMITTED. Its own block, for the reason the per-row ↳
+# line is not enough: a run of twenty tasklists scrolls, and this is the one failure
+# state that is RECOVERABLE by reading a directory. On 2026-08-24 tasklist 71 ended
+# INCOMPLETE with its adopted game — 2,029 files — fetched and correctly placed in its
+# worktree, and the summary said only `left in worktree for review`. Whoever read that
+# had no reason to look, and re-scoping the tasklist would have thrown the work away.
+if [ -n "$workleft" ]; then
+  echo "   📂 WORK LEFT UNCOMMITTED — $(set -- $workleft; echo $#) tasklist(s) produced changes that were never committed:"
+  for n in $workleft; do
+    printf '    · %-30s %s\n' "$n" "$(sed 's/^work pending: //' "$STATE/$n.pending" | head -1)"
+  done
+  echo "    NOTHING IS LOST — each branch and its worktree are kept exactly as they were. This is"
+  echo "    a recoverable state, not an empty one: read the worktree, keep what is good, re-run."
 fi
 # A usage-limit pause is not a failure and must not read like one: say plainly that
 # the branch is intact, how much of the self-heal budget it spent, and that a re-run
