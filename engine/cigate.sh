@@ -226,14 +226,15 @@ cigate_on_block() {
   ' "$1" 2>/dev/null
 }
 
-# cigate_base_branch REPO — the branch chief pushes: the repo's declared
-# CHIEF_BASE_BRANCH, else main. READ as a line, never sourced — a report must not
-# execute another repository's bash (engine/status.sh's config_list keeps the same
-# rule, for the same reason).
-cigate_base_branch() {
+# cigate_config REPO KEY DEFAULT — one setting out of a repo's .chief/config.
+# READ as a line, never sourced — a report must not execute another repository's
+# bash (engine/status.sh's config_list keeps the same rule, for the same reason).
+cigate_config() {
   local f="$1/.chief/config" v=""
-  [ -f "$f" ] && v="$(LC_ALL=C awk '
-      /^[ \t]*(export[ \t]+)?CHIEF_BASE_BRANCH=/ { sub(/^[^=]*=/, "", $0); v = $0 }
+  [ -f "$f" ] && v="$(LC_ALL=C awk -v k="$2" '
+      index($0, k "=") { i = index($0, "="); pre = substr($0, 1, i - 1)
+                         gsub(/^[ \t]*(export[ \t]+)?/, "", pre)
+                         if (pre == k) v = substr($0, i + 1) }
       END { print v }' "$f" 2>/dev/null)"
   v="${v%%#*}"
   v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
@@ -241,8 +242,12 @@ cigate_base_branch() {
     \"*\") v="${v#\"}"; v="${v%\"}" ;;
     \'*\') v="${v#\'}"; v="${v%\'}" ;;
   esac
-  printf '%s\n' "${v:-main}"
+  printf '%s\n' "${v:-$3}"
 }
+
+# cigate_base_branch REPO — the branch chief pushes: the repo's declared
+# CHIEF_BASE_BRANCH, else main.
+cigate_base_branch() { cigate_config "$1" CHIEF_BASE_BRANCH main; }
 
 # cigate_branch_matches PATTERN BRANCH — GitHub's branch-filter glob against the
 # branch chief pushes, evaluated by `case`. The one difference is that GitHub's
@@ -260,10 +265,11 @@ cigate_branch_matches() {
 # limited to `tags:` never fires for a branch push, and chief creates no tags.
 # `!pattern` inside `branches:` is GitHub's negation and excludes.
 cigate_push_fires() {
-  local branch="$2" k e kind val inc=0 hit=0 tags=0
+  local branch="$2" k e kind val inc=0 hit=0 tags=0 tab
+  tab="$(printf '\t')"
   printf '%s\n' "$1" | LC_ALL=C awk -F'\t' \
     '$1 == "event" && $2 == "push" { f = 1 } END { exit f ? 0 : 1 }' || return 1
-  while IFS="$(printf '\t')" read -r k e kind val; do
+  while IFS="$tab" read -r k e kind val; do
     [ "$k" = filter ] && [ "$e" = push ] || continue
     case "$kind" in
       tags|tags-ignore)  tags=1; continue ;;
@@ -499,15 +505,22 @@ cigate_symbol() {
   esac
 }
 
-# cigate_render RECORDS [all] — the scan rendered for a human, one line each.
-# By default only what needs acting on: DID NOT RUN and UNKNOWN. Pass "all" to
-# include the healthy and the no-CI rows, which is what a per-repo report wants.
+# cigate_render RECORDS [MODE] — the scan rendered for a human, one line each.
+# By default only what needs acting on: DID NOT RUN and UNKNOWN. "all" adds the
+# healthy and the no-CI rows, which is what a per-repo report wants; "dead" keeps
+# only DID NOT RUN, for a reader whose UNKNOWNs are the NORMAL case and would bury
+# the finding — every merge record written before chief recorded gates is one, and
+# those are counted and named in the summary line instead of listed.
 cigate_render() {
-  local all="${2:-}" tok name wf detail
-  printf '%s\n' "$1" | while IFS="$(printf '\t')" read -r tok name wf detail; do
+  local all="${2:-}" tok name wf detail tab
+  # HOISTED: `while IFS="$(printf '\t')" read` re-runs that substitution — a FORK —
+  # on every iteration, and this loop is now fed one row per (merge record, workflow).
+  tab="$(printf '\t')"
+  printf '%s\n' "$1" | while IFS="$tab" read -r tok name wf detail; do
     [ -n "$tok" ] || continue
     case "$all" in
-      all) ;;
+      all)  ;;
+      dead) [ "$tok" = "$CIGATE_DEAD" ] || continue ;;
       *) case "$tok" in "$CIGATE_DEAD"|"$CIGATE_UNKNOWN") ;; *) continue ;; esac ;;
     esac
     if [ "$tok" = "$CIGATE_NONE" ]; then
@@ -564,5 +577,243 @@ NOTE
 NOTE
   fi
   [ "$unknown" -gt 0 ] && printf '  ↳ UNKNOWN is not a pass. Those gates were not measured, and chief will not round them up.\n'
+  return 0
+}
+
+# --- the MERGE RECORD: which gates actually executed --------------------------
+#
+# The third surface, and the only one that can be asked AFTERWARDS. Four tasklists
+# in this portfolio merged as `auto-verified` against a gate that had never
+# executed — `vita`'s `72` against a workflow no event chief produces could start,
+# and three in `amphora` against a `.chief/verify.sh` that ran one unrelated check
+# and then `exit 0`. Every one of them was found BY HAND, long after the fact,
+# because the completed record said `mergedToMain` and nothing else. A record that
+# names which gates ran is the difference between finding the next one by hand and
+# reading it off the file.
+#
+# OFFLINE, and AFTER the merge. `finalize_merged` calls this once the merge commit
+# already exists, and nothing in it touches the network — so it cannot slow, fail
+# or block a merge, which is the scope rule this whole module is built under. The
+# CI half is therefore the TRIGGER check ONLY: "could anything chief does have
+# started this gate", which is a pure function of the file. Whether a run then
+# happened is UNKNOWN in the record and is written down as unknown — `chief cigate`
+# is the command that asks GitHub, and it is deliberately not on this path.
+#
+# The vocabulary is the one stated at the top of this file. A record carries the
+# TOKENS (passed/failed/dead/unknown); `cigate_label` turns them into RAN AND
+# PASSED / RAN AND FAILED / DID NOT RUN at read time, so there is exactly one
+# place a state is named and a record written by an older chief still renders.
+
+# cigate_stamp_merge_record RECORD REPO SHA [HOOK] [NO_VERIFY] — add `gates` to a
+# completed/ record. Never fails, never writes a partial file: the whole document
+# is rebuilt through a temp file and moved into place, or the record is left
+# exactly as it was.
+#
+# THE LOCAL HALF IS THE `amphora` CHECK. A merge only happens after the gate came
+# back green, so "it passed" is knowable here without re-running anything — but so
+# is the case that has no gate at all. No hook, no per-tasklist `verify` commands,
+# or `NO_VERIFY=1`: green for the same reason an empty test suite is green, and
+# recorded as DID NOT RUN rather than as a pass.
+cigate_stamp_merge_record() {
+  local rec="$1" repo="$2" sha="$3" hook="${4:-}" noverify="${5:-0}"
+  local state detail branch rows="" wf label mm rc tmp cmds tab
+  [ -f "$rec" ] || return 0
+  tab="$(printf '\t')"
+  cmds="$(jq -r '(.verify // [])[] ' "$rec" 2>/dev/null | head -1)"
+  if [ "$noverify" = 1 ]; then
+    state="$CIGATE_DEAD"
+    detail="the local merge gate was SKIPPED by NO_VERIFY=1 — nothing verified this merge"
+  elif [ -n "$cmds" ]; then
+    state="$CIGATE_PASSED"; detail="this tasklist's own \"verify\" commands ran and exited 0"
+  elif [ -n "$hook" ] && [ -x "$hook" ]; then
+    state="$CIGATE_PASSED"; detail="the project verify hook ($(basename "$hook")) ran and exited 0"
+  else
+    state="$CIGATE_DEAD"
+    detail="no verify hook is configured and this tasklist declares no \"verify\" commands — NOTHING checked this merge"
+  fi
+  branch="$(cigate_base_branch "$repo")"
+  while IFS= read -r wf; do
+    [ -n "$wf" ] || continue
+    label="$(cigate_workflow_name "$wf")"
+    mm="$(cigate_trigger_check "$wf" "$branch")"; rc=$?
+    case "$rc" in
+      1) rows="$rows$CIGATE_DEAD$tab$label$tab$CIGATE_MISMATCH_TAG$mm" ;;
+      2) rows="$rows$CIGATE_UNKNOWN$tab$label${tab}its \`on:\` block could not be read, so whether anything chief does can start it is unknown" ;;
+      *) rows="$rows$CIGATE_UNKNOWN$tab$label${tab}a push of $branch can start it; whether it RAN for $sha is not recorded here — chief makes no network call on the merge path. \`chief cigate\` is what asks GitHub." ;;
+    esac
+    rows="$rows
+"
+  done <<EOF
+$(cigate_workflows "$repo")
+EOF
+  tmp="$rec.gates.$$"
+  printf '%s' "$rows" | jq -R -s --slurpfile r "$rec" --arg s "$state" --arg d "$detail" '
+      $r[0] + { gates: {
+        "local": { "state": $s, "detail": $d },
+        "ci": [ split("\n")[] | select(length > 0) | split("\t")
+                | { "workflow": .[1], "state": .[0], "detail": .[2] } ] } }' > "$tmp" 2>/dev/null \
+    && [ -s "$tmp" ] && mv "$tmp" "$rec"
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# cigate_tree_verdicts_set REPO TREE BRANCH -> CIGATE_TREE_ROWS — the trigger
+# verdict for every workflow in one `.github/workflows` TREE, as
+# "token<TAB>file<TAB>prose" lines.
+#
+# Keyed by the TREE, not by the commit, because that is what the answer actually
+# depends on: a repo's `.github/workflows` changes a few dozen times across
+# hundreds of merges, so the same handful of trees is asked about over and over.
+# cuneiform: 378 records, 4,155 (record, workflow) questions — and 31 distinct
+# trees behind them.
+#
+# The memo holds ALL of them, not one. deps.sh's one-entry memo is a full cache
+# because its caller asks about each record immediately after reading it; this
+# caller reads records in NAME order while trees change in MERGE order, and
+# measured on cuneiform that is 189 hits and 189 misses — half a cache, and the
+# misses are the expensive half. 31 entries is nothing to hold, and the memo is
+# bounded by the distinct trees of one report.
+#
+# SET-A-GLOBAL, not print-it, and its callers are the same all the way up to the
+# accumulator in cigate_records_report — `$( )` is a subshell, and a memo written
+# inside one dies with it. That is not a slow memo, it is NO memo, and it is silent.
+CIGATE_TREE_ROWS=""
+_CIGATE_TREE_KEYS=()
+_CIGATE_TREE_VALS=()
+cigate_tree_verdicts_set() {
+  local repo="$1" tree="$2" branch="$3" b mm rc tab out="" i=0 n
+  n="${#_CIGATE_TREE_KEYS[@]}"
+  while [ "$i" -lt "$n" ]; do
+    if [ "${_CIGATE_TREE_KEYS[$i]}" = "$tree" ]; then CIGATE_TREE_ROWS="${_CIGATE_TREE_VALS[$i]}"; return 0; fi
+    i=$((i + 1))
+  done
+  tab="$(printf '\t')"
+  while IFS= read -r b; do
+    case "$b" in *.yml|*.yaml) ;; *) continue ;; esac
+    mm="$(git -C "$repo" show "$tree:$b" 2>/dev/null | cigate_trigger_check - "$branch")"; rc=$?
+    case "$rc" in
+      1) out="$out$CIGATE_DEAD$tab$b$tab$mm
+" ;;
+      *) out="$out$CIGATE_UNKNOWN$tab$b$tab-
+" ;;
+    esac
+  done <<EOF
+$(git -C "$repo" ls-tree --name-only "$tree" 2>/dev/null)
+EOF
+  _CIGATE_TREE_KEYS[$n]="$tree"; _CIGATE_TREE_VALS[$n]="$out"
+  CIGATE_TREE_ROWS="$out"
+}
+
+# cigate_reconstruct_set REPO SHA NAME BRANCH -> CIGATE_REC_ROWS — the CI half of
+# a record that carries no `gates` field, rebuilt from the workflow files AS THEY
+# STOOD at the merge commit. Offline, textual, and historical: the four merges this
+# module exists because of all predate the field, and this is what lets them be
+# answered off the record instead of by hand.
+#
+# It answers the TRIGGER question only, which is the one still answerable. A
+# workflow chief's push could have started is UNKNOWN, never a pass — whether it
+# actually ran was never recorded, and that gap is the whole point.
+#
+# `rev-parse` is asked with `--verify -q` deliberately: plain `rev-parse` PRINTS an
+# argument it could not resolve and exits non-zero, so testing its output for
+# emptiness reads "no such tree" as a tree named `<sha>:.github/workflows` — which
+# silently dropped every merge made before the repo had CI at all, the one case
+# that most needs saying out loud.
+CIGATE_REC_ROWS=""
+cigate_reconstruct_set() {
+  local repo="$1" sha="$2" name="$3" branch="$4" tree tok b prose
+  CIGATE_REC_ROWS=""
+  if ! git -C "$repo" cat-file -e "$sha^{commit}" 2>/dev/null; then
+    CIGATE_REC_ROWS="$(printf '%s\t%s\t-\tmerged at %s, which is not a commit in this checkout — the gates of this merge cannot be reconstructed\n' \
+      "$CIGATE_UNKNOWN" "$name" "${sha:-(no mergedToMain recorded)}")
+"
+    return 0
+  fi
+  tree="$(git -C "$repo" rev-parse --verify -q "$sha:$CIGATE_WORKFLOW_DIR" 2>/dev/null)" || tree=""
+  if [ -z "$tree" ]; then
+    CIGATE_REC_ROWS="$(printf '%s\t%s\t-\tthe repository declared no CI at %s — nothing was missing\n' "$CIGATE_NONE" "$name" "$sha")
+"
+    return 0
+  fi
+  cigate_tree_verdicts_set "$repo" "$tree" "$branch"
+  # `printf -v`, not `$( )`: this is the innermost loop of the whole report — one
+  # pass per (record, workflow) — and a command substitution here is a FORK per
+  # row. On cuneiform that alone was 4,155 of them.
+  local line tab
+  tab="$(printf '\t')"
+  while IFS="$tab" read -r tok b prose; do
+    [ -n "$tok" ] || continue
+    case "$tok" in
+      "$CIGATE_DEAD")
+        printf -v line '%s\t%s\t%s\t%s%s (reconstructed from the file at %s; this merge predates chief recording gates)\n' \
+          "$tok" "$name" "$b" "$CIGATE_MISMATCH_TAG" "$prose" "$sha" ;;
+      *)
+        printf -v line '%s\t%s\t%s\ta push of %s could have started it at %s, but this merge predates chief recording gates — whether it RAN was never written down\n' \
+          "$tok" "$name" "$b" "$branch" "$sha" ;;
+    esac
+    CIGATE_REC_ROWS="$CIGATE_REC_ROWS$line"
+  done <<EOF
+$CIGATE_TREE_ROWS
+EOF
+}
+
+# cigate_records_report REPO [VERBOSE] — read the merge records BACK: for every
+# merged tasklist in this repo, which gates executed for it. Findings only by
+# default; VERBOSE=1 shows the healthy records too.
+#
+# ONE jq for the whole directory, not one per record (the rule engine/status.sh
+# established when 1,040 records cost 2,576 forks): the pass below emits the
+# stamped rows directly and marks the unstamped ones for reconstruction, which is
+# the only per-record work left and only happens for records written before the
+# field existed.
+cigate_records_report() {
+  local repo="$1" verbose="${2:-0}" completed rows="" branch name kind sha tok wf detail us line
+  us="$(printf '\037')"
+  repo="$(cd -P "$repo" 2>/dev/null && pwd)" || return 0
+  completed="$repo/$(cigate_config "$repo" CHIEF_TASKS_DIR tasks/chief)/completed"
+  branch="$(cigate_base_branch "$repo")"
+  if [ ! -d "$completed" ]; then
+    printf 'chief cigate --records: %s keeps no completed/ records (looked in %s)\n' "$(basename "$repo")" "$completed"
+    return 0
+  fi
+  # US-delimited, not TAB: a detail field is prose and an empty middle field would
+  # collapse a run of tabs (see CLAUDE.md). Reading is by the same delimiter.
+  while IFS="$us" read -r name kind sha tok wf detail; do
+    [ -n "$name" ] || continue
+    case "$kind" in
+      stamped) printf -v line '%s\t%s\t%s\t%s\n' "$tok" "$name" "$wf" "$detail"
+               rows="$rows$line" ;;
+      *)       cigate_reconstruct_set "$repo" "$sha" "$name" "$branch"
+               rows="$rows$CIGATE_REC_ROWS" ;;
+    esac
+  done <<EOF
+$(jq -rn --arg us "$us" '
+    inputs as $r
+    | (input_filename | sub("^.*/"; "") | sub("\\.json$"; "")) as $n
+    | ($r.mergedToMain // "" | tostring) as $sha
+    | if ($r.gates | type) == "object" then
+        ([{workflow: "the local verify gate", state: ($r.gates["local"].state // "unknown"),
+           detail: ($r.gates["local"].detail // "no detail recorded")}]
+         + ($r.gates.ci // []))[]
+        | [$n, "stamped", $sha, (.state // "unknown"), (.workflow // "-"), (.detail // "-")]
+      else [$n, "unstamped", $sha, "", "", ""] end
+    | join($us)' "$completed"/*.json 2>/dev/null)
+EOF
+  if [ -z "$rows" ]; then
+    printf 'chief cigate --records: %s has no merged tasklists to read.\n' "$(basename "$repo")"
+    return 0
+  fi
+  case "$verbose" in 1) cigate_render "$rows" all ;; *) cigate_render "$rows" dead ;; esac
+  printf '%s\n' "$rows" | LC_ALL=C awk -F'\t' -v repo="$(basename "$repo")" \
+      -v d="$CIGATE_DEAD" -v p="$CIGATE_PASSED" -v u="$CIGATE_UNKNOWN" '
+      NF { t[$1]++; seen[$2] = 1; if ($1 == d) bad[$2] = 1 }
+      END {
+        n = 0; for (k in seen) n++
+        b = 0; for (k in bad) b++
+        printf "%d merged tasklist(s) in %s: %d gate(s) DID NOT RUN across %d of them · %d RAN AND PASSED · %d UNKNOWN\n",
+               n, repo, t[d]+0, b, t[p]+0, t[u]+0
+        if (b > 0) print "  ↳ those tasklists merged with a declared gate that never executed. A merge record is\n    evidence of a merge, not of a check — that is the whole distinction this reports."
+        if (t[u]+0 > 0) print "  ↳ UNKNOWN is not a pass, and it is not silence either — those merges are counted\n    above. A record written before chief recorded gates keeps only what is still\n    reconstructable from the workflow files at the merge commit (-v lists them);\n    `chief cigate` is what asks GitHub what ran now."
+      }'
   return 0
 }

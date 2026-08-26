@@ -139,3 +139,79 @@ version-bump PASS, doc-sync PASS, `bash -n` clean, doc-links 0 dead, quality rat
   without a fifth TSV column. It is written in exactly ONE place (`cigate_row`) and
   matched with `index($4, t) == 1`. US-3's merge record should key off the same tag
   rather than re-matching the prose.
+
+## US-3 — The distinction is stated once, and reused  (2026-08-26)
+
+The third surface: the MERGE RECORD. `mergedToMain` is evidence of a MERGE, not of
+a CHECK — and that is the whole gap. Four tasklists in this portfolio merged against
+a gate that had never executed and every one was found BY HAND: vita's `72` against
+a workflow no event chief produces could start, three in `amphora` against a
+`.chief/verify.sh` that ran one unrelated check and then `exit 0`.
+
+Files: `engine/cigate.sh` (new `--- the MERGE RECORD ---` section + `cigate_config`
+lifted out of `cigate_base_branch`; `cigate_render` grew a `dead` mode),
+`engine/lib.sh` (sources cigate.sh; `finalize_merged` stamps), `bin/chief`
+(`--records`), `docs/reference/verify-hook.md` (the rule, the billing asymmetry, the
+record shape), `test/cigate.sh` (the whole block), `test/smoke.sh` (the stamp through
+the REAL merge path), README + ROADMAP + `VERSION` 0.9.4 -> 0.9.5.
+
+**Two halves, and the split is the scope rule.** `cigate_stamp_merge_record` runs in
+`finalize_merged`, AFTER the merge commit exists, and makes no network call: the
+LOCAL gate (hook ran / tasklist `verify` commands ran / `NO_VERIFY=1` / no gate at
+all) plus the OFFLINE TRIGGER verdict per declared workflow. Whether CI then ran is
+recorded `UNKNOWN` and printed as unknown, because measuring it needs the network and
+nothing on the merge path may.
+
+**The local half is the `amphora` check, and it is cheap.** A merge only happens
+after the gate came back green, so "it passed" is knowable without re-running
+anything — but so is the case that has NO gate. No hook, no `verify` commands, or
+`NO_VERIFY=1` are green for the same reason an empty test suite is green, and are
+recorded `DID NOT RUN`.
+
+**Records that predate the field are RECONSTRUCTED, not written off.** The trigger
+verdict is a pure function of the workflow files, so `cigate_reconstruct_set` reads
+them as they stood at the merge commit (`git show <mergedToMain>:.github/workflows/…`)
+— offline, historical, and the reason vita's `72` is now named off the file. Anything
+not reconstructable stays `UNKNOWN`; it is never rounded up.
+
+Counterfactual (real portfolio, 2026-08-26, no `gh` anywhere): vita 27 of 33 merged
+tasklists merged with a gate that DID NOT RUN, `72-windows-linux-bundles` among them;
+cuneiform 354/378; talos 41/54; pinakes 36/41; praxis 0/23.
+
+Gates: `test/cigate.sh` PASS, smoke PASS, ratelimit PASS, noworkguard PASS,
+version-bump PASS, doc-sync PASS, `bash -n` clean, doc-links 0 dead, quality ratchet
+OK (`function_length_max` 192 -> 206 tol 15; `single_use_functions` 21 -> 22 tol 2).
+`shellcheck` not installed on this host.
+
+### Learnings for future iterations
+
+- **`git rev-parse "<sha>:<path>"` PRINTS the argument it could not resolve** and
+  exits non-zero. Testing its stdout for emptiness therefore reads "no such tree" as
+  a tree literally named `<sha>:.github/workflows` — which silently dropped every
+  merge made before the repo had CI at all, the one case that most needed saying out
+  loud. Use `rev-parse --verify -q` (quiet, no echo) and check the status.
+- **`$( )` IS A SUBSHELL, so a memo written inside one dies with it** — not a slow
+  memo, NO memo, and silently. `cigate_tree_verdicts_set` / `cigate_reconstruct_set`
+  are SET-A-GLOBAL for that reason, all the way up to the accumulator in
+  `cigate_records_report`; this is the same discipline crossrepo.sh states for
+  `dep_record_set`, and it has to hold for the WHOLE call chain or it holds nowhere.
+- **A one-entry memo is a full cache only if the caller asks in the memo's order.**
+  deps.sh's is, because it asks about each record right after reading it. This reader
+  walks records in NAME order while trees change in MERGE order: measured on
+  cuneiform that is 189 hits / 189 misses — half a cache, and the misses are the
+  expensive half. Holding all 31 distinct trees costs nothing. 70s -> 26s with the
+  two fork fixes below.
+- **`while IFS="$(printf '\t')" read` re-runs that substitution EVERY ITERATION.**
+  It is a fork per row, and three loops in this module had it. Hoist `tab=` above
+  the loop. Likewise `var="$var$(printf …)"` in a hot loop is a fork per row —
+  `printf -v line …` then append is free.
+- **The three-state vocabulary now has THREE readers** (`chief cigate`, the record
+  stamp, `--records`) and still exactly one definition: `CIGATE_PASSED/FAILED/DEAD/
+  UNKNOWN/NONE` + `cigate_label`. Records store the TOKENS, never the labels, so a
+  record written by an older chief still renders correctly. Keep it that way.
+- **A `schedule`-only nightly is still reported as a mismatch** (US-2's open
+  judgement call), and at record scale it is loud: cuneiform's 354 findings are
+  mostly its two cron nightlies and one tags-only release, repeated per merge. The
+  seam is unchanged — `cigate_event_prose` + `CIGATE_MISMATCH_TAG` — and separating
+  "cannot be started by chief" from "not intended as a merge gate" is now the single
+  highest-value follow-up in this area.

@@ -320,5 +320,120 @@ out="$(bash "$ROOT/bin/chief" cigate "$R_VITA" 2>&1)"; rc=$?
 case "$out" in *"TRIGGER MISMATCH"*) ;; *) fail "chief cigate does not separate the mismatch from the billing story: $out" ;; esac
 case "$out" in *"not in billing"*) ;; *) fail "chief cigate does not say the mismatch has a different fix: $out" ;; esac
 
+# ── THE MERGE RECORD: which gates actually executed ─────────────────────────
+# A completed record carrying `mergedToMain` is evidence of a MERGE, not of a
+# CHECK. Four tasklists in this portfolio merged against a gate that had never
+# executed and all four were found by hand — `vita`'s 72 against a workflow no
+# event chief produces could start, three in `amphora` against a verify hook that
+# ran one unrelated check and then `exit 0`.
+#
+# Offline throughout: no fake `gh` is consulted by any of this, and the CI half of
+# a record is the TRIGGER verdict only, because nothing on the merge path may make
+# a network call.
+R_REC="$(mkrepo cg-rec yes)"
+mkdir -p "$R_REC/tasks/chief/completed"
+cp "$FX" "$R_REC/.github/workflows/ci.yml" 2>/dev/null || {
+  mkdir -p "$R_REC/.github/workflows"; cp "$FX" "$R_REC/.github/workflows/ci.yml"; }
+git -C "$R_REC" add -A; git -C "$R_REC" commit -qm vita-shape
+REC_DEAD_SHA="$(git -C "$R_REC" rev-parse --short HEAD)"
+mkwf "$R_REC" CI                                   # a reachable `on: push` workflow
+git -C "$R_REC" add -A; git -C "$R_REC" commit -qm reachable
+REC_LIVE_SHA="$(git -C "$R_REC" rev-parse --short HEAD)"
+rec() {  # $1 = stem, $2 = merge sha  -> an UNSTAMPED completed record
+  jq -n --arg s "$2" '{project:"cg",branchName:"chief/\($s)",userStories:[],mergedToMain:$s}' \
+    > "$R_REC/tasks/chief/completed/$1.json"
+}
+rec 72-windows-linux-bundles "$REC_DEAD_SHA"
+rec 73-something-later       "$REC_LIVE_SHA"
+
+# ── the local half is the `amphora` check ───────────────────────────────────
+HOOK="$WORK/verify.sh"; printf 'exit 0\n' > "$HOOK"; chmod +x "$HOOK"
+gates() { jq -r "$2" "$R_REC/tasks/chief/completed/$1.json"; }
+
+cigate_stamp_merge_record "$R_REC/tasks/chief/completed/73-something-later.json" "$R_REC" "$REC_LIVE_SHA" "$HOOK" 0
+[ "$(gates 73-something-later '.gates["local"].state')" = "$CIGATE_PASSED" ] \
+  || fail "a merge gated by a real verify hook was not recorded as RAN AND PASSED"
+[ "$(gates 73-something-later '.gates.ci[0].state')" = "$CIGATE_UNKNOWN" ] \
+  || fail "whether CI RAN is not measurable on the merge path — it must be recorded UNKNOWN, not passed"
+[ "$(gates 73-something-later '.userStories | length')" = 0 ] \
+  || fail "stamping the gates rewrote the rest of the record"
+
+cigate_stamp_merge_record "$R_REC/tasks/chief/completed/72-windows-linux-bundles.json" "$R_REC" "$REC_DEAD_SHA" "" 0
+[ "$(gates 72-windows-linux-bundles '.gates["local"].state')" = "$CIGATE_DEAD" ] \
+  || fail "a merge with NO verify hook at all was recorded as a pass — that is the amphora shape"
+case "$(gates 72-windows-linux-bundles '.gates["local"].detail')" in
+  *"NOTHING checked this merge"*) ;;
+  *) fail "the no-gate merge does not say that nothing checked it" ;;
+esac
+
+# NO_VERIFY=1 is a merge that was not verified, and is recorded as one.
+cp "$R_REC/tasks/chief/completed/73-something-later.json" "$WORK/nv.json"
+cigate_stamp_merge_record "$WORK/nv.json" "$R_REC" "$REC_LIVE_SHA" "$HOOK" 1
+[ "$(jq -r '.gates["local"].state' "$WORK/nv.json")" = "$CIGATE_DEAD" ] \
+  || fail "a merge with NO_VERIFY=1 was recorded as a gate that ran"
+
+# A per-tasklist "verify" array is a gate too, and is read off the record itself.
+jq '. + {verify:["true"]}' "$R_REC/tasks/chief/completed/73-something-later.json" > "$WORK/pv.json"
+cigate_stamp_merge_record "$WORK/pv.json" "$R_REC" "$REC_LIVE_SHA" "" 0
+[ "$(jq -r '.gates["local"].state' "$WORK/pv.json")" = "$CIGATE_PASSED" ] \
+  || fail "a tasklist's own verify commands were not counted as the local gate"
+
+# A record that cannot be rewritten is left EXACTLY as it was — never truncated.
+printf 'not json at all\n' > "$WORK/broken.json"
+cigate_stamp_merge_record "$WORK/broken.json" "$R_REC" "$REC_LIVE_SHA" "$HOOK" 0
+[ "$(cat "$WORK/broken.json")" = "not json at all" ] \
+  || fail "stamping a record it could not parse damaged the file"
+
+# ── reading it back, including the merges that predate the field ────────────
+# 72's record is stamped; 74's is not, and must be RECONSTRUCTED from the workflow
+# files as they stood at ITS merge commit. That is the half that answers for the
+# four merges this whole module exists because of.
+rec 74-predates-the-field "$REC_DEAD_SHA"
+rec 75-no-ci-yet "$(git -C "$R_REC" rev-parse --short HEAD~2 2>/dev/null || git -C "$R_REC" rev-parse --short HEAD)"
+jq -n '{project:"cg",branchName:"chief/76-x",userStories:[],mergedToMain:"0000000"}' \
+  > "$R_REC/tasks/chief/completed/76-not-in-this-checkout.json"
+
+recs="$(cigate_records_report "$R_REC" 1)"
+case "$recs" in
+  *"74-predates-the-field"*"DID NOT RUN"*"trigger mismatch"*) ;;
+  *) fail "a merge that predates the gates field was not reconstructed from the workflow file: $recs" ;;
+esac
+case "$recs" in
+  *"reconstructed from the file at $REC_DEAD_SHA"*) ;;
+  *) fail "the reconstruction does not say it was reconstructed, or from where" ;;
+esac
+case "$recs" in
+  *"76-not-in-this-checkout"*"UNKNOWN"*) ;;
+  *) fail "a merge sha absent from the checkout was not UNKNOWN — it must never read as a pass" ;;
+esac
+case "$recs" in
+  *"75-no-ci-yet"*"NO GATE DECLARED"*) ;;
+  *) fail "a merge made before the repo declared any CI was not reported as declaring none: $recs" ;;
+esac
+case "$recs" in
+  *"72-windows-linux-bundles"*"DID NOT RUN"*"NOTHING checked this merge"*) ;;
+  *) fail "the stamped no-gate record does not read back as DID NOT RUN" ;;
+esac
+case "$recs" in *"merged tasklist(s) in cg-rec"*) ;; *) fail "the records report does not count what it read" ;; esac
+
+# The vocabulary is ONE vocabulary: the record carries tokens, cigate_label names
+# them, and a reader must never see a second set of words for the same state.
+for st in "$CIGATE_PASSED" "$CIGATE_FAILED" "$CIGATE_DEAD"; do
+  case "$(cigate_label "$st")" in "RAN AND PASSED"|"RAN AND FAILED"|"DID NOT RUN") ;;
+    *) fail "cigate_label invented a state name for '$st'" ;;
+  esac
+done
+
+# The CLI, and it still reports rather than blocks.
+out="$(bash "$ROOT/bin/chief" cigate --records "$R_REC" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] || fail "chief cigate --records exited $rc on a finding — this reports, it never blocks"
+case "$out" in *"DID NOT RUN"*) ;; *) fail "chief cigate --records never names a gate that did not run: $out" ;; esac
+case "$out" in *"UNKNOWN is not a pass"*) ;; *) fail "chief cigate --records lets an unmeasured merge read as clean: $out" ;; esac
+# --records is OFFLINE, and the DEPENDENCY GATE applies to it too: the same PATH
+# carrying only the tools this module is allowed to need, and no `gh` at all.
+nogh_out="$(PATH="$WORK/nogh" cigate_records_report "$R_REC" 1 2>&1)"
+case "$nogh_out" in *"DID NOT RUN"*) ;; *) fail "the records report needs the network or a tool it may not: $nogh_out" ;; esac
+[ "$nogh_out" = "$recs" ] || fail "the records report answered differently with gh absent — it must be entirely offline"
+
 [ "$fails" -eq 0 ] || exit 1
-echo "CIGATE PASS — declared-but-dead gates reported (never-started · never-run · not-current); no-CI and green repos not flagged; gh absent, no remote and a refusing API all land on UNKNOWN and never on a pass; vita's 2026-08-25 workflow reports its trigger mismatch offline, in prose, and a passing run does not clear it"
+echo "CIGATE PASS — declared-but-dead gates reported (never-started · never-run · not-current); no-CI and green repos not flagged; gh absent, no remote and a refusing API all land on UNKNOWN and never on a pass; vita's 2026-08-25 workflow reports its trigger mismatch offline, in prose, and a passing run does not clear it; a merge record names which gates executed for it, and a merge that predates the field is reconstructed from the workflow files at its own merge commit"

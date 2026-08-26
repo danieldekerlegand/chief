@@ -118,6 +118,11 @@ git checkout -q main
 [ -f out/US-1.txt ] && [ -f out/US-2.txt ]                     || fail "agent artifacts not merged to main"
 [ -f tasks/chief/completed/smoke.json ]                        || fail "tasklist not retired to completed/"
 [ -n "$(jq -r '.mergedToMain // empty' tasks/chief/completed/smoke.json)" ] || fail "completed record has no mergedToMain stamp"
+# WHICH GATES ACTUALLY EXECUTED, through the real merge path. `mergedToMain` is
+# evidence of a MERGE, not of a CHECK — four tasklists in this portfolio merged
+# against a gate that had never run, and every one was found by hand afterwards.
+[ "$(jq -r '.gates["local"].state // empty' tasks/chief/completed/smoke.json)" = passed ] \
+  || fail "the merged record does not record that the local gate RAN AND PASSED"
 [ ! -f tasks/chief/smoke.json ]                                || fail "pending tasklist not removed after merge"
 # case-match (not `| grep -q`) so pipefail's SIGPIPE race can't false-negative.
 case "$(git log --oneline)" in *"Merge chief/smoke"*) ;; *) fail "no --no-ff merge commit on main" ;; esac

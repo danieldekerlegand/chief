@@ -150,8 +150,10 @@ Usage:
                               re-baseline hatch; CHIEF_VERIFY_QUALITY=0 skips it.
                               See docs/reference/verify-hook.md
   chief cigate [-a] [-v]      DID THE DECLARED CI GATE ACTUALLY RUN? A report, never a block.
-       [--head|--sha SHA]     Per repo, the state of the most recent run of every workflow it
-       [paths…]               DECLARES: RAN AND PASSED · RAN AND FAILED · DID NOT RUN (no run
+       [--head|--sha SHA]     \`--records\` reads it BACKWARDS off completed/: which gates
+       [--records] [paths…]   executed for the merges that already happened, offline.
+                              Per repo, the state of the most recent run of every workflow it
+                              DECLARES: RAN AND PASSED · RAN AND FAILED · DID NOT RUN (no run
                               ever, a run that completed without executing a single step, or a
                               green run that never covered the commit asked about). A repo with
                               no workflows is not flagged. Also the TRIGGER MISMATCH: a workflow
@@ -1096,12 +1098,13 @@ cmd_quality() { bash "$ENGINE/quality.sh" "$@" ; }
 cmd_cigate() {
   # shellcheck source=engine/cigate.sh
   . "$ENGINE/cigate.sh"
-  local verbose=0 sha="" head=0 roots=() r rows all_rows="" total=0
+  local verbose=0 sha="" head=0 records=0 roots=() r rows all_rows="" total=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       -a|--all)     while IFS= read -r r; do [ -d "$r" ] && roots+=("$r"); done < <(cat "$CHIEF_REPOS" 2>/dev/null) ;;
       -v|--verbose) verbose=1 ;;
       --head)       head=1 ;;
+      --records)    records=1 ;;
       --sha)        sha="${2:-}"; shift ;;
       -*)           echo "chief cigate: unknown option $1" >&2; return 2 ;;
       *)            roots+=("$1") ;;
@@ -1115,6 +1118,10 @@ cmd_cigate() {
   fi
   for r in "${roots[@]}"; do
     [ -d "$r" ] || { echo "  ? $(basename "$r") — no such directory: $r"; continue; }
+    # --records asks the OTHER question: not "did the gate run", but "which gates
+    # ran for the merges that already happened". Offline, off the registry, and
+    # read straight off completed/ — no network call is made in this mode at all.
+    [ "$records" = 1 ] && { cigate_records_report "$r" "$verbose"; continue; }
     [ "$head" = 1 ] && sha="$(git -C "$r" rev-parse HEAD 2>/dev/null || true)"
     rows="$(cigate_scan "$r" "$sha")"
     [ -n "$rows" ] || continue
@@ -1122,7 +1129,7 @@ cmd_cigate() {
 "
     total=$((total + 1))
   done
-  cigate_summary "$all_rows" "$total" "$verbose"
+  [ "$records" = 1 ] || cigate_summary "$all_rows" "$total" "$verbose"
 }
 
 # ── retiring a tasklist whose answer was NO (engine/retire.sh) ───────────────
