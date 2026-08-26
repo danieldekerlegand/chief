@@ -1,58 +1,57 @@
 {
   "project": "chief",
   "category": "fix",
-  "branchName": "chief/114-the-roadmap-describes-a-program-that-ended",
-  "description": "**`ROADMAP.md` documents the `77`–`92` era and is silent on roughly 60% of the merged program.** Audited 2026-08-25 against disk.\n\nIts banner reads *\"Shipping & self-hosting (v0.8.0 — see VERSION)\"*; `VERSION` is `0.8.94`. Line 55 says *\"1/1 built-program tasklists merged (`77`); 15 proposed forward tasklists authored … the runnable head is the agent-output quality & alignment band (`88`–`91`)\"* — that band shipped between 08-12 and 08-18. Line 153 says *\"remaining work is hardening and breadth … numbered from the current max, `77`.\"* `77` stopped being the max on 2026-08-01.\n\n**Bands `93`–`113` do not appear in the file at all.** A grep for `9[3-9]|1[01][0-9]` returns nothing; the highest number present is `92`. Concept greps for `chief usage`, `chief decide`, `chief status`, `machine-wide` and `iteration-outcome` all return zero. The CLI roster at line 20 lists twelve subcommands; `bin/chief` dispatches eight more (`status · lint · gen · events · usage · quality · approve · decide`).\n\n**Two coherent programmes are missing, and they deserve naming rather than a list of numbers.** `104`–`109` are OPERATOR ERGONOMICS — usage reporting, decision tasklists, list/ps, machine-wide concurrency. `110`–`113` are one thesis, *chief learning to tell real progress from motion*: a green branch verified three times, a 529 misread as a usage wall, a bookkeeping commit scored as progress, a story that may terminate false. That is an ITERATION-OUTCOME TAXONOMY and the roadmap has no vocabulary for it.\n\n**The mechanism is on the record inside this repo.** `86-doc-sync-gate` shipped and `test/doc-sync.sh` enforces README ↔ VERSION ↔ subcommand parity — and does not cover `ROADMAP.md`. That is precisely why `README.md:347` correctly says `v0.8.94` while the roadmap says `v0.8.0`. Fixing the text without closing that gap re-runs this audit in a fortnight; the measured portfolio drift rate is about two weeks.",
+  "branchName": "chief/115-a-gate-that-did-not-run-is-not-a-gate-that-passed",
+  "description": "**Every private repository in this portfolio has had dead CI for an unknown period, and nothing anywhere said so.** Measured 2026-08-25.\n\n```\npraxis      PUBLIC    success  2026-08-15\npinakes     PUBLIC    success  2026-08-25\ntalos       PRIVATE   failure  2026-08-24\ncuneiform   PRIVATE   failure  2026-08-25\nvita        PRIVATE   failure  2026-08-25\n```\n\nAll three private failures are byte-identical and none is a code problem: *\"The job was not started because recent account payments have failed or your spending limit needs to be increased.\"* GitHub Actions minutes are free for public repositories and billed for private ones, so the account-level block silently killed CI on every private repo while the public ones kept working.\n\n**vita carried a second, independent version of the same fault.** Its workflow triggers only `on: pull_request` and `workflow_dispatch`. chief merges branches into main LOCALLY and pushes main — it never opens a pull request — so no event that chief generates could ever start that workflow. vita's CI had therefore never run once in the repository's history, and a tasklist (`72`) was unparked and merged as `auto-verified` on the premise that it had.\n\n**This is the generalized form of two failures already recorded in this portfolio.** `amphora` merged three tasklists against a `.chief/verify.sh` that ran one unrelated check and then `exit 0`. `145-forge-harness-gate` was written because *\"a green gate that cannot go red is worse than no gate.\"* Both concern a gate that CANNOT FAIL. This one is worse: a gate that **never executes** is indistinguishable, from every surface chief offers, from one that ran and passed.\n\n**Scope discipline.** chief must not become a CI client, must not require a network call on the merge path, and must not fail a merge because a third-party service is down. What it can do is refuse to let ABSENCE read as SUCCESS — the same distinction `.chief/verify.sh` already draws locally between a skipped check and a passing one, applied to the gate a repo claims to have but does not run.",
   "touches": [
-    "ROADMAP.md",
+    "engine",
+    "bin/chief",
+    "docs",
     "test",
-    "docs"
+    "VERSION"
   ],
-  "iters": 6,
+  "iters": 7,
   "warmup": [
-    "grep -n 'Last updated\\|v0\\.8\\.0' ROADMAP.md | head -5; cat VERSION",
-    "grep -nE '\\b(9[3-9]|1[01][0-9])\\b' ROADMAP.md | head",
-    "ls tasks/chief/completed/ | sed 's/-.*//' | sort -n | uniq | tail -25 | tr '\\n' ' '",
-    "sed -n '/doc-sync/,+25p' test/doc-sync.sh | head -40",
-    "grep -n 'ROADMAP' test/doc-sync.sh || echo 'ROADMAP.md is NOT covered by the doc-sync gate'"
+    "grep -rn 'skip\\|SKIP' engine/*.sh | head -12",
+    "sed -n '1,40p' ../vita/.github/workflows/ci.yml",
+    "cd ../cuneiform && gh run list --limit 2 2>&1 | head -3",
+    "grep -rn 'verify.sh' engine/driver.sh | head -8",
+    "sed -n '/doc-sync/,+15p' test/doc-sync.sh 2>/dev/null | head -20"
   ],
   "userStories": [
     {
       "id": "US-1",
-      "title": "The roadmap states what is true today",
+      "title": "A declared gate that never ran is reported, not assumed",
       "acceptanceCriteria": [
-        "The banner, the Current State block and every phase row are rewritten against `tasks/chief/completed/`. All 35 records carry a real `mergedToMain` — verify rather than assume, and cite shas for the bands you mark done.",
-        "The version claim is derived from `VERSION`, not restated. A roadmap asserting `v0.8.0` beside a `VERSION` of `0.8.94` is the specific failure this tasklist exists to end.",
-        "The CLI roster matches `bin/chief`'s dispatch table. Eight subcommands are currently missing from it.",
-        "Internal contradictions are resolved: the file currently says five first-class providers in one place, four in another and three in a third. Pick the true one and state it once."
+        "chief can tell an operator, per repo, that the repository DECLARES a CI gate (a `.github/workflows/*.yml` or equivalent) whose most recent run is absent, failed to start, or is older than the commit being merged. Reporting is the deliverable; blocking is explicitly not.",
+        "The check is OFFLINE-SAFE and never on the merge critical path. An unreachable network, an absent `gh`, or a repo with no remote produces an UNKNOWN verdict that is stated as unknown — never a pass. `check-engine-pin.sh`'s loud-SKIP discipline is the precedent: a run that could not measure must not read as a pass.",
+        "A repo that legitimately has no CI (no workflows at all) is NOT flagged. The finding is a declared-but-dead gate, not the absence of one — those are different situations and conflating them would make the check noise.",
+        "A test drives fixtures for each case: no workflows, workflows with a recent green run, workflows whose runs all failed to start, and workflows with no runs ever."
       ],
-      "notes": "Rewrote banner, Current State, and every existing phase row against tasks/chief/completed/. All 37 records carry a real mergedToMain (0 MISSING); shas resolve bd030a6 (77, 2026-08-01) .. 716c9e4 (113, 2026-08-26). Version claim now bold **v0.9.1** == VERSION 0.9.1 (was v0.8.0). CLI roster 12 -> 22. Provider contradiction resolved to five first-class. check-doc-links: 0 dead vs 0 on main; test/doc-sync.sh PASS; chief lint clean.",
+      "notes": "test/cigate.sh PASS — 5 fixtures (no workflows at all / a recent green run / runs that completed with zero steps / a workflow with no runs ever / no GitHub remote), plus gh-absent, an API refusal, and a green run on another commit; every could-not-measure arm lands on UNKNOWN. bash -n clean across bin/chief + engine/*.sh + test/*.sh; smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.9.3), doc-sync PASS (38 merged tasklists); quality ratchet OK (function_length_max 192 -> 200, tol 15). shellcheck not installed locally — CI enforces it. Counterfactual against the real portfolio: cuneiform 11/11 workflows DID NOT RUN, vita 1/1 DID NOT RUN, chief 1/1 DID NOT RUN, praxis RAN AND PASSED, pinakes 3 passed / 2 failed / 1 never run.",
       "passes": true
     },
     {
       "id": "US-2",
-      "title": "The two unnamed programmes get names and rows",
+      "title": "The trigger mismatch is detectable, because it is invisible otherwise",
       "acceptanceCriteria": [
-        "`104`–`109` are recorded as a coherent OPERATOR ERGONOMICS phase, not as a list of merged numbers.",
-        "`110`–`113` are recorded as one thesis about iteration-outcome honesty, with the measurement behind each: three verifies of an already-green branch; a 529 Overloaded slept on as a usage wall; five bookkeeping commits scoring as progress and stretching a 5-iteration budget to 11; a story re-driven 63 commits whose right answer was `passes:false`.",
-        "The `93`–`103` band is placed too — merge safety, worktree reaping, `chief status`, reap orphanhood. Roughly 21 merged tasklists are currently invisible.",
-        "`docs/decisions/conflict-predictor-adoption-decision.md` and the two active tasklists are reflected, so the 'Loose wishlist — Empty. No future threads are parked' line stops being false."
+        "chief detects the vita shape: a workflow whose triggers cannot be produced by how chief lands work. chief merges locally and pushes the base branch, so a `pull_request`-only workflow is dead by construction under it, and nothing about the file looks wrong.",
+        "The report names the mismatch in the operator's terms — which trigger the workflow waits for, and what chief actually does — rather than printing YAML. 'Your CI waits for a pull request; chief pushes to main' is actionable, 'on: pull_request' is not.",
+        "Detection is textual and offline. Do not add a YAML dependency or a network call to the engine for this.",
+        "Counterfactual: pointing the check at vita's workflow as it stood on 2026-08-25 reports the mismatch. That file is the fixture."
       ],
-      "notes": "Added three named phase sections to ROADMAP.md: 'Operating the fleet' (93-103, 11 rows), 'Operator ergonomics' (104-109, 6 rows) and 'Iteration-outcome honesty' (110-113, 4 rows, stated as one thesis with each measurement: ~34min to merge an already-green 4/4 branch and 2 merge-phase verifies over 6 iterations on a 3/3; three iterations of API Error 529 hitting stall 3/2 with 2,029 files intact on disk; five re-check-stamp commits stretching a 5-iteration budget to 11 over 1h32m; 63 commits / 21 iterations in one run / 42 identical measurements on a story whose right answer was passes:false). Replaced the false 'Loose wishlist - Empty' block with 'In flight' (114/115/116) + 'Open threads' citing docs/decisions/conflict-predictor-adoption-decision.md. VERIFIED: all 37 completed/ stems AND all 37 mergedToMain shas now appear in ROADMAP.md (0 missing, checked by loop); 3/3 live tasklists referenced. Gates: check-doc-links --ratchet 0 dead vs 0 on main; test/doc-sync.sh DOC-SYNC PASS; chief lint 3 tasklists clean. File 274 -> 360 lines.",
-      "passes": true
+      "notes": null
     },
     {
       "id": "US-3",
-      "title": "The gate that would have caught this covers the file",
+      "title": "The distinction is stated once, and reused",
       "acceptanceCriteria": [
-        "`test/doc-sync.sh` is extended to cover `ROADMAP.md`. At minimum it fails when the roadmap's stated version disagrees with `VERSION`, and when a tasklist stem in `completed/` is absent from the roadmap — the two checks that would each independently have caught this drift.",
-        "The check is cheap and offline, in keeping with the gate it joins. It must not require a network call or a model.",
-        "It is proven able to FAIL: a negative-control fixture drives it red, in the same shape the rest of this repo's guards use. A gate nobody has watched fail is indistinguishable from one that always passes.",
-        "The rationale is recorded where the next reader looks: this repo shipped a doc-sync gate that deliberately did not cover the roadmap, and the roadmap is the file that rotted.",
+        "The three states are named and used consistently wherever chief reports a gate: RAN AND PASSED, RAN AND FAILED, DID NOT RUN. `.chief/verify.sh` already draws the skipped-vs-passed line locally; this extends the same idea outward rather than inventing a second vocabulary.",
+        "`docs/reference/verify-hook.md` records the rule and the measurement behind it, including that GitHub Actions is free for public repos and billed for private ones — the asymmetry that let this hide, since the public repos kept working and looked normal.",
+        "A merge record can be read afterwards to see which gates actually executed. A tasklist that merged while its declared CI never ran should be answerable from the record, because three of them already exist across this portfolio and were only found by hand.",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
       ],
-      "notes": "test/doc-sync.sh extended to cover ROADMAP.md with the two checks that would each independently have caught the audited drift: the roadmap's bold **vX.Y.Z** == VERSION (shared with README via version_claims_ok), and every merged stem in tasks/chief/completed/ named in ROADMAP.md. Green: 'DOC-SYNC PASS - README and ROADMAP state v0.9.2; README documents every bin/chief subcommand; ROADMAP names all 37 merged tasklists' (exit 0). PROVEN ABLE TO FAIL - 4 negative self-checks now run inline (2 README + 2 new ROADMAP) and all trip; driven red by hand too, reproducing both halves of the 2026-08-25 audit: a ROADMAP claiming **v0.8.0** beside VERSION 0.9.1 -> exit 1, and a ROADMAP stripped of '99-reap-must-not-infer-orphanhood' -> exit 1. Offline: grep/sed/awk/basename over tracked files, no network, no model. Gates: bash -n all 60 shell files clean; shellcheck -S error clean on test/doc-sync.sh + .chief/verify.sh (v0.11.0 via npx - the 3 errors it reports in engine/quality.sh:60 and engine/sweep.sh:396,404 are byte-identical on main, pre-existing); VERSION 0.9.1 -> 0.9.2, test/version-bump.sh 'VERSION-BUMP PASS'; quality ratchet OK (function_length_max 1 -> 12 tol 15, function_length_mean 1 -> 3.2 tol 5, duplicate_blocks 0 -> 0 tol 0); check-doc-links 0 dead vs 0 on main; chief lint 3 tasklists clean.",
-      "passes": true
+      "notes": null
     }
   ]
 }

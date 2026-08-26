@@ -1,174 +1,73 @@
-# Chief Progress — 114-the-roadmap-describes-a-program-that-ended
-Started: Wed Aug 26 16:03:25 CDT 2026
+# Chief Progress — 115-a-gate-that-did-not-run-is-not-a-gate-that-passed
+Started: Wed Aug 26 17:00:25 CDT 2026
 ---
 
-## US-1 — The roadmap states what is true today (2026-08-26)
+## Codebase Patterns
 
-Rewrote ROADMAP.md's banner, Current State block and every existing phase row against disk.
+- **A new `test/*.sh` is a gate only in THREE lists** (already in CLAUDE.md, restating
+  because this tasklist hit it): `.chief/verify.sh`'s `CHIEF_BYSTANDER_TESTS`,
+  `test/all.sh`'s `BASH_SUITE`, and `.github/workflows/ci.yml`.
+- **`usage()` in `bin/chief` is the repo's longest function (192 lines on main) and it
+  therefore OWNS `function_length_max`.** The ratchet's tolerance is 15 lines, so a
+  usage entry longer than ~14 lines blocks the merge on its own — and the next story
+  on the same branch measures against the SAME base, so every usage edit on a branch
+  shares one 15-line budget. Write the entry compact the first time.
+- **A `gh run list` fake is enough to test a CI probe hermetically.** Two calls are all
+  `engine/cigate.sh` makes (`run list`, `run view --json jobs`); a ~15-line fake `gh` on
+  PATH serving fixture JSON keyed by `--repo <slug>` covers every case, and a missing
+  fixture exits 1, which is exactly what an offline/unauthenticated `gh` does.
+- **Narrowing `PATH` to `/usr/bin:/bin` to simulate "tool absent" is a trap** — it also
+  drops tools the code legitimately needs, so the test can pass for the wrong reason.
+  Build a dir of symlinks to everything the code needs EXCEPT the one tool under test.
 
-**What was wrong, measured:**
-- Banner claimed `v0.8.0`; `VERSION` is `0.9.1`. Now a bold `**v0.9.1**` (the shape
-  `test/doc-sync.sh` already checks in README — US-3 extends the gate to this file).
-- "Last updated: 2026-08-11" → 2026-08-26.
-- CLI roster listed 12 subcommands; `bin/chief`'s dispatch `case "$cmd" in` has **22** primary
-  arms (`init run list status lint gen ps monitor logs events usage models reap quality retire
-  approve decide pause resume version update help`). Ten were missing, not eight — the tasklist
-  description undercounted (`retire` and `help` were also absent).
-- Provider count contradicted itself three ways (five / four / three). **Five is true** — verified
-  in three places that are kept in lockstep by `test/provider-conformance.sh`: `bin/chief:625`,
-  `engine/agent.sh:167`, and the `ROSTER` array. Stated once now.
-- Every ⬜ row for `78`–`92` was stale: all merged. Flipped to ✅ **with the merge sha in the
-  Tasklist column**, and the three section headers that said "proposed"/"highest priority"
-  (`88`–`91`, `92`, embeddable engine) now say shipped with their date range.
-- The "Planned / hardening" section had no discrete rows left, only the two continuous bars —
-  retitled "Hardening & breadth — ✅ shipped (`78`–`87`), two ongoing bars".
+---
 
-**Verified, not assumed:** all **37** records in `tasks/chief/completed/` (not 35 — `112` and
-`113` merged after the audit) carry a real `mergedToMain`, and every sha resolves in git:
-`bd030a6` (77, 2026-08-01) → `716c9e4` (113, 2026-08-26). Zero MISSING.
+## US-1 — A declared gate that never ran is reported, not assumed  (2026-08-26)
 
-Gates: `node scripts/check-doc-links.mjs --ratchet --base main` → 0 dead vs 0 on main;
-`bash test/doc-sync.sh` → PASS; `bin/chief lint` → 3 tasklists clean. Doc-only change, so no
-`VERSION` bump (`test/version-bump.sh` only fires on `bin/`/`engine/`/`scripts/`/`install.sh`).
+Added `engine/cigate.sh` and the `chief cigate` subcommand.
 
-**Left for US-2:** the `93`–`113` bands still do not appear anywhere in the file. US-1 deliberately
-did not add sections for them — it only made the existing text true.
+Files: `engine/cigate.sh` (new), `test/cigate.sh` (new), `bin/chief` (usage entry,
+`cmd_cigate`, dispatch arm), `.chief/verify.sh` + `test/all.sh` +
+`.github/workflows/ci.yml` (register the test), `README.md` (command-table row +
+version), `ROADMAP.md` (version), `VERSION` 0.9.2 -> 0.9.3.
 
-### Learnings for future iterations
-- **Reconstruct the merge record with one loop, not by trusting the tasklist description.**
-  `for f in tasks/chief/completed/*.json; do jq -r '[.mergedToMain]' …; git log -1 --format=%ad
-  --date=short "$sha"; done` gives stem + sha + date in one pass, and is what "verify rather than
-  assume" means here. The description's counts were two records stale before the first iteration ran.
-- **The `Bash` tool's cwd persists across calls.** A `cd tasks/chief/completed` in one call left the
-  next call unable to find `bin/chief`. Prefix with the worktree root or use absolute paths.
-- **`.chief/verify.sh` path-scopes docs work to two cheap checks** (`check-doc-links.mjs --ratchet`
-  on any `*.md`, and `test/doc-sync.sh` only on `bin/|engine/|VERSION|README.md`). A ROADMAP-only
-  change therefore costs seconds, not the ~10-minute full gate — run both directly while iterating.
-- The doc-link checker scans **tracked files** for `docs/…md` paths. Every doc referenced in the new
-  Related Docs list was confirmed present with `find docs -name '*.md'` first; `../AGENTIC-
-  ENGINEERING-ADVISORY.md` is outside the repo and the checker leaves it alone.
+What it does: for each `.github/workflows/*.yml|*.yaml` a repo DECLARES, it reports the
+state of that workflow's most recent run — `RAN AND PASSED` / `RAN AND FAILED` /
+`DID NOT RUN` / `UNKNOWN` / `NO GATE DECLARED`. `DID NOT RUN` covers three shapes: no
+run ever recorded, a run that completed without executing a single step, and a green
+run that never covered the commit asked about (`--head` / `--sha`).
 
-## US-2 — The two unnamed programmes get names and rows (2026-08-26)
+**The measurement that made the "failed to start" case checkable.** A billing-blocked
+run completes in ~4s with jobs present, `conclusion: failure`, and `steps: []` on every
+job (cuneiform run 32944778403). A run that really executed has a populated `steps`
+array (pinakes run 32827758461: 10). So "at least one step recorded anywhere in the
+run" is the discriminator, and it is measured, not inferred from the conclusion string.
 
-Added the three missing phase sections to `ROADMAP.md` (274 → 360 lines) and replaced the one
-provably false paragraph in the file.
+**A real bug the counterfactual caught.** Matching a declared workflow to its runs by
+`name:` alone LOSES exactly the case this module exists for: when GitHub cannot parse
+the workflow file at that ref it reports the run under `.github/workflows/ci.yml`
+rather than the declared `name: ci` — so chief's own dead gate read as "no run ever
+recorded" instead of "never started". The matcher accepts the declared name OR the
+file path.
 
-**Three new sections, inserted after the `92` merge-throughput band so the numbered program reads
-in order (`88`→`92`→`93`–`103`→`104`–`109`→`110`–`113`) before the older `78`–`87` bands:**
+Observed on the real portfolio: cuneiform 11/11 DID NOT RUN, vita 1/1 DID NOT RUN,
+chief 1/1 DID NOT RUN, praxis RAN AND PASSED, pinakes 3 passed / 2 failed / 1 never
+run. That reproduces the 2026-08-25 measurement in the tasklist description.
 
-1. **Operating the fleet — merge safety, durability & the evidence rule (`93`–`103`, 08-17 → 08-20)**
-   — 11 rows. Framed by the three threads that actually run through it: the merge floor meeting a
-   real operator (`93`, `94`), resources a run creates and never collects (`95`, `99`, `102`, `103`),
-   and the evidence rule (`98`, `100`, `101`) as the direct ancestor of the `110`–`113` band. Every
-   row carries the measurement from its tasklist (61 GB / 729,816 files; 7 of 9 "stalled" runs were
-   working; one tasklist killing three other repos' runs; 5 of koine's 10 markers already shipped;
-   nine PPID-1 watchers).
-2. **Operator ergonomics (`104`–`109`, 08-21 → 08-22)** — 6 rows, stated as one programme: *chief
-   could already do the work and could not yet be operated*. Each row names the gap between what
-   chief already knew and the operator who needed to see or spend it.
-3. **Iteration-outcome honesty (`110`–`113`, 08-22 → 08-26)** — 4 rows under one thesis, with the
-   taxonomy stated explicitly (`111` stops a run too early, `112` lets one run forever, and neither
-   fix may redefine the other) and the asymmetry that produced the band (rigorous about a false
-   claim of COMPLETION, silent on a false claim of PROGRESS). Measurements per the criteria:
-   ~34 min to merge an already-green 4/4 branch + 2 merge-phase verifies over 6 iterations on a 3/3;
-   three iterations of `API Error: 529 Overloaded` → `stall 3/2` with 2,029 files intact on disk;
-   five re-check-stamp commits stretching a 5-iteration budget to 11 over 1h32m; 63 commits /
-   21 iterations in one run / 59 across the program / 42 identical measurements on a story whose
-   correct answer was `passes:false`.
-
-**The false line is gone.** "Loose wishlist — Empty. No future threads are parked" was replaced by
-two real sections: **In flight** (rows for `114`/`115`/`116`, noting all three continue the
-`110`–`113` thesis) and **Open threads — ⬜ parked, with conditions** (the conflict-predictor
-DECLINE with its actual reason — `touches` is consumed at *admission*, when the candidate branch has
-no diff for a predictor to read — plus the seam left open and the reversal clause, citing
-`docs/decisions/conflict-predictor-adoption-decision.md`; and the desktop-GUI decision).
-Also updated the Milestones preamble and the Chief Tasklist Status bullets, which now name the
-merged program as **five bands** rather than a run of numbers.
-
-**Verified, not assumed:** a loop over `tasks/chief/completed/*.json` confirms all **37** stems AND
-all **37** `mergedToMain` shas now appear in `ROADMAP.md` — 0 missing on either check (this is the
-same assertion US-3 is about to turn into a gate). All 3 live tasklists are referenced.
-
-Gates: `node scripts/check-doc-links.mjs --ratchet --base main` → **0 dead vs 0 on main**;
-`bash test/doc-sync.sh` → **DOC-SYNC PASS**; `bin/chief lint` → **3 tasklists clean**. Every markdown
-table row checked for exactly 4 pipes (`awk` over `^|`) — 0 malformed. Doc-only, so no `VERSION` bump.
+Gates: `test/cigate.sh` PASS, `smoke` PASS, `ratelimit` PASS, `noworkguard` PASS,
+`version-bump` PASS, `doc-sync` PASS, `bash -n` clean, doc-links 0 dead vs 0 on main,
+quality ratchet OK (`function_length_max` 192 -> 200, tol 15). `shellcheck` is not
+installed on this host — CI enforces it.
 
 ### Learnings for future iterations
-- **The stem-and-sha loop is the roadmap's real test, and US-3 should just encode it.** Two greps —
-  every `completed/` stem appears in `ROADMAP.md`, and every `mergedToMain` sha appears — are cheap,
-  offline, and would each independently have caught this drift. They already passed here by hand.
-- **Splice sections with `python3` + an assert on the marker, not `sed`.** `assert marker in s` and
-  `assert s.count(marker)==1` turn a silent no-op edit into a failure. Same for a verbatim
-  replacement: assert the old block is present before replacing it.
-- **A tasklist description's numbers go stale between authoring and execution.** This one said the
-  CLI roster was missing eight subcommands (it was ten) and that ~21 tasklists were invisible
-  (it was 21 exactly, `93`–`113`). Recompute from disk; cite what you counted.
-- **Unstarted stories in this repo's tasklists carry no `passes` key at all** (only `"notes": null`).
-  Writing `passes:true` adds the key; absent is treated as false. Don't "restore" a `passes:false`
-  you never saw.
 
-## US-3 — The gate that would have caught this covers the file (2026-08-26)
-
-`86` shipped a doc-sync gate that covered `README.md` and **deliberately stopped there**.
-`ROADMAP.md` is the file that then rotted — and the control is right there in the record: the
-gated README was correct to the patch (`v0.8.94`) on the very day the ungated roadmap claimed
-`v0.8.0`. So the fix is not more prose, it is two assertions.
-
-**`test/doc-sync.sh` now makes four assertions instead of two** (files: `test/doc-sync.sh`,
-`.chief/verify.sh`, `.github/workflows/ci.yml`, `CLAUDE.md`, `VERSION`, `README.md`, `ROADMAP.md`):
-
-3. **ROADMAP's bold `**vX.Y.Z**` == `VERSION`.** Shared with the README through one
-   `version_claims_ok FILE LABEL` helper, so the two docs cannot drift apart in the RULE as well
-   as in the value. LABEL is what the operator reads in the failure (`ROADMAP claims version …`).
-4. **Every merged stem in `tasks/chief/completed/` is named in `ROADMAP.md`.** Anywhere — a phase
-   row, a branch name, prose. Matching the **stem, not the number**, is what makes it unambiguous:
-   `93` also matches a merge sha or a line count; `93-dirty-checkout-merge-safety` matches only itself.
-
-**Proven able to fail, four ways.** The existing negative self-check block gained two arms in the
-same shape as the README pair (doctor a COPY, re-run self with `DOC_SYNC_NEGATIVE=1` + the override,
-require exit≠0 *and* the specific message). Both new fixtures reproduce a real half of the
-2026-08-25 audit rather than an invented one: a ROADMAP claiming `**v9.9.9**`, and a ROADMAP with
-every mention of one completed record stripped. Driven red by hand too, with the historical values:
-
-    ROADMAP claiming **v0.8.0** beside VERSION 0.9.1        → exit 1
-    ROADMAP stripped of '99-reap-must-not-infer-orphanhood' → exit 1
-
-**The trigger widened where the drift actually enters.** `.chief/verify.sh` §3 now fires on
-`ROADMAP.md` **and `tasks/chief/completed/`** — *retiring a tasklist is now a roadmap edit*.
-Retirement lands on the base branch, not a tasklist branch, so CI (which runs `doc-sync` on every
-push, unconditionally) is where that half usually bites; the verify trigger covers the branch that
-does carry a `completed/` record.
-
-**Measured, not assumed:**
-- `bash test/doc-sync.sh` → `DOC-SYNC PASS — README and ROADMAP state v0.9.2; README documents every
-  bin/chief subcommand; ROADMAP names all 37 merged tasklists`, exit 0. All 4 negative self-checks trip.
-- `/bin/bash` **3.2.57** — `-n` clean and a clean PASS run (the criterion's 3.2 bar, on the real 3.2).
-- `shellcheck -S error` (0.11.0, fetched ephemerally via `npx shellcheck@latest`) → **exit 0** on
-  `test/doc-sync.sh` + `.chief/verify.sh`. It reports 3 errors elsewhere — `engine/quality.sh:60`
-  (SC1073/SC1072) and `engine/sweep.sh:396,404` (SC2066) — which are **byte-identical on `main`**
-  (checked via `git show main:… | shellcheck`), i.e. pre-existing and surfaced only by this newer
-  shellcheck than CI's. Not this branch's, not touched.
-- `VERSION` 0.9.1 → **0.9.2**; `test/version-bump.sh` → `VERSION-BUMP PASS`.
-- `engine/quality.sh ratchet --base main` → OK: `function_length_max` 1 → **12** (tol 15),
-  `function_length_mean` 1 → **3.2** (tol 5), `duplicate_blocks` **0 → 0** (tol 0).
-- `check-doc-links --ratchet` → **0 dead vs 0 on main**; `bin/chief lint` → **3 tasklists clean**;
-  `bash -n` clean across every tracked shell file.
-
-### Learnings for future iterations
-- **A doc gate must trigger on the ACT that staleness enters by, not only on the doc.** Gating
-  `ROADMAP.md` edits alone would be circular — the roadmap goes stale when a *tasklist retires*, an
-  event that touches `tasks/chief/completed/` and never touches the roadmap. That path is now in
-  both triggers. Generalise: ask "what commit makes this doc wrong?" and gate *that*.
-- **`shellcheck` is absent on this machine but reachable with zero install:**
-  `npx --yes shellcheck@latest -S error …` downloads a real binary and caches it under
-  `~/.npm/_npx/`. Worth the ~40s for CI parity. And when it flags files you didn't touch,
-  `git show main:<file> | shellcheck` proves pre-existing in one command — do that before
-  "fixing" someone else's file inside your story.
-- **The version-claim helper had to be extracted, not copy-pasted.** `CHIEF_QUALITY_TOL_duplicate_blocks`
-  is **0** at a 6-line window, so duplicating the ~8-line README version check for the ROADMAP would
-  have blocked the merge on the ratchet. Extracting it also kept `function_length_mean` inside tol 5
-  (this file's only prior function is the 1-line `fail()`, so the base mean is 1 and a big new
-  function moves the mean hard — keep an added helper ≲12 lines in a file this small).
-- **Bumping `VERSION` in this repo is now a THREE-file edit**, not two: `VERSION`, README's bold
-  `**vX.Y.Z**`, and ROADMAP's. That is the new gate working as intended, and it bit on this very
-  story (0.9.1 → 0.9.2 failed doc-sync until the roadmap moved too).
+- The state vocabulary is already stated once, in `engine/cigate.sh`'s
+  `CIGATE_PASSED/FAILED/DEAD/UNKNOWN/NONE` + `cigate_label`. **US-3 must reuse those,
+  not invent a second set** — that is most of its first acceptance criterion.
+- `cigate_scan REPO [SHA]` is the one entry point; it already takes the commit the
+  verdict is about, which is what US-3's merge record needs.
+- `cigate_workflow_name FILE` is textual (`sed`, no YAML dependency) and returns the
+  path when the file declares no `name:` — US-2's trigger check should extend that same
+  textual reader rather than add a parser.
+- `cigate_classify` is a PURE function of (slug, one run record, sha) apart from the
+  jobs probe, which is why the fixtures can drive every branch of it.

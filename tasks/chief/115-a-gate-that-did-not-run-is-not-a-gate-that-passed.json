@@ -28,7 +28,8 @@
         "A repo that legitimately has no CI (no workflows at all) is NOT flagged. The finding is a declared-but-dead gate, not the absence of one — those are different situations and conflating them would make the check noise.",
         "A test drives fixtures for each case: no workflows, workflows with a recent green run, workflows whose runs all failed to start, and workflows with no runs ever."
       ],
-      "notes": null
+      "notes": "test/cigate.sh PASS — 5 fixtures (no workflows at all / a recent green run / runs that completed with zero steps / a workflow with no runs ever / no GitHub remote), plus gh-absent, an API refusal, and a green run on another commit; every could-not-measure arm lands on UNKNOWN. bash -n clean across bin/chief + engine/*.sh + test/*.sh; smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.9.3), doc-sync PASS (38 merged tasklists); quality ratchet OK (function_length_max 192 -> 200, tol 15). shellcheck not installed locally — CI enforces it. Counterfactual against the real portfolio: cuneiform 11/11 workflows DID NOT RUN, vita 1/1 DID NOT RUN, chief 1/1 DID NOT RUN, praxis RAN AND PASSED, pinakes 3 passed / 2 failed / 1 never run.",
+      "passes": true
     },
     {
       "id": "US-2",

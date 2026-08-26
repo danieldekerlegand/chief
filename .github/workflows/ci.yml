@@ -197,6 +197,9 @@ jobs:
       - name: Merge queue (batch tip verified ONCE; red tip bisected; ratchet attributed; absent, the floor verifies N times)
         run: bash test/merge-batch.sh
 
+      - name: Declared CI gate (dead gate reported; no-CI and green not flagged; unmeasurable never reads as a pass)
+        run: bash test/cigate.sh
+
       - name: Cross-repo deps + the marker link (counterpart lint, the merged-counterpart report)
         run: bash test/crossrepo.sh
 
