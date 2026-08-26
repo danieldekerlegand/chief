@@ -144,3 +144,21 @@ repeat_stop_report() {
   repeat_report "$1" "$2"
   repeat_actions
 }
+
+# Fail the tasklist on the IN-RUN repeat stop (agent.sh's $AGENT_RC_REPEAT). Here, not
+# in the driver, for the reason unmeasured_stop is in engine/measure.sh: the rule and
+# the park it causes are one policy, and a driver arm that restated either would drift
+# from it. $1 = the report the boundary banked in the worktree — the AGENT's own, from
+# repeat_stop_report above, so the run log and the boundary can never say different
+# things. It is copied to $STATE because the end-of-run summary still quotes it after
+# the worktree is gone, exactly as the stall reason is. $name/$branch/$STATE are
+# run_worker's, by dynamic scope, and worker_park is the driver's — the same convention
+# unmeasured_stop and unverified_stop already use.
+cannot_complete_stop() {
+  cp "$1" "$STATE/$name.cannot-complete" 2>/dev/null || true
+  worker_park cannot-complete \
+    "the same story recorded the same outcome at consecutive iteration boundaries — the tasklist cannot complete as written; branch + worktree kept" \
+    "!! $name CANNOT COMPLETE — chief kept re-answering one question and the answer never moved; branch $branch and its worktree are kept, and every commit with them"
+  sed 's/^/   /' "$STATE/$name.cannot-complete" 2>/dev/null \
+    || echo "   (the boundary report was not kept)"
+}

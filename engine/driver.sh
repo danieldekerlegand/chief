@@ -492,6 +492,12 @@ source "$ENGINE/measure.sh"
 # definition of "the run measured something", read by the gate that demands a number
 # and by the gate that accepts a negative.
 source "$ENGINE/terminal.sh"
+# The REPEAT rule (engine/repeat.sh): the safety net for a tasklist nobody declared,
+# and the park it causes. The driver needs only the second half, but it lives with the
+# rule for the same reason unmeasured_stop lives in measure.sh — a stop restated away
+# from the rule that raises it drifts from it. Idempotent to source twice (agent.sh
+# already does): REPEAT_LIMIT honours the environment and its counters start at zero.
+source "$ENGINE/repeat.sh"
 # The per-story DIFF-SIZE BUDGET (engine/budget.sh): larger diffs carry higher
 # conflict probability, so change size is the lever. Sourced BEFORE zones.sh, whose
 # merge gate calls it — the two are one policy layer with one approval, not two
@@ -802,21 +808,6 @@ unverified_stop() {
   printf '%s\n' "$1"
   echo "   Recorded for the resume in $SNAP_REL/$name.unverified.md — the next run re-engages the agent on these stories rather than reading the branch as finished."
   echo "   Not merging. A story chief passes on the agent's behalf must record in 'notes' HOW it met these — branch $branch is kept in its worktree."
-}
-
-# prd_state_open — how many stories that state still leaves OPEN.
-#
-# OPEN, not `passes==false`: a story that declared the negative terminal and recorded
-# the measurement behind it is SETTLED (engine/terminal.sh), and a resume that counted
-# it as work left would put an agent back on a question that already has its answer.
-# Via a file because terminal_open reads a path, not a stream — everything the settled
-# predicate does is one jq program over a document.
-prd_state_open() {
-  local f="$STATE/.$name.state-src" out
-  prd_state_source > "$f" 2>/dev/null
-  out="$(terminal_open "$f")"
-  rm -f "$f" 2>/dev/null || true
-  printf '%s' "$out"
 }
 
 # plan_sync SRC DEST — copy the PLAN ARTIFACTS (docs/plan-review.md) one way.
@@ -2303,8 +2294,8 @@ done
 # bug this exists to make impossible.
 #
 # $live/$name/$total/$remaining/$STATE are the caller's, by dynamic scope (the same
-# idiom as prd_state_source above). Returns 0; the caller still owns its `return`,
-# because a helper cannot return out of run_worker for it.
+# idiom as engine/terminal.sh's prd_state_source). Returns 0; the caller still owns
+# its `return`, because a helper cannot return out of run_worker for it.
 worker_park() {
   local phase status ev state story
   story="$(live_get "$live" story)"
@@ -2542,10 +2533,7 @@ run_worker() {
     # build deps (node_modules/.venv/dist). Each tasklist's optional "warmup":[...]
     # runs (cwd = worktree) to provision what its checks need, ISOLATED per worktree
     # (so no concurrent-install corruption).
-    terminal_counts "$wtstate/prd.json"
-    live_set "$live" phase=seeded \
-      passing="$(_int "$TERMINAL_PASSED")" negative="$(_int "$TERMINAL_NEGATIVE")" \
-      total="$(_int "$TERMINAL_TOTAL")"
+    terminal_live_counts "$live" "$wtstate/prd.json" phase=seeded
     warmups="$(jq -r '(.warmup // [])[]' "$SRC/$name.json" 2>/dev/null)"
     if [ -n "$warmups" ]; then
       echo ">> $name warm-up…"
@@ -2640,14 +2628,10 @@ run_worker() {
     # left", and a story that declared the negative terminal and recorded the
     # measurement behind it has none. Its `passes` stays false, because the answer is.
     local remaining total negative
-    terminal_counts "$wtstate/prd.json"
+    terminal_live_counts "$live" "$wtstate/prd.json"
     remaining="$TERMINAL_OPEN"; total="$TERMINAL_TOTAL"; negative="$TERMINAL_NEGATIVE"
     cp "$wtstate/prd.json" "$SNAP/$name.json" 2>/dev/null || true
     plan_sync "$wtstate/plans" "$SNAP/$name.plans"          # bank what this run planned
-    # _int() (defined with the self-heal helpers below, resolved at call time) keeps
-    # an unreadable prd.json's '?' out of the arithmetic.
-    live_set "$live" passing="$(( $(_int "$total") - $(_int "$remaining") ))" \
-      negative="$(_int "$negative")" total="$(_int "$total")"
     # USAGE-LIMIT PAUSE: agent.sh exits $AGENT_RC_LIMIT when it stopped on a Claude
     # usage/session limit and won't retry. That is NOT a failure — the branch is fine,
     # it is only blocked until the window resets — so record a distinct, non-terminal
@@ -2740,19 +2724,12 @@ run_worker() {
       return 0
     fi
     # CANNOT COMPLETE — agent.sh stopped ITSELF at an iteration boundary because the
-    # story it was driving kept recording the same outcome (engine/repeat.sh). Above the
-    # no-work guard for the same reason as the UNVERIFIED arm: the stop can leave a
-    # branch full of commits or none at all, and neither is EMPTY-NO-WORK. The report is
-    # the agent's own, composed once by repeat_stop_report and banked in the worktree —
-    # copied to $STATE so the end-of-run summary can still quote it after the worktree
-    # is gone, exactly as the stall reason is.
+    # story it was driving kept recording the same outcome (cannot_complete_stop, in
+    # engine/repeat.sh). Above the no-work guard for the same reason as the UNVERIFIED
+    # arm: the stop can leave a branch full of commits or none at all, and neither is
+    # EMPTY-NO-WORK.
     if [ "$agent_rc" = "$AGENT_RC_REPEAT" ]; then
-      cp "$wtstate/.cannot-complete.md" "$STATE/$name.cannot-complete" 2>/dev/null || true
-      worker_park cannot-complete \
-        "the same story recorded the same outcome at consecutive iteration boundaries — the tasklist cannot complete as written; branch + worktree kept" \
-        "!! $name CANNOT COMPLETE — chief kept re-answering one question and the answer never moved; branch $branch and its worktree are kept, and every commit with them"
-      sed 's/^/   /' "$STATE/$name.cannot-complete" 2>/dev/null \
-        || echo "   (the boundary report was not kept)"
+      cannot_complete_stop "$wtstate/.cannot-complete.md"
       return 0
     fi
     # NO-WORK GUARD: an all-"pass" branch with zero diff vs base never did the work.

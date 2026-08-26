@@ -252,6 +252,38 @@ prd_state_source() {
   fi
 }
 
+# prd_state_open — how many stories that state still leaves OPEN.
+#
+# OPEN, not `passes==false`: a story that declared the negative terminal and recorded
+# the measurement behind it is SETTLED, and a resume that counted it as work left would
+# put an agent back on a question that already has its answer. Here rather than in the
+# driver because both halves are here: the state to read is prd_state_source's, the
+# predicate that reads it is terminal_open's. Via a file because terminal_open takes a
+# path, not a stream — everything the settled predicate does is one jq over a document.
+prd_state_open() {
+  local f="$STATE/.$name.state-src" out
+  prd_state_source > "$f" 2>/dev/null
+  out="$(terminal_open "$f")"
+  rm -f "$f" 2>/dev/null || true
+  printf '%s' "$out"
+}
+
+
+# terminal_live_counts LIVE PRD [KEY=VALUE …] — count PRD and publish the three
+# progress numbers to the liveliness record in one step, with any extra fields the
+# caller wants merged in the same write.
+#
+# ONE WRITER, so the seeding write and the boundary write cannot disagree about what
+# `passing` means. They did: seeding published the passed count while the boundary
+# published total-minus-open, which is passed PLUS the delivered negatives — the very
+# collapse the third field exists to prevent, visible only on a tasklist that declares
+# one. `passing` is TERMINAL_PASSED at both, `negative` is its own number at both.
+terminal_live_counts() {
+  local live="$1" prd="$2"; shift 2
+  terminal_counts "$prd"
+  live_set "$live" passing="$(_int "$TERMINAL_PASSED")" \
+    negative="$(_int "$TERMINAL_NEGATIVE")" total="$(_int "$TERMINAL_TOTAL")" "$@"
+}
 
 # terminal_any PRD — 0 when at least one story DECLARES the field, 1 otherwise. The
 # cheap guard every caller uses before spending a fork on the reports above: a tasklist

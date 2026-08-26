@@ -263,13 +263,17 @@ stories() {   # $1 name $2 wtroot $3 staterel $4 stateroot $5 tasks -> "pass[+ne
   printf '?/?'
 }
 
-live_prog() { # $1 name $2 stateroot -> "pass/total" from the record (jq-free fallback)
-  local lf p t
+# The same "pass[+neg]/total" shape stories() renders, off the liveliness record
+# instead of the prd.json — and it must agree with it, or which of the two a caller
+# happened to reach would decide whether a delivered negative looked like a pass.
+live_prog() { # $1 name $2 stateroot -> "pass[+neg]/total" from the record (jq-free)
+  local lf p g t
   lf="$(live_file "$1" "$2")"
-  p="$(live_get "$lf" passing)"; t="$(live_get "$lf" total)"
+  p="$(live_get "$lf" passing)"; g="$(live_get "$lf" negative)"; t="$(live_get "$lf" total)"
   case "$t" in ''|0|*[!0-9]*) printf '?/?'; return ;; esac
   case "$p" in ''|*[!0-9]*) p=0 ;; esac
-  printf '%s/%s' "$p" "$t"
+  case "$g" in ''|*[!0-9]*) g=0 ;; esac
+  if [ "$g" != "0" ]; then printf '%s+%s/%s' "$p" "$g" "$t"; else printf '%s/%s' "$p" "$t"; fi
 }
 
 # Elapsed-in-phase. live.sh moves `phase_since` only when the phase ACTUALLY changes,

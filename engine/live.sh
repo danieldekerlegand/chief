@@ -91,8 +91,15 @@
 # counted against ($PROVIDER_NOTURN_LIMIT). Kept apart from `stall` on purpose — one
 # counts iterations the agent RAN and got nowhere in, the other counts iterations the
 # agent was never given, and conflating them is the whole defect this pair exists for.
-LIVE_FIELDS='name state phase story iter passing total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat'
-LIVE_NUMERIC=' iter passing total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat '
+#
+# `negative` is a THIRD count beside passing/total, never folded into either
+# (engine/terminal.sh): a story that declared the negative terminal and recorded its
+# measurement is DONE with the answer no. Folding it into `passing` says the tasklist
+# agreed; leaving it out of both says the tasklist is unfinished. It is a field because
+# a reader cannot re-derive it — this record is the jq-free path, and `283` rendered as
+# unfinished work for three days. 0 for every tasklist that never declares one.
+LIVE_FIELDS='name state phase story iter passing negative total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat'
+LIVE_NUMERIC=' iter passing negative total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat '
 
 # live_get FILE KEY -> the raw value ('' when the file or key is absent).
 # The writer's format is rigid (one `  "key": value,` per line), so a sed reader is
@@ -130,8 +137,8 @@ live_set() {
   local dir tmp now key kv k v val n=0 old_phase
   # Listed explicitly (not `eval local`) so the per-field scratch vars stay OUT of
   # the caller's globals — driver.sh and agent.sh both source this file.
-  local _lv_name _lv_state _lv_phase _lv_story _lv_iter _lv_passing _lv_total \
-        _lv_stall _lv_stall_limit _lv_waits _lv_noturn _lv_noturn_limit \
+  local _lv_name _lv_state _lv_phase _lv_story _lv_iter _lv_passing _lv_negative \
+        _lv_total _lv_stall _lv_stall_limit _lv_waits _lv_noturn _lv_noturn_limit \
         _lv_retry_at _lv_phase_since _lv_heartbeat
   dir="$(dirname "$f")"
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
