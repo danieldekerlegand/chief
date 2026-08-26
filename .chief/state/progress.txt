@@ -1,3 +1,66 @@
 # Chief Progress — 113-a-story-may-terminate-false
-Started: Wed Aug 26 13:31:57 CDT 2026
+Started: Wed Aug 26 14:14:22 CDT 2026
 ---
+
+## Codebase Patterns
+
+- **A commit can land without its bookkeeping.** An iteration that is cut off after
+  step 6 leaves the implementation on the branch with `passes:false` everywhere. The
+  next iteration's first move is `git log --oneline -5` against the PRD: if HEAD is
+  already `feat: [US-x] - <that story's title>`, the work exists — RE-VERIFY it and
+  close the books, do not re-implement it. Two implementations of one story on one
+  branch is the expensive failure.
+- **`shellcheck` is not installed on this host.** `bash -n` over `bin/chief
+  engine/*.sh test/*.sh install.sh` is the local half; CI (`.github/workflows/ci.yml`)
+  is the enforcing half. Say which one you ran in `notes` rather than claiming both.
+- **A new `test/*.sh` needs THREE lists** (already noted in CLAUDE.md, confirmed here):
+  `.chief/verify.sh`'s `CHIEF_BYSTANDER_TESTS`, `test/all.sh`'s `BASH_SUITE`, and
+  `.github/workflows/ci.yml`. `terminal-false` is in all three.
+
+---
+
+## US-1 — A story can declare that FALSE is its terminal answer
+
+The implementation landed in `be444da` on a prior iteration that never reached steps
+7–9, so this iteration re-verified it end to end and recorded it.
+
+**What is there.** `engine/terminal.sh` — a new module holding the whole vocabulary:
+`TERMINAL_FIELD='terminalFalse'`, and one jq prelude (`TERMINAL_JQ`) defining
+`declared` / `attempted` / `negative` / `inert` / `settled`. **SETTLED** is now the
+predicate the engine counts completion from — `passes:true` OR (declared + a recorded
+measurement) — and `passes` is never rewritten, because the answer really is false and
+that IS the finding.
+
+Files: `engine/terminal.sh` (new), `engine/driver.sh` (sources it at :483; remaining
+is OPEN not unpassed at the completion sites; `terminal_say_inert` /
+`terminal_say_negative` at the stops), `engine/agent.sh` (SETTLED drives `_passes` /
+`_story` / `_passed_ids` and the prompt's ALREADY-DONE roster), `engine/lib.sh` (the
+`completed/` record leaves a `terminalFalse` story's `passes` alone), `bin/chief`
+(`lint` type-checks the boolean; `ps` distinguishes the two), `engine/measure.sh`,
+`engine/monitor.sh`, `docs/reference/tasklist-schema.md`, `test/terminal-false.sh`
+(new, wired into all three gate lists), `VERSION` 0.8.98 + README.
+
+**Two things worth knowing.**
+- `observed` is **shared** with `engine/measure.sh`, not copied — the inert rule and
+  the BAR rule ask the same question, and a second copy would drift into two answers.
+- `prd_state_source` was **moved** out of `driver.sh` into `terminal.sh`. It is
+  unrelated to terminal-false and still reads `$name`/`$branch`/`$sub`/`$SNAP`/`$SRC`
+  by dynamic scope from the driver. It works (smoke + the resume tests are green), but
+  it is misfiled — if a later story touches that area, `driver.sh` is where a reader
+  will look for it.
+
+**Observed.** `test/terminal-false.sh` PASS, including the corpus assertion — 40
+existing tasklists classify identically before and after. `bash -n` clean over
+`bin/chief engine/*.sh test/*.sh install.sh`. `smoke` PASS · `ratelimit` PASS ·
+`noworkguard` PASS · `measured-bars` PASS · `evidence-gate` PASS · `version-bump` PASS
+(VERSION 0.8.98 covers every engine/bin change on HEAD) · `doc-sync` PASS.
+`shellcheck` is absent on this host; CI enforces it.
+
+**Learnings for future iterations.**
+- US-2 (stall detection) and US-3 (`chief retire --negative`) both build on
+  `terminal.sh`. Reuse `TERMINAL_JQ`'s five `def`s — do not re-spell "settled".
+- US-3's command is already named in `terminal.sh`'s header comment as
+  `chief retire --negative`; `bin/chief` does not have it yet. Adding a subcommand
+  re-stales `doc-sync` (README's command table) and `version-bump` (VERSION) together.
+- A backtick in an unquoted heredoc RUNS — `bin/chief`'s usage blocks are `cat <<EOF`.
+  Escape them `\`` when documenting the new flag.

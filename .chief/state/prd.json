@@ -31,8 +31,8 @@
         "Nothing changes for a story without the declaration: it completes only by passing, exactly as today. Asserted over the existing tasklist corpus, which must classify identically before and after",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "test/terminal-false.sh: PASS — a declared negative settles, survives into completed/, is never re-driven; an undeclared story untouched; an unmeasured declaration settles nothing. Corpus assertion green: 40 existing tasklists classify identically before and after. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, measured-bars PASS, evidence-gate PASS; version-bump PASS (VERSION 0.8.98 covers every engine/bin change on HEAD); doc-sync PASS (README states v0.8.98). shellcheck not installed on this host — CI enforces it."
     },
     {
       "id": "US-2",
