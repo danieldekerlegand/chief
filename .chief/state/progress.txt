@@ -141,3 +141,80 @@ drive to completion**, because every iteration of it scores as a stall.
 - **A fixture whose tasklists write the same files needs a shared `touches`**, or the
   run ends with a legitimate under-tagged-touches warning and the two workers race on a
   rebase. Sharing the domain serializes them and is the honest tag.
+
+## US-3 — The operator can see the difference without reading the log
+
+`engine/agent.sh`:
+- The progress line NAMES what advanced. `Iteration $i: progress ($now_pass/$(_total)
+  passing). Continuing...` — formant's sentence, eleven times — is no longer printable;
+  it is now `Iteration N: progress — US-2 passed; 4 paths outside .chief/state/ changed
+  (e.g. engine/agent.sh) (2/3 passing). Continuing...`. Two evidence sources, both
+  already in hand:
+  * `_product_changed` now RECORDS what its walk saw — `$PRODUCT_COUNT` /
+    `$PRODUCT_FIRST`, a set-a-global rather than a second helper and a second `git diff`
+    fork (the quality ratchet was AT its `single_use_functions` tolerance, so this story
+    added no functions at all — final reading is still `14 -> 16`, delta +2, tol 2).
+    It is called UNCONDITIONALLY now, not as the right arm of `||`, or its globals would
+    be a previous iteration's on any turn a story flip settled the verdict first.
+  * `$prev_ids` beside `$prev_pass` — the SET behind the count, so the line can say
+    WHICH story flipped. Deliberately NOT `PASSED_IDS`: that global belongs to the event
+    stream and is advanced the moment the provider returns, which is before
+    `_measure_boundary` has had its say.
+  * fail-open is said as itself ("HEAD moved but the diff could not be read").
+- `$STALL_FILE` (`.chief/state/.stalled`) — the twin of `$NOTURN_FILE`, written only when
+  the loop GIVES UP (the stall arm, and separately the hard ceiling). Line 1 is the
+  reason; the lines under it are the agent's own closing words, quoted from `$OUTPUT`.
+  `$bk` counts, within the current stall streak, the iterations that committed
+  bookkeeping only — that is what lets the reason distinguish the formant shape from an
+  agent that produced nothing at all.
+
+`engine/driver.sh`:
+- The INCOMPLETE arm reads `$wtstate/.stalled`, copies it to `$STATE/<name>.stalled`
+  (the worktree may be gone by summary time) and puts the reason in BOTH the headline
+  and the park detail (so `tasklist.incomplete`'s event carries it too).
+- New end-of-run summary block, `⛔ STOPPED ADVANCING`, above the PROVIDER UNAVAILABLE
+  one and built on the same shape. It exists because INCOMPLETE covers two opposite
+  situations and three causes rendered as one red line is the misread: stopped
+  advancing / VERIFY-FAILED / PROVIDER UNAVAILABLE now each say what they are, and this
+  one adds "raising `iters` does NOT fix these".
+
+**Criterion 3 — the agent asking to be stopped — is a RECORDED FINDING, not code.**
+Chief cannot detect it reliably: a phrase list ("re-parking", "blocked on", "cannot
+proceed") fires on an agent DESCRIBING a blocker it then clears, misses every
+rephrasing, and rots silently as models change idiom — the exact shape 111 is fixing.
+The only reliable form is a protocol token the way `<promise>COMPLETE</promise>` is one,
+which is a change to the AGENT CONTRACT, not to this loop; and it would buy little now,
+because the stall counter reaches the same stop within `STALL_LIMIT` iterations of the
+first churning turn. What was actually lost was the reasoning, buried at iteration 10 of
+a log nobody re-reads — so chief QUOTES the final turn's last words in the summary and
+branches on nothing in them. Written up in `docs/reference/tasklist-schema.md` beside
+the rule, and in the stall arm's own comment.
+
+`docs/reference/tasklist-schema.md` — "What the operator sees" + "What chief will not
+do"; `docs/reference/events.md` — `tasklist.incomplete`'s `detail` now opens with WHY.
+
+`test/bookkeeping-progress.sh` — new section 6 (five assertions): the nameless line is
+not printable in ANY of the three logs; the summary says STOPPED ADVANCING, names the
+bookkeeping cause, and keeps it apart from a gate failure and an unreachable provider;
+the INCOMPLETE headline carries the same reason; the merged tasklist is NOT in the
+block (asserted on the `.stalled` record, not the rendered text — `bk-both` appears in
+the summary for legitimate reasons); and the agent's closing words are quoted. The
+`bk-spin` fixture now ends its turn with formant's actual sentence.
+`test/provider-unavailable.sh` — its `progress (1/2 passing)` grep now matches the count
+where it actually sits, at the end of the sentence.
+
+## Learnings for future iterations
+
+- **Two tests grepped the exact old progress string** (`bookkeeping-progress.sh`,
+  `provider-unavailable.sh`). Any future reword must keep the PREFIXES
+  `Iteration N: progress` / `Iteration N: no progress` (`boundary-demotion.sh` too) and
+  keep `(N/M passing)` somewhere in the line — but match it as a substring, never as
+  `progress (N/M`, which is now deliberately unprintable.
+- **`X.stalled` joins the per-tasklist state files the scheduler clears at launch**
+  (`rm -f "$STATE/$n.stalled" …`, driver.sh). A new one that is not in that list leaks a
+  previous run's verdict into this run's summary.
+- **To eyeball a hermetic test's output**, `sed`-out its `trap 'rm -rf "$WORK"' EXIT`
+  into an `echo "WORK=$WORK" > /tmp/…` and run the copy FROM the repo root (`$ROOT` is
+  `dirname $BASH_SOURCE/..`, so running it from `/tmp` installs chief from `/`).
+- **`cmd 2>&1 | tail -30` on a long suite shows NOTHING until it finishes** — `tail`
+  buffers the whole stream. Redirect to a file and read the file instead.
