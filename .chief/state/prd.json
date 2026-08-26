@@ -1,64 +1,56 @@
 {
   "project": "chief",
   "category": "fix",
-  "branchName": "chief/113-a-story-may-terminate-false",
-  "description": "🚫 **A story whose CORRECT answer is `false` makes its tasklist permanently uncompletable, and chief has no way to say so.** Measured on cuneiform `283-nixos-bare-metal-vpn-topology-target`, 2026-08-22 → 2026-08-25.\n\nIts US-3 read *\"VERIFY the MaaS commission→deploy flow, honestly\"*, and the criterion said in as many words: *\"if it does not complete, **THIS STORY STAYS `passes: false`** and the precise failure point is written into `bare-metal.md` — a stubbed phone-home does not count as a pass.\"* The flow genuinely does not complete: the verdict is `maas-client-absent`, and no file under `core/`, `services/`, `apps/`, `packages/` or `infrastructure/` calls a MaaS API at all. So `passes: false` **was the correct, measured outcome** — the story was DONE and its answer was negative.\n\n**Chief has exactly one notion of done — every story true — so it re-drove the branch forever.** 63 commits. 21 iterations in a single run, 59 across the program, and **42 consecutive IDENTICAL measurements**. The agent never faked it: it tried the stub route, got `1 provisioned` against a 40-line stub it had written for the measurement, and REJECTED its own result because the criterion excluded exactly that. It collapsed its own notes at iteration 32 after they had grown to ~44 KB of duplicate text, and its terminal note read: *\"criterion 1 makes `passes: false` the CORRECT end state, so this tasklist can NEVER report all-stories-true and no further iteration can change that. It needs MANUAL RETIREMENT.\"* It was right, it said so in the only channel it had, and nothing could hear it.\n\n**`112` does not cover this and neither does `111`.** `112` fixes progress DETECTION — a bookkeeping commit no longer scores as progress. `111` fixes an iteration that never reached the model. Both are about whether an iteration counted. **This is about whether the tasklist is DONE**, and with both of those fixed `283` would still have run out its budget and been marked INCOMPLETE, which is a wrong verdict on finished work rather than a cheaper wrong verdict.\n\n**The shape recurs.** talos `80` hit the same wall from the other side — its AC1 conflated wiring the lane (delivered) with executing it (blocked on another repo), and was re-passed eight times across 18 iterations before being split. A negative finding is a legitimate deliverable, and the tasklist format currently cannot express one.",
-  "dependsOn": [],
+  "branchName": "chief/114-the-roadmap-describes-a-program-that-ended",
+  "description": "**`ROADMAP.md` documents the `77`–`92` era and is silent on roughly 60% of the merged program.** Audited 2026-08-25 against disk.\n\nIts banner reads *\"Shipping & self-hosting (v0.8.0 — see VERSION)\"*; `VERSION` is `0.8.94`. Line 55 says *\"1/1 built-program tasklists merged (`77`); 15 proposed forward tasklists authored … the runnable head is the agent-output quality & alignment band (`88`–`91`)\"* — that band shipped between 08-12 and 08-18. Line 153 says *\"remaining work is hardening and breadth … numbered from the current max, `77`.\"* `77` stopped being the max on 2026-08-01.\n\n**Bands `93`–`113` do not appear in the file at all.** A grep for `9[3-9]|1[01][0-9]` returns nothing; the highest number present is `92`. Concept greps for `chief usage`, `chief decide`, `chief status`, `machine-wide` and `iteration-outcome` all return zero. The CLI roster at line 20 lists twelve subcommands; `bin/chief` dispatches eight more (`status · lint · gen · events · usage · quality · approve · decide`).\n\n**Two coherent programmes are missing, and they deserve naming rather than a list of numbers.** `104`–`109` are OPERATOR ERGONOMICS — usage reporting, decision tasklists, list/ps, machine-wide concurrency. `110`–`113` are one thesis, *chief learning to tell real progress from motion*: a green branch verified three times, a 529 misread as a usage wall, a bookkeeping commit scored as progress, a story that may terminate false. That is an ITERATION-OUTCOME TAXONOMY and the roadmap has no vocabulary for it.\n\n**The mechanism is on the record inside this repo.** `86-doc-sync-gate` shipped and `test/doc-sync.sh` enforces README ↔ VERSION ↔ subcommand parity — and does not cover `ROADMAP.md`. That is precisely why `README.md:347` correctly says `v0.8.94` while the roadmap says `v0.8.0`. Fixing the text without closing that gap re-runs this audit in a fortnight; the measured portfolio drift rate is about two weeks.",
   "touches": [
-    "engine/driver.sh",
-    "engine/agent.sh",
+    "ROADMAP.md",
     "test",
-    "docs",
-    "VERSION"
+    "docs"
   ],
   "iters": 6,
   "warmup": [
-    "grep -n 'passes' engine/driver.sh | head -20",
-    "grep -rn 'all-stories-true\\|allPass\\|complete' engine/driver.sh | head -12",
-    "sed -n '2945,2965p' engine/driver.sh",
-    "ls docs/ test/",
-    "grep -rn 'userStories' engine/*.sh | head"
+    "grep -n 'Last updated\\|v0\\.8\\.0' ROADMAP.md | head -5; cat VERSION",
+    "grep -nE '\\b(9[3-9]|1[01][0-9])\\b' ROADMAP.md | head",
+    "ls tasks/chief/completed/ | sed 's/-.*//' | sort -n | uniq | tail -25 | tr '\\n' ' '",
+    "sed -n '/doc-sync/,+25p' test/doc-sync.sh | head -40",
+    "grep -n 'ROADMAP' test/doc-sync.sh || echo 'ROADMAP.md is NOT covered by the doc-sync gate'"
   ],
   "userStories": [
     {
       "id": "US-1",
-      "title": "A story can declare that FALSE is its terminal answer",
-      "description": "The missing vocabulary. A verification story whose honest result is negative has delivered its work, and the format must be able to say that.",
+      "title": "The roadmap states what is true today",
       "acceptanceCriteria": [
-        "A story may declare that a negative result is TERMINAL — an explicit field on the story, never inferred from prose and never a magic value in `notes`. A story carrying it and answering false is COMPLETE for the purposes of tasklist completion, while its `passes` flag stays false because the answer really is false",
-        "The recorded answer and the finding are BOTH preserved and distinguishable: a reader (and `chief ps`) can tell 'this story is done and the answer is no' from 'this story is not done yet'. Collapsing them is the defect — `283` rendered as unfinished work for three days",
-        "The declaration is INERT unless the story also carries evidence of the attempt. A terminal-false story that recorded no measurement is not done, it is skipped, and the two must not be spellable the same way — otherwise this becomes a way to mark hard stories complete",
-        "Nothing changes for a story without the declaration: it completes only by passing, exactly as today. Asserted over the existing tasklist corpus, which must classify identically before and after",
-        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
+        "The banner, the Current State block and every phase row are rewritten against `tasks/chief/completed/`. All 35 records carry a real `mergedToMain` — verify rather than assume, and cite shas for the bands you mark done.",
+        "The version claim is derived from `VERSION`, not restated. A roadmap asserting `v0.8.0` beside a `VERSION` of `0.8.94` is the specific failure this tasklist exists to end.",
+        "The CLI roster matches `bin/chief`'s dispatch table. Eight subcommands are currently missing from it.",
+        "Internal contradictions are resolved: the file currently says five first-class providers in one place, four in another and three in a third. Pick the true one and state it once."
       ],
-      "passes": true,
-      "notes": "test/terminal-false.sh: PASS — a declared negative settles, survives into completed/, is never re-driven; an undeclared story untouched; an unmeasured declaration settles nothing. Corpus assertion green: 40 existing tasklists classify identically before and after. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, measured-bars PASS, evidence-gate PASS; version-bump PASS (VERSION 0.8.98 covers every engine/bin change on HEAD); doc-sync PASS (README states v0.8.98). shellcheck not installed on this host — CI enforces it. | FOLLOW-UP (merge-gate fix): the liveliness record now CARRIES the negative count — `negative` was absent from LIVE_FIELDS, so live_set dropped it silently and live_prog folded a delivered negative into `passing`, the exact collapse this story forbids. live.sh gained the field, monitor.sh's live_prog renders `pass[+neg]/total` like stories(), and terminal_live_counts is now the one writer of the three numbers (the two call sites disagreed: seeding published passed, the boundary published passed+negative). Observed: full `.chief/verify.sh` exit 0 — bystander block 50/50 tests PASS (terminal-false, repeat-stop, retire-negative, liveliness among them), doc-sync PASS (README v0.9.1 == VERSION 0.9.1), check-doc-links 0 dead, quality ratchet OK (function_length_max 587->598 tol 15, single_use_functions 82->84 tol 2, no metric regressed); test/monitor.sh MONITOR PASS run separately (it is out of the merge gate)."
+      "notes": "Rewrote banner, Current State, and every existing phase row against tasks/chief/completed/. All 37 records carry a real mergedToMain (0 MISSING); shas resolve bd030a6 (77, 2026-08-01) .. 716c9e4 (113, 2026-08-26). Version claim now bold **v0.9.1** == VERSION 0.9.1 (was v0.8.0). CLI roster 12 -> 22. Provider contradiction resolved to five first-class. check-doc-links: 0 dead vs 0 on main; test/doc-sync.sh PASS; chief lint clean.",
+      "passes": true
     },
     {
       "id": "US-2",
-      "title": "A tasklist that cannot complete is DETECTED and stops, rather than running to the cap",
-      "description": "The safety net for the case where nobody remembered to declare it. 283 was diagnosable from its own record by iteration 6.",
+      "title": "The two unnamed programmes get names and rows",
       "acceptanceCriteria": [
-        "When a story's recorded outcome is IDENTICAL across N consecutive iterations — same measurement, same blocker, no change to `passes` — the run STOPS and reports that the tasklist appears unable to complete, naming the story and quoting the repeated finding. `283` produced 42 identical measurements; the signal was available long before that",
-        "The report names the two actions that resolve it — amend the criterion, or declare the negative terminal (US-1) — because 'it stalled' sent an operator to re-scope a tasklist whose work was intact and whose agent had already written the correct diagnosis",
-        "This fires INDEPENDENTLY of the progress counter, since the failure mode is a story that is legitimately being re-measured rather than an agent doing nothing. It must catch `283` even with `112`'s bookkeeping fix in place, and a test asserts exactly that",
-        "N is configurable with a stated default, and the comparison is on the story's recorded outcome rather than on commit count — `283` produced a commit every iteration and each one was real, just not new"
+        "`104`–`109` are recorded as a coherent OPERATOR ERGONOMICS phase, not as a list of merged numbers.",
+        "`110`–`113` are recorded as one thesis about iteration-outcome honesty, with the measurement behind each: three verifies of an already-green branch; a 529 Overloaded slept on as a usage wall; five bookkeeping commits scoring as progress and stretching a 5-iteration budget to 11; a story re-driven 63 commits whose right answer was `passes:false`.",
+        "The `93`–`103` band is placed too — merge safety, worktree reaping, `chief status`, reap orphanhood. Roughly 21 merged tasklists are currently invisible.",
+        "`docs/decisions/conflict-predictor-adoption-decision.md` and the two active tasklists are reflected, so the 'Loose wishlist — Empty. No future threads are parked' line stops being false."
       ],
-      "passes": true,
-      "notes": "test/repeat-stop.sh: PASS — the 283 shape (a fixed finding re-recorded while real product files commit every iteration) stops at 3 turns as CANNOT-COMPLETE, names US-2, quotes the finding and both fixes; the same fixture with a measurement that MOVES runs 4 turns and MERGES; REPEAT_LIMIT=2 stops at 2 turns end to end through `chief run`. 112-independence asserted in the same run: the log carries 'Iteration 2: progress' and no 'no progress' line. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.8.99), doc-sync PASS (README v0.8.99), terminal-false PASS, measured-bars PASS, evidence-gate PASS, bookkeeping-progress PASS, unverified-resume PASS, boundary-demotion PASS, stall-flag PASS, five-cases PASS, headless PASS, events PASS, liveliness PASS, pause PASS, research PASS, worktree-pending PASS, limitstate PASS, provider-unavailable PASS, plan-review PASS, teardown PASS, noworkguard-jsononly PASS, check-doc-links 0 dead references. test/retry-on-failure.sh FAILS ('transient took 1 attempt(s), want 2') — PRE-EXISTING, reproduced identically on the base commit d61be82 from a clean clone, and it is not in the merge gate. shellcheck not installed on this host — CI enforces it."
+      "notes": null
     },
     {
       "id": "US-3",
-      "title": "The operator can retire a tasklist on a negative without hand-editing JSON",
-      "description": "283's agent asked for MANUAL RETIREMENT in its notes. There is no command for that, so the ask had nowhere to land.",
+      "title": "The gate that would have caught this covers the file",
       "acceptanceCriteria": [
-        "A command retires a tasklist whose delivered stories passed and whose remaining story terminated false — filing the `completed/` record, recording WHICH story terminated negative and its finding, and stopping the tasklist being re-driven",
-        "It REFUSES a tasklist whose stories are merely unfinished. The distinction is the whole point: `283` had two passing stories and one measured negative, which is not the same as a tasklist that stopped halfway, and a command that cannot tell them apart is a way to bury incomplete work",
-        "The `completed/` record carries the negative finding in a form a successor tasklist can cite. A story that terminates false often names the thing to do instead — that closing action is the most valuable output of the whole tasklist, and it must survive in the record rather than only in a run log, so whoever authors the successor can point at it.",
-        "Mutation-check it: a tasklist with an ordinary unfinished story is refused; one with a declared terminal-false story is retired; a tasklist with NO evidence on the terminal-false story is refused. A retirement path that cannot be shown to refuse is a way to lose work"
+        "`test/doc-sync.sh` is extended to cover `ROADMAP.md`. At minimum it fails when the roadmap's stated version disagrees with `VERSION`, and when a tasklist stem in `completed/` is absent from the roadmap — the two checks that would each independently have caught this drift.",
+        "The check is cheap and offline, in keeping with the gate it joins. It must not require a network call or a model.",
+        "It is proven able to FAIL: a negative-control fixture drives it red, in the same shape the rest of this repo's guards use. A gate nobody has watched fail is indistinguishable from one that always passes.",
+        "The rationale is recorded where the next reader looks: this repo shipped a doc-sync gate that deliberately did not cover the roadmap, and the roadmap is the file that rotted.",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
       ],
-      "passes": true,
-      "notes": "test/retire-negative.sh: PASS — a delivered-plus-measured-negative tasklist retires (record filed, mergedToMain stamped when the branch is contained in main, finding citable at .retiredOnNegative.stories[]); ordinary unfinished work, an unmeasured declaration, an all-passing tasklist and a live dependent with no merge are each REFUSED with the story named and the tasklist left in place; the union of tasklist declaration + run snapshot retires. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; retire-negative PASS, terminal-false PASS (40-tasklist corpus identical), repeat-stop PASS, smoke PASS, noworkguard PASS, ratelimit PASS, doc-sync PASS (README v0.9.0), version-bump PASS (VERSION 0.9.0), check-doc-links 0 dead references. shellcheck not installed on this host — CI enforces it."
+      "notes": null
     }
   ]
 }

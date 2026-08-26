@@ -26,7 +26,8 @@
         "The CLI roster matches `bin/chief`'s dispatch table. Eight subcommands are currently missing from it.",
         "Internal contradictions are resolved: the file currently says five first-class providers in one place, four in another and three in a third. Pick the true one and state it once."
       ],
-      "notes": null
+      "notes": "Rewrote banner, Current State, and every existing phase row against tasks/chief/completed/. Verified all 37 records carry a real mergedToMain (0 MISSING) and every sha resolves in git: bd030a6 (77, 2026-08-01) .. 716c9e4 (113, 2026-08-26). Version claim is now a bold **v0.9.1** matching VERSION 0.9.1 (was v0.8.0). CLI roster corrected from 12 to the full 22 dispatch arms. Provider contradiction (5/4/3) resolved to five first-class, confirmed against bin/chief:625, engine/agent.sh:167 and test/provider-conformance.sh ROSTER. Gates: check-doc-links 0 dead vs 0 on main; test/doc-sync.sh PASS; chief lint 3 tasklists clean.",
+      "passes": true
     },
     {
       "id": "US-2",
