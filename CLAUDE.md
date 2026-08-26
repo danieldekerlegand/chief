@@ -46,7 +46,7 @@ pay for what you changed. A tasklist may override it with its own `"verify":[...
 |---|---|
 | Shell engine (`bin/chief`, `engine/*.sh`, `install.sh`, `test/*.sh`) | `bash -n` clean + `shellcheck -S error` clean; behavioral core `test/{smoke,ratelimit,noworkguard}.sh` green |
 | Engine version discipline | editing `bin/`/`engine/`/`install.sh` **must** bump `VERSION` (`test/version-bump.sh`) |
-| Docs vs engine (`README.md`, `VERSION`, `bin/chief`) | README's bold `**vX.Y.Z**` == `VERSION` and its command table covers every `bin/chief` subcommand (`test/doc-sync.sh`) |
+| Docs vs engine (`README.md`, `ROADMAP.md`, `VERSION`, `bin/chief`, `tasks/chief/completed/`) | README's **and** ROADMAP's bold `**vX.Y.Z**` == `VERSION`; README's command table covers every `bin/chief` subcommand; ROADMAP names every merged tasklist stem in `completed/` (`test/doc-sync.sh`). The roadmap half was added by `114` because `86` gated the README and stopped there — and the roadmap is the file that then rotted, to `v0.8.0` beside a `VERSION` of `0.8.94` with 21 merged bands invisible, while the gated README stayed correct to the patch. **Retiring a tasklist is now a roadmap edit**: a record in `completed/` that `ROADMAP.md` never names fails CI. |
 | Tasklists (`tasks/chief/*.json`) | valid JSON (`jq -e .`); `branchName == chief/NN-slug`; `mergedToMain:false` until merged; no acceptance criterion naming another repo unless `crossRepo` declares it (`chief lint`) |
 
 Notes: the behavioral tests install chief from **`git rev-parse HEAD`**, not from your working
