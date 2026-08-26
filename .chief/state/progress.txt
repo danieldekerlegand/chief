@@ -1,143 +1,75 @@
-# Chief Progress — 111-an-api-error-is-not-a-stall
-Started: Mon Aug 24 21:59:18 CDT 2026
+# Chief Progress — 112-a-bookkeeping-commit-is-not-progress
+Started: Wed Aug 26 11:52:01 CDT 2026
 ---
 
-## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
-```
-doc-links: 0 dead vs 0 on main
-verify: quality — ratchet (engine/quality.sh, deltas vs main)
-chief quality: ratchet — measuring 19 changed path(s) on HEAD and at main
-quality: scope — the 9 changed source file(s), HEAD vs main (4 file(s) new on this branch — no base version, deferred to the baseline axis)
-quality:   ok     duplicate_blocks              0 -> 0        (delta 0      tol 0)
-quality:   ok     duplicate_line_pct            0 -> 0        (delta 0      tol 1)
-quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
-quality:   BLOCK  function_length_max    base 563 -> branch 603 (delta +40, tolerance 15)
-quality:            top contributors by function_length_max (base -> branch):
-quality:              engine/driver.sh                               563 -> 603 (+40)
-quality:              engine/monitor.sh                              253 -> 271 (+18)
-quality:              engine/agent.sh                                75 -> 78 (+3)
-quality:   ok     function_length_mean      16.67 -> 17.53    (delta +0.86  tol 5)
-quality:   BLOCK  single_use_functions   base 57 -> branch 62 (delta +5, tolerance 2)
-quality:            top contributors by functions (base -> branch):
-quality:              engine/agent.sh                                33 -> 40 (+7)
-quality:              engine/driver.sh                               76 -> 77 (+1)
-quality:              engine/lib.sh                                  11 -> 12 (+1)
-quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
-quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
-quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
-quality: BLOCKED — a tracked metric regressed past its tolerance.
-quality:   Fix the named files, loosen the tolerance in .chief/quality.conf (a
-quality:   reviewable diff), or re-baseline deliberately with --write-baseline.
-verify: BLOCK — code-quality ratchet: a tracked metric regressed (see above)
-```
+## Codebase Patterns
 
-## ⚠️ BASE INTEGRATION REQUIRED — do this FIRST, before any user story
-
-`chief/111-an-api-error-is-not-a-stall` is **2 commit(s) behind** its base `main` (@04f5534) and
-chief's automatic rebase onto that base CONFLICTS. The rebase was aborted, so
-your branch is exactly as it was and nothing is lost — but it cannot merge
-until the base is integrated, and every commit that lands on `main` while
-this is unresolved makes it worse.
-
-**Your first task this iteration is to integrate the base yourself:**
-
-1. `git rebase main` in this worktree.
-2. At each stop, resolve the conflicts keeping BOTH sides' intent — the
-   `main` side is already-merged work, so never discard it, and never
-   discard your own — then `git add <files>` and `git rebase --continue`.
-   `git rebase --abort` returns you to exactly this state if you need it.
-3. Re-run the project's quality gates and make them green.
-
-Rebase, not `git merge main`: chief rebases this branch again at merge time,
-and a rebase drops merge commits and replays the originals — a resolution
-recorded in a merge commit would be thrown away and this conflict would come
-straight back. Resolving inside the rebase puts the fix in your own commits.
-
-Then continue the normal loop: pick the highest-priority story with
-`passes:false` and implement it. The integration is NOT a user story — do not
-flip any story's `passes` for it, and do not report completion until the
-stories themselves are really done.
-
-## Conflicting paths
-- VERSION
-
-base: main @04f5534 · behind: 2 commit(s) · branch: chief/111-an-api-error-is-not-a-stall
-(full note: .chief/state/INTEGRATE-BASE.md)
+- **The iteration-outcome classifier lives in ONE block** — `engine/agent.sh`, right after
+  `_measure_boundary`/`_prd_promote`: `now_pass=$(_passes); now_head=$(_head)` and the
+  if/else that either resets `stall` or increments it. Every "chief scored this iteration
+  wrong" bug (111, 112) ends up in that block or in the guards immediately above it
+  (rate limit, `_is_no_turn`), which are placed BEFORE it precisely because they are not
+  judgements about the work.
+- **A behavioural test must REPRODUCE before it is trusted.** The cheap way here: `git clone
+  --no-local` this worktree to a temp dir, revert the one line under test in the clone,
+  commit, and run the same test file there — the suite installs chief from
+  `git rev-parse HEAD` of its own `$ROOT`, so the clone tests the neutered engine with no
+  risk to this tree. (`git show HEAD~N` does not work in CI: the clones are shallow.)
+- **`cmd | grep -q` under `set -o pipefail` is a length-dependent assertion.** `grep -q`
+  exits on the first match and SIGPIPEs the producer, so the pipeline fails when the input
+  is long and passes when it is short. Every test in this suite that greps a `git log`
+  should capture into a variable first and `case` on it — a fixture whose whole point is
+  "the loop ran 20 times instead of 2" will otherwise fail on the wrong assertion.
 
 ---
 
-## 2026-08-24 — base integrated, gate re-verified GREEN (no story work)
+## US-1 — Progress means a story moved or the PRODUCT changed
 
-Every user story on 111 was already `passes:true` (US-1, US-2, US-3). This iteration
-had two outstanding non-story items, both now cleared.
+`engine/agent.sh`:
+- `_product_changed PREV NOW` (beside `_passed_ids`) — true when the net tree diff
+  `git diff --name-only PREV NOW` touches at least one path outside `$BOOKKEEPING_REL`
+  (`${CHIEF_STATE_DIR:-.chief/state}/`). TREE-to-TREE, so an amend/squash landing on an
+  identical tree is not progress; and the commit MESSAGE is never read. FAILS OPEN on
+  anything it cannot answer (unknown sha, `none`, git error) — the old behaviour was "any
+  HEAD move is progress", and an unreadable diff must not become a silent way to stall a
+  working run. In a `repo:<sub>` worktree the state dir is not in the tree at all, so no
+  path matches the prefix and every commit counts, which is correct there.
+- The progress check now reads `[ "$now_pass" -gt "$prev_pass" ] || _product_changed ...`,
+  and the stall branch says `no progress — BOOKKEEPING ONLY (...)` when HEAD moved anyway,
+  so an operator reading `git log` beside the run does not think chief lost the commit.
 
-**1. BASE INTEGRATION — already done.** `git rev-list --count HEAD..main` = 0; the
-VERSION ladder was replayed to 0.8.94 above `main@04f5534` in e162b43 and README's
-bold version follows it. Nothing to do.
+`test/bookkeeping-progress.sh` (new; registered in all THREE lists — `.chief/verify.sh`'s
+`CHIEF_BYSTANDER_TESTS`, `test/all.sh`'s `BASH_SUITE`, `.github/workflows/ci.yml`):
+replays the formant shape — every turn re-stamps `notes` in the runtime prd.json, appends
+to progress.txt, `git add -f`s both (chief init gitignores `.chief/state/`) and commits
+`feat: US-1 - record the re-check and the blocker`. Asserts the fixture really is
+state-only first, then that the run takes exactly `iters` (2) turns.
 
-**2. PRIOR VERIFICATION FAILED — the quality ratchet is green, but the gate had gone
-red somewhere else.** The block in this file names the band-88 ratchet
-(`function_length_max` +40, `single_use_functions` +5); 9940b32 fixed that and it now
-measures +12 (tol 15) and +2 (tol 2). Re-running the WHOLE gate surfaced a different,
-newer failure: `test/merge-batch.sh` PART D.
-
-  BISECT points at member #4 of 4 — charlie   (expected: member #3 of 4)
-
-**It was not this branch's doing.** Proven by bisecting the ENGINE, not the test: the
-same PART D script run against a `git archive main` export fails identically, and
-against the branch's previous base (`f0c0cb9`) it passes. What changed is main's own
-concurrency fix (7b8b9ad / 04f5534) — the machine agent-turn budget used to shadow its
-own default and cap every host at 1 (`machine budget: 1 agent turn(s) across 14
-physical core(s)`), so PART D's four workers never actually ran in parallel and the
-fake agent's 2s stagger decided the batch order on its own.
-
-With the cap lifted, the culprit's real handicap shows. Since band 110 the agent runs
-the project's verify hook ITSELF before accepting a completion, and PART D's fixture
-hook is red on any tree holding charlie's artifact — charlie's own worktree included.
-So charlie's completion is refused (`!! agent verification failed (exit 1); completion
-will not be accepted`), it spends its whole stall budget (2 no-progress iterations,
-~3s each) and only then enqueues — behind delta, at member #4, where there is no
-survivor and the bisect's re-form path goes unrun (`batchpoison.verifies` 4, not 5).
-
-Fix (354ffda, `test/merge-batch.sh` only): delta's wait absorbs the culprit's handicap
-explicitly rather than the test assuming every branch enqueues in the order the fake
-agent was told to. Measured on the fixed run, from the run's own event stream:
-enqueue at +0s / +2s / +9s / +18s — 7s and 9s of margin either side of the culprit.
-
-### Verification observed
-`bash .chief/verify.sh` → exit 0, `verify: OK (allowing merge)`
-  - quality ratchet: duplicate_blocks 0, duplicate_line_pct -0.02, max_nesting_depth 0,
-    function_length_max +12 (tol 15), function_length_mean +0.81 (tol 5),
-    single_use_functions +2 (tol 2) — OK, no tracked metric regressed
-  - doc-links: 0 dead vs 0 on main
-  - `bash -n`: clean over bin/chief + engine/*.sh + install.sh + templates/*.sh + test/*.sh
-  - shellcheck: NOT INSTALLED on this host — the gate skipped it and said so; CI enforces it
-  - version-bump: PASS (VERSION 0.8.94 covers every engine/bin change on HEAD)
-  - behavioral: 46/46 under the bystander guard, none signalled the decoy run
-  - doc-sync: PASS (README states v0.8.94)
-`bash test/merge-batch.sh` standalone → EXIT 0, all six parts (A–F), 106s.
+### Observed
+- New test: `BOOKKEEPING PASS` — 2 turns, stall 2/2, INCOMPLETE, nothing merged.
+- Reproduced against a neutered clone: **20 turns** (HARD_MAX), log line
+  `Iteration 11: progress (0/1 passing). Continuing...` — the formant sentence verbatim.
+- `smoke noworkguard ratelimit boundary-demotion evidence-gate measured-bars version-bump
+  doc-sync bookkeeping-progress` → 9 passed, 0 failed.
+- `.chief/verify.sh` (static half, `CHIEF_VERIFY_TESTS=0`): OK — `bash -n` clean, doc-links
+  0 dead vs 0 on main, quality ratchet no regression, VERSION 0.8.95 covers the change.
+- `shellcheck` is NOT installed on this host; verify.sh skips it and says so. CI enforces it.
 
 ## Learnings for future iterations
 
-- **A green `test/*.sh` is not evidence the ENGINE is green — bisect the engine, not
-  the test.** `git archive <ref> | tar -x -C /tmp/chief-<ref>` gives a throwaway ROOT,
-  and every hermetic test here takes its engine from `ROOT="$(cd "$(dirname
-  "${BASH_SOURCE[0]}")/.." && pwd)"`. Copy the test to /tmp, pin `ROOT=` to the export
-  and neuter its `trap ... rm -rf "$WORK"` to `echo "WORK=$WORK"` — now the same
-  fixture can be run against main, against the old base, and against the branch, and
-  "did this branch break it" stops being an argument and becomes a measurement.
-- **A behavioural test that races real workers may have been passing for the wrong
-  reason.** PART D's ordering assumption only ever held because the machine budget bug
-  serialized every agent turn. Fixing a CONCURRENCY bug retroactively un-fixes every
-  test whose determinism was quietly resting on the absence of concurrency — expect a
-  crop of them, and read a newly-red test as "what did parallelism just expose" before
-  reading it as "what did I break".
-- **In `test/merge-batch.sh` the verify counter is keyed by `basename "$PWD"`,** so the
-  merge-gate runs land in `$OZ_WORK/<repo>.verifies` and the band-110 agent-side
-  pre-completion runs land in `$OZ_WORK/<tasklist>.verifies`. Two different counters,
-  which is why the exact `verifies == 5` assertions still model only the merge gate.
-- **The run's own event stream is the timing oracle.**
-  `jq -r 'select(.event=="tasklist.queued")|[.ts,.name]|@tsv'` over
-  `$CHIEF_RUNS/<run-id>.events.jsonl` reads out enqueue order and the real margins
-  between workers — far better than inferring order from a worker log with no
-  per-line timestamps.
+- **US-2 has a ready-made home**: add a `bk-both` tasklist to `test/bookkeeping-progress.sh`
+  whose agent does real work AND stamps state in the same turn, and assert it scores as
+  progress. The fixture, the install and the assertions are already there.
+- **US-3's line is `Iteration $i: progress ($now_pass/$(_total) passing). Continuing...`**,
+  still exactly as it was — US-1 deliberately left it alone. Note that
+  `test/boundary-demotion.sh` greps `Iteration 2: progress` and `Iteration 2: no progress`,
+  so keep those two prefixes whatever the rest of the sentence becomes.
+- **This repo's own `tasks/chief/*.json` omit `passes` entirely** (the generator writes
+  `notes: null` and no flag). `_passes()` counts `passes==true` so the count is right, but
+  `_story()` selects `.passes==false` and therefore returns EMPTY for a freshly generated
+  tasklist — the liveliness record's `story` field is blank until an agent writes a flag.
+  Pre-existing, not touched here, but it is why `chief ps` shows no story id early in a run.
+- **`.chief/state/prd.json` and `progress.txt` are TRACKED in chief's own repo** (added
+  before `.gitignore` gained `.chief/state/`), so chief self-hosting is exactly the repo
+  where the formant pathology can occur — `git log --oneline -- .chief/state` shows
+  `chore: driver-seeded run state` commits. That is the case US-2 must keep working.

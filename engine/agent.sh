@@ -459,11 +459,12 @@ fi
 
 # --- Adaptive iteration control + session-limit recovery ---------------------
 # MAX_ITERATIONS is a SOFT budget, not a hard wall. As long as each iteration
-# makes forward progress (a story flips to passes:true, OR a new commit lands),
-# Chief keeps going past the budget — up to HARD_MAX — so a PRD that just needs
-# a few more turns isn't cut off mid-flight. It gives up only once it has spent
-# the budget AND stalled (no progress) for STALL_LIMIT consecutive iterations,
-# or reaches the HARD_MAX safety ceiling.
+# makes forward progress (a story flips to passes:true, OR a commit changes something
+# outside chief's own state directory — see _product_changed), Chief keeps going past
+# the budget — up to HARD_MAX — so a PRD that just needs a few more turns isn't cut
+# off mid-flight. It gives up only once it has spent the budget AND stalled (no
+# progress) for STALL_LIMIT consecutive iterations, or reaches the HARD_MAX safety
+# ceiling.
 STALL_LIMIT="${STALL_LIMIT:-2}"
 # THE SAME IDEA FOR THE BAR CHECK AT THE BOUNDARY. STALL_LIMIT bounds a loop that
 # is achieving NOTHING; MEASURE_DEMOTE_LIMIT bounds a loop that is achieving the
@@ -631,6 +632,59 @@ _story()  { jq -r '[.userStories[]? | select(.passes==false)][0].id // empty' "$
 # count each iteration; reading the ids alongside it is what lets the event stream
 # name WHICH story passed instead of just that one more did.
 _passed_ids() { jq -r '[.userStories[]? | select(.passes==true) | .id] | join(" ")' "$PRD_FILE" 2>/dev/null || echo ""; }
+
+# --- PROGRESS IS A CHANGE TO THE WORK, NOT TO CHIEF'S OWN NOTES ---------------
+# The stall counter is what stops a tasklist that cannot advance. It used to read
+# "HEAD moved" as progress, and HEAD moves for any commit at all — including one whose
+# entire diff is chief's own runtime state. Measured in `formant` on 2026-08-24:
+# `56-neural-synth-ship-flip` was blocked on a measurement only a human could take, the
+# agent said so on every turn, and every turn re-stamped a note into
+# `.chief/state/prd.json` + `.chief/state/progress.txt` and committed it. Each of those
+# commits reset the stall counter and bought another iteration; the run reached
+# iteration 11 of a 5-iteration budget, 1h32m after it stopped being able to accomplish
+# anything. Note the asymmetry that fixed: chief already refuses to believe a claim of
+# COMPLETION without commits behind it (the no-work guard, the evidence gate), and
+# accepted a claim of PROGRESS with nothing behind it at all.
+#
+# So the rule is stated on the DIFF, never on the commit message or the commit count:
+# an iteration advanced the work if a story's `passes` rose, or if the net tree diff
+# across the iteration touches at least one path OUTSIDE $BOOKKEEPING_REL. Writing
+# notes and progress records stays entirely supported — this removes their power to
+# extend a budget, not their existence — and an iteration that does real work AND
+# updates the state files still scores on the strength of the real work, because the
+# state paths are not subtracted from anything, they just cannot carry the verdict
+# alone.
+#
+# The comparison is TREE-TO-TREE (`git diff A B`), not a walk of the commits between
+# them: an amend, a squash or a rebase that lands back on an identical tree changed
+# nothing, whatever it did to the commit graph.
+BOOKKEEPING_REL="${CHIEF_STATE_DIR:-.chief/state}"
+BOOKKEEPING_REL="${BOOKKEEPING_REL#./}"; BOOKKEEPING_REL="${BOOKKEEPING_REL%/}/"
+
+# _product_changed PREV NOW — true when the net diff PREV..NOW touches anything that
+# is not bookkeeping. FAILS OPEN in every case it cannot answer (an unknown sha, a
+# repo git will not diff, no prior HEAD): the pre-2026-08-26 behaviour was "any HEAD
+# move is progress", and an unreadable diff must not become a silent way to stall a
+# run that is working. For a `repo:<sub>` tasklist the worktree is the submodule and
+# the state directory is not in it at all, so no path can match the prefix and every
+# commit counts — which is correct there, because the bookkeeping is not in that tree.
+_product_changed() {
+  local prev="$1" now="$2" files f
+  if [ "$prev" = "$now" ]; then return 1; fi
+  case "$prev" in ''|none) return 0 ;; esac
+  case "$now"  in ''|none) return 0 ;; esac
+  files="$(git -C "$REPO" diff --name-only "$prev" "$now" 2>/dev/null)" || return 0
+  if [ -z "$files" ]; then return 1; fi   # HEAD moved onto an identical tree
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # Quoted on purpose: the prefix is a path, and a `.` in it is a dot, not a regex.
+    case "$f" in "$BOOKKEEPING_REL"*) continue ;; esac
+    return 0
+  done <<EOF
+$files
+EOF
+  return 1
+}
 
 # _prd_promote — bank the runtime pass-state to the DURABLE store ($PRD_STORE).
 #
@@ -1970,16 +2024,25 @@ while :; do
   # this point still resumes at the count this iteration reached.
   _prd_promote
 
-  # Progress check: did a story pass, or a new commit land?
+  # Progress check: did a story pass, or did a commit change something that is not
+  # chief's own bookkeeping? (see _product_changed — the rule is on the DIFF)
   now_pass=$(_passes); now_head=$(_head)
-  if [ "$now_pass" -gt "$prev_pass" ] || [ "$now_head" != "$prev_head" ]; then
+  if [ "$now_pass" -gt "$prev_pass" ] || _product_changed "$prev_head" "$now_head"; then
     stall=0
     echo "Iteration $i: progress ($now_pass/$(_total) passing). Continuing..."
     live_set "$LIVE" phase=agent-turn stall=0 stall_limit="$STALL_LIMIT" \
       passing="$now_pass" total="$(_total)" story="$(_story)"
   else
     stall=$((stall+1))
-    echo "Iteration $i: no progress (stall $stall/$STALL_LIMIT)."
+    # A commit that moved HEAD and changed nothing but chief's own state is scored
+    # here, with the iterations that produced no commit at all — and it says which of
+    # the two it was, because "no progress" beside a commit the operator can see in
+    # `git log` reads like chief lost it.
+    if [ "$now_head" != "$prev_head" ]; then
+      echo "Iteration $i: no progress — BOOKKEEPING ONLY (this iteration's commits touch nothing outside ${BOOKKEEPING_REL}) (stall $stall/$STALL_LIMIT)."
+    else
+      echo "Iteration $i: no progress (stall $stall/$STALL_LIMIT)."
+    fi
     # BETWEEN iterations, and only here: the phase is the verdict on the boundary just
     # reached, and the next iteration's first write (top of the loop) takes it back.
     # The budget travels with the count so a reader can tell "1 of 2" from "2 of 2"

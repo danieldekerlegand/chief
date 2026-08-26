@@ -122,6 +122,9 @@ jobs:
       - name: An UNVERIFIED stop outlives its run (the resume re-engages instead of re-failing forever)
         run: bash test/unverified-resume.sh
 
+      - name: Bookkeeping is not progress (a state-only commit cannot extend the budget)
+        run: bash test/bookkeeping-progress.sh
+
       - name: Stall flag is run-state aware (a quiet-by-design phase is not also called stalled)
         run: bash test/stall-flag.sh
 
