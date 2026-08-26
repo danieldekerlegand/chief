@@ -129,3 +129,62 @@ base commit `d61be82` from a clean clone, and it is not in the merge gate.
   naming the story that terminated negative — the retire command can cite it rather
   than re-deriving the diagnosis. Adding a subcommand re-stales `doc-sync` (README's
   command table) and `version-bump` (VERSION) together.
+
+---
+
+## US-3 — The operator can retire a tasklist on a negative without hand-editing JSON
+
+**What is there.** `engine/retire.sh` + `chief retire --negative NAME…` — the command
+`283`'s agent asked for in its notes ("It needs MANUAL RETIREMENT") and had nowhere to
+put. It retires a tasklist whose delivered stories PASSED and whose remaining story
+TERMINATED FALSE, and it is narrow on purpose: every story `settled` (terminal.sh's
+predicate, not a private copy) and at least one settled NO.
+
+Files: `engine/retire.sh` (new), `bin/chief` (`cmd_retire` = `load_project` + the
+module, dispatch arm, usage block), `engine/repeat.sh` (the CANNOT-COMPLETE stop's
+option 2 now names the command that follows it), `docs/reference/tasklist-schema.md`
+(the refusal table + the `retiredOnNegative` shape), `test/retire-negative.sh` (new,
+wired into all three gate lists), `VERSION` 0.9.0 + README.
+
+**Four things worth knowing.**
+- **THREE REFUSALS, and they are the story.** Ordinary unfinished work, a declaration
+  with nothing measured, and an all-passing tasklist (that one retires by MERGING —
+  this path skips the verify gate, so it must not be a second door to `completed/`).
+  Each names the story that caused it. The test asserts each refusal leaves the
+  tasklist exactly where it was; a retirement path that cannot be shown to refuse is a
+  way to lose work.
+- **A FOURTH refusal is the RETIREMENT TRAP**, and it is the one that is easy to miss:
+  a `completed/` record satisfies a `dependsOn` edge only if it carries
+  `mergedToMain`, and a tasklist retired on a negative usually never merged. So chief
+  stamps the sha only when it can VERIFY the branch is contained in the base
+  (`merge-base --is-ancestor`), and when it cannot it refuses if anything still
+  depends on the tasklist — the same rule `chief decide --retire` already applies.
+  With no dependents it files and says plainly that the record satisfies no edge.
+- **The declaration and the finding live in DIFFERENT FILES**, which is the real 283
+  shape: the run recorded the measurement in `.chief/state/snapshots/<name>.json` and
+  the operator adds `terminalFalse` to `tasks/chief/<name>.json` afterwards, having
+  been told to by the stop report. Neither settles the story alone, so `retire_record`
+  reads the UNION per story id (declared if either says so, the finding is the run's
+  when the run recorded one) and REPORTS which file supplied the measurement.
+- **The finding is lifted into `retiredOnNegative`** as well as left on the story, so a
+  successor tasklist can cite `.retiredOnNegative.stories[].finding` without knowing
+  the `negative` predicate. The story itself is untouched — `passes:false`,
+  `terminalFalse:true`, notes verbatim.
+
+**Observed.** `test/retire-negative.sh` PASS. `bash -n` clean over `bin/chief
+engine/*.sh test/*.sh install.sh`. terminal-false PASS (40-tasklist corpus identical) ·
+repeat-stop PASS · smoke PASS · noworkguard PASS · ratelimit PASS · doc-sync PASS
+(README v0.9.0) · version-bump PASS (VERSION 0.9.0) · `scripts/check-doc-links.mjs` 0
+dead references. `shellcheck` is absent on this host; CI enforces it.
+
+**Learnings for future iterations.**
+- **A new subcommand is FOUR edits, not one**: the dispatch arm, the `usage()` block,
+  the README command-reference table (`test/doc-sync.sh` parses the dispatch `case` and
+  requires a table row per arm), and `VERSION` + the README's bold `**vX.Y.Z**`
+  together. Doing three of them just trades one red gate for another.
+- **`terminal_inert_report` says "records NO measurement", not "recorded"** — an
+  assertion written from memory cost one test cycle. Grep the module for the string
+  rather than paraphrasing it.
+- **A `rm -f "$VAR/..."` inside a heredoc can trip a tool-level safety guard** when the
+  file is written via `cat <<'SH'`. Writing the file directly (the Write tool) avoids
+  it; the code itself is fine.

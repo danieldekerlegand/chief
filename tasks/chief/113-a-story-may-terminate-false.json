@@ -57,8 +57,8 @@
         "The `completed/` record carries the negative finding in a form a successor tasklist can cite. A story that terminates false often names the thing to do instead — that closing action is the most valuable output of the whole tasklist, and it must survive in the record rather than only in a run log, so whoever authors the successor can point at it.",
         "Mutation-check it: a tasklist with an ordinary unfinished story is refused; one with a declared terminal-false story is retired; a tasklist with NO evidence on the terminal-false story is refused. A retirement path that cannot be shown to refuse is a way to lose work"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "test/retire-negative.sh: PASS — a delivered-plus-measured-negative tasklist retires (record filed, mergedToMain stamped when the branch is contained in main, finding citable at .retiredOnNegative.stories[]); ordinary unfinished work, an unmeasured declaration, an all-passing tasklist and a live dependent with no merge are each REFUSED with the story named and the tasklist left in place; the union of tasklist declaration + run snapshot retires. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; retire-negative PASS, terminal-false PASS (40-tasklist corpus identical), repeat-stop PASS, smoke PASS, noworkguard PASS, ratelimit PASS, doc-sync PASS (README v0.9.0), version-bump PASS (VERSION 0.9.0), check-doc-links 0 dead references. shellcheck not installed on this host — CI enforces it."
     }
   ]
 }

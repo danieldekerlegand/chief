@@ -92,7 +92,7 @@ grep -q 'ordinary unfinished work' "$WORK/out" || fail "the refusal does not say
 # (b) declared, but nothing measured. Without this half the field is a way to mark hard
 # stories complete: write the declaration, never do the work, retire.
 [ "$(run retire --negative rn-inert)" != 0 ] || fail "a declaration with NO measurement was retired"
-grep -q 'recorded NO measurement' "$WORK/out" || fail "the refusal does not say the declaration is inert"
+grep -q 'records NO measurement' "$WORK/out" || fail "the refusal does not say the declaration is inert"
 grep -q 'US-2' "$WORK/out"                    || fail "the inert refusal does not name the story"
 [ -f tasks/chief/rn-inert.json ]              || fail "the inert tasklist was removed from the backlog"
 [ ! -f tasks/chief/completed/rn-inert.json ]  || fail "the inert tasklist was filed to completed/"
