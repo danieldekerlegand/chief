@@ -125,6 +125,9 @@ jobs:
       - name: A story may terminate FALSE (a declared, measured negative settles; an unmeasured one does not)
         run: bash test/terminal-false.sh
 
+      - name: A tasklist that cannot complete is detected and stopped (one outcome, re-recorded)
+        run: bash test/repeat-stop.sh
+
       - name: Bookkeeping is not progress (a state-only commit cannot extend the budget)
         run: bash test/bookkeeping-progress.sh
 

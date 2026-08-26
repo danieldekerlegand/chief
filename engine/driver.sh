@@ -353,6 +353,7 @@ tasklist_outcome() {
     EMPTY-NO-WORK*)                   printf 'no-work' ;;
     PLAN-INVALID*)                    printf 'plan-invalid' ;;
     RESEARCH-FAILED*)                 printf 'research-failed' ;;
+    CANNOT-COMPLETE*)                 printf 'cannot-complete' ;;
     AWAITING-REVIEW*)                 printf 'awaiting-review' ;;
     AWAITING-DECISION*)               printf 'awaiting-decision' ;;
     AWAITING-APPROVAL*)               printf 'awaiting-approval' ;;
@@ -435,6 +436,16 @@ AGENT_RC_UNVERIFIED=7
 # had been learned about (talos 2026-08-24, tasklists 71 and 72). Like 2 it is a
 # BLOCK, not a failure: branch, commits and worktree are all kept.
 AGENT_RC_UNAVAILABLE=8
+# 9 IS THE TASKLIST THAT CANNOT GET ANYWHERE (engine/repeat.sh). The agent loop
+# stopped ITSELF because the story it is driving recorded the same outcome — same
+# measurement, same blocker, `passes` unmoved — at $REPEAT_LIMIT consecutive iteration
+# boundaries. It is NOT a stall and NOT 1: commits were landing every single time (that
+# is precisely why the stall counter cannot see it), and they are all kept. cuneiform
+# `283` is the case: 42 identical measurements across three days, ending INCOMPLETE,
+# which is a wrong verdict on finished work rather than a cheap one. Reported as its
+# own outcome so the operator is sent to the two things that resolve it — amend the
+# criterion, or declare the negative terminal — instead of to `iters`.
+AGENT_RC_REPEAT=9
 # Driver-level usage-limit self-heal (see SCHEDULER STATES above). Deliberately a
 # separate family from agent.sh's RATE_LIMIT_* per-worker knobs: those govern how
 # long ONE agent loop sleeps mid-story, these govern how many times the SCHEDULER
@@ -2306,6 +2317,10 @@ worker_park() {
     # story — there was never a turn to name. It is a failure (nothing was built),
     # but an actionable one: the fix is usually to write the document by hand.
     research-failed) phase=research-failed; status=RESEARCH-FAILED; ev=tasklist.research-failed; state=failed; story="" ;;
+    # The repeat rule stopped the loop (engine/repeat.sh, agent.sh exit 9). A failure —
+    # the tasklist did not deliver — but a DIAGNOSED one, and it names its story: which
+    # question chief kept re-answering is the first thing the fix needs.
+    cannot-complete) phase=cannot-complete; status=CANNOT-COMPLETE; ev=tasklist.cannot-complete; state=failed ;;
     awaiting-review) phase=awaiting-review; status=AWAITING-REVIEW; ev=tasklist.awaiting-review; state=awaiting-review ;;
     awaiting-decision) phase=awaiting-decision; status=AWAITING-DECISION; ev=tasklist.awaiting-decision; state=awaiting-decision ;;
     # The one arm that fires INSIDE the merge phase, after the floor came back
@@ -2724,6 +2739,22 @@ run_worker() {
       unmeasured_stop "$(cat "$wtstate/.demoted.md" 2>/dev/null || echo '   ✗ (the boundary report was not kept)')"
       return 0
     fi
+    # CANNOT COMPLETE — agent.sh stopped ITSELF at an iteration boundary because the
+    # story it was driving kept recording the same outcome (engine/repeat.sh). Above the
+    # no-work guard for the same reason as the UNVERIFIED arm: the stop can leave a
+    # branch full of commits or none at all, and neither is EMPTY-NO-WORK. The report is
+    # the agent's own, composed once by repeat_stop_report and banked in the worktree —
+    # copied to $STATE so the end-of-run summary can still quote it after the worktree
+    # is gone, exactly as the stall reason is.
+    if [ "$agent_rc" = "$AGENT_RC_REPEAT" ]; then
+      cp "$wtstate/.cannot-complete.md" "$STATE/$name.cannot-complete" 2>/dev/null || true
+      worker_park cannot-complete \
+        "the same story recorded the same outcome at consecutive iteration boundaries — the tasklist cannot complete as written; branch + worktree kept" \
+        "!! $name CANNOT COMPLETE — chief kept re-answering one question and the answer never moved; branch $branch and its worktree are kept, and every commit with them"
+      sed 's/^/   /' "$STATE/$name.cannot-complete" 2>/dev/null \
+        || echo "   (the boundary report was not kept)"
+      return 0
+    fi
     # NO-WORK GUARD: an all-"pass" branch with zero diff vs base never did the work.
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
     if [ -z "$has_work" ]; then
@@ -2971,7 +3002,7 @@ rm -f "$LIMIT_PAUSE_FILE"
 rm -f "$STATE/.cosched"     # the co-scheduling relation is per-run, not cumulative
 for n in $NAMES; do
   set_state "$n" pending
-  rm -f "$STATE/$n.stalled" \
+  rm -f "$STATE/$n.stalled" "$STATE/$n.cannot-complete" \
         "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
         "$STATE/$n.files" "$STATE/$n.touches"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
@@ -3327,7 +3358,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""; noway=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -3353,6 +3384,10 @@ for n in $NAMES; do
   # Collected off the FILE, not the status: INCOMPLETE is one status covering two very
   # different stops, and only agent.sh knows which one this was.
   [ -s "$STATE/$n.stalled" ] && stalled="$stalled $n"
+  # And the OTHER end of "it did not finish": a tasklist that kept re-answering one
+  # question (engine/repeat.sh). Collected off the FILE for the same reason as the line
+  # above — the status alone cannot carry which story, or what it kept finding.
+  [ -s "$STATE/$n.cannot-complete" ] && noway="$noway $n"
   # The merge phase parks the operator's uncommitted work for the length of its
   # critical section (merge_stash_push). This file exists only when giving it back
   # could not be done cleanly — the entry was KEPT, so the block below is the run's
@@ -3472,6 +3507,19 @@ if [ -n "$stalled" ]; then
   echo "    Raising \`iters\` does NOT fix these — the budget was not the binding constraint."
   echo "    Read the words above and the branch: the usual causes are a blocker only a human can"
   echo "    clear, and a story whose acceptance criteria cannot be met from this worktree."
+fi
+# AND THE ONE THAT KEPT ADVANCING AND STILL COULD NOT FINISH (engine/repeat.sh). Its
+# own block precisely because it is the OPPOSITE shape from the one above and would be
+# read as it otherwise: these tasklists committed real work on every iteration and
+# stopped only because the question they were re-answering has a fixed answer. Raising
+# `iters` is the exactly-wrong response, and it is what the old nameless INCOMPLETE
+# invited — cuneiform `283` spent three days there.
+if [ -n "$noway" ]; then
+  echo "   ⟳ CANNOT COMPLETE AS WRITTEN — $(set -- $noway; echo $#) tasklist(s) kept re-answering one question and the answer never moved. NOT a stall: commits landed every iteration:"
+  for n in $noway; do
+    printf '    · %-30s\n' "$n"
+    sed 's/^/         /' "$STATE/$n.cannot-complete" 2>/dev/null
+  done
 fi
 # THE PROVIDER NEVER SERVED US. Reported here, next to the other holds and never among
 # the failures, because that is precisely the misread this exists to stop: on

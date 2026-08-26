@@ -234,6 +234,36 @@ Notes:
   same stop within `STALL_LIMIT` iterations of the first churning turn. What was
   actually lost was the reasoning, buried at iteration 10 of a log nobody re-reads, so
   chief **quotes** those closing words in the summary and draws no conclusion from them.
+- **A tasklist that keeps re-answering one question is STOPPED and diagnosed.** The
+  safety net for the case where nobody declared `terminalFalse` on the story that
+  needed it — and the case it is measured on is the same one: cuneiform `283` recorded
+  **42 consecutive identical measurements** and ended `INCOMPLETE`, which is a wrong
+  verdict on finished work rather than a cheap one.
+
+  When the story chief is driving records the **same outcome** — same measurement, same
+  blocker, `passes` unmoved — at `REPEAT_LIMIT` consecutive iteration boundaries
+  (**default 3**), the run stops that tasklist with the outcome `CANNOT-COMPLETE`. It
+  names the story, quotes the finding verbatim, and names the two actions that resolve
+  it: **amend the criterion**, or **declare the negative terminal** (`terminalFalse`
+  above). Chief chooses neither — it cannot evaluate the finding, and guessing would be
+  a way to bury unfinished work.
+
+  Three properties make it the rule it is:
+  - **It is independent of the stall counter, and has to be.** `283` committed real
+    files outside `.chief/state/` on every one of those 42 iterations, so progress
+    scored every time — with the bookkeeping fix above fully in place. The comparison
+    is on the story's **recorded outcome**, never on commits.
+  - **An outcome only exists once it is measured.** A story mid-implementation has
+    recorded nothing, and quiet iterations of ordinary work never accumulate repeats.
+    The observation bar is the same lenient one the bar rule and the inert rule use.
+    That also keeps this rule disjoint from `MEASURE_DEMOTE_LIMIT`: a story with no
+    observation is that rule's business and never reaches this one.
+  - **A reworded finding is not a repeat.** The comparison is conservative on purpose —
+    a missed repeat costs iterations, a false one stops a tasklist that was working.
+
+  The branch, its worktree and every commit are kept, and the run summary gives these
+  their own block (`CANNOT COMPLETE AS WRITTEN`), apart from `STOPPED ADVANCING`: they
+  are the opposite shape, and raising `iters` is the exactly-wrong response to them.
 - **A criterion must be satisfiable from this tasklist's worktree.** One that names
   another repo is stopped before the run starts (`UNSATISFIABLE`) unless the tasklist
   declares `crossRepo`; `chief lint` reports the same finding while it is still a text

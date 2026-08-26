@@ -70,6 +70,16 @@
 #      spread across the outage instead of fired into it back to back. A PERMANENT
 #      one — a bad or revoked key, a quota that will not replenish — reaches this
 #      exit on the FIRST refusal, because no delay makes an unusable key usable.
+#   9  THE TASKLIST APPEARS UNABLE TO COMPLETE — the story chief is driving recorded
+#      the SAME outcome (same measurement, same blocker, `passes` unmoved) at
+#      $REPEAT_LIMIT consecutive iteration boundaries, so no further iteration is going
+#      to change it (engine/repeat.sh). NOT a stall and NOT a failed branch: commits
+#      were landing every time and every one of them is kept, which is exactly why the
+#      stall counter and the bar rule are both blind to it. It exists because cuneiform
+#      `283` ran 42 identical measurements across three days and ended INCOMPLETE — a
+#      wrong verdict on finished work. The stop names the story, quotes the repeated
+#      finding, and names the two actions that resolve it: amend the criterion, or
+#      declare the negative terminal ("terminalFalse", engine/terminal.sh).
 # A usage limit is detected BEFORE the progress/stall accounting (see
 # _is_rate_limit below), so a limit-blocked turn can never be misread as a
 # no-progress iteration that trips STALL_LIMIT and exits 1. A request the provider
@@ -209,6 +219,12 @@ rm -f "$NOTURN_FILE"
 # Line 1 is the reason; the lines after it are the agent's own closing words.
 STALL_FILE="$STATE_DIR/.stalled"
 rm -f "$STALL_FILE"
+# THE CANNOT-COMPLETE REPORT (engine/repeat.sh), on the same terms as the two files
+# above: written only when the repeat rule stops the loop, read by the driver's exit-9
+# arm the moment the worker returns, and removed at startup because $STATE_DIR outlives
+# the process on an in-place run and last run's diagnosis is not this run's news.
+REPEAT_FILE="$STATE_DIR/.cannot-complete.md"
+rm -f "$REPEAT_FILE"
 # THE RESEARCH DOCUMENT, in its two locations — declared HERE rather than beside the
 # RESEARCH PHASE below because _compose_prompt (next) reads it, and every story turn
 # is composed through that one function.
@@ -294,6 +310,12 @@ DEMOTE_REPEATS=0
 # terms, and it ships in the same directory as this file.
 # shellcheck source=engine/terminal.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/terminal.sh"
+# THE REPEAT RULE (engine/repeat.sh) — the safety net for the tasklist nobody
+# remembered to declare `terminalFalse` on. Sourced beside terminal.sh because it is
+# the same predicate family (it borrows SETTLED from there and `observed` from
+# measure.sh through it) and because the boundary check below is unconditional.
+# shellcheck source=engine/repeat.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/repeat.sh"
 
 # _compose_prompt INSTRUCTIONS DEST — the prompt one turn is handed: the engine's
 # loop instructions followed by the project's own context. A turn picks its
@@ -514,6 +536,14 @@ STALL_LIMIT="${STALL_LIMIT:-2}"
 # never counted as repeating itself. 2 = one demotion, one turn told about it by
 # name and by bar, and then stop — a third turn has nothing new to learn.
 MEASURE_DEMOTE_LIMIT="${MEASURE_DEMOTE_LIMIT:-2}"
+# AND THE THIRD BOUND, for the loop that is achieving the SAME THING and is RIGHT to
+# (engine/repeat.sh). STALL_LIMIT bounds a loop achieving nothing; MEASURE_DEMOTE_LIMIT
+# bounds one re-marking a story without the number it owes; REPEAT_LIMIT bounds one
+# re-measuring a question whose answer does not move. Neither of the first two can see
+# it: the turns commit real files, so the stall counter reads progress, and the notes
+# carry a real observation, so the bar rule has nothing to demote. The default lives in
+# repeat.sh beside the rule it bounds; it is named here because this is where an
+# operator looks for the loop's knobs.
 HARD_MAX="${HARD_MAX:-$(( MAX_ITERATIONS*3 > 20 ? MAX_ITERATIONS*3 : 20 ))}"
 
 # On a Claude session/usage limit, sleep until it resets and RESUME the same
@@ -1081,6 +1111,42 @@ _demote_escalate() {
   event_emit story.unverified name="${CHIEF_TASKLIST:-}" story="$DEMOTE_KEY" state=failed \
     detail="demoted at $DEMOTE_REPEATS consecutive iteration boundaries — a claimed bar with no observed value"
   exit 7
+}
+
+# --- THE REPEAT RULE, AT THE BOUNDARY (engine/repeat.sh) ----------------------
+# _repeat_boundary ITER — stop a tasklist that is re-answering a settled question.
+#
+# THE CASE IT EXISTS FOR, and why nothing already here can see it: cuneiform `283` ran
+# 42 consecutive IDENTICAL measurements of a flow that does not complete. Every one of
+# those turns committed real files outside the state directory, so `_product_changed`
+# scored progress and `$stall` was reset each time; every one recorded a real
+# observation, so `_measure_boundary` had nothing to demote. Both existing bounds ask
+# whether an ITERATION COUNTED. This one asks whether the TASKLIST IS GOING ANYWHERE.
+#
+# INDEPENDENT OF THE PROGRESS COUNTER, deliberately and structurally: it runs ABOVE the
+# progress accounting, it reads only the PRD's recorded outcome, and it never touches
+# $stall. A version of this expressed as a stall threshold would be the same blindness
+# with a bigger number.
+#
+# It stops rather than concludes. Chief cannot evaluate the finding, so it will not
+# decide the answer is `false` — it names the story, quotes what is being re-recorded,
+# and names the two actions a human chooses between (repeat_actions).
+_repeat_boundary() {
+  command -v repeat_bump >/dev/null 2>&1 || return 0
+  repeat_bump "$PRD_FILE" || return 0
+  echo ""
+  repeat_stop_report "$PRD_FILE" "$REPEAT_COUNT" > "$REPEAT_FILE" 2>/dev/null \
+    || repeat_stop_report "$PRD_FILE" "$REPEAT_COUNT"
+  [ -s "$REPEAT_FILE" ] && cat "$REPEAT_FILE"
+  echo "Exit 9 = CANNOT-COMPLETE — NOT a stall (commits landed on every one of these turns) and NOT a failed branch: every commit is kept, and re-running after either fix above resumes from the committed passes state."
+  live_set "$LIVE" phase=cannot-complete iter="${1:-?}" story="$REPEAT_STORY" \
+    passing="$(_passes)" total="$(_total)" stall="${stall:-0}"
+  # STORY scope here; the driver emits the TASKLIST-scope terminal when it sees exit 9
+  # — the same split story.unverified and story.plan-invalid use, so a consumer
+  # counting tasklist outcomes never double-counts.
+  event_emit story.cannot-complete name="${CHIEF_TASKLIST:-}" story="$REPEAT_STORY" state=failed \
+    detail="the same recorded outcome at $REPEAT_COUNT consecutive iteration boundaries (limit $REPEAT_LIMIT)"
+  exit 9
 }
 # --- USAGE / COST OBSERVATION (the event stream's `usage` block) ---------------
 # OBSERVATION ONLY. Chief never asks a provider what a turn cost — it reads what the
@@ -2113,6 +2179,11 @@ while :; do
   # a merge lock, and the stall/budget arms below can exit — so a kill anywhere past
   # this point still resumes at the count this iteration reached.
   _prd_promote
+
+  # THE REPEAT RULE, AT THE SAME BOUNDARY (_repeat_boundary above). ABOVE the progress
+  # accounting on purpose: the outcome it judges is the one just banked, and its verdict
+  # must not be reachable from — or reset by — the counter that cannot see it.
+  _repeat_boundary "$i"
 
   # Progress check: did a story pass, or did a commit change something that is not
   # chief's own bookkeeping? (see _product_changed — the rule is on the DIFF)

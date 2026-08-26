@@ -146,7 +146,7 @@ Per tasklist:
 | field | |
 |---|---|
 | `name` | the tasklist stem (`tasks/<project>/<name>.json`) |
-| `outcome` | `merged` · `complete-unmerged` · `verify-failed` · `conflict` · `rebase-refused` · `rate-limited` · `provider-unavailable` · `paused` · `awaiting-review` · `no-work` · `plan-invalid` · `bad-repo` · `blocked` · `not-launched` · `failed` |
+| `outcome` | `merged` · `complete-unmerged` · `verify-failed` · `conflict` · `rebase-refused` · `rate-limited` · `provider-unavailable` · `paused` · `awaiting-review` · `no-work` · `plan-invalid` · `cannot-complete` · `bad-repo` · `blocked` · `not-launched` · `failed` |
 | `state` | the raw scheduler state (`done` · `failed` · `blocked` · `rate-limited` · `provider-unavailable` · `paused` · `awaiting-review` · `pending`) |
 | `status` | the driver's own status line, verbatim (`MERGED @<sha>`, `INCOMPLETE 2/5`, `REBASE-CONFLICT see …`) — the detail behind `outcome` |
 | `attempts` | attempts spent this run (`RETRY_MAX` governs the budget); `0` when it was never retried |
