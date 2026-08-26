@@ -73,3 +73,71 @@ state-only first, then that the run takes exactly `iters` (2) turns.
   before `.gitignore` gained `.chief/state/`), so chief self-hosting is exactly the repo
   where the formant pathology can occur — `git log --oneline -- .chief/state` shows
   `chore: driver-seeded run state` commits. That is the case US-2 must keep working.
+
+## US-2 — A legitimate bookkeeping commit is still allowed to happen
+
+`engine/agent.sh`:
+- `_touches_bookkeeping` (beside `_product_changed`) — does this tasklist name chief's
+  state directory in its `touches`? It changes NOTHING about the verdict. It exists so
+  the reclassification is not SILENT: when an iteration is scored BOOKKEEPING ONLY on a
+  tasklist that declared the directory, the next line says why the declaration bought
+  nothing. `touches` is a CONFLICT DOMAIN the scheduler serializes on (a conceptual tag,
+  often not even a path — see `docs/decisions/conflict-predictor-adoption-decision.md`),
+  not a scope grant; and a guard the tasklist under judgement can switch off is not a
+  guard. That is the whole argument for reporting instead of exempting.
+- Nothing was removed. The state paths are still written, committed and merged; they
+  just cannot carry the progress verdict alone.
+
+`test/bookkeeping-progress.sh` — the fixture grew a second tasklist, `bk-both`, and the
+fake agent now dispatches on `$name` with a shared `stamp()` (both fixtures write the
+SAME two state files; the only difference between them is whether anything else moved):
+- `bk-both` does real work (`src/step-$turn.txt`) AND stamps `notes`/`progress.txt` in
+  ONE commit, and flips its story only on turn 3 — so turns 1-2 can be scored progress by
+  nothing except the `src/` path in the diff. That is the exact arm the naive fix breaks.
+- Both tasklists declare `touches: [".chief/state"]`: it is the true shared domain (so
+  they serialize instead of tripping the under-tagged-touches audit, which was RIGHT),
+  and it puts them in the position criterion 3 asks about — so the run also asserts the
+  notice is printed.
+- Asserts the merged tree still carries the notes and the progress line, and the retired
+  `completed/bk-both.json` still carries `notes`.
+
+`docs/reference/tasklist-schema.md` — new bullet before the crossRepo one: progress is
+judged on the DIFF; `.chief/state/**`-only is bookkeeping; notes stay supported; work +
+notes in one commit scores on the work; `touches` cannot exempt; and the honest
+admission — **work whose entire product is `.chief/state/` is not a tasklist chief can
+drive to completion**, because every iteration of it scores as a stall.
+
+### Observed
+- `bookkeeping-progress`: PASS — bk-spin 2 turns / stall 2/2 / INCOMPLETE, bk-both **3
+  turns past its 2-iter budget → MERGED**, `Iteration 1: progress (0/1 passing)`, no
+  BOOKKEEPING ONLY in its log, notes + progress.txt on main.
+- REPRODUCED, twice, in `git clone --no-local` copies with the engine neutered:
+  the naive fix (`case "$f" in "$BOOKKEEPING_REL"*) return 1`) → *"the pairing case took
+  2 turns against a 2-iter budget"*; dropping the notice → *"reclassified as bookkeeping
+  SILENTLY"*.
+- `version-bump doc-sync boundary-demotion evidence-gate measured-bars noworkguard
+  ratelimit smoke` → 8 PASS, 0 FAIL.
+- `.chief/verify.sh` (static half): OK — `bash -n` clean, doc-links 0 dead vs 0 on main,
+  quality ratchet no regression (`single_use_functions 14 -> 16`, tol 2 — AT the
+  tolerance, so the next story adding two helpers to a changed file will trip it),
+  VERSION 0.8.96, DOC-SYNC PASS.
+- `shellcheck` still not installed on this host; verify skips it, CI enforces it.
+
+## Learnings for future iterations
+
+- **The quality ratchet is at its `single_use_functions` tolerance (+2 of 2).** US-3 adds
+  output, not helpers, if it can — or it should inline rather than extract.
+- **US-3's remaining surface, now that the two verdict lines are settled:** the progress
+  line is still `Iteration $i: progress ($now_pass/$(_total) passing). Continuing...` and
+  criterion 1 says that sentence must not be printable — but note `bk-both` legitimately
+  prints `progress (0/1 passing)` and MERGES three turns later, so "0 passing" is not by
+  itself the bug. What made formant's line a lie was `progress` over a state-only diff,
+  which no longer happens; what is left is to say WHAT advanced. Any rewording must keep
+  the prefixes `Iteration N: progress` and `Iteration N: no progress`
+  (`test/boundary-demotion.sh` and now `test/bookkeeping-progress.sh` both grep them).
+- **A second tasklist in a fixture repo moves `main` under the first one.** `git diff
+  main "$BR"` then reports the sibling's merged files as deletions on your branch — diff
+  against `git merge-base main "$BR"` instead. Same for a `git log` range.
+- **A fixture whose tasklists write the same files needs a shared `touches`**, or the
+  run ends with a legitimate under-tagged-touches warning and the two workers race on a
+  rebase. Sharing the domain serializes them and is the honest tag.

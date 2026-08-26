@@ -686,6 +686,28 @@ EOF
   return 1
 }
 
+# _touches_bookkeeping — does THIS tasklist declare chief's own state directory as one
+# of its `touches`? It changes nothing about the verdict: a state-only diff is scored as
+# no progress for every tasklist, because `touches` is a CONFLICT DOMAIN the scheduler
+# serializes on (a conceptual tag, frequently not even a path) and not a scope grant —
+# and a guard the tasklist under judgement can switch off is not a guard. What it buys
+# is that the reclassification is not SILENT: an author who wrote the state directory
+# into `touches` had a reason to think it was in scope, and gets told, at the moment it
+# costs them an iteration, rather than discovering it. See
+# docs/reference/tasklist-schema.md.
+_touches_bookkeeping() {
+  local e n
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    n="${e#./}"; n="${n%/}/"
+    case "$BOOKKEEPING_REL" in "$n"*) return 0 ;; esac   # `.chief` / `.chief/state` — covers it
+    case "$n" in "$BOOKKEEPING_REL"*) return 0 ;; esac   # a path INSIDE it
+  done <<EOF
+$(jq -r '.touches[]?' "$PRD_FILE" 2>/dev/null)
+EOF
+  return 1
+}
+
 # _prd_promote — bank the runtime pass-state to the DURABLE store ($PRD_STORE).
 #
 # Called at the ITERATION BOUNDARY, never mid-turn: the boundary is the one moment
@@ -2040,6 +2062,11 @@ while :; do
     # `git log` reads like chief lost it.
     if [ "$now_head" != "$prev_head" ]; then
       echo "Iteration $i: no progress — BOOKKEEPING ONLY (this iteration's commits touch nothing outside ${BOOKKEEPING_REL}) (stall $stall/$STALL_LIMIT)."
+      # Not silently reclassified: a tasklist that declared the state directory in its
+      # `touches` is told why that declaration did not exempt it (see _touches_bookkeeping).
+      if _touches_bookkeeping; then
+        echo "  NOTE: this tasklist lists ${BOOKKEEPING_REL%/} in \"touches\", which does NOT exempt it — \"touches\" is a scheduling domain, not a scope grant, and the rule is the same for every tasklist. Work whose entire product is ${BOOKKEEPING_REL%/} cannot be expressed as a tasklist; see docs/reference/tasklist-schema.md."
+      fi
     else
       echo "Iteration $i: no progress (stall $stall/$STALL_LIMIT)."
     fi

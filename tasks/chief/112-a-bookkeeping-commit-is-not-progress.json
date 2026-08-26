@@ -39,7 +39,8 @@
         "An iteration that makes real progress AND updates the state files scores as progress on the strength of the real change. A test covers this pairing explicitly, because the naive fix — ignore any commit touching `.chief/state/` — would break the normal case where both happen together.",
         "Where a tasklist's `touches` legitimately includes chief's own state layout, that is not silently reclassified. If this repo cannot express such a tasklist, say so in the docs rather than leaving it to be discovered."
       ],
-      "notes": null
+      "notes": "engine/agent.sh: _touches_bookkeeping + the NOTE printed beside a BOOKKEEPING ONLY verdict on a tasklist that declared the state dir in \"touches\" (reports, never exempts). Docs: the rule, the pairing, and the one case chief cannot express are now in docs/reference/tasklist-schema.md. test/bookkeeping-progress.sh gained the bk-both fixture (real work + a state stamp in ONE commit, no story flipped until the last turn): ran 3 turns past its 2-iter budget to MERGED, \"Iteration 1: progress (0/1 passing)\", no BOOKKEEPING ONLY, notes + progress.txt intact on main. REPRODUCED both new assertions against neutered clones: the naive fix (\"any commit touching .chief/state/ is bookkeeping\") stops bk-both at 2 turns; dropping the notice trips the silent-reclassification assertion. Green: bookkeeping-progress, smoke, noworkguard, ratelimit, boundary-demotion, evidence-gate, measured-bars, version-bump, doc-sync — 8 named tests + the new one, 0 failed. .chief/verify.sh static half OK (bash -n clean, doc-links 0 dead vs 0 on main, quality ratchet no regression, VERSION 0.8.96, doc-sync PASS). shellcheck not installed on this host (verify skips it; CI enforces).",
+      "passes": true
     },
     {
       "id": "US-3",

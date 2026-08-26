@@ -140,6 +140,30 @@ Notes:
   it the story is marked `unverified` rather than `passes` and the branch stops. Chief
   does not judge whether the observation MEETS the bar — see
   [verify-hook.md](verify-hook.md) for which layer checks what.
+- **Progress is judged on the DIFF, and chief's own state directory does not count.**
+  An iteration advances the tasklist if a story's `passes` rose, or if its commits
+  touched at least one path outside `.chief/state/` (`$CHIEF_STATE_DIR`). A commit whose
+  entire diff is `.chief/state/**` is bookkeeping: it scores as **no progress**, the
+  stall counter increments exactly as it would for an iteration that committed nothing,
+  and the log says `BOOKKEEPING ONLY` so the commit does not look lost. The rule reads
+  the diff and never the commit message — the same discipline the no-work guard applies
+  to a claim of *completion*, applied to a claim of *progress*. (Measured in `formant`
+  on 2026-08-24: a tasklist blocked on a human measurement re-stamped its notes every
+  turn and reached iteration 11 of a 5-iteration budget.)
+  **Writing notes and progress records stays fully supported** — they are how the next
+  iteration and a human reader learn what was tried, and an iteration that does real
+  work *and* updates them scores as progress on the strength of the real work. The state
+  paths are not subtracted from anything; they simply cannot carry the verdict alone.
+  **`touches` cannot exempt a tasklist from this**, and this is the one case chief
+  genuinely cannot express: work whose *entire product* is content under
+  `.chief/state/` is not a tasklist chief can drive to completion, because every
+  iteration of it scores as a stall. `touches` is a conflict domain the scheduler
+  serializes on — a conceptual tag, frequently not even a path — not a scope grant, and
+  a guard the tasklist under judgement could switch off would not be a guard. It is not
+  silent about it: an iteration scored `BOOKKEEPING ONLY` on a tasklist that *did* list
+  the state directory in `touches` prints a note saying why the declaration made no
+  difference. Do such work by hand outside a run, or give the tasklist a real product
+  (the engine, `templates/`, `docs/`) to change.
 - **A criterion must be satisfiable from this tasklist's worktree.** One that names
   another repo is stopped before the run starts (`UNSATISFIABLE`) unless the tasklist
   declares `crossRepo`; `chief lint` reports the same finding while it is still a text
