@@ -28,7 +28,8 @@
         "The rule is stated in terms of the diff, not the message. An agent that writes a plausible commit subject over a state-only diff must still be scored as stalled — this is the same discipline the false-complete guard already applies to a claim of completion.",
         "Counterfactual test: replay the formant shape — N consecutive commits touching only `.chief/state/` with the story count unmoved — and assert the run stops at the stall threshold rather than extending. Today it reaches iteration 11 of a 5-iteration budget."
       ],
-      "notes": null
+      "notes": "engine/agent.sh: progress is now a story flip OR a net diff touching a path outside $CHIEF_STATE_DIR (_product_changed, tree-to-tree, message-ignored). New test/bookkeeping-progress.sh replays the formant shape: 2 turns of state-only commits with implementation-shaped subjects -> stops at the 2-iter budget (stall 2/2). REPRODUCED against a neutered engine in a clone: 20 turns, log reading \"Iteration 11: progress (0/1 passing)\". Green: bookkeeping-progress, smoke, noworkguard, ratelimit, boundary-demotion, evidence-gate, measured-bars, version-bump, doc-sync — 9 passed, 0 failed; .chief/verify.sh static half OK (bash -n clean, quality ratchet no regression, VERSION 0.8.95). shellcheck not installed on this host (verify skips it; CI enforces).",
+      "passes": true
     },
     {
       "id": "US-2",
@@ -38,7 +39,8 @@
         "An iteration that makes real progress AND updates the state files scores as progress on the strength of the real change. A test covers this pairing explicitly, because the naive fix — ignore any commit touching `.chief/state/` — would break the normal case where both happen together.",
         "Where a tasklist's `touches` legitimately includes chief's own state layout, that is not silently reclassified. If this repo cannot express such a tasklist, say so in the docs rather than leaving it to be discovered."
       ],
-      "notes": null
+      "notes": "engine/agent.sh: _touches_bookkeeping + the NOTE printed beside a BOOKKEEPING ONLY verdict on a tasklist that declared the state dir in \"touches\" (reports, never exempts). Docs: the rule, the pairing, and the one case chief cannot express are now in docs/reference/tasklist-schema.md. test/bookkeeping-progress.sh gained the bk-both fixture (real work + a state stamp in ONE commit, no story flipped until the last turn): ran 3 turns past its 2-iter budget to MERGED, \"Iteration 1: progress (0/1 passing)\", no BOOKKEEPING ONLY, notes + progress.txt intact on main. REPRODUCED both new assertions against neutered clones: the naive fix (\"any commit touching .chief/state/ is bookkeeping\") stops bk-both at 2 turns; dropping the notice trips the silent-reclassification assertion. Green: bookkeeping-progress, smoke, noworkguard, ratelimit, boundary-demotion, evidence-gate, measured-bars, version-bump, doc-sync — 8 named tests + the new one, 0 failed. .chief/verify.sh static half OK (bash -n clean, doc-links 0 dead vs 0 on main, quality ratchet no regression, VERSION 0.8.96, doc-sync PASS). shellcheck not installed on this host (verify skips it; CI enforces).",
+      "passes": true
     },
     {
       "id": "US-3",
@@ -49,7 +51,8 @@
         "Where an agent's own output asks to be stopped — formant's said `re-parking it would be the honest call` — that is worth surfacing rather than burying at iteration 10 of a log. Judge whether chief can act on it at all; if it cannot be detected reliably, record that finding rather than implementing a fragile prose match, and do not let it become the kind of undated grep `111` is fixing.",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
       ],
-      "notes": null
+      "notes": "engine/agent.sh: the progress line now NAMES what advanced — \"Iteration 1: progress — 1 path outside .chief/state/ changed (e.g. src/step-1.txt) (0/1 passing). Continuing...\" — so \"progress (0/2 passing)\" is no longer printable (_product_changed records $PRODUCT_COUNT/$PRODUCT_FIRST; $prev_ids beside $prev_pass names the story that flipped). New $STALL_FILE (.chief/state/.stalled), the twin of $NOTURN_FILE, carries the give-up reason + the agent's quoted closing words; driver.sh puts it in the INCOMPLETE headline, the tasklist.incomplete detail, and a new \"⛔ STOPPED ADVANCING\" summary block kept apart from VERIFY-FAILED and PROVIDER UNAVAILABLE. Observed live: \"!! bk-spin INCOMPLETE — stalled: 2 of the last 2 iteration(s) committed nothing outside .chief/state/ — bookkeeping, not progress (budget 2 iters, stall limit 2)\" with formant's sentence quoted under it. Criterion 3 is a RECORDED FINDING, not a prose match (docs/reference/tasklist-schema.md + the stall arm's comment): no reliable signal exists, the only sound form is a protocol token like <promise>COMPLETE</promise>, and the stall counter already reaches the same stop — so chief QUOTES the words and branches on nothing. Green: bookkeeping-progress, smoke, noworkguard, ratelimit, boundary-demotion, evidence-gate, measured-bars, version-bump, doc-sync, bystander, provider-unavailable — 11 passed, 0 failed. Full test/all.sh: 59 passed, 3 failed, 6 skipped — machine-budget, decision, retry-on-failure, all three PRE-EXISTING (verified failing identically on a clean clone of main) and all three outside the merge gate. All 5 new assertions REPRODUCED against neutered clones. .chief/verify.sh: OK (allowing merge) — bash -n clean, doc-links 0 dead vs 0 on main, quality ratchet no regression (single_use_functions 38 -> 40, tol 2 — this story added no functions), VERSION 0.8.97, DOC-SYNC PASS, chief lint 5 tasklists clean. shellcheck not installed on this host (verify skips it; CI enforces).",
+      "passes": true
     }
   ]
 }

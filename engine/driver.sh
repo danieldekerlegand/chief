@@ -2749,9 +2749,21 @@ run_worker() {
     [ -n "$unmeasured" ] && { unmeasured_stop "$unmeasured"; return 0; }
     if [ "$remaining" != "0" ]; then
       pending_record "$name" "$wt" 1   # "left in worktree for review" used to name nothing
+      # WHY THE LOOP GAVE UP, in the words of the loop that gave up (agent.sh's
+      # $STALL_FILE). Without it INCOMPLETE says only "the iteration budget ran out",
+      # which is true of a tasklist that was working and ran short AND of one that
+      # stopped advancing on iteration two and spent the rest of the budget churning —
+      # and those need opposite responses (raise `iters` vs go and read what blocked
+      # it). Kept in $STATE so the end-of-run summary can render it after the worktree
+      # is gone; first line is the reason, the rest is the agent's own last words.
+      local stall_why=""
+      if [ -s "$wtstate/.stalled" ]; then
+        cp "$wtstate/.stalled" "$STATE/$name.stalled" 2>/dev/null || true
+        stall_why="$(head -1 "$wtstate/.stalled" 2>/dev/null || true)"
+      fi
       worker_park incomplete \
-        "$(( total - remaining ))/$total stories passing when the iteration budget ran out${PENDING_PHRASE:+ — worktree holds $PENDING_PHRASE}" \
-        "!! $name INCOMPLETE — branch $branch left in worktree for review"
+        "$(( total - remaining ))/$total stories passing — ${stall_why:-the iteration budget ran out}${PENDING_PHRASE:+ — worktree holds $PENDING_PHRASE}" \
+        "!! $name INCOMPLETE — ${stall_why:-the iteration budget ran out}; branch $branch left in worktree for review"
       pending_say "$name"; return 0
     fi
     # Passing stories prepare a decision brief; they are not the operator's
@@ -2964,7 +2976,8 @@ rm -f "$LIMIT_PAUSE_FILE"
 rm -f "$STATE/.cosched"     # the co-scheduling relation is per-run, not cumulative
 for n in $NAMES; do
   set_state "$n" pending
-  rm -f "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
+  rm -f "$STATE/$n.stalled" \
+        "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
         "$STATE/$n.files" "$STATE/$n.touches"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
 done
@@ -3319,7 +3332,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -3342,6 +3355,9 @@ for n in $NAMES; do
   # Collected off the STATUS, not the scheduler state: a refusal is 'failed' like any
   # other, and the summary block below is what separates it from one worth re-running.
   case "$(cat "$STATE/$n.status" 2>/dev/null || echo)" in REBASE-REFUSED*) refused="$refused $n" ;; esac
+  # Collected off the FILE, not the status: INCOMPLETE is one status covering two very
+  # different stops, and only agent.sh knows which one this was.
+  [ -s "$STATE/$n.stalled" ] && stalled="$stalled $n"
   # The merge phase parks the operator's uncommitted work for the length of its
   # critical section (merge_stash_push). This file exists only when giving it back
   # could not be done cleanly — the entry was KEPT, so the block below is the run's
@@ -3436,6 +3452,31 @@ if [ -n "$paused" ]; then
   # lookup of a name that never existed, which under `set -u` kills the run in
   # its own summary. Brace any $var butted against non-ASCII punctuation.
   [ -n "$still" ] && echo "    (never launched, held by the limit pause: ${still}— they run on the next 'chief run')"
+fi
+# THE AGENT STOPPED ADVANCING. Its own block for the reason the provider one below has
+# its own block: three unrelated causes reported as one red line is what sends an
+# operator to re-scope work that was never the problem. On 2026-08-24 formant's
+# `56-neural-synth-ship-flip` was blocked on a measurement only a human could take, and
+# the run reported the same nameless INCOMPLETE a tasklist gets when it was working
+# well and simply ran out of budget — the two need opposite responses. So the three are
+# kept apart and each says what it is:
+#   here                    the agent was RUNNING and stopped ADVANCING. Read why.
+#   VERIFY-FAILED (above)   the work exists; the GATE said no. Fixable, and retried.
+#   PROVIDER UNAVAILABLE    no turn was ever taken. Nothing is known about the work.
+if [ -n "$stalled" ]; then
+  echo "   ⛔ STOPPED ADVANCING — $(set -- $stalled; echo $#) tasklist(s) ran out of budget WITHOUT making progress. Not a failed gate, and not an unreachable provider:"
+  for n in $stalled; do
+    printf '    · %-30s %s\n' "$n" "$(head -1 "$STATE/$n.stalled")"
+    # The agent's own closing words, quoted verbatim — chief matches nothing in them
+    # and decides nothing from them. They were previously discoverable only by reading
+    # to the bottom of a log that had already scrolled: formant's agent said "further
+    # iterations on this tasklist can only add churn; re-parking it would be the honest
+    # call" and was re-driven five more times.
+    sed -n '2,$p' "$STATE/$n.stalled" 2>/dev/null | sed 's/^/         /'
+  done
+  echo "    Raising \`iters\` does NOT fix these — the budget was not the binding constraint."
+  echo "    Read the words above and the branch: the usual causes are a blocker only a human can"
+  echo "    clear, and a story whose acceptance criteria cannot be met from this worktree."
 fi
 # THE PROVIDER NEVER SERVED US. Reported here, next to the other holds and never among
 # the failures, because that is precisely the misread this exists to stop: on
