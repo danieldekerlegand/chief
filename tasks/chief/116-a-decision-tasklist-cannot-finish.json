@@ -1,0 +1,58 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/116-a-decision-tasklist-cannot-finish",
+  "description": "**`106` shipped the operator surface and the halt, and never connected them. A decision tasklist therefore cannot complete end to end, and the first real one has proved it.**\n\nMeasured on `lugh/460-commercial-vl-base-anchor`, 2026-08-25. It ran green — 3,892 tests passed, ruff clean, verification recorded — reached `AWAITING-DECISION 2/2`, and stopped. It cannot be finished by any invocation of `chief decide`:\n\n**The verdict is written and never read.** `cmd_decide` writes `.verdict={choice,note,recordedAt}` into the tasklist JSON. `grep -rn 'verdict.choice'` across `engine/` and `bin/chief` returns exactly one hit — that write. `driver.sh:2668` then halts unconditionally on every subsequent run:\n\n```bash\nif is_decision_tasklist \"$wtstate/prd.json\"; then\n  worker_park awaiting-decision \"the decision brief is prepared; waiting for a human verdict\"\n  return 0\nfi\n```\n\nNo check for an existing verdict. So recording one leaves the tasklist in exactly the state it was in, plus a stale field.\n\n**Neither available action fits.** `chief decide` requires `--retire ID` or `--unpark`. `--retire` REFUSES `460` because three live tasklists depend on it (`450`, `500`, `530`) — correct behaviour, wrong outcome. `--unpark` clears a park that does not exist, because `AWAITING-DECISION` is not `parked: true`.\n\n**And a decision tasklist can carry code.** `106` assumed the deliverable IS the verdict. `460` produced **2,209 insertions across 16 files** — a `configs/kft-base-models.json` row, a 453-line `shippable_defaults.py`, 655 lines of tests — all gated on a licence call a human must make. That is an implementation waiting on a decision, which is a legitimate and probably common shape, and the mechanism has no path to merge it after the verdict.\n\n**Separately, the run reporter calls it a failure.** The summary prints `460-commercial-vl-base-anchor failed [AWAITING-DECISION 2/2]`, and five downstream tasklists then report `BLOCKED … which FAILED in this run`. `AWAITING-DECISION` is a successful terminal state — the status file says so and the log says *\"stories are complete\"*. Treating it as failure blocks dependents on a tasklist that did its job.\n\nThis is the same family as `112`, `113` and `115`: chief mis-classifying an outcome. It is the sharpest instance, because here the feature works and only its result is mishandled.",
+  "touches": [
+    "engine/driver.sh",
+    "bin/chief",
+    "engine/decision.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
+  "iters": 8,
+  "warmup": [
+    "sed -n '2660,2680p' engine/driver.sh",
+    "sed -n '/^cmd_decide()/,/^}/p' bin/chief | head -45",
+    "grep -rn 'verdict.choice' engine/ bin/chief || echo 'the writer is the only occurrence'",
+    "cat engine/decision.sh",
+    "grep -n 'AWAITING-DECISION' engine/driver.sh"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A recorded verdict is read, and the tasklist proceeds",
+      "acceptanceCriteria": [
+        "`driver.sh`'s decision halt checks for a recorded verdict before parking. With one present the tasklist continues to the ordinary merge path; without one it halts as it does today.",
+        "The verdict's shape is read through one shared predicate in `engine/decision.sh`, beside `is_decision_tasklist`, so the writer in `cmd_decide` and the reader in the driver cannot drift. A second definition of 'has a verdict' is how this breaks again.",
+        "A stale verdict cannot silently authorise later work. If the stories change after a verdict is recorded, the verdict must not carry over — bind it to what it approved, the way `review.sh` binds a plan verdict by checksum and refuses to let a re-planned story inherit the old approval.",
+        "A test drives a decision tasklist through halt → `chief decide` → resume → merge. That end-to-end path has never once executed, which is why the gap survived shipping."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-2",
+      "title": "The action set covers a decision that carries code",
+      "acceptanceCriteria": [
+        "`chief decide` gains an action for 'verdict recorded, let the work merge'. `--retire` and `--unpark` both assume the deliverable is the verdict itself; the first decision tasklist to run in anger produced 2,209 insertions across 16 files gated on a licence call, and neither flag fits that shape. An implementation waiting on a decision is legitimate and probably common.",
+        "The existing actions keep their meanings exactly. `--retire` still refuses when live dependents exist — that refusal is correct and caught a real case — and `--unpark` still clears a park.",
+        "A NEGATIVE verdict is expressible on a tasklist carrying code: the operator declines, and the branch does NOT merge. A mechanism that can only say yes is not a decision point, and this is the story where that is easiest to get wrong.",
+        "The verdict, its note and its action land in the event stream, so a completed run records which human decided what. `106` US-3 asked for this and nothing consumed it."
+      ],
+      "notes": null
+    },
+    {
+      "id": "US-3",
+      "title": "AWAITING-DECISION stops being reported as a failure",
+      "acceptanceCriteria": [
+        "The run summary reports `AWAITING-DECISION` as a distinct terminal state, not `failed`. It currently prints `failed [AWAITING-DECISION 2/2]` — contradicting itself in one line.",
+        "A dependent of a tasklist awaiting a decision reports that it waits on a DECISION, not that its dependency FAILED. Five tasklists in the observed run were told a green tasklist had failed.",
+        "Whether a dependent should block at all is decided deliberately and documented. Blocking is defensible — the decision may change what the dependency produced — but it must be a stated policy rather than a side effect of the failure label.",
+        "`chief status` and `chief ps` agree with the summary. One surface calling it failed while the status file says `AWAITING-DECISION 2/2` is the inconsistency to remove.",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
+      ],
+      "notes": null
+    }
+  ]
+}
