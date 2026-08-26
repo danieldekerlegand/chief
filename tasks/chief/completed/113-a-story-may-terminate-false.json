@@ -32,7 +32,17 @@
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
       "passes": true,
-      "notes": "test/terminal-false.sh: PASS — a declared negative settles, survives into completed/, is never re-driven; an undeclared story untouched; an unmeasured declaration settles nothing. Corpus assertion green: 40 existing tasklists classify identically before and after. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, measured-bars PASS, evidence-gate PASS; version-bump PASS (VERSION 0.8.98 covers every engine/bin change on HEAD); doc-sync PASS (README states v0.8.98). shellcheck not installed on this host — CI enforces it. | FOLLOW-UP (merge-gate fix): the liveliness record now CARRIES the negative count — `negative` was absent from LIVE_FIELDS, so live_set dropped it silently and live_prog folded a delivered negative into `passing`, the exact collapse this story forbids. live.sh gained the field, monitor.sh's live_prog renders `pass[+neg]/total` like stories(), and terminal_live_counts is now the one writer of the three numbers (the two call sites disagreed: seeding published passed, the boundary published passed+negative). Observed: full `.chief/verify.sh` exit 0 — bystander block 50/50 tests PASS (terminal-false, repeat-stop, retire-negative, liveliness among them), doc-sync PASS (README v0.9.1 == VERSION 0.9.1), check-doc-links 0 dead, quality ratchet OK (function_length_max 587->598 tol 15, single_use_functions 82->84 tol 2, no metric regressed); test/monitor.sh MONITOR PASS run separately (it is out of the merge gate)."
+      "notes": "test/terminal-false.sh: PASS — a declared negative settles, survives into completed/, is never re-driven; an undeclared story untouched; an unmeasured declaration settles nothing. Corpus assertion green: 40 existing tasklists classify identically before and after. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, measured-bars PASS, evidence-gate PASS; version-bump PASS (VERSION 0.8.98 covers every engine/bin change on HEAD); doc-sync PASS (README states v0.8.98). shellcheck not installed on this host — CI enforces it. | FOLLOW-UP (merge-gate fix): the liveliness record now CARRIES the negative count — `negative` was absent from LIVE_FIELDS, so live_set dropped it silently and live_prog folded a delivered negative into `passing`, the exact collapse this story forbids. live.sh gained the field, monitor.sh's live_prog renders `pass[+neg]/total` like stories(), and terminal_live_counts is now the one writer of the three numbers (the two call sites disagreed: seeding published passed, the boundary published passed+negative). Observed: full `.chief/verify.sh` exit 0 — bystander block 50/50 tests PASS (terminal-false, repeat-stop, retire-negative, liveliness among them), doc-sync PASS (README v0.9.1 == VERSION 0.9.1), check-doc-links 0 dead, quality ratchet OK (function_length_max 587->598 tol 15, single_use_functions 82->84 tol 2, no metric regressed); test/monitor.sh MONITOR PASS run separately (it is out of the merge gate).",
+      "diffSize": {
+        "files": 20,
+        "lines": 1379,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-2",
@@ -45,7 +55,17 @@
         "N is configurable with a stated default, and the comparison is on the story's recorded outcome rather than on commit count — `283` produced a commit every iteration and each one was real, just not new"
       ],
       "passes": true,
-      "notes": "test/repeat-stop.sh: PASS — the 283 shape (a fixed finding re-recorded while real product files commit every iteration) stops at 3 turns as CANNOT-COMPLETE, names US-2, quotes the finding and both fixes; the same fixture with a measurement that MOVES runs 4 turns and MERGES; REPEAT_LIMIT=2 stops at 2 turns end to end through `chief run`. 112-independence asserted in the same run: the log carries 'Iteration 2: progress' and no 'no progress' line. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.8.99), doc-sync PASS (README v0.8.99), terminal-false PASS, measured-bars PASS, evidence-gate PASS, bookkeeping-progress PASS, unverified-resume PASS, boundary-demotion PASS, stall-flag PASS, five-cases PASS, headless PASS, events PASS, liveliness PASS, pause PASS, research PASS, worktree-pending PASS, limitstate PASS, provider-unavailable PASS, plan-review PASS, teardown PASS, noworkguard-jsononly PASS, check-doc-links 0 dead references. test/retry-on-failure.sh FAILS ('transient took 1 attempt(s), want 2') — PRE-EXISTING, reproduced identically on the base commit d61be82 from a clean clone, and it is not in the merge gate. shellcheck not installed on this host — CI enforces it."
+      "notes": "test/repeat-stop.sh: PASS — the 283 shape (a fixed finding re-recorded while real product files commit every iteration) stops at 3 turns as CANNOT-COMPLETE, names US-2, quotes the finding and both fixes; the same fixture with a measurement that MOVES runs 4 turns and MERGES; REPEAT_LIMIT=2 stops at 2 turns end to end through `chief run`. 112-independence asserted in the same run: the log carries 'Iteration 2: progress' and no 'no progress' line. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.8.99), doc-sync PASS (README v0.8.99), terminal-false PASS, measured-bars PASS, evidence-gate PASS, bookkeeping-progress PASS, unverified-resume PASS, boundary-demotion PASS, stall-flag PASS, five-cases PASS, headless PASS, events PASS, liveliness PASS, pause PASS, research PASS, worktree-pending PASS, limitstate PASS, provider-unavailable PASS, plan-review PASS, teardown PASS, noworkguard-jsononly PASS, check-doc-links 0 dead references. test/retry-on-failure.sh FAILS ('transient took 1 attempt(s), want 2') — PRE-EXISTING, reproduced identically on the base commit d61be82 from a clean clone, and it is not in the merge gate. shellcheck not installed on this host — CI enforces it.",
+      "diffSize": {
+        "files": 16,
+        "lines": 628,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-3",
@@ -58,7 +78,18 @@
         "Mutation-check it: a tasklist with an ordinary unfinished story is refused; one with a declared terminal-false story is retired; a tasklist with NO evidence on the terminal-false story is refused. A retirement path that cannot be shown to refuse is a way to lose work"
       ],
       "passes": true,
-      "notes": "test/retire-negative.sh: PASS — a delivered-plus-measured-negative tasklist retires (record filed, mergedToMain stamped when the branch is contained in main, finding citable at .retiredOnNegative.stories[]); ordinary unfinished work, an unmeasured declaration, an all-passing tasklist and a live dependent with no merge are each REFUSED with the story named and the tasklist left in place; the union of tasklist declaration + run snapshot retires. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; retire-negative PASS, terminal-false PASS (40-tasklist corpus identical), repeat-stop PASS, smoke PASS, noworkguard PASS, ratelimit PASS, doc-sync PASS (README v0.9.0), version-bump PASS (VERSION 0.9.0), check-doc-links 0 dead references. shellcheck not installed on this host — CI enforces it."
+      "notes": "test/retire-negative.sh: PASS — a delivered-plus-measured-negative tasklist retires (record filed, mergedToMain stamped when the branch is contained in main, finding citable at .retiredOnNegative.stories[]); ordinary unfinished work, an unmeasured declaration, an all-passing tasklist and a live dependent with no merge are each REFUSED with the story named and the tasklist left in place; the union of tasklist declaration + run snapshot retires. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; retire-negative PASS, terminal-false PASS (40-tasklist corpus identical), repeat-stop PASS, smoke PASS, noworkguard PASS, ratelimit PASS, doc-sync PASS (README v0.9.0), version-bump PASS (VERSION 0.9.0), check-doc-links 0 dead references. shellcheck not installed on this host — CI enforces it.",
+      "diffSize": {
+        "files": 13,
+        "lines": 681,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     }
-  ]
+  ],
+  "mergedToMain": "716c9e4"
 }
