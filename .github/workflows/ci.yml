@@ -203,7 +203,7 @@ jobs:
       - name: Roadmap -> tasklists generator (contract enforced, conventions correct)
         run: bash test/gen.sh
 
-      - name: Doc sync (README's version string + command table vs the engine)
+      - name: Doc sync (README + ROADMAP version strings, README's command table, ROADMAP's coverage of completed/)
         run: bash test/doc-sync.sh
 
       - name: Dry-run schedule of the bundled example

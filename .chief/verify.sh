@@ -109,12 +109,18 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   fi
 fi
 
-# ── 3) Docs — README must not lag the engine (version string + command table) ─
+# ── 3) Docs — README and ROADMAP must not lag the engine ──────────────────
 # Cheap grep/sed/awk check, so it runs on any branch that could have caused the
-# drift: a VERSION bump, a CLI surface change, or a README edit itself.
-if touches '^(bin/|engine/|VERSION$|README\.md$)'; then
-  say "docs — test/doc-sync.sh (README vs VERSION + bin/chief dispatch)"
-  bash test/doc-sync.sh || block "README is out of sync with the engine"
+# drift: a VERSION bump, a CLI surface change, or a README/ROADMAP edit itself.
+# tasks/chief/completed/ is in the trigger because RETIRING a tasklist is the
+# other way the roadmap goes stale — 86 gated the README and stopped there, and
+# ROADMAP.md is the file that then rotted (v0.8.0 beside a VERSION of 0.8.94,
+# 21 merged bands invisible). Retirement lands on the base branch rather than a
+# tasklist branch, so CI is where that half usually bites; the trigger is here
+# for the branch that does carry a completed/ record.
+if touches '^(bin/|engine/|VERSION$|README\.md$|ROADMAP\.md$|tasks/chief/completed/)'; then
+  say "docs — test/doc-sync.sh (README + ROADMAP vs VERSION, bin/chief dispatch, completed/)"
+  bash test/doc-sync.sh || block "README or ROADMAP is out of sync with the engine"
 fi
 
 # ── 4) Tasklists — every changed tasks/chief/*.json must be valid JSON ──────
