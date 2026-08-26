@@ -188,3 +188,68 @@ dead references. `shellcheck` is absent on this host; CI enforces it.
 - **A `rm -f "$VAR/..."` inside a heredoc can trip a tool-level safety guard** when the
   file is written via `cat <<'SH'`. Writing the file directly (the Write tool) avoids
   it; the code itself is fine.
+
+## Iteration — merge-gate fix (all three stories already passing)
+
+Every story read passes:true and the tracked tasklist agreed, but `.chief/verify.sh`
+came back BLOCK on the code-quality ratchet, so the branch could not have merged.
+Two metrics had regressed, and chasing the second one turned up a real defect in
+US-1's own second acceptance criterion.
+
+**The defect.** `live_set` silently ignores keys that are not in `LIVE_FIELDS`
+(engine/live.sh, `# ignore unknown keys`), and `negative` was never added there. So
+the count run_worker handed it never reached disk, and `live_prog` — the jq-free
+reader `chief ps` falls back to when it cannot read a prd.json — rendered a
+delivered negative folded into `passing`. That is precisely "this story is done and
+the answer is no" reading as "this story passed", which US-1 exists to prevent.
+`stories()` was right only because it re-reads the prd.json; the record beside it
+was not. Fixed by making `negative` a real field, rendering `pass[+neg]/total` in
+`live_prog` exactly as `stories()` does, and collapsing the two ad-hoc `live_set`
+writes into one writer — they disagreed about what `passing` meant (seeding
+published the passed count, the boundary published passed PLUS negatives).
+
+**The ratchet.** `function_length_max` 587 -> 612 (tol 15) and
+`single_use_functions` 81 -> 84 (tol 2). Both fixed by putting code where it
+already belonged rather than by loosening anything:
+  · `prd_state_open` -> engine/terminal.sh, where both of its halves already live
+    (`prd_state_source` and `terminal_open`). One less single-use function in the
+    driver, and the move is the honest home for it.
+  · the CANNOT-COMPLETE arm -> `cannot_complete_stop` in engine/repeat.sh, beside
+    the rule that raises it, exactly as `unmeasured_stop` sits in engine/measure.sh.
+    driver.sh now sources repeat.sh (idempotent: REPEAT_LIMIT honours the env and
+    the counters start at zero, so agent.sh sourcing it too is free).
+  · `terminal_live_counts` has TWO call sites, so it is not a single-use function —
+    the deduplication and the metric point the same way here.
+Final: function_length_max 587 -> 598, single_use_functions 82 -> 84, ratchet OK.
+
+**Observed.** `.chief/verify.sh` exit 0: bystander block 50/50 tests PASS
+(terminal-false, repeat-stop, retire-negative and liveliness among them), doc-sync
+PASS (README **v0.9.1** == VERSION 0.9.1), check-doc-links 0 dead references,
+quality ratchet OK. `bash -n` clean. `bin/chief lint`: 4 tasklists clean.
+test/monitor.sh MONITOR PASS, run separately because it is deliberately out of the
+merge gate. shellcheck is not installed on this host — CI enforces it.
+
+### Learnings for future iterations
+
+- **`live_set` drops unknown keys silently.** Adding a field to the liveliness
+  record is THREE edits in engine/live.sh, not one: `LIVE_FIELDS`, `LIVE_NUMERIC`
+  if it is a number, and the explicit `local _lv_*` list in `live_set` (they are
+  listed by hand so per-field scratch vars stay out of the caller's globals).
+  Miss any of them and the write looks fine and lands nothing.
+- **Two readers of the same progress number must render it the same way.**
+  `stories()` re-reads the prd.json and `live_prog` reads the record; whichever a
+  caller happens to reach decided whether a negative looked like a pass.
+- **`VERSION` re-stales on EVERY engine commit.** A follow-up fix touching
+  `engine/` after the story commit that bumped it needs its own bump — and the
+  README's bold `**vX.Y.Z**` in the same commit, or doc-sync just replaces the
+  version-bump block with its own.
+- **The quality ratchet reads the WORKING TREE, so `bash engine/quality.sh ratchet`
+  is a fast pre-check** — seconds, versus the ~10 minutes the full verify takes.
+  Run it before the suite whenever a change grows a function or adds a helper.
+  `function_length_max` counts RAW LINE SPAN, comments and blanks included, so in
+  this codebase a well-commented addition to a long function is what trips it; the
+  fix is to move the block somewhere it belongs, not to strip the comments.
+- **A helper extracted to a NEW file on the branch does not count against
+  `single_use_functions`** (new files are deferred to the baseline axis), but that
+  is a side effect — the reason to put `cannot_complete_stop` in repeat.sh is that
+  `unmeasured_stop` is already in measure.sh for the same reason.

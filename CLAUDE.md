@@ -300,6 +300,25 @@ VERSION              # engine version — bump on any engine/bin/install change
   empties (`engine/status.sh`'s `read_records`). Relatedly, `read -r -d '' V <<EOF` strips leading
   whitespace and *keeps* the final newline: `IFS= read -r -d ''` plus `V="${V%$'\n'}"` before
   comparing against a `$( )` capture.
+- **The quality RATCHET is a merge gate, and it reads the WORKING TREE.**
+  `bash engine/quality.sh ratchet` answers in seconds what the full `.chief/verify.sh`
+  takes ~10 minutes to tell you, and it needs no commit — run it the moment a change
+  grows a function or adds a helper. `function_length_max` counts **raw line span**,
+  comments and blanks included, so in a codebase commented like this one a well-argued
+  addition to a long function is what trips it; the fix is to move the block somewhere
+  it belongs (`unmeasured_stop` lives in `engine/measure.sh`, not in the driver arm that
+  calls it), never to strip the comments. `single_use_functions` counts helpers with
+  exactly one call site, so extracting *and* deduplicating in one pass is the move that
+  satisfies both metrics at once.
+- **`live_set` DROPS keys it does not know, silently** (`engine/live.sh`, `# ignore
+  unknown keys`). Adding a field to the liveliness record is **three** edits, not one:
+  `LIVE_FIELDS`, `LIVE_NUMERIC` if it is a number, and the hand-written `local _lv_*`
+  list inside `live_set` (explicit so per-field scratch vars stay out of the caller's
+  globals — driver.sh and agent.sh both source the file). Miss one and the write looks
+  perfectly healthy and lands nothing. Relatedly, `stories()` and `live_prog` in
+  `engine/monitor.sh` render the SAME progress number from two different sources; a
+  change to one is a change to both, or which reader a caller happens to reach decides
+  what the operator sees.
 - **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
   after one inside a `jq -n '…'` program parses as an expression and silently replaces the
   field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in
