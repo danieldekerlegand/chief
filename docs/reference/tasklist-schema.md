@@ -125,6 +125,12 @@ work run to completion by a chain of agent iterations.
                                          //   claimed a bar chief cannot evaluate and
                                          //   recorded no observation, so it is neither
                                          //   passing nor silently ignored
+      // "terminalFalse": true           // OPT-IN, written BY HAND when the tasklist is
+                                         //   authored: a NEGATIVE finding on this story
+                                         //   is a deliverable, not a failure to deliver.
+                                         //   The story is DONE once it records the
+                                         //   measurement behind the answer, and `passes`
+                                         //   stays false because the answer is false
     }
   ]
 }
@@ -140,6 +146,41 @@ Notes:
   it the story is marked `unverified` rather than `passes` and the branch stops. Chief
   does not judge whether the observation MEETS the bar — see
   [verify-hook.md](verify-hook.md) for which layer checks what.
+- **A story may declare that FALSE is its terminal answer** — `"terminalFalse": true`.
+  Some stories are verifications: *"check whether the commission→deploy flow completes,
+  honestly."* When the honest answer is **no**, that story has delivered its work and
+  the finding is the output. Without this field chief has exactly one notion of done —
+  every story `passes:true` — so such a tasklist can never complete. (Measured on
+  cuneiform `283-nixos-bare-metal-vpn-topology-target`: 63 commits, 59 iterations and
+  **42 consecutive identical measurements** before a human read the agent's own note
+  saying the tasklist needed manual retirement.)
+
+  A story is **settled** — the tasklist may stop asking about it — when either:
+
+  | state | `passes` | `terminalFalse` | `notes` | settled? |
+  |---|---|---|---|---|
+  | delivered | `true` | — | — | yes, answer **YES** |
+  | terminated negative | `false` | `true` | an observed value | yes, answer **NO** |
+  | declared, never measured | `false` | `true` | nothing recorded | **no** — open, and reported as *skipped* |
+  | ordinary unfinished | `false` | absent | — | **no** |
+
+  Three consequences, and they are the whole feature:
+  - **`passes` is never rewritten.** It stays `false` on a terminal negative, on the
+    branch and in the `completed/` record, because that *is* the finding. Completion is
+    computed from *settled*; a reader that never heard of the field still reads the
+    record correctly.
+  - **The declaration is INERT without evidence.** A declared story whose `notes` record
+    no observation is *not* done — it is skipped work, it keeps the tasklist open, and
+    the run says so in its own words rather than parking as "the iteration budget ran
+    out". Otherwise the field would be a way to mark hard stories complete. The
+    observation bar is the lenient one the bar rule already uses: any number, or a
+    word like *green* / *clean* / *failing*.
+  - **Nothing changes for a story without it.** No declaration, no new behaviour: the
+    story completes only by passing, exactly as before.
+
+  `chief ps` and `chief list` render a settled negative distinctly — `2+1/4`, never
+  folded into the passing count and never left out of it.
+
 - **Progress is judged on the DIFF, and chief's own state directory does not count.**
   An iteration advances the tasklist if a story's `passes` rose, or if its commits
   touched at least one path outside `.chief/state/` (`$CHIEF_STATE_DIR`). A commit whose
@@ -199,7 +240,9 @@ Notes:
   edit, and `chief gen` warns. See
   [drivers-and-safety.md](../explanation/drivers-and-safety.md).
 - When a tasklist completes and merges, chief writes
-  `tasks/chief/completed/<name>.json` (all `passes:true` + `mergedToMain: <sha>`)
+  `tasks/chief/completed/<name>.json` (every story `passes:true` — except one that
+  declared `terminalFalse`, which keeps its `false` and its finding — plus
+  `mergedToMain: <sha>`)
   and retires the source file — so a re-run skips it.
 - Deps may reference a tasklist that's already in `completed/`; it counts satisfied.
 - A dep name is the **filename minus `.json`**, not a branch name — `some-tasklist`,

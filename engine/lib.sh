@@ -279,11 +279,17 @@ finalize_merged() {
   # through to the template and dropped the agent's notes.
   local src="${SNAP:-$STATE/snapshots}/$name.json"; [ -f "$src" ] || src="$TASKS_DIR/$name.json"
   local rec="$COMPLETED/$name.json"
+  # The record force-passes every story, because a merged tasklist is done by
+  # definition and the record is what `is_recorded_done` reads. THE ONE EXCEPTION is a
+  # story that declared `terminalFalse` (engine/terminal.sh): its answer really is NO,
+  # that answer IS the deliverable, and rewriting it to true would leave the completed/
+  # record asserting the opposite of what the tasklist found. So it is left alone —
+  # false, declared, with its finding in `notes` — and a successor tasklist can cite it.
   if command -v node >/dev/null 2>&1; then
-    node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('$src','utf8'));(j.userStories||[]).forEach(s=>s.passes=true);j.mergedToMain='$sha';fs.writeFileSync('$rec',JSON.stringify(j,null,2)+'\n');" 2>/dev/null \
+    node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('$src','utf8'));(j.userStories||[]).forEach(s=>{if(s.terminalFalse!==true)s.passes=true;});j.mergedToMain='$sha';fs.writeFileSync('$rec',JSON.stringify(j,null,2)+'\n');" 2>/dev/null \
       || cp "$src" "$rec"
   else
-    jq --arg sha "$sha" '(.userStories |= map(.passes=true)) | .mergedToMain=$sha' "$src" > "$rec" 2>/dev/null || cp "$src" "$rec"
+    jq --arg sha "$sha" '(.userStories |= map(if .terminalFalse == true then . else .passes=true end)) | .mergedToMain=$sha' "$src" > "$rec" 2>/dev/null || cp "$src" "$rec"
   fi
   # Retire the source tasklist. MUST be -f: `git rm` REFUSES to remove a file with
   # local modifications (--ignore-unmatch only suppresses "no match"), and an agent

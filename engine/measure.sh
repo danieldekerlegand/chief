@@ -50,6 +50,28 @@ MEASURE_BAR_RE="$MEASURE_BAR_RE"'|\b(0|zero|no)[ \t]+(failure|failures|failing|e
 MEASURE_BAR_RE="$MEASURE_BAR_RE"'|\b[0-9]+[ \t]+(failed|failing|passing|passed|tests?|checks?|errors?|failures?)\b'
 MEASURE_BAR_RE="$MEASURE_BAR_RE"'|\bbaseline\b[^.]{0,60}[0-9]'
 
+# THE OBSERVATION PREDICATE, as a jq `def` every reader of a story's `notes` shares.
+#
+# One definition, because there is now more than one gate asking the same question.
+# This one asks it of a PASSING story ("you claimed a bar — where is the number?");
+# engine/terminal.sh asks it of a story whose declared answer is NO ("you declared the
+# negative terminal — where is the measurement behind it?"). Those are opposite
+# verdicts resting on the identical fact, and a private copy in either would drift
+# into two different meanings of "the run measured something".
+#
+# An OBSERVED VALUE in the notes: any number, once the tokens that are names rather
+# than measurements are removed (story ids, cross-repo refs, issue numbers), or an
+# explicit result word. Lenient by design — see the header.
+MEASURE_OBSERVED_JQ='
+    def observed:
+      ( (. // "") | tostring
+        | gsub("\\bus-?[0-9]+"; " "; "i")
+        | gsub("\\b[a-z][a-z0-9_-]*:[0-9]+"; " "; "i")
+        | gsub("#[0-9]+"; " ") ) as $n
+      | ($n | test("[0-9]"))
+        or ($n | test("\\b(green|passe[sd]|passing|clean|identical|failing|failures?)\\b"; "i"));
+'
+
 # measure_gate PRD — hold every PASSING story to the bars its criteria state.
 #
 # Applies to a story whichever way it came to pass: chief promoted it, or the agent
@@ -66,18 +88,8 @@ MEASURE_BAR_RE="$MEASURE_BAR_RE"'|\bbaseline\b[^.]{0,60}[0-9]'
 # Empty output = every claimed bar has an observation beside it.
 measure_gate() {
   local prd="$1" t
-  jq -r --arg bar "$MEASURE_BAR_RE" '
+  jq -r --arg bar "$MEASURE_BAR_RE" "$MEASURE_OBSERVED_JQ"'
     def clip: if (. | length) > 200 then .[0:197] + "..." else . end;
-    # An OBSERVED VALUE in the notes: any number, once the tokens that are names
-    # rather than measurements are removed (story ids, cross-repo refs, issue
-    # numbers), or an explicit result word. Lenient by design — see the header.
-    def observed:
-      ( (. // "") | tostring
-        | gsub("\\bus-?[0-9]+"; " "; "i")
-        | gsub("\\b[a-z][a-z0-9_-]*:[0-9]+"; " "; "i")
-        | gsub("#[0-9]+"; " ") ) as $n
-      | ($n | test("[0-9]"))
-        or ($n | test("\\b(green|passe[sd]|passing|clean|identical|failing|failures?)\\b"; "i"));
     .userStories[]?
     | select(.passes == true)
     | . as $us
@@ -93,14 +105,7 @@ measure_gate() {
       + (if ($n | test("\\S")) then "\"\($n | clip)\" — no observed value in it" else "(nothing)" end)
   ' "$prd" 2>/dev/null
   t="$(mktemp)"
-  jq --arg bar "$MEASURE_BAR_RE" '
-    def observed:
-      ( (. // "") | tostring
-        | gsub("\\bus-?[0-9]+"; " "; "i")
-        | gsub("\\b[a-z][a-z0-9_-]*:[0-9]+"; " "; "i")
-        | gsub("#[0-9]+"; " ") ) as $n
-      | ($n | test("[0-9]"))
-        or ($n | test("\\b(green|passe[sd]|passing|clean|identical|failing|failures?)\\b"; "i"));
+  jq --arg bar "$MEASURE_BAR_RE" "$MEASURE_OBSERVED_JQ"'
     def unmeasured:
       (.passes == true)
       and ([ (.acceptanceCriteria // [])[]? | tostring | select(test($bar; "i")) ] | length) > 0

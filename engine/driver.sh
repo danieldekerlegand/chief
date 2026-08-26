@@ -475,6 +475,12 @@ source "$ENGINE/criteria.sh"
 # The BAR rule on acceptance criteria (engine/measure.sh): a story claiming a
 # checkable bar must record the value it observed, or it is `unverified`, not passed.
 source "$ENGINE/measure.sh"
+# A story whose CORRECT answer is `false` (engine/terminal.sh): the declaration that a
+# negative finding is a DELIVERABLE, and the SETTLED predicate every completion count
+# below is computed from. Sourced after measure.sh, whose `observed` it shares — one
+# definition of "the run measured something", read by the gate that demands a number
+# and by the gate that accepts a negative.
+source "$ENGINE/terminal.sh"
 # The per-story DIFF-SIZE BUDGET (engine/budget.sh): larger diffs carry higher
 # conflict probability, so change size is the lever. Sourced BEFORE zones.sh, whose
 # merge gate calls it — the two are one policy layer with one approval, not two
@@ -733,6 +739,13 @@ pending_say() { sed 's/^/   ↳ /' "$STATE/$1.pending" 2>/dev/null || true; }
 # A stale-false story WITH evidence in `notes` is promoted as before; one WITHOUT is
 # left false and reported here, so the branch fails instead of merging.
 #
+# A story declaring `terminalFalse` (engine/terminal.sh) is EXEMPT FROM BOTH HALVES,
+# and this is the one exemption that is about correctness rather than ceremony: its
+# `notes` carry the negative finding, so the evidence test would pass and the promotion
+# would rewrite the answer NO into the answer YES — destroying the only thing the
+# tasklist produced. It is not reported here either; a declared story with nothing
+# measured is INERT, which terminal_inert_report says in its own words.
+#
 # $1 = the runtime prd.json. Promotes in place, and prints one block per unevidenced
 # story — its id, title and the criteria it would have claimed — on stdout. Empty
 # output means every promotion carried evidence and the branch may proceed.
@@ -742,9 +755,10 @@ evidence_gate() {
   # the promotion below rewrites any pass-flag.
   jq -r '
     def unpassed: (.passes != true);
+    def declared: (.terminalFalse == true);
     def evidenced: (((.notes // "") | tostring) | test("\\S"));
     def clip: if (. | length) > 200 then .[0:197] + "..." else . end;
-    .userStories[] | select(unpassed and (evidenced | not))
+    .userStories[] | select(unpassed and (declared | not) and (evidenced | not))
     | "   ✗ \(.id) — \(.title // "(untitled)")\n"
       + ( [ (.acceptanceCriteria // [])[] | "       claimed: \"" + (tostring | clip) + "\"" ]
           | if length == 0 then ["       (no acceptance criteria recorded)"] else . end
@@ -752,8 +766,10 @@ evidence_gate() {
   ' "$prd" 2>/dev/null
   t="$(mktemp)"
   jq '
+    def declared: (.terminalFalse == true);
     def evidenced: (((.notes // "") | tostring) | test("\\S"));
-    .userStories |= map(if (.passes != true) and evidenced then .passes = true else . end)
+    .userStories |= map(if (.passes != true) and (declared | not) and evidenced
+                        then .passes = true else . end)
   ' "$prd" > "$t" 2>/dev/null && mv "$t" "$prd" || rm -f "$t"
 }
 
@@ -777,49 +793,19 @@ unverified_stop() {
   echo "   Not merging. A story chief passes on the agent's behalf must record in 'notes' HOW it met these — branch $branch is kept in its worktree."
 }
 
-# The passes-state to seed the runtime prd.json from (and to count remaining
-# stories on a resume). For a project tasklist it's the branch's committed tasklist
-# (survives across resumes in-repo). A submodule branch carries no tasklist JSON, so
-# fall back to the last snapshot, then the pristine template. $name/$branch/$sub/
-# $work_repo/$TASKS_REL/$SNAP/$SRC are visible by dynamic scope.
+# prd_state_open — how many stories that state still leaves OPEN.
 #
-# WHY THE SUBMODULE ARM IS THE ONE THAT NEEDED FIXING (tasklist 96). A project
-# tasklist records every story as it lands: the agent commits the tracked tasklist
-# with its pass-flag flipped, so the branch itself carries 2-of-3 and a run killed
-# mid-tasklist resumes at exactly that. A submodule branch cannot — the tasklist
-# lives in the PARENT and the work branch lives in the submodule, and the parent
-# gets ONE commit for the whole tasklist (the terminal `complete @sha — bump <sub>
-# + record + retire`). There is no per-story marker in between, so the snapshot IS
-# the record, and it used to be written only at the END of a worker. A run killed
-# mid-tasklist therefore resumed at 0-of-3 onto a branch already carrying the code
-# for two of them — wasting iterations at best, and at worst re-implementing a
-# story, which leaves TWO implementations of one story on one branch.
-#
-# THE MECHANISM CHOSEN, and its trade-off. The snapshot is promoted at every
-# ITERATION BOUNDARY instead of once at the end (agent.sh's $CHIEF_PRD_SNAPSHOT,
-# handed down below — the same "driver owns the durable path, agent promotes to it
-# the moment the artifact is valid" shape as $CHIEF_RESEARCH_FILE). It lives under
-# $STATE_ROOT, NOT in the worktree run_worker rm -rf's, so it survives both a
-# rebuilt worktree and a driver restart — which is the failure being fixed.
-#   · vs. a MARKER COMMIT on the submodule branch: that branch is merged verbatim
-#     into the submodule's own history, so per-story bookkeeping commits would be
-#     chief litter in a consumer's repo forever.
-#   · vs. a PARENT-SIDE BRANCH: the parent deliberately has no chief/* branches at
-#     all, and inventing one changes the terminal record's shape — the very thing
-#     downstream readers of completed/ depend on not moving.
-#   · the COST accepted: the snapshot is host state, not git. Deleting
-#     .chief/state/ still loses the per-story record (RESET=1's behaviour, on
-#     purpose), and the branch's commits remain the ground truth either way.
-# Nothing here changes a PROJECT tasklist: this arm is not reached for one, so its
-# resume still reads the committed tasklist and a fresher snapshot is inert.
-prd_state_source() {
-  if [ -z "${sub:-}" ]; then
-    git -C "${work_repo:-$REPO}" show "$branch:$TASKS_REL/$name.json" 2>/dev/null
-  elif [ -f "$SNAP/$name.json" ]; then
-    cat "$SNAP/$name.json"
-  else
-    cat "$SRC/$name.json"
-  fi
+# OPEN, not `passes==false`: a story that declared the negative terminal and recorded
+# the measurement behind it is SETTLED (engine/terminal.sh), and a resume that counted
+# it as work left would put an agent back on a question that already has its answer.
+# Via a file because terminal_open reads a path, not a stream — everything the settled
+# predicate does is one jq program over a document.
+prd_state_open() {
+  local f="$STATE/.$name.state-src" out
+  prd_state_source > "$f" 2>/dev/null
+  out="$(terminal_open "$f")"
+  rm -f "$f" 2>/dev/null || true
+  printf '%s' "$out"
 }
 
 # plan_sync SRC DEST — copy the PLAN ARTIFACTS (docs/plan-review.md) one way.
@@ -2412,7 +2398,7 @@ run_worker() {
     # restarting from scratch. RESET=1 forces a fresh start from the base branch.
     if [ "${RESET:-0}" != "1" ] && git -C "$work_repo" rev-parse --verify --quiet "$branch" >/dev/null 2>&1; then
       local left bhw="" vfail=""
-      left="$(prd_state_source | jq '[.userStories[]|select(.passes==false)]|length' 2>/dev/null || echo '?')"
+      left="$(prd_state_open)"
       # Does the branch actually diverge from the base? A branch that EXISTS but has
       # no commits vs base carries no real work — its committed pass-state is
       # meaningless (often a false all-pass from a prior misfire). Never skip the
@@ -2541,9 +2527,10 @@ run_worker() {
     # build deps (node_modules/.venv/dist). Each tasklist's optional "warmup":[...]
     # runs (cwd = worktree) to provision what its checks need, ISOLATED per worktree
     # (so no concurrent-install corruption).
+    terminal_counts "$wtstate/prd.json"
     live_set "$live" phase=seeded \
-      passing="$(jq '[.userStories[]?|select(.passes==true)]|length' "$wtstate/prd.json" 2>/dev/null || echo 0)" \
-      total="$(jq '.userStories|length' "$wtstate/prd.json" 2>/dev/null || echo 0)"
+      passing="$(_int "$TERMINAL_PASSED")" negative="$(_int "$TERMINAL_NEGATIVE")" \
+      total="$(_int "$TERMINAL_TOTAL")"
     warmups="$(jq -r '(.warmup // [])[]' "$SRC/$name.json" 2>/dev/null)"
     if [ -n "$warmups" ]; then
       echo ">> $name warm-up…"
@@ -2633,14 +2620,19 @@ run_worker() {
       unevidenced="$(evidence_gate "$wtstate/prd.json")"
     fi
     unmeasured="$(measure_gate "$wtstate/prd.json")"   # EVERY path to a merge — engine/measure.sh
-    local remaining total
-    remaining="$(jq '[.userStories[]|select(.passes==false)]|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
-    total="$(jq '.userStories|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
+    # REMAINING IS OPEN, NOT UNPASSED (engine/terminal.sh). Every stop below — the
+    # INCOMPLETE park, the status line, the liveliness record — asks "is there work
+    # left", and a story that declared the negative terminal and recorded the
+    # measurement behind it has none. Its `passes` stays false, because the answer is.
+    local remaining total negative
+    terminal_counts "$wtstate/prd.json"
+    remaining="$TERMINAL_OPEN"; total="$TERMINAL_TOTAL"; negative="$TERMINAL_NEGATIVE"
     cp "$wtstate/prd.json" "$SNAP/$name.json" 2>/dev/null || true
     plan_sync "$wtstate/plans" "$SNAP/$name.plans"          # bank what this run planned
     # _int() (defined with the self-heal helpers below, resolved at call time) keeps
     # an unreadable prd.json's '?' out of the arithmetic.
-    live_set "$live" passing="$(( $(_int "$total") - $(_int "$remaining") ))" total="$(_int "$total")"
+    live_set "$live" passing="$(( $(_int "$total") - $(_int "$remaining") ))" \
+      negative="$(_int "$negative")" total="$(_int "$total")"
     # USAGE-LIMIT PAUSE: agent.sh exits $AGENT_RC_LIMIT when it stopped on a Claude
     # usage/session limit and won't retry. That is NOT a failure — the branch is fine,
     # it is only blocked until the window resets — so record a distinct, non-terminal
@@ -2761,11 +2753,14 @@ run_worker() {
         cp "$wtstate/.stalled" "$STATE/$name.stalled" 2>/dev/null || true
         stall_why="$(head -1 "$wtstate/.stalled" 2>/dev/null || true)"
       fi
+      terminal_say_inert "$wtstate/prd.json" "$name" \
+        && stall_why="${stall_why:-a story declares terminalFalse with no measurement recorded — still open}"
       worker_park incomplete \
         "$(( total - remaining ))/$total stories passing — ${stall_why:-the iteration budget ran out}${PENDING_PHRASE:+ — worktree holds $PENDING_PHRASE}" \
         "!! $name INCOMPLETE — ${stall_why:-the iteration budget ran out}; branch $branch left in worktree for review"
       pending_say "$name"; return 0
     fi
+    terminal_say_negative "$wtstate/prd.json" "$name" "$negative" "$total"
     # Passing stories prepare a decision brief; they are not the operator's
     # verdict. Keep the branch and worktree available for `chief decide` rather
     # than letting the ordinary merge path turn model-authored passes into consent.

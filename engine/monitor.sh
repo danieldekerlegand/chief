@@ -190,6 +190,14 @@ else
 fi
 live_file() { printf '%s' "$2/parallel/$1.live.json"; }   # $1 name $2 state root
 
+# SETTLED vs PASSING (engine/terminal.sh) — `stories()` reports a delivered NEGATIVE
+# distinctly from a pass and from unfinished work, and it may not invent a second
+# definition of which is which. UNGUARDED, unlike live.sh above: a stub would have to
+# choose one of the two renderings, and choosing either is the mistake this column
+# exists to stop making. It ships in the same directory as this file.
+# shellcheck source=engine/terminal.sh
+. "$_MON_DIR/terminal.sh"
+
 # Live-driver identification (engine/reap.sh): chief_find_unregistered_drivers,
 # which answers the question this view never asked — is there a driver RUNNING that
 # no run file knows about? Sourced through ${BASH_SOURCE[0]} and guarded exactly
@@ -234,13 +242,23 @@ elapsed() {   # $1 = start epoch -> how long ago that was
   dur "$s"
 }
 
-stories() {   # $1 name $2 wtroot $3 staterel $4 stateroot $5 tasks -> "pass/total"
-  local n="$1" prd p t
+# PROGRESS, and the SHAPE of it: "2/3" while every story that is done passed, and
+# "2+1/4" when one of them is done with the answer NO (engine/terminal.sh). The `+n`
+# is the whole point of the column here — collapsing a delivered negative into the
+# passing count would say the tasklist agreed, and leaving it out of the count would
+# say it is unfinished. `283` rendered as unfinished work for three days.
+# ASCII on purpose: this field is printf-padded to a byte width, and a multibyte glyph
+# would shift the columns beside it.
+stories() {   # $1 name $2 wtroot $3 staterel $4 stateroot $5 tasks -> "pass[+neg]/total"
+  local prd out p g t
   for prd in "$2/$1/$3/prd.json" "$4/snapshots/$1.json" "$5/$1.json"; do
     [ -f "$prd" ] || continue
-    p="$(jq '[.userStories[]?|select(.passes==true)]|length' "$prd" 2>/dev/null)"
-    t="$(jq '.userStories|length' "$prd" 2>/dev/null)"
-    if [ -n "$p" ] && [ -n "$t" ]; then printf '%s/%s' "$p" "$t"; return; fi
+    out="$(terminal_counts "$prd" >/dev/null 2>&1; printf '%s\t%s\t%s' \
+             "$TERMINAL_PASSED" "$TERMINAL_NEGATIVE" "$TERMINAL_TOTAL")"
+    IFS=$'\t' read -r p g t <<< "$out"
+    case "$t" in ''|'?'|*[!0-9]*) continue ;; esac
+    if [ "${g:-0}" != "0" ]; then printf '%s+%s/%s' "$p" "$g" "$t"; else printf '%s/%s' "$p" "$t"; fi
+    return
   done
   printf '?/?'
 }

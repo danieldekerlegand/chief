@@ -276,6 +276,25 @@ fi
 # DEMOTE_KEY is the REASON — the sorted ids the last boundary demoted.
 DEMOTE_KEY=""
 DEMOTE_REPEATS=0
+# A story whose CORRECT answer is `false` (engine/terminal.sh) — the SETTLED predicate
+# every counter and the prior-work notice below are computed from.
+#
+# SOURCED HERE, not with the other modules further down, and the placement is load-
+# bearing: `_compose_prompt` is CALLED at the top level a hundred lines below, long
+# before that block runs, so a module the prompt builder reads has to be in scope by
+# now. It cost a truncated prompt to learn — `set -e` inside the `{ … } > "$dest"`
+# block turns an unknown function into a prompt that simply stops, with the missing
+# sections looking exactly like sections that had nothing to say.
+#
+# $_AGENT_DIR is not defined yet either, for the same reason; this resolves its own.
+# UNGUARDED, unlike live.sh/events.sh/measure.sh below: those degrade to a no-op
+# because losing a heartbeat or an event is not losing correctness. This one decides
+# WHICH STORY the turn is handed, and a stub that guessed would either re-drive a
+# settled negative or skip an unfinished story. engine/driver.sh sources it on the same
+# terms, and it ships in the same directory as this file.
+# shellcheck source=engine/terminal.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/terminal.sh"
+
 # _compose_prompt INSTRUCTIONS DEST — the prompt one turn is handed: the engine's
 # loop instructions followed by the project's own context. A turn picks its
 # INSTRUCTIONS (implement, or the PLAN turn below) and everything downstream of that
@@ -345,17 +364,26 @@ _compose_prompt() {
     fi
     # THE PRIOR-WORK NOTICE (see the header above). Both jq reads are guarded to empty,
     # so a missing or half-written PRD costs the section, never the prompt.
-    done_list="$(jq -r '[.userStories[]? | select(.passes==true)]
-                         | map("  - \(.id) — \(.title // "untitled")") | join("\n")' \
-                   "$PRD_FILE" 2>/dev/null || echo "")"
+    # SETTLED, not passing (engine/terminal.sh): a story whose declared answer is NO and
+    # whose measurement is recorded is finished work, and listing it as outstanding is
+    # how `283` got re-driven 42 times. It is listed with its ANSWER, never silently
+    # folded in among the passes — the agent has to be able to tell them apart too.
+    done_list="$(terminal_done_list "$PRD_FILE" || echo "")"
     if [ -n "$done_list" ]; then
-      next_id="$(jq -r '[.userStories[]? | select(.passes==false)][0].id // empty' \
-                   "$PRD_FILE" 2>/dev/null || echo "")"
+      next_id="$(terminal_next "$PRD_FILE")"
       printf '\n\n---\n\n# ALREADY DONE — work that is already committed on this branch\n\n'
       printf 'Chief has the stories below recorded as COMPLETE for this tasklist, and\n'
       printf 'their code is ALREADY ON the branch you have checked out. That is a stated\n'
       printf 'fact, not something for you to establish by reading the diff or the log:\n\n'
       printf '%s\n\n' "$done_list"
+      if [ -n "$(terminal_negative_ids "$PRD_FILE")" ]; then
+        printf 'A story marked "answered NO" is COMPLETE. Its tasklist declared\n'
+        printf '`"terminalFalse": true` on it, meaning a negative finding there is the\n'
+        printf 'DELIVERABLE — the work was done, the measurement was taken, and the answer\n'
+        printf 'came back no. Its `passes` stays `false` because the answer really is false.\n'
+        printf 'Do NOT re-attempt it, do NOT flip its `passes`, and do NOT count it against\n'
+        printf 'completion: chief already counts it as done.\n\n'
+      fi
       printf 'You have no memory of that work — every turn is a fresh context, and this run\n'
       printf 'may be RESUMING a tasklist that was interrupted after those stories landed.\n'
       printf 'The work is in the tree regardless. Read the files if you need them.\n\n'
@@ -633,14 +661,25 @@ PAUSE_FILE="${CHIEF_PAUSE_FILE:-}"
 _op_paused() { [ -n "$PAUSE_FILE" ] && [ -f "$PAUSE_FILE" ]; }
 
 REPO="$CHIEF_PROJECT"
-_passes() { jq '[.userStories[]? | select(.passes==true)] | length' "$PRD_FILE" 2>/dev/null || echo 0; }
+# SETTLED, NOT PASSING (engine/terminal.sh). A story that declared `terminalFalse` and
+# recorded the measurement behind it is DONE with the answer NO: the loop must stop
+# handing it out (_story), and the counters must stop reporting it as work left, or the
+# tasklist can never reach its stop condition. `passes` itself is untouched — these
+# read the record, they do not rewrite it. A tasklist declaring nothing counts exactly
+# as it did before, story for story.
+# The two `case`s are driver.sh's _int, inline: an unreadable prd.json answers '?' on
+# both reads and neither may reach the arithmetic.
+_passes() { local o t; o="$(terminal_open "$PRD_FILE")"; t="$(_total)"
+            case "$o" in ''|*[!0-9]*) o=0 ;; esac
+            case "$t" in ''|*[!0-9]*) t=0 ;; esac
+            [ "$t" -ge "$o" ] && echo "$(( t - o ))" || echo 0; }
 _total()  { jq '.userStories | length' "$PRD_FILE" 2>/dev/null || echo '?'; }
 _head()   { git -C "$REPO" rev-parse HEAD 2>/dev/null || echo none; }
-_story()  { jq -r '[.userStories[]? | select(.passes==false)][0].id // empty' "$PRD_FILE" 2>/dev/null || echo ""; }
+_story()  { terminal_next "$PRD_FILE"; }
 # The SET behind _passes()' count. The progress check below already re-reads the
 # count each iteration; reading the ids alongside it is what lets the event stream
 # name WHICH story passed instead of just that one more did.
-_passed_ids() { jq -r '[.userStories[]? | select(.passes==true) | .id] | join(" ")' "$PRD_FILE" 2>/dev/null || echo ""; }
+_passed_ids() { terminal_settled_ids "$PRD_FILE"; }
 
 # --- PROGRESS IS A CHANGE TO THE WORK, NOT TO CHIEF'S OWN NOTES ---------------
 # The stall counter is what stops a tasklist that cannot advance. It used to read

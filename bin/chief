@@ -358,6 +358,7 @@ cmd_lint() {
   . "$ENGINE/criteria.sh"
   . "$ENGINE/crossrepo.sh"
   . "$ENGINE/counterpart.sh"
+  . "$ENGINE/terminal.sh"
   local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n rep findings=0 checked=0 declared=0
   local files=()
   if [ "$#" -gt 0 ]; then
@@ -378,6 +379,18 @@ cmd_lint() {
     if jq -e '(.parked // false) and ((.parkedReason // "") | tostring | length == 0)' "$f" >/dev/null 2>&1; then
       echo "  ✗ $n — parked tasklist must carry parkedReason (use CLASS: explanation)"
       findings=$((findings + 1))
+    fi
+    # `terminalFalse` is a BOOLEAN (engine/terminal.sh). A truthy-looking string
+    # ("true", "yes") is a declaration that silently does nothing, and the failure mode
+    # of a silent declaration is exactly the one this field exists to fix: a story
+    # everyone believes is settled, re-driven forever.
+    rep="$(jq -r --arg k "$TERMINAL_FIELD" '
+      .userStories[]? | select(has($k)) | select((.[$k] | type) != "boolean")
+      | "      \(.id // "?") — \($k) is \(.[$k] | type), must be a boolean"' "$f" 2>/dev/null)"
+    if [ -n "$rep" ]; then
+      echo "  ✗ $n — a story's $TERMINAL_FIELD declaration is not a boolean:"
+      printf '%s\n' "$rep"
+      findings=$((findings + $(printf '%s\n' "$rep" | grep -c . || true)))
     fi
     rep="$(criteria_scope_report "$f" "$CHIEF_PROJECT")"
     if [ -n "$rep" ]; then
@@ -436,7 +449,11 @@ cmd_list() {
   load_project
   . "$ENGINE/crossrepo.sh"
   . "$ENGINE/counterpart.sh"
-  local all=0 plain=0 arg d f n c t mark pk flagged="" completed=0 files=()
+  # SETTLED vs PASSING (engine/terminal.sh) — the PROGRESS column reports a story that
+  # is done with the answer NO as "2+1/4", never folded into the passing count and
+  # never left out of it.
+  . "$ENGINE/terminal.sh"
+  local all=0 plain=0 arg d f n c t g mark pk flagged="" completed=0 files=()
   while [ "$#" -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
@@ -474,10 +491,11 @@ USAGE
     fi
     for f in "${files[@]}"; do
       n="$(basename "$f" .json)"
-      t="$(jq '.userStories|length' "$f" 2>/dev/null || echo '?')"
-      c="$(jq '[.userStories[]|select(.passes)]|length' "$f" 2>/dev/null || echo '?')"
+      terminal_counts "$f"
+      t="$TERMINAL_TOTAL"; c="$TERMINAL_PASSED"; g="$TERMINAL_NEGATIVE"
       category="$(jq -r '.category // "(uncategorized)"' "$f" 2>/dev/null || echo '(uncategorized)')"
-      state="ready"; [ "$c" != 0 ] && [ "$c" != '?' ] && state="in-progress"
+      state="ready"; { [ "$c" != 0 ] || [ "$g" != 0 ]; } && [ "$c" != '?' ] && state="in-progress"
+      [ "$g" != 0 ] && c="$c+$g"
       reason=""
       pk="$(jq -r "$LIST_PARK_JQ" "$f" 2>/dev/null)"
       if [ -n "$pk" ]; then

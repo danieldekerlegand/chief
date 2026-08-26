@@ -1,8 +1,9 @@
 {
   "project": "chief",
   "category": "fix",
-  "branchName": "chief/112-a-bookkeeping-commit-is-not-progress",
-  "description": "**A tasklist with nothing left to do ran to iteration 11 of a 5-iteration budget, and every extension was bought with a commit that changed nothing but chief's own state files.**\n\nMeasured in `formant` on 2026-08-24. `56-neural-synth-ship-flip` is blocked on a measurement only a human can take. The agent understood that perfectly and said so every time — its closing note reads *\"further iterations on this tasklist can only add churn; re-parking it would be the honest call.\"* It nevertheless kept being re-driven, because each iteration wrote a notes stamp into `.chief/state/prd.json` and `.chief/state/progress.txt` and committed it. Chief saw a commit, scored the iteration `progress (0/2 passing). Continuing...`, reset the stall counter and extended the budget. **Five consecutive commits whose entire content was a re-check stamp.**\n\nThe stall counter is the mechanism that is supposed to stop exactly this, and it is trivially defeated by writing to a state file. Note the asymmetry with the guard on the other side: chief is rigorous about a FALSE CLAIM OF COMPLETION — `100-evidence-checked-at-the-iteration-boundary` and the no-work guard both refuse to merge a tasklist that says it is done without commits behind it — but it accepts a false claim of PROGRESS without checking anything at all. One end of the loop is defended and the other is open.\n\nThe cost is not only wasted budget. `0/2 passing` printed beside the word `progress` is actively misleading in the one place an operator looks to decide whether to intervene, and it is the reason this ran for 1h32m after it had stopped being able to accomplish anything.\n\nRelated but distinct from `111`: that one is chief mis-classifying an iteration that never reached the model, which stops a run too EARLY. This is chief mis-classifying an iteration that reached the model and did nothing, which lets a run go on FOREVER. Same family — the iteration-outcome classifier — opposite failure directions, and the fix for one should not quietly redefine the other.",
+  "branchName": "chief/113-a-story-may-terminate-false",
+  "description": "🚫 **A story whose CORRECT answer is `false` makes its tasklist permanently uncompletable, and chief has no way to say so.** Measured on cuneiform `283-nixos-bare-metal-vpn-topology-target`, 2026-08-22 → 2026-08-25.\n\nIts US-3 read *\"VERIFY the MaaS commission→deploy flow, honestly\"*, and the criterion said in as many words: *\"if it does not complete, **THIS STORY STAYS `passes: false`** and the precise failure point is written into `bare-metal.md` — a stubbed phone-home does not count as a pass.\"* The flow genuinely does not complete: the verdict is `maas-client-absent`, and no file under `core/`, `services/`, `apps/`, `packages/` or `infrastructure/` calls a MaaS API at all. So `passes: false` **was the correct, measured outcome** — the story was DONE and its answer was negative.\n\n**Chief has exactly one notion of done — every story true — so it re-drove the branch forever.** 63 commits. 21 iterations in a single run, 59 across the program, and **42 consecutive IDENTICAL measurements**. The agent never faked it: it tried the stub route, got `1 provisioned` against a 40-line stub it had written for the measurement, and REJECTED its own result because the criterion excluded exactly that. It collapsed its own notes at iteration 32 after they had grown to ~44 KB of duplicate text, and its terminal note read: *\"criterion 1 makes `passes: false` the CORRECT end state, so this tasklist can NEVER report all-stories-true and no further iteration can change that. It needs MANUAL RETIREMENT.\"* It was right, it said so in the only channel it had, and nothing could hear it.\n\n**`112` does not cover this and neither does `111`.** `112` fixes progress DETECTION — a bookkeeping commit no longer scores as progress. `111` fixes an iteration that never reached the model. Both are about whether an iteration counted. **This is about whether the tasklist is DONE**, and with both of those fixed `283` would still have run out its budget and been marked INCOMPLETE, which is a wrong verdict on finished work rather than a cheaper wrong verdict.\n\n**The shape recurs.** talos `80` hit the same wall from the other side — its AC1 conflated wiring the lane (delivered) with executing it (blocked on another repo), and was re-passed eight times across 18 iterations before being split. A negative finding is a legitimate deliverable, and the tasklist format currently cannot express one.",
+  "dependsOn": [],
   "touches": [
     "engine/driver.sh",
     "engine/agent.sh",
@@ -12,47 +13,52 @@
   ],
   "iters": 6,
   "warmup": [
-    "grep -n 'progress (\\|stall\\|no progress' engine/agent.sh | head -20",
-    "grep -rn 'STATE_DIR\\|\\.chief/state' engine/agent.sh | head -10",
-    "cd ../formant && git log --oneline -8 chief/56-neural-synth-ship-flip",
-    "cd ../formant && git show --stat chief/56-neural-synth-ship-flip | head -12",
-    "grep -n 'iters\\|budget' engine/agent.sh | head -12"
+    "grep -n 'passes' engine/driver.sh | head -20",
+    "grep -rn 'all-stories-true\\|allPass\\|complete' engine/driver.sh | head -12",
+    "sed -n '2945,2965p' engine/driver.sh",
+    "ls docs/ test/",
+    "grep -rn 'userStories' engine/*.sh | head"
   ],
   "userStories": [
     {
       "id": "US-1",
-      "title": "Progress means a story moved or the PRODUCT changed",
+      "title": "A story can declare that FALSE is its terminal answer",
+      "description": "The missing vocabulary. A verification story whose honest result is negative has delivered its work, and the format must be able to say that.",
       "acceptanceCriteria": [
-        "An iteration counts as progress only if a story's `passes` advanced, or the commit touched something outside chief's own state directory. A commit whose entire diff is `.chief/state/**` is bookkeeping and must score as NO PROGRESS.",
-        "The stall counter increments on such an iteration exactly as it does on one with no commit at all, so a tasklist that cannot advance stops at the threshold instead of extending its budget indefinitely.",
-        "The rule is stated in terms of the diff, not the message. An agent that writes a plausible commit subject over a state-only diff must still be scored as stalled — this is the same discipline the false-complete guard already applies to a claim of completion.",
-        "Counterfactual test: replay the formant shape — N consecutive commits touching only `.chief/state/` with the story count unmoved — and assert the run stops at the stall threshold rather than extending. Today it reaches iteration 11 of a 5-iteration budget."
+        "A story may declare that a negative result is TERMINAL — an explicit field on the story, never inferred from prose and never a magic value in `notes`. A story carrying it and answering false is COMPLETE for the purposes of tasklist completion, while its `passes` flag stays false because the answer really is false",
+        "The recorded answer and the finding are BOTH preserved and distinguishable: a reader (and `chief ps`) can tell 'this story is done and the answer is no' from 'this story is not done yet'. Collapsing them is the defect — `283` rendered as unfinished work for three days",
+        "The declaration is INERT unless the story also carries evidence of the attempt. A terminal-false story that recorded no measurement is not done, it is skipped, and the two must not be spellable the same way — otherwise this becomes a way to mark hard stories complete",
+        "Nothing changes for a story without the declaration: it completes only by passing, exactly as today. Asserted over the existing tasklist corpus, which must classify identically before and after",
+        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)"
       ],
-      "notes": "engine/agent.sh: progress is now a story flip OR a net diff touching a path outside $CHIEF_STATE_DIR (_product_changed, tree-to-tree, message-ignored). New test/bookkeeping-progress.sh replays the formant shape: 2 turns of state-only commits with implementation-shaped subjects -> stops at the 2-iter budget (stall 2/2). REPRODUCED against a neutered engine in a clone: 20 turns, log reading \"Iteration 11: progress (0/1 passing)\". Green: bookkeeping-progress, smoke, noworkguard, ratelimit, boundary-demotion, evidence-gate, measured-bars, version-bump, doc-sync — 9 passed, 0 failed; .chief/verify.sh static half OK (bash -n clean, quality ratchet no regression, VERSION 0.8.95). shellcheck not installed on this host (verify skips it; CI enforces).",
-      "passes": true
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-2",
-      "title": "A legitimate bookkeeping commit is still allowed to happen",
+      "title": "A tasklist that cannot complete is DETECTED and stops, rather than running to the cap",
+      "description": "The safety net for the case where nobody remembered to declare it. 283 was diagnosable from its own record by iteration 6.",
       "acceptanceCriteria": [
-        "Writing notes and progress records stays SUPPORTED — those files are how a later iteration and a human reader learn what was tried. This story removes their power to extend a budget, not their existence.",
-        "An iteration that makes real progress AND updates the state files scores as progress on the strength of the real change. A test covers this pairing explicitly, because the naive fix — ignore any commit touching `.chief/state/` — would break the normal case where both happen together.",
-        "Where a tasklist's `touches` legitimately includes chief's own state layout, that is not silently reclassified. If this repo cannot express such a tasklist, say so in the docs rather than leaving it to be discovered."
+        "When a story's recorded outcome is IDENTICAL across N consecutive iterations — same measurement, same blocker, no change to `passes` — the run STOPS and reports that the tasklist appears unable to complete, naming the story and quoting the repeated finding. `283` produced 42 identical measurements; the signal was available long before that",
+        "The report names the two actions that resolve it — amend the criterion, or declare the negative terminal (US-1) — because 'it stalled' sent an operator to re-scope a tasklist whose work was intact and whose agent had already written the correct diagnosis",
+        "This fires INDEPENDENTLY of the progress counter, since the failure mode is a story that is legitimately being re-measured rather than an agent doing nothing. It must catch `283` even with `112`'s bookkeeping fix in place, and a test asserts exactly that",
+        "N is configurable with a stated default, and the comparison is on the story's recorded outcome rather than on commit count — `283` produced a commit every iteration and each one was real, just not new"
       ],
-      "notes": "engine/agent.sh: _touches_bookkeeping + the NOTE printed beside a BOOKKEEPING ONLY verdict on a tasklist that declared the state dir in \"touches\" (reports, never exempts). Docs: the rule, the pairing, and the one case chief cannot express are now in docs/reference/tasklist-schema.md. test/bookkeeping-progress.sh gained the bk-both fixture (real work + a state stamp in ONE commit, no story flipped until the last turn): ran 3 turns past its 2-iter budget to MERGED, \"Iteration 1: progress (0/1 passing)\", no BOOKKEEPING ONLY, notes + progress.txt intact on main. REPRODUCED both new assertions against neutered clones: the naive fix (\"any commit touching .chief/state/ is bookkeeping\") stops bk-both at 2 turns; dropping the notice trips the silent-reclassification assertion. Green: bookkeeping-progress, smoke, noworkguard, ratelimit, boundary-demotion, evidence-gate, measured-bars, version-bump, doc-sync — 8 named tests + the new one, 0 failed. .chief/verify.sh static half OK (bash -n clean, doc-links 0 dead vs 0 on main, quality ratchet no regression, VERSION 0.8.96, doc-sync PASS). shellcheck not installed on this host (verify skips it; CI enforces).",
-      "passes": true
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-3",
-      "title": "The operator can see the difference without reading the log",
+      "title": "The operator can retire a tasklist on a negative without hand-editing JSON",
+      "description": "283's agent asked for MANUAL RETIREMENT in its notes. There is no command for that, so the ask had nowhere to land.",
       "acceptanceCriteria": [
-        "`progress (0/2 passing). Continuing...` must not be printable. Either the line reports what actually advanced, or it reports no progress — the current output states progress and zero passing in the same breath, which is the sentence that let this run for 1h32m unexamined.",
-        "A tasklist stopped this way says WHY in the run summary, distinguishably from a tasklist that failed its gate and from one stopped by provider unavailability (`111`). Three different causes reported identically is what sends an operator to re-scope work that was never the problem.",
-        "Where an agent's own output asks to be stopped — formant's said `re-parking it would be the honest call` — that is worth surfacing rather than burying at iteration 10 of a log. Judge whether chief can act on it at all; if it cannot be detected reliably, record that finding rather than implementing a fragile prose match, and do not let it become the kind of undated grep `111` is fixing.",
-        "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
+        "A command retires a tasklist whose delivered stories passed and whose remaining story terminated false — filing the `completed/` record, recording WHICH story terminated negative and its finding, and stopping the tasklist being re-driven",
+        "It REFUSES a tasklist whose stories are merely unfinished. The distinction is the whole point: `283` had two passing stories and one measured negative, which is not the same as a tasklist that stopped halfway, and a command that cannot tell them apart is a way to bury incomplete work",
+        "The `completed/` record carries the negative finding in a form a successor tasklist can cite. A story that terminates false often names the thing to do instead — that closing action is the most valuable output of the whole tasklist, and it must survive in the record rather than only in a run log, so whoever authors the successor can point at it.",
+        "Mutation-check it: a tasklist with an ordinary unfinished story is refused; one with a declared terminal-false story is retired; a tasklist with NO evidence on the terminal-false story is refused. A retirement path that cannot be shown to refuse is a way to lose work"
       ],
-      "notes": "engine/agent.sh: the progress line now NAMES what advanced — \"Iteration 1: progress — 1 path outside .chief/state/ changed (e.g. src/step-1.txt) (0/1 passing). Continuing...\" — so \"progress (0/2 passing)\" is no longer printable (_product_changed records $PRODUCT_COUNT/$PRODUCT_FIRST; $prev_ids beside $prev_pass names the story that flipped). New $STALL_FILE (.chief/state/.stalled), the twin of $NOTURN_FILE, carries the give-up reason + the agent's quoted closing words; driver.sh puts it in the INCOMPLETE headline, the tasklist.incomplete detail, and a new \"⛔ STOPPED ADVANCING\" summary block kept apart from VERIFY-FAILED and PROVIDER UNAVAILABLE. Observed live: \"!! bk-spin INCOMPLETE — stalled: 2 of the last 2 iteration(s) committed nothing outside .chief/state/ — bookkeeping, not progress (budget 2 iters, stall limit 2)\" with formant's sentence quoted under it. Criterion 3 is a RECORDED FINDING, not a prose match (docs/reference/tasklist-schema.md + the stall arm's comment): no reliable signal exists, the only sound form is a protocol token like <promise>COMPLETE</promise>, and the stall counter already reaches the same stop — so chief QUOTES the words and branches on nothing. Green: bookkeeping-progress, smoke, noworkguard, ratelimit, boundary-demotion, evidence-gate, measured-bars, version-bump, doc-sync, bystander, provider-unavailable — 11 passed, 0 failed. Full test/all.sh: 59 passed, 3 failed, 6 skipped — machine-budget, decision, retry-on-failure, all three PRE-EXISTING (verified failing identically on a clean clone of main) and all three outside the merge gate. All 5 new assertions REPRODUCED against neutered clones. .chief/verify.sh: OK (allowing merge) — bash -n clean, doc-links 0 dead vs 0 on main, quality ratchet no regression (single_use_functions 38 -> 40, tol 2 — this story added no functions), VERSION 0.8.97, DOC-SYNC PASS, chief lint 5 tasklists clean. shellcheck not installed on this host (verify skips it; CI enforces).",
-      "passes": true
+      "passes": false,
+      "notes": ""
     }
   ]
 }
