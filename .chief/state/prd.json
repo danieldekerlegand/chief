@@ -44,8 +44,8 @@
         "This fires INDEPENDENTLY of the progress counter, since the failure mode is a story that is legitimately being re-measured rather than an agent doing nothing. It must catch `283` even with `112`'s bookkeeping fix in place, and a test asserts exactly that",
         "N is configurable with a stated default, and the comparison is on the story's recorded outcome rather than on commit count — `283` produced a commit every iteration and each one was real, just not new"
       ],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "test/repeat-stop.sh: PASS — the 283 shape (a fixed finding re-recorded while real product files commit every iteration) stops at 3 turns as CANNOT-COMPLETE, names US-2, quotes the finding and both fixes; the same fixture with a measurement that MOVES runs 4 turns and MERGES; REPEAT_LIMIT=2 stops at 2 turns end to end through `chief run`. 112-independence asserted in the same run: the log carries 'Iteration 2: progress' and no 'no progress' line. Gates: bash -n clean over bin/chief + engine/*.sh + test/*.sh + install.sh; smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.8.99), doc-sync PASS (README v0.8.99), terminal-false PASS, measured-bars PASS, evidence-gate PASS, bookkeeping-progress PASS, unverified-resume PASS, boundary-demotion PASS, stall-flag PASS, five-cases PASS, headless PASS, events PASS, liveliness PASS, pause PASS, research PASS, worktree-pending PASS, limitstate PASS, provider-unavailable PASS, plan-review PASS, teardown PASS, noworkguard-jsononly PASS, check-doc-links 0 dead references. test/retry-on-failure.sh FAILS ('transient took 1 attempt(s), want 2') — PRE-EXISTING, reproduced identically on the base commit d61be82 from a clean clone, and it is not in the merge gate. shellcheck not installed on this host — CI enforces it."
     },
     {
       "id": "US-3",

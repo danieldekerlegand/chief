@@ -64,3 +64,68 @@ existing tasklists classify identically before and after. `bash -n` clean over
   re-stales `doc-sync` (README's command table) and `version-bump` (VERSION) together.
 - A backtick in an unquoted heredoc RUNS — `bin/chief`'s usage blocks are `cat <<EOF`.
   Escape them `\`` when documenting the new flag.
+
+---
+
+## US-2 — A tasklist that cannot complete is DETECTED and stops
+
+**What is there.** `engine/repeat.sh` — a new module holding THE REPEAT RULE: when the
+story chief is driving records the SAME outcome (same id, same `passes`, same
+whitespace-collapsed `notes`) at `REPEAT_LIMIT` consecutive iteration boundaries
+(default **3**, `REPEAT_LIMIT=N` overrides it end to end through `chief run`), the agent
+loop stops itself with **exit 9 = CANNOT-COMPLETE**. It names the story, quotes the
+finding verbatim, and names the two resolving actions (amend the criterion / declare the
+negative terminal). Chief chooses neither — it cannot evaluate the finding.
+
+Files: `engine/repeat.sh` (new), `engine/agent.sh` (sources it beside terminal.sh;
+`REPEAT_FILE` marker; `_repeat_boundary` called at the boundary ABOVE the progress
+accounting; exit-code header), `engine/driver.sh` (`AGENT_RC_REPEAT=9`, a
+`cannot-complete` arm in `worker_park`, the run_worker arm above the no-work guard, the
+`CANNOT-COMPLETE` → `cannot-complete` outcome mapping, per-run reset of
+`$STATE/<n>.cannot-complete`, and a `CANNOT COMPLETE AS WRITTEN` summary block),
+`test/repeat-stop.sh` (new, wired into all three gate lists), `test/stall-flag.sh`
+(the new phase classified), `docs/reference/tasklist-schema.md`,
+`docs/reference/events.md`, `docs/guides/headless-invocation.md`, `VERSION` 0.8.99 +
+README.
+
+**Three things worth knowing.**
+- **An outcome only exists once it is MEASURED.** The fingerprint is empty unless the
+  open story's `notes` satisfy measure.sh's `observed` (borrowed through terminal.sh —
+  a third caller of the one predicate, never a copy). That is what stops a story
+  mid-implementation, which records nothing for several quiet iterations, from reading
+  as a repeat — the false positive that would have made the rule unusable. It also
+  makes this rule DISJOINT from `MEASURE_DEMOTE_LIMIT` by construction.
+- **It runs ABOVE the progress accounting and never touches `$stall`.** That placement
+  IS the "independent of the progress counter" criterion: 283 committed real product
+  files every iteration, so any rule expressed as a stall threshold is the same
+  blindness with a bigger number. The test asserts the log carries
+  `Iteration 2: progress` and no `no progress` line — if that ever flips, the fixture
+  has stopped reproducing 283 and the stop it observes proves nothing.
+- **A reworded finding is deliberately NOT a repeat.** Same conservatism as
+  `DEMOTE_KEY`: a missed repeat costs iterations, a false one kills a working tasklist.
+
+**Observed.** `test/repeat-stop.sh` PASS (stuck: 3 turns → CANNOT-COMPLETE; control with
+a moving measurement: 4 turns → MERGED; `REPEAT_LIMIT=2`: 2 turns). `bash -n` clean over
+`bin/chief engine/*.sh test/*.sh install.sh`. smoke · ratelimit · noworkguard ·
+version-bump · doc-sync · terminal-false · measured-bars · evidence-gate ·
+bookkeeping-progress · unverified-resume · boundary-demotion · stall-flag · five-cases ·
+headless · events · liveliness · pause · research · worktree-pending · limitstate ·
+provider-unavailable · plan-review · teardown · noworkguard-jsononly — all PASS.
+`scripts/check-doc-links.mjs`: 0 dead references. **`test/retry-on-failure.sh` FAILS**
+(`transient took 1 attempt(s), want 2`) — PRE-EXISTING: reproduced identically on the
+base commit `d61be82` from a clean clone, and it is not in the merge gate.
+`shellcheck` is absent on this host; CI enforces it.
+
+**Learnings for future iterations.**
+- **A behavioural test installs chief from `git rev-parse HEAD`.** The first run of
+  `test/repeat-stop.sh` against an uncommitted engine reported the OLD behaviour (ran to
+  the hard ceiling) and looked like a design failure. It is in CLAUDE.md; it costs a
+  confusing debug cycle every time it is forgotten. Commit, run, `--amend`.
+- **A new `phase=` literal fails `test/stall-flag.sh` until it is classified** in that
+  file's `QUIET_PHASES`/`FLAGGED_PHASES` drift guard. `cannot-complete` went in
+  FLAGGED (it is a stop, not a quiet-by-design wait).
+- US-3 (`chief retire --negative`) is the last story. It builds on `terminal.sh`'s
+  predicates, and `$STATE/<name>.cannot-complete` is now a second on-disk artifact
+  naming the story that terminated negative — the retire command can cite it rather
+  than re-deriving the diagnosis. Adding a subcommand re-stales `doc-sync` (README's
+  command table) and `version-bump` (VERSION) together.
