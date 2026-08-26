@@ -1,0 +1,301 @@
+name: CI
+
+# The merge gate, mirroring `.chief/verify.sh`: the same three checks, scoped to
+# the same paths. A green run here means what a green verify.sh means locally —
+# with two differences on purpose. verify.sh *skips* a check whose toolchain is
+# missing, because a developer's machine may legitimately lack one; CI installs
+# every toolchain instead, so a skipped gate here would be a bug, not a courtesy.
+# And the Rust gate's scope reaches one file outside `src-tauri/` — see the
+# version-parity note on `scoped backend` below.
+#
+# It also carries one check verify.sh cannot: the Windows and Linux bundles.
+# `make bundle` writes whichever of `tauri.conf.json`'s targets the *host* can
+# package, so on the macOS machine this repository is developed from, the
+# `nsis`/`msi`/`deb`/`rpm`/`appimage` half of that list is never exercised. The
+# `bundle` matrix below is the only place it is — one app definition, three
+# hosts, no second config and no parallel build script.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Which gates this PR's diff actually needs — the same globs verify.sh uses.
+  scope:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.scope.outputs.backend }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+      latex: ${{ steps.scope.outputs.latex }}
+      bundle: ${{ steps.scope.outputs.bundle }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: scope
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -uo pipefail
+          if [ -z "${BASE_REF:-}" ]; then
+            echo "No pull-request base (manual run) — every gate is in scope."
+            printf 'backend=true\nfrontend=true\nlatex=true\nbundle=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+          echo "Changed files:"; echo "$changed" | sed 's/^/  /'
+          # A change to the gate itself puts every gate back in scope: a workflow
+          # nothing runs is a workflow nobody has checked.
+          if echo "$changed" | grep -q '^\.github/workflows/'; then
+            echo "The workflow itself changed — running every gate."
+            printf 'backend=true\nfrontend=true\nlatex=true\nbundle=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          scoped() {
+            if echo "$changed" | grep -qE "$2"; then echo "$1=true"; else echo "$1=false"; fi
+          }
+          {
+            # `^ui/package.json` is not a stray: the app's version lives in three
+            # manifests (`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`,
+            # `ui/package.json`) and the rule that they agree is pinned by a
+            # `cargo test` — so bumping the frontend's copy alone has to put the
+            # Rust gate in scope, or the drift ships unnoticed. `^fixtures/` is
+            # there for the same reason: the Markdown round-trip test reads the
+            # shipped fixture, so editing it can turn that test red.
+            scoped backend '^src-tauri/|^ui/package\.json$|^fixtures/'
+            scoped frontend '^ui/'
+            scoped latex '\.tex$|^variants/|^cover-letters/|^Makefile$|^CV\.md$|^src-tauri/src/(ats|latex)\.rs$'
+            # A bundle is the Rust binary and the frontend it embeds, so it is
+            # in scope exactly when either of those gates is: the *union* of the
+            # two globs above and not a third list. A diff that skips the
+            # frontend and Rust gates skips these too, which is the same
+            # predicate `.chief/verify.sh` applies — it just has no host that
+            # can run them.
+            scoped bundle '^src-tauri/|^ui/|^fixtures/'
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # Runs on macOS: it is what Vita is packaged for, and it needs no system
+  # webkit/gtk packages installed before Tauri will compile.
+  backend:
+    name: cargo build + test
+    needs: scope
+    if: needs.scope.outputs.backend == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner image ships a stable Rust toolchain; nothing to install.
+      - run: rustc --version && cargo --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # `ui/dist` is embedded at compile time. Building the frontend here would
+      # duplicate the frontend gate, so an empty directory stands in: the crate
+      # compiles either way, and this run is checking the Rust, not the bundle.
+      - run: mkdir -p ui/dist
+
+      - name: cargo build
+        working-directory: src-tauri
+        run: cargo build --quiet
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: env RUST_TEST_THREADS=1 cargo test --quiet
+
+  frontend:
+    name: npm run build + test
+    needs: scope
+    if: needs.scope.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: npm ci
+        working-directory: ui
+        run: npm ci
+
+      # `tsc --noEmit && vite build` — the type-check is half of this gate.
+      - name: npm run build
+        working-directory: ui
+        run: npm run build
+
+      # The other half: vitest under jsdom. The Markdown preview's sanitizer is
+      # the reason it exists — a claim about what cannot execute needs a test.
+      - name: npm test
+        working-directory: ui
+        run: npm test
+
+  # The real gate: the templates still compile to a PDF.
+  #
+  # macOS is not a preference here, it is a requirement. Every template sets its
+  # fonts by absolute path, and one of those paths is
+  # `/System/Library/Fonts/Supplemental/` (Noto Sans Linear B, for the bullet
+  # glyph) — a directory only macOS has. The other two point into
+  # `/usr/local/texlive/2026/texmf-dist`, which TinyTeX does not install to, so
+  # the step below makes that path the TinyTeX tree. Both are the price of the
+  # author's real templates; see "Packaging and distribution" in the README.
+  latex:
+    name: make main
+    needs: scope
+    if: needs.scope.outputs.latex == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install TinyTeX
+        run: |
+          set -euo pipefail
+          curl -sL "https://yihui.org/tinytex/install-bin-unix.sh" | sh
+          bin="$(ls -d "$HOME/Library/TinyTeX/bin"/*/ | head -n 1)"
+          echo "${bin%/}" >> "$GITHUB_PATH"
+
+      - name: Put the TeX tree where the templates look for it
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /usr/local/texlive
+          sudo ln -sfn "$HOME/Library/TinyTeX" /usr/local/texlive/2026
+
+      - name: Install the LaTeX packages
+        run: |
+          set -euo pipefail
+          tlmgr install latexmk   # `make setup` needs it before it will run
+          make setup
+
+      - run: make main
+
+      - name: Install Poppler
+        run: brew install poppler
+
+      - name: ATS parseability check
+        run: cargo run --manifest-path src-tauri/Cargo.toml --bin ats-check -- dist/cv-main.pdf --report-only
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cv-main-pdf
+          path: dist/cv-main.pdf
+          if-no-files-found: error
+
+  # The half of `tauri.conf.json`'s target list no macOS host can write.
+  #
+  # tauri-bundler intersects `bundle.targets` with the package types the *host*
+  # supports, so the same `tauri build` that writes `Vita.app` and a `.dmg` on
+  # macOS writes `.msi`/`-setup.exe` on Windows and `.deb`/`.rpm`/`.AppImage` on
+  # Linux. There is nothing platform-specific to run — only a platform to run it
+  # on, which is what this matrix is for. `if-no-files-found: error` on the
+  # upload is the assertion: a job that compiled but packaged nothing is red.
+  bundle:
+    name: tauri build (${{ matrix.name }})
+    needs: scope
+    if: needs.scope.outputs.bundle == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Each host is a separate answer. One failing must not cancel the other,
+      # or a Windows-only regression hides which platforms are still fine.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            # WiX (msi) and NSIS are downloaded by the CLI on first use; the
+            # MSVC toolchain and WebView2 are already on the runner image.
+            artifacts: |
+              src-tauri/target/release/bundle/msi/*.msi
+              src-tauri/target/release/bundle/nsis/*-setup.exe
+          - name: Linux
+            os: ubuntu-latest
+            artifacts: |
+              src-tauri/target/release/bundle/deb/*.deb
+              src-tauri/target/release/bundle/rpm/*.rpm
+              src-tauri/target/release/bundle/appimage/*.AppImage
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustc --version && cargo --version
+
+      # Tauri's Linux prerequisites. macOS and Windows need none — the webview
+      # is part of the OS there; on Linux it is a package, and so is the toolkit
+      # around it. `libayatana-appindicator3-dev` and `libxdo-dev` are what the
+      # `libappindicator`, `muda` and `tray-icon` crates in `Cargo.lock` link
+      # against; `patchelf` and `librsvg2-dev` are the AppImage bundler's.
+      - name: Install the Linux webview toolchain
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # The Tauri CLI is a frontend dev dependency, and `beforeBuildCommand`
+      # rebuilds `ui/dist` from this same install — so the binary always embeds
+      # the frontend it was packaged with.
+      - name: npm ci
+        working-directory: ui
+        run: npm ci
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-bundle-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-bundle-${{ runner.os }}-
+
+      # `make bundle` is this plus `scripts/bundle-signing.sh`, which reports
+      # "not macOS — the bundler signs nothing here" and exits on both of these
+      # runners. Calling the CLI directly is the same command without requiring
+      # GNU make on the Windows image; `bash` is the shell on both so the step
+      # itself stays one step. The CLI must run from the repository root — it
+      # finds the app by looking for `tauri.conf.json` in a subfolder.
+      - name: tauri build
+        shell: bash
+        env:
+          # linuxdeploy, which the AppImage bundler runs, mounts itself with
+          # FUSE — which a GitHub runner does not have. Extracting instead is
+          # the supported way round it and is ignored by the other bundlers.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: ./ui/node_modules/.bin/tauri build
+
+      - name: Say what was packaged
+        shell: bash
+        run: ls -R src-tauri/target/release/bundle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vita-${{ matrix.os }}-bundles
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error

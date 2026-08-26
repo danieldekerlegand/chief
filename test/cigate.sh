@@ -20,6 +20,21 @@
 # plus: `gh` absent entirely -> UNKNOWN; an API that refuses -> UNKNOWN; and a green
 # run on a DIFFERENT commit than the one asked about -> DID NOT RUN for that commit.
 #
+# THE TRIGGER MISMATCH is the second, independent version of the same fault, and the
+# one nothing on the network can answer: `vita`'s workflow triggers only on
+# `pull_request` and `workflow_dispatch`, chief merges locally and pushes the base
+# branch, so no event chief generates could ever start it. Its CI had never run once
+# in the repository's history, and tasklist 72 was unparked and merged as
+# `auto-verified` on the premise that it had. `gh` cannot tell that apart from a
+# brand-new workflow: "no runs" is what both look like, and only the trigger says
+# which.
+#
+# So that half is driven by THE FILE, verbatim — test/fixtures/vita-ci-2026-08-25.yml
+# is vita/.github/workflows/ci.yml as it stood on 2026-08-25, copied byte for byte
+# (sha256 317fb0bbdcdd2d4289c76e899c98e5573510563df34ea98d26f980e4ac00c498). Around it,
+# one fixture per YAML form the `on:` mapping is written in, because the parser is
+# textual by design and the forms are where a textual parser goes wrong.
+#
 # Hermetic: temp git repos, a scripted fake `gh` on PATH serving fixture JSON, its own
 # CHIEF_PREFIX. No network, no agent, no ~/.chief access.
 set -uo pipefail
@@ -171,5 +186,139 @@ case "$out" in *"billing"*) ;; *) fail "chief cigate never names the public/priv
 case "$out" in *"declare no CI"*) ;; *) fail "chief cigate does not account for the repo that declares no CI: $out" ;; esac
 case "$out" in *"cg-noci"*) fail "the no-CI repo was flagged as a finding: $out" ;; esac
 
+# ── the TRIGGER MISMATCH ─────────────────────────────────────────────────────
+# Offline and textual: no fake gh is on PATH for any of this, and none is needed.
+FX="$ROOT/test/fixtures/vita-ci-2026-08-25.yml"
+[ -f "$FX" ] || fail "the vita fixture is missing — the counterfactual cannot run"
+
+# The counterfactual, against the real file. It must report the mismatch, and it
+# must report it in the OPERATOR's terms: which trigger the workflow waits for,
+# and what chief actually does instead.
+vita_detail="$(cigate_trigger_check "$FX" main)"; vita_rc=$?
+[ "$vita_rc" -eq 1 ] || fail "vita's workflow as it stood on 2026-08-25 returned rc=$vita_rc, not a mismatch"
+case "$vita_detail" in
+  *"pull request"*) ;; *) fail "the mismatch never names what the workflow waits for: $vita_detail" ;;
+esac
+case "$vita_detail" in
+  *"pushes main"*) ;; *) fail "the mismatch never names what chief actually does: $vita_detail" ;;
+esac
+case "$vita_detail" in
+  *"on: pull_request, workflow_dispatch"*) ;;
+  *) fail "the mismatch never names the triggers it read: $vita_detail" ;;
+esac
+
+# Every YAML form of `on:`, and the two ways a `push:` can still be unreachable.
+# Expected: fires | mismatch | unreadable.
+# The verdict goes in $TRIG_OUT rather than on stdout: a test that PRINTS its
+# fixtures buries the one line that matters when it fails.
+trig() {  # $1 = label, $2 = expected, $3 = base branch, stdin = the workflow
+  local f rc got
+  f="$WORK/wf-$1.yml"; cat > "$f"
+  TRIG_OUT="$(cigate_trigger_check "$f" "$3")"; rc=$?
+  case "$rc" in 0) got=fires ;; 1) got=mismatch ;; *) got=unreadable ;; esac
+  [ "$got" = "$2" ] || fail "$1: expected $2, got $got — $TRIG_OUT"
+}
+TRIG_OUT=""
+trig scalar   fires      main <<'Y'
+on: push
+Y
+trig flowseq  fires      main <<'Y'
+on: [push, pull_request]
+Y
+trig blockmap fires      main <<'Y'
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+Y
+trig quoted   mismatch   main <<'Y'
+"on":
+  - pull_request
+Y
+trig otherbr  mismatch   main <<'Y'
+on:
+  push:
+    branches:
+      - develop
+      - 'release/**'
+Y
+trig ignored  mismatch   main <<'Y'
+on:
+  push:
+    branches-ignore: [main]
+Y
+trig tagonly  mismatch   main <<'Y'
+on:
+  push:
+    tags: ['v*']
+Y
+case "$TRIG_OUT" in *"never creates a tag"*) ;; *) fail "a tags-only push is not explained as one: $TRIG_OUT" ;; esac
+trig comment  fires      main <<'Y'
+# on: pull_request   <- a comment, not a trigger
+on:
+  push:
+Y
+trig noon     unreadable main <<'Y'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+Y
+
+# The declared base branch is the one chief pushes, so it is the one that decides.
+# Same file, two projects: `develop` is dead under a repo based on main and live
+# under one that declares develop.
+trig ondevelop mismatch main <<'Y'
+on:
+  push:
+    branches: [develop]
+Y
+trig ondevelop2 fires develop <<'Y'
+on:
+  push:
+    branches: [develop]
+Y
+mkdir -p "$R_GREEN/.chief"
+printf 'CHIEF_BASE_BRANCH="develop"   # not main\n' > "$R_GREEN/.chief/config"
+[ "$(cigate_base_branch "$R_GREEN")" = develop ] \
+  || fail "a declared CHIEF_BASE_BRANCH is not the branch the trigger check measures against"
+rm -rf "$R_GREEN/.chief"
+[ "$(cigate_base_branch "$R_GREEN")" = main ] || fail "the base branch does not default to main"
+
+# ── the mismatch through the whole surface: scan, render, CLI ───────────────
+# A repo whose ONLY workflow is vita's. gh has no fixture for it, so every network
+# answer here is a refusal — which is the point: the finding is measured from the
+# file, and a repo where nothing else could be measured is where it matters most.
+R_VITA="$(mkrepo cg-vita yes)"
+mkdir -p "$R_VITA/.github/workflows"; cp "$FX" "$R_VITA/.github/workflows/ci.yml"
+vita_rows="$(cigate_scan "$R_VITA")"
+[ "$(tokof "$vita_rows")" = "$CIGATE_DEAD" ] \
+  || fail "a workflow chief can never start reads as '$(tokof "$vita_rows")', not DID NOT RUN"
+case "$(detof "$vita_rows")" in
+  "trigger mismatch: "*) ;;
+  *) fail "the mismatch is not tagged so the report can find it again: $(detof "$vita_rows")" ;;
+esac
+case "$(detof "$vita_rows")" in
+  *"not measured"*) ;;
+  *) fail "the mismatch row swallowed the unmeasured run verdict instead of keeping it: $(detof "$vita_rows")" ;;
+esac
+case "$(cigate_render "$vita_rows")" in *"DID NOT RUN"*) ;; *) fail "the mismatch is missing from the findings render" ;; esac
+
+# A green run does NOT clear a mismatch. Someone opening a pull request by hand is
+# exactly the reassuring surface this whole tasklist exists to stop trusting.
+cp "$FX" "$R_GREEN/.github/workflows/ci.yml"
+green_wf_rows="$(cigate_scan "$R_GREEN")"
+[ "$(tokof "$green_wf_rows")" = "$CIGATE_DEAD" ] \
+  || fail "a passing run on a workflow chief cannot start still read as '$(tokof "$green_wf_rows")'"
+case "$(detof "$green_wf_rows")" in
+  *"passed on"*) ;; *) fail "the mismatch row threw away the passing run instead of reporting it alongside" ;;
+esac
+mkwf "$R_GREEN" CI    # back to the reachable workflow for anything after this
+
+out="$(bash "$ROOT/bin/chief" cigate "$R_VITA" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] || fail "chief cigate exited $rc on a trigger mismatch — this reports, it never blocks"
+case "$out" in *"TRIGGER MISMATCH"*) ;; *) fail "chief cigate does not separate the mismatch from the billing story: $out" ;; esac
+case "$out" in *"not in billing"*) ;; *) fail "chief cigate does not say the mismatch has a different fix: $out" ;; esac
+
 [ "$fails" -eq 0 ] || exit 1
-echo "CIGATE PASS — declared-but-dead gates reported (never-started · never-run · not-current); no-CI and green repos not flagged; gh absent, no remote and a refusing API all land on UNKNOWN and never on a pass"
+echo "CIGATE PASS — declared-but-dead gates reported (never-started · never-run · not-current); no-CI and green repos not flagged; gh absent, no remote and a refusing API all land on UNKNOWN and never on a pass; vita's 2026-08-25 workflow reports its trigger mismatch offline, in prose, and a passing run does not clear it"

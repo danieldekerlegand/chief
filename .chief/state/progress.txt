@@ -71,3 +71,71 @@ installed on this host — CI enforces it.
   textual reader rather than add a parser.
 - `cigate_classify` is a PURE function of (slug, one run record, sha) apart from the
   jobs probe, which is why the fixtures can drive every branch of it.
+
+## US-2 — The trigger mismatch is detectable, because it is invisible otherwise  (2026-08-26)
+
+Extended `engine/cigate.sh` with the OFFLINE, TEXTUAL trigger check and laid it over
+every arm of the scan.
+
+Files: `engine/cigate.sh` (new `--- the TRIGGER MISMATCH ---` section + `cigate_row`,
+`cigate_scan`/`cigate_unknown_rows` routed through it, `cigate_summary` counts it),
+`test/cigate.sh` (the counterfactual + 11 `on:`-form fixtures), `test/fixtures/
+vita-ci-2026-08-25.yml` (new — vita's workflow byte for byte), `bin/chief` (usage),
+`README.md` (command row + version), `ROADMAP.md` (version), `VERSION` 0.9.3 -> 0.9.4.
+
+What it does: reads a workflow's `on:` mapping textually (`cigate_on_block` — one awk,
+no YAML dependency, no network) and asks whether a push of the repo's declared base
+branch would start it. If not, the row is `DID NOT RUN` with the reason in the
+operator's terms — what the workflow waits for, and what chief actually does — and
+whatever GitHub said is kept alongside rather than thrown away.
+
+**A MISMATCH WINS over a green run.** A passing run on a `pull_request`-only workflow
+means someone opened a PR by hand; chief's merge was still ungated. That reassuring
+surface is the exact thing this tasklist exists to stop trusting, so the row stays
+`DID NOT RUN` and names the passing run in the aside.
+
+**The mismatch is reported in the UNKNOWN arms too.** No remote / no `gh` / no network
+still yields a real verdict here, because the finding is measured from the FILE. That
+is the case worth having: a repo where nothing else could be measured.
+
+**`gh` cannot answer this question at all.** "No runs" is what a dead gate and a
+brand-new gate both look like; only the trigger says which. That is why US-1's network
+probe left vita indistinguishable from a repo that had just added CI.
+
+Counterfactual (real portfolio, 2026-08-26): vita 1/1 mismatch — `pull_request` +
+`workflow_dispatch`, exactly the shape tasklist `72` merged against. Eight more the
+billing story would have hidden: cuneiform 3 (two cron-only nightlies, one tags-only
+release), talos 3, pinakes 2. praxis 0.
+
+Gates: `test/cigate.sh` PASS, smoke PASS, ratelimit PASS, noworkguard PASS,
+version-bump PASS, doc-sync PASS, `bash -n` clean, doc-links 0 dead, quality ratchet OK
+(`function_length_max` 192 -> 204, tol 15). `shellcheck` not installed on this host.
+
+### Learnings for future iterations
+
+- **`function_length_max` headroom on this branch is now 3 LINES** (192 on main, 204
+  here, tolerance 15). `usage()` in `bin/chief` owns the metric, so US-3's usage edit
+  must add at most 3 lines — or move a block out of `usage()` to buy room.
+- **The nogh-PATH arm of `test/cigate.sh` is a DEPENDENCY GATE, and it works.** It
+  symlinks only the tools the module needs (`basename git sed head awk jq cut`), so
+  reaching for `tr` or `grep` fails the test immediately. Both of mine did; both were
+  replaced with `awk` and bash parameter expansion. Do not "fix" that by widening the
+  symlink list — the narrowness is the check.
+- **The shell this agent's Bash tool runs is `zsh`, not bash.** Unquoted `$var` does
+  NOT word-split there, so a `for x in $list` loop silently iterates once and a shell
+  test of engine code passes or fails for the wrong reason. Always drive engine
+  functions with `bash -c '...'` or `bash <<'SH'`, never a bare tool invocation.
+- **`case` globs cross `/` and GitHub's `*` does not** (`**` does). `cigate_branch_matches`
+  therefore matches slightly MORE than GitHub would, on purpose: reporting a live gate
+  as dead costs an operator's attention, and only the other direction is silent. Every
+  ambiguous call in this module errs the same way.
+- **A `schedule`-only nightly is reported as a mismatch, and that is a judgement call
+  worth revisiting.** It is literally true (chief's merge never starts it) and the
+  prose says "a cron clock rather than your change" — but a nightly is not usually
+  meant to be a merge gate, so it is arguably noise. If US-3 or a successor wants to
+  separate "cannot be started by chief" from "not intended as a merge gate", the seam
+  is `cigate_event_prose` + the `CIGATE_MISMATCH_TAG` count in `cigate_summary`.
+- **`CIGATE_MISMATCH_TAG` is the marker that lets a report find this finding again**
+  without a fifth TSV column. It is written in exactly ONE place (`cigate_row`) and
+  matched with `index($4, t) == 1`. US-3's merge record should key off the same tag
+  rather than re-matching the prose.

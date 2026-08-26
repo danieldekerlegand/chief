@@ -40,7 +40,8 @@
         "Detection is textual and offline. Do not add a YAML dependency or a network call to the engine for this.",
         "Counterfactual: pointing the check at vita's workflow as it stood on 2026-08-25 reports the mismatch. That file is the fixture."
       ],
-      "notes": null
+      "notes": "test/cigate.sh PASS — the counterfactual runs against test/fixtures/vita-ci-2026-08-25.yml, vita/.github/workflows/ci.yml copied byte for byte (sha256 317fb0bb…), and reports the mismatch naming both halves: what it waits for (a pull request, a manual dispatch) and what chief does (merges into main locally and pushes main). 11 more trigger fixtures cover every `on:` form (scalar / flow seq / block map / quoted \"on\" / block seq), a comment that only looks like a trigger, a branches filter, branches-ignore, tags-only, a declared CHIEF_BASE_BRANCH, and a file with no `on:` at all (unreadable, never a pass); plus a green run that does NOT clear a mismatch. Zero new tool dependencies and no network — the nogh-PATH arm of the existing suite caught the two I had added (tr, grep) and both are gone. Gates: bash -n clean across bin/chief + engine/*.sh + test/*.sh + install.sh; cigate PASS, smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.9.4), doc-sync PASS (38 merged tasklists); doc-links 0 dead references; quality ratchet OK (function_length_max 192 -> 204, tol 15). shellcheck not installed locally — CI enforces it. Counterfactual against the real portfolio: vita 1/1 trigger mismatch (pull_request + workflow_dispatch), and 8 more the billing story would have hidden — cuneiform 3 (2 cron-only, 1 tags-only release), talos 3, pinakes 2 (1 cron-only, 1 workflow_dispatch-only); praxis 0.",
+      "passes": true
     },
     {
       "id": "US-3",

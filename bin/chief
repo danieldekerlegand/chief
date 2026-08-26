@@ -154,8 +154,12 @@ Usage:
        [paths…]               DECLARES: RAN AND PASSED · RAN AND FAILED · DID NOT RUN (no run
                               ever, a run that completed without executing a single step, or a
                               green run that never covered the commit asked about). A repo with
-                              no workflows is not flagged. OFFLINE-SAFE: no gh, no remote or no
-                              network is UNKNOWN — stated as unknown, never rounded to a pass.
+                              no workflows is not flagged. Also the TRIGGER MISMATCH: a workflow
+                              waiting for an event chief never produces (a pull request, a manual
+                              dispatch, a branch it does not push) — read from the file, offline,
+                              because "no runs" is what a dead gate and a new one both look like.
+                              OFFLINE-SAFE: no gh, no remote or no network is UNKNOWN — stated as
+                              unknown, never rounded to a pass.
                               -a all known repos · -v also the healthy · always exits 0
   chief approve [names…]      release a branch HELD AT AN OVERLAP ZONE — a domain this repo
        [--list] [-m NOTE]     declared in .chief/zones.conf as one where a green gate is not
