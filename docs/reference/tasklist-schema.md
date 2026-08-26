@@ -181,6 +181,53 @@ Notes:
   `chief ps` and `chief list` render a settled negative distinctly — `2+1/4`, never
   folded into the passing count and never left out of it.
 
+  **Retiring one by hand: `chief retire --negative <name>`.** A tasklist that settles
+  on a negative and still has a branch to merge is finished by `chief run` like any
+  other. The command is for the other case — the one `283` was in, where the branch
+  will not (or should not) run again and the operator has to close the tasklist
+  themselves. It retires a tasklist whose delivered stories **passed** and whose
+  remaining story **terminated false**, and refuses everything else:
+
+  | state | `chief retire --negative` |
+  |---|---|
+  | every story settled, ≥1 settled **NO** | **retires** — files `completed/`, removes the live tasklist |
+  | an ordinary open story (no declaration) | **refuses**, naming the story |
+  | declared but nothing measured | **refuses**, naming the story |
+  | every story passes, nothing negative | **refuses** — that one retires by *merging* |
+  | not in the base branch, and something still `dependsOn` it | **refuses**, naming the dependents |
+
+  The last row is the retirement trap the `downstreamCounterpart` note below describes:
+  a `completed/` record satisfies a dependency edge only if it carries `mergedToMain`,
+  so filing an unmerged one under a live dependent blocks that dependent forever.
+  Chief stamps `mergedToMain` when it can verify the branch is contained in the base,
+  and otherwise says so plainly.
+
+  The **declaration and the finding usually live in different files** — the operator
+  adds `terminalFalse` to `tasks/chief/<name>.json` after a run has already recorded
+  the measurement in `.chief/state/snapshots/<name>.json` — so the command reads the
+  **union** of the two per story id and reports which file supplied the measurement.
+  The record it writes keeps the negative as `false` with its `notes`, and lifts the
+  same finding into a `retiredOnNegative` block so a successor tasklist can cite it
+  without knowing the predicate:
+
+  ```jsonc
+  "retiredOnNegative": {
+    "at": "2026-08-26T18:22:41Z",
+    "by": "chief retire --negative",
+    "branch": "chief/283-nixos-bare-metal-vpn-topology-target",
+    "merged": false,                    // no mergedToMain: satisfies no dependency edge
+    "source": "the run's snapshot .chief/state/snapshots/283-….json",
+    "stories": [
+      { "id": "US-3",
+        "title": "VERIFY the MaaS commission→deploy flow, honestly",
+        "finding": "verdict maas-client-absent; no file under core/ services/ apps/ … calls a MaaS API. Do this instead: land a MaaS client in services/ first." }
+    ]
+  }
+  ```
+
+  `-n` prints the verdict and writes nothing; `--no-commit` leaves the two file changes
+  in the working tree instead of committing them.
+
 - **Progress is judged on the DIFF, and chief's own state directory does not count.**
   An iteration advances the tasklist if a story's `passes` rose, or if its commits
   touched at least one path outside `.chief/state/` (`$CHIEF_STATE_DIR`). A commit whose

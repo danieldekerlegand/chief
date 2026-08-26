@@ -128,6 +128,9 @@ jobs:
       - name: A tasklist that cannot complete is detected and stopped (one outcome, re-recorded)
         run: bash test/repeat-stop.sh
 
+      - name: Retiring a tasklist on a NEGATIVE finding (and refusing one that is merely unfinished)
+        run: bash test/retire-negative.sh
+
       - name: Bookkeeping is not progress (a state-only commit cannot extend the budget)
         run: bash test/bookkeeping-progress.sh
 

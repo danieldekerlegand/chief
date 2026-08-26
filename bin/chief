@@ -160,6 +160,15 @@ Usage:
   chief decide NAME VERDICT  record the operator's verdict with --note NOTE, then
        [--retire ID]          retire it to completed/ (without mergedToMain), or
        [--unpark]             clear its park while retaining the verdict.
+  chief retire --negative     retire a tasklist whose delivered stories PASSED and whose remaining
+       NAME [-n] [--no-commit] story TERMINATED FALSE — declared "terminalFalse" and carrying the
+                              measurement behind the answer. Files the completed/ record (the
+                              negative keeps its \`false\` and its finding, plus a
+                              "retiredOnNegative" block a successor tasklist can cite) and stops
+                              the tasklist being scheduled. REFUSES a tasklist whose stories are
+                              merely unfinished, one whose declaration recorded no measurement,
+                              and — when the work never reached the base branch — one that live
+                              tasklists still depend on. -n reports the verdict and writes nothing
   chief pause [--all]         withhold AGENT TURNS: launch no tasklist and start no new agent
                               iteration — but DRAIN, never kill: the iteration in flight runs to
                               completion so its commits land, a tasklist whose agent loop already
@@ -1058,6 +1067,16 @@ cmd_reap()    { bash "$ENGINE/reap.sh" "$@" ; }
 # docs/reference/verify-hook.md.
 cmd_quality() { bash "$ENGINE/quality.sh" "$@" ; }
 
+# ── retiring a tasklist whose answer was NO (engine/retire.sh) ───────────────
+# The one retirement an operator makes by hand. Chief retires a FINISHED tasklist by
+# merging it; a tasklist whose remaining story TERMINATED FALSE (engine/terminal.sh)
+# has finished too — it delivered a finding rather than a passing story — and before
+# this there was no command for that, so `283`'s agent asking in its notes for MANUAL
+# RETIREMENT had nowhere for the ask to land. Gated on load_project because it files
+# into the project's tasks dir and reads the project's state, both of which the
+# project's own .chief/config may have relocated.
+cmd_retire()  { load_project; bash "$ENGINE/retire.sh" "$@" ; }
+
 # ── overlap-zone approval (the YES no automated gate can give) ───────────────
 # The merge floor — rebase, re-verify, merge --no-ff — is chief's correctness
 # guarantee, and it is blind to exactly one thing: two parallel branches whose code
@@ -1346,6 +1365,7 @@ case "$cmd" in
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   quality)              cmd_quality "$@" ;;
+  retire)               cmd_retire "$@" ;;
   approve)              cmd_approve "$@" ;;
   decide)               cmd_decide "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;

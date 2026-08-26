@@ -129,6 +129,9 @@ repeat_actions() {
         "terminalFalse": true to that story (docs/reference/tasklist-schema.md). It
         then SETTLES on the measurement it already recorded, `passes` stays false
         because the answer is false, and the finding travels into completed/.
+        Then either re-run this tasklist (chief finishes and merges it), or — if
+        nothing more should run against it — file it where it stands:
+            chief retire --negative <tasklist>
    Chief does not decide which of those is true: it cannot evaluate the finding, and
    guessing would be a way to bury unfinished work.
 EOF
