@@ -85,8 +85,8 @@ implements their work) and contract definitions (those live in `koine`).
 
 ## Milestones
 
-One list, everything: shipped capabilities, the ongoing steady-state bars, and the modest planned
-hardening. Chief was extracted from a production multi-tasklist setup, then generalized, so the
+One list, everything: shipped capability bands, the three tasklists in flight, the ongoing
+steady-state bars, and the open threads that carry a recorded decision rather than a plan. Chief was extracted from a production multi-tasklist setup, then generalized, so the
 shipped rows are **capability bands, not a linear rewrite** — the earliest rows predate self-hosting
 and carry no single tasklist. Status legend: **✅ shipped · 🚧 partial / ongoing · ⬜ planned**. The
 Tasklist column names the Chief tasklist that delivered a row (✅, with its merge sha) or the
@@ -180,6 +180,68 @@ Refinery's batching + bisect; keep everything else.
 |---|---|---|
 | ✅ | **Opt-in batch-then-bisect merge queue** — batch N merge-ready branches, verify the tip once, binary-bisect on failure and merge only the passers; default-off, serialized floor unchanged when absent; a bisect the confirming run contradicts is abandoned wholesale and every branch re-run serially · M/L | `chief/92-opt-in-batch-then-bisect-merge-queue` · `c5ada5a` |
 
+### Operating the fleet — merge safety, durability & the evidence rule — ✅ shipped (`93`–`103`, 2026-08-17 → 08-20)
+
+Eleven tasklists, and **not one of them came from a design wishlist** — every row was written from a
+failure observed while chief was driving the portfolio, with the measurement in the tasklist. Three
+threads run through the band: the **merge floor** meeting a real operator (`93`, `94`), the
+**resources a run creates and never collects** (`95`, `99`, `102`, `103`), and the **evidence rule** —
+chief refusing to record a pass it cannot check (`98`, `100`, `101`), which is the direct ancestor of
+the iteration-outcome band below.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ✅ | **Dirty-checkout merge safety** — the merge phase stopped rebasing in the *operator's* checkout, and a refused rebase is never re-dispatched to the agent. Two cuneiform tasklists had each finished every story, each failed to merge over one modified tracked file, and each burned 3/3 retries — six wasted iterations for work that was already done | `chief/93-dirty-checkout-merge-safety` · `5396c32` |
+| ✅ | **Stall flag is run-state aware** — per-phase thresholds plus elapsed-in-phase shown routinely, so *slow* is distinguishable from *stuck*. Nine runs were stopped as "stalled"; **seven were working** (logs of 73 KB / 47 KB / 21 KB), flagged only because `provider-waiting` is the whole duration of an agent turn and had no clock beside it | `chief/94-stall-flag-is-run-state-aware` · `1ff485a` |
+| ✅ | **Worktree build-artifact reaping** (`engine/sweep.sh`) — what chief *caused to be built* inside a worktree goes with the worktree, as a table of toolchain artifact dirs. A shared `CARGO_TARGET_DIR`, a symlink or a sibling worktree is refused with a stated reason, never followed. The trigger: a `target/` tree at **61 GB across 729,816 files** | `chief/95-worktree-build-artifact-reaping` · `25d1c3e` |
+| ✅ | **Submodule story-progress durability** — for a `repo:<sub>` tasklist the tasklist lives in the parent and the work branch in the submodule, so neither side could record "2 of 3"; an insimul tasklist at 2/3 resumed at **0/3** onto a branch already carrying its own work. The per-tasklist snapshot outside the worktree is now the record | `chief/96-submodule-story-progress-durability` · `459767d` |
+| ✅ | **`chief status`** — what is *left* and what can *start now*, across one repo or a whole tree of them: remaining live/parked, runnable vs. blocked, `--blocked` aggregating by edge (holds / releases / cascade), `--json`. It **is** the scheduler's own gate run in report mode (`engine/deps.sh`), because a second implementation would drift and then name work as startable that a run would refuse to start. Measured need: 312 remaining across 16 repos, 93 parked, 82 blocked ([`docs/reference/status.md`](docs/reference/status.md)) | `chief/97-tasklist-state-report` · `f8c03bf` |
+| ✅ | **Unverified criteria must not pass** — the evidence rule: a story whose criteria state a checkable bar and whose `notes` carry no observed value is not a pass. Chief requires the measurement and never judges it. **Five stories in one day** had reported green against criteria that were not met, and 9 of 10 passing stories in that batch had empty `notes` | `chief/98-unverified-criteria-must-not-pass` · `482b5ef` |
+| ✅ | **Reap must not infer orphanhood** — an unreadable registry stopped being evidence of orphanhood, and the test suite stopped running host-wide sweeps. Starting one chief tasklist had **killed every other chief run on the host** (cuneiform, vita, rosetta); only the tree the sweep executed inside survived. `test/bystander.sh` now proves a bystander lives | `chief/99-reap-must-not-infer-orphanhood` · `e6826b1` |
+| ✅ | **Evidence checked at the iteration boundary** — the demotion moved from merge time (where the agent is already gone) to the boundary where the next turn can still act, and that turn is *told* what was demoted and why. Four tasklists across three repos had needed hand-rescue in a single day; none was a defect in the work | `chief/100-evidence-checked-at-the-iteration-boundary` · `826a2dc` |
+| ✅ | **UNVERIFIED survives the resume** — the demotion used to live only in the worktree's runtime PRD, so the next run read an all-pass committed tasklist, skipped the agent, and re-failed identically forever (insimul `261`: three runs, same story, every time). The stop is now persisted beside the verify-failed log and read as a third re-engage arm | `chief/101-unverified-survives-the-resume` · `a9ba809` |
+| ✅ | **Retired work must not leave a marker** (`engine/counterpart.sh`) — a placeholder tasklist for work owned by another repo declares its `downstreamCounterpart` as a *field*, and a merged counterpart with a live marker is reported by name in `chief lint` and `chief list`. **Five of koine's ten markers had already shipped** and every one was still counted as pending | `chief/102-retired-work-must-not-leave-a-marker` · `f3226e9` |
+| ✅ | **Monitor must not outlive its terminal** — the `watch` arm checks its tty and its parent each tick and exits when either is gone, and `chief reap` gained a second kind (an abandoned *view*) reported separately from agent work. **Nine orphaned watchers**, PPID 1, oldest 11.5 hours, and `chief reap` had reported "no orphaned chief processes" while they ran | `chief/103-monitor-must-not-outlive-its-terminal` · `b093b9f` |
+
+### Operator ergonomics — ✅ shipped (`104`–`109`, 2026-08-21 → 08-22)
+
+**A single programme, not six errands: chief could already do the work and could not yet be
+*operated*.** Each row closes a gap between something chief already knew and the operator who needed
+to see or spend it — a usage ledger plumbed end to end that returned `null` for the default provider;
+a decision that could be prepared and held for a human but had nowhere to land; a `list` whose live
+work was 2% of its output; a `-p N` that bounded one run while five ran; a worktree reclaimed only by
+a tasklist running *again*, which a merged tasklist never does.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ✅ | **Claude turns report their usage** — the default provider is invoked so that real token/cost figures reach the `agent.turn` event, while the turn's human-readable output still reaches the log and the agent loop **unchanged** (a ledger bought by breaking completion detection is worse than `null`); a provider that prints nothing usage-shaped still yields `null`, cleanly | `chief/104-claude-turns-report-their-usage` · `c67379c` |
+| ✅ | **`chief usage`** — spend and **rate-limit incident history** read back out of the event logs chief already writes: how often a limit was hit, how long was lost waiting, when the window resets. Deliberately not dependent on `104`, because on a subscription plan the useful question is *how close am I to the window* and **no provider CLI answers it**. Reads; never a second ledger ([`docs/reference/usage.md`](docs/reference/usage.md)) | `chief/105-chief-usage-reports-spend-and-limits` · `0a178b2` |
+| ✅ | **Decision tasklists carry a verdict** — a park says what *kind* of park it is, a DECISION tasklist's deliverable is the operator's verdict rather than a merge, and `chief decide` records it and files the retirement. The agent prepares the decision and is structurally unable to make it. Measured: **20 parked tasklists referenced a decision and not one set `parkedReason`** ([`docs/reference/decision-tasklists.md`](docs/reference/decision-tasklists.md)) | `chief/106-decision-tasklists-carry-a-verdict` · `c2c30e4` |
+| ✅ | **`chief list` / `chief ps -a` show what is live** — `list` defaults to live work as a table with a stable machine contract, and `ps -a` shows everything in flight (running + ready + blocked + parked). `97`'s boundary was kept: `list` stays per-tasklist, `status` stays aggregate, neither absorbs the other. In cuneiform the live work was **under 16% of 371 lines** | `chief/107-list-and-ps-show-what-is-live` · `522ee4c` |
+| ✅ | **Concurrency is machine-wide** — `-p N` bounded one run while nothing bounded runs against each other, so five concurrent runs on a 14-core host reached **load average 62, 4.4× oversubscribed**, and one cuneiform iteration spent ~5 hours whose entire output was *"Gate is still on `engine-build` … Waiting"* behind three concurrent `verify.sh` processes. A machine-wide budget now defaults to the hardware, and contention is visible where the operator already looks ([`docs/reference/concurrency.md`](docs/reference/concurrency.md)) | `chief/108-concurrency-is-machine-wide` · `35d2568` |
+| ✅ | **Reclaim a merged tasklist's worktree** — reclamation was keyed to a tasklist *running again*, which a merged one never does, and every removal was best-effort with its failure discarded. `~/.chief/worktrees` had reached **94 GB across 1,867 containers**, 1,857 of them dead shells, on a host at 84% full. Retirement now reclaims, a removal that loses is **reported** at every site, and a startup sweep bounds the debt earlier runs stranded | `chief/109-reclaim-a-merged-tasklists-worktree` · `3a26242` |
+
+### Iteration-outcome honesty — ✅ shipped (`110`–`113`, 2026-08-22 → 08-26)
+
+**One thesis, four measurements: chief learning to tell real progress from motion.** Every row is the
+same defect in a different direction — chief's *iteration-outcome classifier* answering a question
+about work with an observation about activity. A branch that changed nothing was verified as though
+it had; an API that never took the turn was scored as an agent that got nowhere; a commit touching
+only chief's own state files was scored as progress; and a story whose correct, measured answer was
+`false` was re-driven forever because chief had exactly one notion of done. The band's asymmetry is
+the point: the loop was rigorous about a false claim of **completion** (the no-work guard, `98`/`100`)
+and accepted a false claim of **progress** without checking anything.
+
+This is a **taxonomy**, and naming it is most of the value — `111` stops a run too *early*, `112` lets
+one run *forever*, and the fix for either must not quietly redefine the other.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ✅ | **A green branch should not be verified three times** — re-verification after a rebase stays (semantic staleness has no other detector); what ended is paying a full gate for a tree that **did not change**. A verify-result cache keyed on the tree, an approval that lands without a whole second run, the agent's own verify and the merge gate no longer two full runs of the same thing, `ps` no longer reporting a waiting branch as working, and a hold record that cannot outlive its branch. Measured: a 2h11m `-p1` run in which one already-green 4/4 branch took **~34 minutes to merge**, and a 3/3 branch paid **2 merge-phase verifies over 6 agent iterations** | `chief/110-a-green-branch-should-not-be-verified-three-times` · `22e70bd` |
+| ✅ | **An API error is not a stall** — an iteration that never reached the model does not count as an attempt, a transient provider failure is **waited out** rather than fired into, and work already on disk is never described as no work. Measured on talos: three consecutive iterations whose entire output was `API Error: 529 Overloaded`, counted as no-progress, hit `stall 3/2`, and left INCOMPLETE a branch whose adopted upstream — 2,029 files — sat intact in the worktree ([`docs/reference/provider-unavailability.md`](docs/reference/provider-unavailability.md)) | `chief/111-an-api-error-is-not-a-stall` · `2df23f9` |
+| ✅ | **A bookkeeping commit is not progress** — progress now means a story moved or **the product changed**; a legitimate bookkeeping commit is still allowed to happen, it just no longer buys an iteration, and the operator can see the difference without reading the log. Measured in formant: a tasklist blocked on a measurement only a human could take ran to **iteration 11 of a 5-iteration budget over 1h32m**, each extension bought by one of **five consecutive commits whose entire content was a re-check stamp** in `.chief/state/`, every one printed as `progress (0/2 passing). Continuing...` | `chief/112-a-bookkeeping-commit-is-not-progress` · `b5011ad` |
+| ✅ | **A story may terminate false** — a story can declare that `false` is its *terminal* answer (`terminalFalse`, `engine/terminal.sh`), a tasklist that therefore cannot report all-stories-true is **detected and stopped** rather than run to the cap, and `chief retire --negative` files it without hand-editing JSON. Measured on cuneiform: a story whose criterion said in as many words that a failing verification stays `passes: false` was re-driven across **63 commits — 21 iterations in one run, 59 across the program, 42 consecutive identical measurements** — and the agent's terminal note (*"this tasklist can NEVER report all-stories-true … it needs MANUAL RETIREMENT"*) was correct and had no channel chief could hear ([`docs/reference/tasklist-schema.md`](docs/reference/tasklist-schema.md)) | `chief/113-a-story-may-terminate-false` · `716c9e4` |
+
 ### Hardening & breadth — ✅ shipped (`78`–`87`), two ongoing bars
 
 The 2026-08-11 hardening band. Every discrete row in it merged on 2026-08-12; what remains under this
@@ -227,11 +289,29 @@ Deliberate non-goals, not backlog:
 | ⬜ | `touches` tags stay advisory *by default* — the **merge floor**, not perfect tagging, is the correctness guarantee (under-tagging costs a wasted rebase, over-tagging costs parallelism; neither costs correctness). A project may opt a named domain into policy with `91`'s overlap zones; nothing is enforced that was not declared | never |
 | ⬜ | Cross-host run aggregation — the monitor + registry stay per host/user; the fleet-wide view across machines is **chief-cloud's** (its daemon + control plane aggregate over chief's on-disk state and its `81` event stream), never a chief feature | never — chief-cloud's |
 
-### Loose wishlist — ⬜ not yet scoped
+### In flight — 🚧 authored, unmerged
 
-Empty. No future threads are parked — chief is a tool and its scope stays deliberately small; every
-known item is either an authored tasklist, an ongoing bar, or a **By design** non-goal above
-(cross-host run aggregation moved there: it is chief-cloud's, not a chief convenience).
+The live head, and it is the same thesis as the `110`–`113` band above: **an outcome chief reports
+must be an outcome chief checked.** Records are in [`tasks/chief/`](tasks/chief/); none carries a
+`mergedToMain` yet.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| 🚧 | **The roadmap states what is true today** — this file. It documented the `77`–`92` era, claimed `v0.8.0` against a `VERSION` two minor releases ahead, listed 12 of 22 subcommands, and was silent on `93`–`113`; the fix includes extending the doc-sync gate to cover it, because the gate that would have caught this deliberately did not | `chief/114-the-roadmap-describes-a-program-that-ended` |
+| 🚧 | **A gate that did not run is not a gate that passed** — every private repo in the portfolio had dead CI for an unknown period (an account-level billing block, byte-identical on all three), and vita's workflow triggers only `on: pull_request` while chief merges locally and pushes — so its CI had never run once, and a tasklist merged `auto-verified` on the premise that it had. Chief does not become a CI client; it refuses to let **absence read as success** | `chief/115-a-gate-that-did-not-run-is-not-a-gate-that-passed` |
+| 🚧 | **A decision tasklist cannot finish** — `106` shipped the operator surface and the halt and never connected them: the verdict `chief decide` writes is read by nothing, the halt is unconditional on every later run, neither `--retire` nor `--unpark` fits, a decision tasklist that *carries code* (2,209 insertions in the first real one) has no path to merge after the verdict, and `AWAITING-DECISION` — a successful terminal state — is reported as a failure that blocks five dependents | `chief/116-a-decision-tasklist-cannot-finish` |
+
+### Open threads — ⬜ parked, with conditions
+
+Not a wishlist: each is a thread with a **recorded decision and a stated condition for re-opening**.
+Chief is a tool and its scope stays deliberately small, so anything else known is either an authored
+tasklist, an ongoing bar, or a **By design** non-goal above (cross-host run aggregation moved there:
+it is chief-cloud's, not a chief convenience).
+
+| Status | Thread | Disposition |
+|---|---|---|
+| ⬜ | **Binding a cross-worktree conflict predictor** behind the `touches` seam (Clash, Grove; ccswarm checked and excluded) | **Declined 2026-08-17, seam left open.** `touches` is consumed at *admission*, when the candidate branch has no worktree and no diff — a predictor derives its verdict from diffs between live worktrees and has nothing to read at that instant. Chief built the registry itself (`91`); a predictor could later supply *additional* zone matches at the merge-time seam as an optional input whose absence changes nothing, behind a config flag and an installed binary. Reversal conditions are recorded in [`docs/decisions/conflict-predictor-adoption-decision.md`](docs/decisions/conflict-predictor-adoption-decision.md) |
+| ⬜ | **Desktop monitor app** | **Decided CLI-only** — see the `79` row above; the GUI surface is chief-cloud's ([`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md)) |
 
 ---
 
@@ -241,11 +321,17 @@ known item is either an authored tasklist, an ongoing bar, or a **By design** no
   [`tasks/chief/completed/`](tasks/chief/completed/), each stamped with a `mergedToMain` sha; all 37
   were checked against git on 2026-08-26 and none is missing one. The band runs `bd030a6`
   (2026-08-01) → `716c9e4` (2026-08-26).
-- **3 live tasklists** in [`tasks/chief/`](tasks/chief/): `114-the-roadmap-describes-a-program-that-ended`
-  (this file), `115-a-gate-that-did-not-run-is-not-a-gate-that-passed`,
-  `116-a-decision-tasklist-cannot-finish`.
+- The merged program reads as **five bands**, and the last three are named phases above rather than
+  runs of numbers: `77`–`87` hardening & the embeddable engine · `88`–`92` agent-output quality then
+  merge throughput · `93`–`103` operating the fleet (merge safety, durability, the evidence rule) ·
+  `104`–`109` **operator ergonomics** · `110`–`113` **iteration-outcome honesty**.
+- **3 live tasklists** in [`tasks/chief/`](tasks/chief/), rowed under *In flight* above:
+  `114-the-roadmap-describes-a-program-that-ended` (this file),
+  `115-a-gate-that-did-not-run-is-not-a-gate-that-passed`, `116-a-decision-tasklist-cannot-finish`.
+  All three continue the `110`–`113` thesis: an outcome chief reports must be an outcome chief checked.
 - The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep, not discrete
-  tasklists.
+  tasklists, and the two **open threads** (conflict-predictor binding, desktop GUI) are decided-and-
+  parked with reversal conditions in [`docs/decisions/`](docs/decisions/) — not unscoped wishes.
 - Chief is self-hosting: new work is written as `tasks/chief/NN-slug.json` and driven with chief
   itself. A `completed/` record means it merged — verify actual engine changes, not just `passes`
   flags.

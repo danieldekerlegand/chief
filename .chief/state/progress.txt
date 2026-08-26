@@ -47,3 +47,62 @@ did not add sections for them — it only made the existing text true.
 - The doc-link checker scans **tracked files** for `docs/…md` paths. Every doc referenced in the new
   Related Docs list was confirmed present with `find docs -name '*.md'` first; `../AGENTIC-
   ENGINEERING-ADVISORY.md` is outside the repo and the checker leaves it alone.
+
+## US-2 — The two unnamed programmes get names and rows (2026-08-26)
+
+Added the three missing phase sections to `ROADMAP.md` (274 → 360 lines) and replaced the one
+provably false paragraph in the file.
+
+**Three new sections, inserted after the `92` merge-throughput band so the numbered program reads
+in order (`88`→`92`→`93`–`103`→`104`–`109`→`110`–`113`) before the older `78`–`87` bands:**
+
+1. **Operating the fleet — merge safety, durability & the evidence rule (`93`–`103`, 08-17 → 08-20)**
+   — 11 rows. Framed by the three threads that actually run through it: the merge floor meeting a
+   real operator (`93`, `94`), resources a run creates and never collects (`95`, `99`, `102`, `103`),
+   and the evidence rule (`98`, `100`, `101`) as the direct ancestor of the `110`–`113` band. Every
+   row carries the measurement from its tasklist (61 GB / 729,816 files; 7 of 9 "stalled" runs were
+   working; one tasklist killing three other repos' runs; 5 of koine's 10 markers already shipped;
+   nine PPID-1 watchers).
+2. **Operator ergonomics (`104`–`109`, 08-21 → 08-22)** — 6 rows, stated as one programme: *chief
+   could already do the work and could not yet be operated*. Each row names the gap between what
+   chief already knew and the operator who needed to see or spend it.
+3. **Iteration-outcome honesty (`110`–`113`, 08-22 → 08-26)** — 4 rows under one thesis, with the
+   taxonomy stated explicitly (`111` stops a run too early, `112` lets one run forever, and neither
+   fix may redefine the other) and the asymmetry that produced the band (rigorous about a false
+   claim of COMPLETION, silent on a false claim of PROGRESS). Measurements per the criteria:
+   ~34 min to merge an already-green 4/4 branch + 2 merge-phase verifies over 6 iterations on a 3/3;
+   three iterations of `API Error: 529 Overloaded` → `stall 3/2` with 2,029 files intact on disk;
+   five re-check-stamp commits stretching a 5-iteration budget to 11 over 1h32m; 63 commits /
+   21 iterations in one run / 59 across the program / 42 identical measurements on a story whose
+   correct answer was `passes:false`.
+
+**The false line is gone.** "Loose wishlist — Empty. No future threads are parked" was replaced by
+two real sections: **In flight** (rows for `114`/`115`/`116`, noting all three continue the
+`110`–`113` thesis) and **Open threads — ⬜ parked, with conditions** (the conflict-predictor
+DECLINE with its actual reason — `touches` is consumed at *admission*, when the candidate branch has
+no diff for a predictor to read — plus the seam left open and the reversal clause, citing
+`docs/decisions/conflict-predictor-adoption-decision.md`; and the desktop-GUI decision).
+Also updated the Milestones preamble and the Chief Tasklist Status bullets, which now name the
+merged program as **five bands** rather than a run of numbers.
+
+**Verified, not assumed:** a loop over `tasks/chief/completed/*.json` confirms all **37** stems AND
+all **37** `mergedToMain` shas now appear in `ROADMAP.md` — 0 missing on either check (this is the
+same assertion US-3 is about to turn into a gate). All 3 live tasklists are referenced.
+
+Gates: `node scripts/check-doc-links.mjs --ratchet --base main` → **0 dead vs 0 on main**;
+`bash test/doc-sync.sh` → **DOC-SYNC PASS**; `bin/chief lint` → **3 tasklists clean**. Every markdown
+table row checked for exactly 4 pipes (`awk` over `^|`) — 0 malformed. Doc-only, so no `VERSION` bump.
+
+### Learnings for future iterations
+- **The stem-and-sha loop is the roadmap's real test, and US-3 should just encode it.** Two greps —
+  every `completed/` stem appears in `ROADMAP.md`, and every `mergedToMain` sha appears — are cheap,
+  offline, and would each independently have caught this drift. They already passed here by hand.
+- **Splice sections with `python3` + an assert on the marker, not `sed`.** `assert marker in s` and
+  `assert s.count(marker)==1` turn a silent no-op edit into a failure. Same for a verbatim
+  replacement: assert the old block is present before replacing it.
+- **A tasklist description's numbers go stale between authoring and execution.** This one said the
+  CLI roster was missing eight subcommands (it was ten) and that ~21 tasklists were invisible
+  (it was 21 exactly, `93`–`113`). Recompute from disk; cite what you counted.
+- **Unstarted stories in this repo's tasklists carry no `passes` key at all** (only `"notes": null`).
+  Writing `passes:true` adds the key; absent is treated as false. Don't "restore" a `passes:false`
+  you never saw.

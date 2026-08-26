@@ -38,7 +38,8 @@
         "The `93`–`103` band is placed too — merge safety, worktree reaping, `chief status`, reap orphanhood. Roughly 21 merged tasklists are currently invisible.",
         "`docs/decisions/conflict-predictor-adoption-decision.md` and the two active tasklists are reflected, so the 'Loose wishlist — Empty. No future threads are parked' line stops being false."
       ],
-      "notes": null
+      "notes": "Added three named phase sections to ROADMAP.md: 'Operating the fleet' (93-103, 11 rows), 'Operator ergonomics' (104-109, 6 rows) and 'Iteration-outcome honesty' (110-113, 4 rows, stated as one thesis with each measurement: ~34min to merge an already-green 4/4 branch and 2 merge-phase verifies over 6 iterations on a 3/3; three iterations of API Error 529 hitting stall 3/2 with 2,029 files intact on disk; five re-check-stamp commits stretching a 5-iteration budget to 11 over 1h32m; 63 commits / 21 iterations in one run / 42 identical measurements on a story whose right answer was passes:false). Replaced the false 'Loose wishlist - Empty' block with 'In flight' (114/115/116) + 'Open threads' citing docs/decisions/conflict-predictor-adoption-decision.md. VERIFIED: all 37 completed/ stems AND all 37 mergedToMain shas now appear in ROADMAP.md (0 missing, checked by loop); 3/3 live tasklists referenced. Gates: check-doc-links --ratchet 0 dead vs 0 on main; test/doc-sync.sh DOC-SYNC PASS; chief lint 3 tasklists clean. File 274 -> 360 lines.",
+      "passes": true
     },
     {
       "id": "US-3",
