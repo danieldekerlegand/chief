@@ -94,6 +94,7 @@ QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review 
 # $PROVIDER_BACKOFF_CAP (60s by default), so 15m of silence in it is not a long wait,
 # it is a sleep that never returned.
 FLAGGED_PHASES='provider-waiting provider-backoff agent-turn writing integrating stalled unverified
+  cannot-complete
   complete research research-failed plan-turn plan-ready plan-invalid review-wait
   approved worktree re-engaging seeded warmup reconcile merge-wait merge-queued
   batch-stacking rebasing rebase-conflict rebase-refused verifying verify-failed

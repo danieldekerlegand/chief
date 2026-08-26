@@ -353,6 +353,7 @@ tasklist_outcome() {
     EMPTY-NO-WORK*)                   printf 'no-work' ;;
     PLAN-INVALID*)                    printf 'plan-invalid' ;;
     RESEARCH-FAILED*)                 printf 'research-failed' ;;
+    CANNOT-COMPLETE*)                 printf 'cannot-complete' ;;
     AWAITING-REVIEW*)                 printf 'awaiting-review' ;;
     AWAITING-DECISION*)               printf 'awaiting-decision' ;;
     AWAITING-APPROVAL*)               printf 'awaiting-approval' ;;
@@ -435,6 +436,16 @@ AGENT_RC_UNVERIFIED=7
 # had been learned about (talos 2026-08-24, tasklists 71 and 72). Like 2 it is a
 # BLOCK, not a failure: branch, commits and worktree are all kept.
 AGENT_RC_UNAVAILABLE=8
+# 9 IS THE TASKLIST THAT CANNOT GET ANYWHERE (engine/repeat.sh). The agent loop
+# stopped ITSELF because the story it is driving recorded the same outcome — same
+# measurement, same blocker, `passes` unmoved — at $REPEAT_LIMIT consecutive iteration
+# boundaries. It is NOT a stall and NOT 1: commits were landing every single time (that
+# is precisely why the stall counter cannot see it), and they are all kept. cuneiform
+# `283` is the case: 42 identical measurements across three days, ending INCOMPLETE,
+# which is a wrong verdict on finished work rather than a cheap one. Reported as its
+# own outcome so the operator is sent to the two things that resolve it — amend the
+# criterion, or declare the negative terminal — instead of to `iters`.
+AGENT_RC_REPEAT=9
 # Driver-level usage-limit self-heal (see SCHEDULER STATES above). Deliberately a
 # separate family from agent.sh's RATE_LIMIT_* per-worker knobs: those govern how
 # long ONE agent loop sleeps mid-story, these govern how many times the SCHEDULER
@@ -475,6 +486,18 @@ source "$ENGINE/criteria.sh"
 # The BAR rule on acceptance criteria (engine/measure.sh): a story claiming a
 # checkable bar must record the value it observed, or it is `unverified`, not passed.
 source "$ENGINE/measure.sh"
+# A story whose CORRECT answer is `false` (engine/terminal.sh): the declaration that a
+# negative finding is a DELIVERABLE, and the SETTLED predicate every completion count
+# below is computed from. Sourced after measure.sh, whose `observed` it shares — one
+# definition of "the run measured something", read by the gate that demands a number
+# and by the gate that accepts a negative.
+source "$ENGINE/terminal.sh"
+# The REPEAT rule (engine/repeat.sh): the safety net for a tasklist nobody declared,
+# and the park it causes. The driver needs only the second half, but it lives with the
+# rule for the same reason unmeasured_stop lives in measure.sh — a stop restated away
+# from the rule that raises it drifts from it. Idempotent to source twice (agent.sh
+# already does): REPEAT_LIMIT honours the environment and its counters start at zero.
+source "$ENGINE/repeat.sh"
 # The per-story DIFF-SIZE BUDGET (engine/budget.sh): larger diffs carry higher
 # conflict probability, so change size is the lever. Sourced BEFORE zones.sh, whose
 # merge gate calls it — the two are one policy layer with one approval, not two
@@ -733,6 +756,13 @@ pending_say() { sed 's/^/   ↳ /' "$STATE/$1.pending" 2>/dev/null || true; }
 # A stale-false story WITH evidence in `notes` is promoted as before; one WITHOUT is
 # left false and reported here, so the branch fails instead of merging.
 #
+# A story declaring `terminalFalse` (engine/terminal.sh) is EXEMPT FROM BOTH HALVES,
+# and this is the one exemption that is about correctness rather than ceremony: its
+# `notes` carry the negative finding, so the evidence test would pass and the promotion
+# would rewrite the answer NO into the answer YES — destroying the only thing the
+# tasklist produced. It is not reported here either; a declared story with nothing
+# measured is INERT, which terminal_inert_report says in its own words.
+#
 # $1 = the runtime prd.json. Promotes in place, and prints one block per unevidenced
 # story — its id, title and the criteria it would have claimed — on stdout. Empty
 # output means every promotion carried evidence and the branch may proceed.
@@ -742,9 +772,10 @@ evidence_gate() {
   # the promotion below rewrites any pass-flag.
   jq -r '
     def unpassed: (.passes != true);
+    def declared: (.terminalFalse == true);
     def evidenced: (((.notes // "") | tostring) | test("\\S"));
     def clip: if (. | length) > 200 then .[0:197] + "..." else . end;
-    .userStories[] | select(unpassed and (evidenced | not))
+    .userStories[] | select(unpassed and (declared | not) and (evidenced | not))
     | "   ✗ \(.id) — \(.title // "(untitled)")\n"
       + ( [ (.acceptanceCriteria // [])[] | "       claimed: \"" + (tostring | clip) + "\"" ]
           | if length == 0 then ["       (no acceptance criteria recorded)"] else . end
@@ -752,8 +783,10 @@ evidence_gate() {
   ' "$prd" 2>/dev/null
   t="$(mktemp)"
   jq '
+    def declared: (.terminalFalse == true);
     def evidenced: (((.notes // "") | tostring) | test("\\S"));
-    .userStories |= map(if (.passes != true) and evidenced then .passes = true else . end)
+    .userStories |= map(if (.passes != true) and (declared | not) and evidenced
+                        then .passes = true else . end)
   ' "$prd" > "$t" 2>/dev/null && mv "$t" "$prd" || rm -f "$t"
 }
 
@@ -775,51 +808,6 @@ unverified_stop() {
   printf '%s\n' "$1"
   echo "   Recorded for the resume in $SNAP_REL/$name.unverified.md — the next run re-engages the agent on these stories rather than reading the branch as finished."
   echo "   Not merging. A story chief passes on the agent's behalf must record in 'notes' HOW it met these — branch $branch is kept in its worktree."
-}
-
-# The passes-state to seed the runtime prd.json from (and to count remaining
-# stories on a resume). For a project tasklist it's the branch's committed tasklist
-# (survives across resumes in-repo). A submodule branch carries no tasklist JSON, so
-# fall back to the last snapshot, then the pristine template. $name/$branch/$sub/
-# $work_repo/$TASKS_REL/$SNAP/$SRC are visible by dynamic scope.
-#
-# WHY THE SUBMODULE ARM IS THE ONE THAT NEEDED FIXING (tasklist 96). A project
-# tasklist records every story as it lands: the agent commits the tracked tasklist
-# with its pass-flag flipped, so the branch itself carries 2-of-3 and a run killed
-# mid-tasklist resumes at exactly that. A submodule branch cannot — the tasklist
-# lives in the PARENT and the work branch lives in the submodule, and the parent
-# gets ONE commit for the whole tasklist (the terminal `complete @sha — bump <sub>
-# + record + retire`). There is no per-story marker in between, so the snapshot IS
-# the record, and it used to be written only at the END of a worker. A run killed
-# mid-tasklist therefore resumed at 0-of-3 onto a branch already carrying the code
-# for two of them — wasting iterations at best, and at worst re-implementing a
-# story, which leaves TWO implementations of one story on one branch.
-#
-# THE MECHANISM CHOSEN, and its trade-off. The snapshot is promoted at every
-# ITERATION BOUNDARY instead of once at the end (agent.sh's $CHIEF_PRD_SNAPSHOT,
-# handed down below — the same "driver owns the durable path, agent promotes to it
-# the moment the artifact is valid" shape as $CHIEF_RESEARCH_FILE). It lives under
-# $STATE_ROOT, NOT in the worktree run_worker rm -rf's, so it survives both a
-# rebuilt worktree and a driver restart — which is the failure being fixed.
-#   · vs. a MARKER COMMIT on the submodule branch: that branch is merged verbatim
-#     into the submodule's own history, so per-story bookkeeping commits would be
-#     chief litter in a consumer's repo forever.
-#   · vs. a PARENT-SIDE BRANCH: the parent deliberately has no chief/* branches at
-#     all, and inventing one changes the terminal record's shape — the very thing
-#     downstream readers of completed/ depend on not moving.
-#   · the COST accepted: the snapshot is host state, not git. Deleting
-#     .chief/state/ still loses the per-story record (RESET=1's behaviour, on
-#     purpose), and the branch's commits remain the ground truth either way.
-# Nothing here changes a PROJECT tasklist: this arm is not reached for one, so its
-# resume still reads the committed tasklist and a fresher snapshot is inert.
-prd_state_source() {
-  if [ -z "${sub:-}" ]; then
-    git -C "${work_repo:-$REPO}" show "$branch:$TASKS_REL/$name.json" 2>/dev/null
-  elif [ -f "$SNAP/$name.json" ]; then
-    cat "$SNAP/$name.json"
-  else
-    cat "$SRC/$name.json"
-  fi
 }
 
 # plan_sync SRC DEST — copy the PLAN ARTIFACTS (docs/plan-review.md) one way.
@@ -2306,8 +2294,8 @@ done
 # bug this exists to make impossible.
 #
 # $live/$name/$total/$remaining/$STATE are the caller's, by dynamic scope (the same
-# idiom as prd_state_source above). Returns 0; the caller still owns its `return`,
-# because a helper cannot return out of run_worker for it.
+# idiom as engine/terminal.sh's prd_state_source). Returns 0; the caller still owns
+# its `return`, because a helper cannot return out of run_worker for it.
 worker_park() {
   local phase status ev state story
   story="$(live_get "$live" story)"
@@ -2320,6 +2308,10 @@ worker_park() {
     # story — there was never a turn to name. It is a failure (nothing was built),
     # but an actionable one: the fix is usually to write the document by hand.
     research-failed) phase=research-failed; status=RESEARCH-FAILED; ev=tasklist.research-failed; state=failed; story="" ;;
+    # The repeat rule stopped the loop (engine/repeat.sh, agent.sh exit 9). A failure —
+    # the tasklist did not deliver — but a DIAGNOSED one, and it names its story: which
+    # question chief kept re-answering is the first thing the fix needs.
+    cannot-complete) phase=cannot-complete; status=CANNOT-COMPLETE; ev=tasklist.cannot-complete; state=failed ;;
     awaiting-review) phase=awaiting-review; status=AWAITING-REVIEW; ev=tasklist.awaiting-review; state=awaiting-review ;;
     awaiting-decision) phase=awaiting-decision; status=AWAITING-DECISION; ev=tasklist.awaiting-decision; state=awaiting-decision ;;
     # The one arm that fires INSIDE the merge phase, after the floor came back
@@ -2412,7 +2404,7 @@ run_worker() {
     # restarting from scratch. RESET=1 forces a fresh start from the base branch.
     if [ "${RESET:-0}" != "1" ] && git -C "$work_repo" rev-parse --verify --quiet "$branch" >/dev/null 2>&1; then
       local left bhw="" vfail=""
-      left="$(prd_state_source | jq '[.userStories[]|select(.passes==false)]|length' 2>/dev/null || echo '?')"
+      left="$(prd_state_open)"
       # Does the branch actually diverge from the base? A branch that EXISTS but has
       # no commits vs base carries no real work — its committed pass-state is
       # meaningless (often a false all-pass from a prior misfire). Never skip the
@@ -2541,9 +2533,7 @@ run_worker() {
     # build deps (node_modules/.venv/dist). Each tasklist's optional "warmup":[...]
     # runs (cwd = worktree) to provision what its checks need, ISOLATED per worktree
     # (so no concurrent-install corruption).
-    live_set "$live" phase=seeded \
-      passing="$(jq '[.userStories[]?|select(.passes==true)]|length' "$wtstate/prd.json" 2>/dev/null || echo 0)" \
-      total="$(jq '.userStories|length' "$wtstate/prd.json" 2>/dev/null || echo 0)"
+    terminal_live_counts "$live" "$wtstate/prd.json" phase=seeded
     warmups="$(jq -r '(.warmup // [])[]' "$SRC/$name.json" 2>/dev/null)"
     if [ -n "$warmups" ]; then
       echo ">> $name warm-up…"
@@ -2633,14 +2623,15 @@ run_worker() {
       unevidenced="$(evidence_gate "$wtstate/prd.json")"
     fi
     unmeasured="$(measure_gate "$wtstate/prd.json")"   # EVERY path to a merge — engine/measure.sh
-    local remaining total
-    remaining="$(jq '[.userStories[]|select(.passes==false)]|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
-    total="$(jq '.userStories|length' "$wtstate/prd.json" 2>/dev/null || echo '?')"
+    # REMAINING IS OPEN, NOT UNPASSED (engine/terminal.sh). Every stop below — the
+    # INCOMPLETE park, the status line, the liveliness record — asks "is there work
+    # left", and a story that declared the negative terminal and recorded the
+    # measurement behind it has none. Its `passes` stays false, because the answer is.
+    local remaining total negative
+    terminal_live_counts "$live" "$wtstate/prd.json"
+    remaining="$TERMINAL_OPEN"; total="$TERMINAL_TOTAL"; negative="$TERMINAL_NEGATIVE"
     cp "$wtstate/prd.json" "$SNAP/$name.json" 2>/dev/null || true
     plan_sync "$wtstate/plans" "$SNAP/$name.plans"          # bank what this run planned
-    # _int() (defined with the self-heal helpers below, resolved at call time) keeps
-    # an unreadable prd.json's '?' out of the arithmetic.
-    live_set "$live" passing="$(( $(_int "$total") - $(_int "$remaining") ))" total="$(_int "$total")"
     # USAGE-LIMIT PAUSE: agent.sh exits $AGENT_RC_LIMIT when it stopped on a Claude
     # usage/session limit and won't retry. That is NOT a failure — the branch is fine,
     # it is only blocked until the window resets — so record a distinct, non-terminal
@@ -2732,6 +2723,15 @@ run_worker() {
       unmeasured_stop "$(cat "$wtstate/.demoted.md" 2>/dev/null || echo '   ✗ (the boundary report was not kept)')"
       return 0
     fi
+    # CANNOT COMPLETE — agent.sh stopped ITSELF at an iteration boundary because the
+    # story it was driving kept recording the same outcome (cannot_complete_stop, in
+    # engine/repeat.sh). Above the no-work guard for the same reason as the UNVERIFIED
+    # arm: the stop can leave a branch full of commits or none at all, and neither is
+    # EMPTY-NO-WORK.
+    if [ "$agent_rc" = "$AGENT_RC_REPEAT" ]; then
+      cannot_complete_stop "$wtstate/.cannot-complete.md"
+      return 0
+    fi
     # NO-WORK GUARD: an all-"pass" branch with zero diff vs base never did the work.
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
     if [ -z "$has_work" ]; then
@@ -2761,11 +2761,14 @@ run_worker() {
         cp "$wtstate/.stalled" "$STATE/$name.stalled" 2>/dev/null || true
         stall_why="$(head -1 "$wtstate/.stalled" 2>/dev/null || true)"
       fi
+      terminal_say_inert "$wtstate/prd.json" "$name" \
+        && stall_why="${stall_why:-a story declares terminalFalse with no measurement recorded — still open}"
       worker_park incomplete \
         "$(( total - remaining ))/$total stories passing — ${stall_why:-the iteration budget ran out}${PENDING_PHRASE:+ — worktree holds $PENDING_PHRASE}" \
         "!! $name INCOMPLETE — ${stall_why:-the iteration budget ran out}; branch $branch left in worktree for review"
       pending_say "$name"; return 0
     fi
+    terminal_say_negative "$wtstate/prd.json" "$name" "$negative" "$total"
     # Passing stories prepare a decision brief; they are not the operator's
     # verdict. Keep the branch and worktree available for `chief decide` rather
     # than letting the ordinary merge path turn model-authored passes into consent.
@@ -2976,7 +2979,7 @@ rm -f "$LIMIT_PAUSE_FILE"
 rm -f "$STATE/.cosched"     # the co-scheduling relation is per-run, not cumulative
 for n in $NAMES; do
   set_state "$n" pending
-  rm -f "$STATE/$n.stalled" \
+  rm -f "$STATE/$n.stalled" "$STATE/$n.cannot-complete" \
         "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
         "$STATE/$n.files" "$STATE/$n.touches"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
@@ -3332,7 +3335,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""
+ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""; noway=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -3358,6 +3361,10 @@ for n in $NAMES; do
   # Collected off the FILE, not the status: INCOMPLETE is one status covering two very
   # different stops, and only agent.sh knows which one this was.
   [ -s "$STATE/$n.stalled" ] && stalled="$stalled $n"
+  # And the OTHER end of "it did not finish": a tasklist that kept re-answering one
+  # question (engine/repeat.sh). Collected off the FILE for the same reason as the line
+  # above — the status alone cannot carry which story, or what it kept finding.
+  [ -s "$STATE/$n.cannot-complete" ] && noway="$noway $n"
   # The merge phase parks the operator's uncommitted work for the length of its
   # critical section (merge_stash_push). This file exists only when giving it back
   # could not be done cleanly — the entry was KEPT, so the block below is the run's
@@ -3477,6 +3484,19 @@ if [ -n "$stalled" ]; then
   echo "    Raising \`iters\` does NOT fix these — the budget was not the binding constraint."
   echo "    Read the words above and the branch: the usual causes are a blocker only a human can"
   echo "    clear, and a story whose acceptance criteria cannot be met from this worktree."
+fi
+# AND THE ONE THAT KEPT ADVANCING AND STILL COULD NOT FINISH (engine/repeat.sh). Its
+# own block precisely because it is the OPPOSITE shape from the one above and would be
+# read as it otherwise: these tasklists committed real work on every iteration and
+# stopped only because the question they were re-answering has a fixed answer. Raising
+# `iters` is the exactly-wrong response, and it is what the old nameless INCOMPLETE
+# invited — cuneiform `283` spent three days there.
+if [ -n "$noway" ]; then
+  echo "   ⟳ CANNOT COMPLETE AS WRITTEN — $(set -- $noway; echo $#) tasklist(s) kept re-answering one question and the answer never moved. NOT a stall: commits landed every iteration:"
+  for n in $noway; do
+    printf '    · %-30s\n' "$n"
+    sed 's/^/         /' "$STATE/$n.cannot-complete" 2>/dev/null
+  done
 fi
 # THE PROVIDER NEVER SERVED US. Reported here, next to the other holds and never among
 # the failures, because that is precisely the misread this exists to stop: on
