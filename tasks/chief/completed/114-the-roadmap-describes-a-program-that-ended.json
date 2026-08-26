@@ -26,8 +26,18 @@
         "The CLI roster matches `bin/chief`'s dispatch table. Eight subcommands are currently missing from it.",
         "Internal contradictions are resolved: the file currently says five first-class providers in one place, four in another and three in a third. Pick the true one and state it once."
       ],
-      "notes": "Rewrote banner, Current State, and every existing phase row against tasks/chief/completed/. Verified all 37 records carry a real mergedToMain (0 MISSING) and every sha resolves in git: bd030a6 (77, 2026-08-01) .. 716c9e4 (113, 2026-08-26). Version claim is now a bold **v0.9.1** matching VERSION 0.9.1 (was v0.8.0). CLI roster corrected from 12 to the full 22 dispatch arms. Provider contradiction (5/4/3) resolved to five first-class, confirmed against bin/chief:625, engine/agent.sh:167 and test/provider-conformance.sh ROSTER. Gates: check-doc-links 0 dead vs 0 on main; test/doc-sync.sh PASS; chief lint 3 tasklists clean.",
-      "passes": true
+      "notes": "Rewrote banner, Current State, and every existing phase row against tasks/chief/completed/. All 37 records carry a real mergedToMain (0 MISSING); shas resolve bd030a6 (77, 2026-08-01) .. 716c9e4 (113, 2026-08-26). Version claim now bold **v0.9.1** == VERSION 0.9.1 (was v0.8.0). CLI roster 12 -> 22. Provider contradiction resolved to five first-class. check-doc-links: 0 dead vs 0 on main; test/doc-sync.sh PASS; chief lint clean.",
+      "passes": true,
+      "diffSize": {
+        "files": 4,
+        "lines": 551,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-2",
@@ -39,7 +49,17 @@
         "`docs/decisions/conflict-predictor-adoption-decision.md` and the two active tasklists are reflected, so the 'Loose wishlist — Empty. No future threads are parked' line stops being false."
       ],
       "notes": "Added three named phase sections to ROADMAP.md: 'Operating the fleet' (93-103, 11 rows), 'Operator ergonomics' (104-109, 6 rows) and 'Iteration-outcome honesty' (110-113, 4 rows, stated as one thesis with each measurement: ~34min to merge an already-green 4/4 branch and 2 merge-phase verifies over 6 iterations on a 3/3; three iterations of API Error 529 hitting stall 3/2 with 2,029 files intact on disk; five re-check-stamp commits stretching a 5-iteration budget to 11 over 1h32m; 63 commits / 21 iterations in one run / 42 identical measurements on a story whose right answer was passes:false). Replaced the false 'Loose wishlist - Empty' block with 'In flight' (114/115/116) + 'Open threads' citing docs/decisions/conflict-predictor-adoption-decision.md. VERIFIED: all 37 completed/ stems AND all 37 mergedToMain shas now appear in ROADMAP.md (0 missing, checked by loop); 3/3 live tasklists referenced. Gates: check-doc-links --ratchet 0 dead vs 0 on main; test/doc-sync.sh DOC-SYNC PASS; chief lint 3 tasklists clean. File 274 -> 360 lines.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 4,
+        "lines": 171,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -52,7 +72,18 @@
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
       ],
       "notes": "test/doc-sync.sh extended to cover ROADMAP.md with the two checks that would each independently have caught the audited drift: the roadmap's bold **vX.Y.Z** == VERSION (shared with README via version_claims_ok), and every merged stem in tasks/chief/completed/ named in ROADMAP.md. Green: 'DOC-SYNC PASS - README and ROADMAP state v0.9.2; README documents every bin/chief subcommand; ROADMAP names all 37 merged tasklists' (exit 0). PROVEN ABLE TO FAIL - 4 negative self-checks now run inline (2 README + 2 new ROADMAP) and all trip; driven red by hand too, reproducing both halves of the 2026-08-25 audit: a ROADMAP claiming **v0.8.0** beside VERSION 0.9.1 -> exit 1, and a ROADMAP stripped of '99-reap-must-not-infer-orphanhood' -> exit 1. Offline: grep/sed/awk/basename over tracked files, no network, no model. Gates: bash -n all 60 shell files clean; shellcheck -S error clean on test/doc-sync.sh + .chief/verify.sh (v0.11.0 via npx - the 3 errors it reports in engine/quality.sh:60 and engine/sweep.sh:396,404 are byte-identical on main, pre-existing); VERSION 0.9.1 -> 0.9.2, test/version-bump.sh 'VERSION-BUMP PASS'; quality ratchet OK (function_length_max 1 -> 12 tol 15, function_length_mean 1 -> 3.2 tol 5, duplicate_blocks 0 -> 0 tol 0); check-doc-links 0 dead vs 0 on main; chief lint 3 tasklists clean.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 10,
+        "lines": 214,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "4a20241"
 }
