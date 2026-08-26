@@ -42,6 +42,10 @@
 #   6. THE BOOKKEEPING IS STILL THERE — the merged tree carries both the product file
 #      and the agent's notes/progress stamps. This story removed their power to extend a
 #      budget, not their existence.
+#   7. THE OPERATOR CAN SEE IT WITHOUT READING THE LOG — `progress (0/2 passing)` is
+#      not printable anywhere; the run SUMMARY says this tasklist STOPPED ADVANCING,
+#      names WHICH stall it was, keeps it apart from a failed gate and from an
+#      unreachable provider, and quotes the agent's own closing words underneath.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -95,7 +99,10 @@ bk-spin)
   stamp "re-checked; still blocked on the hardware measurement. Further iterations can only add churn."
   # A PLAUSIBLE SUBJECT over a bookkeeping diff: the rule under test reads the diff.
   git commit -q -m "feat: US-1 - record the re-check and the blocker" >/dev/null 2>&1 || true
-  echo "re-checked; the story is not complete"
+  # Formant's closing note, near-verbatim. Nothing in chief MATCHES on it (see the
+  # stall arm in engine/agent.sh) — it is here because the run summary QUOTES the
+  # agent's last words, and this is the sentence that was buried at iteration 10.
+  echo "re-checked; still blocked on the hardware measurement. Further iterations on this tasklist can only add churn; re-parking it would be the honest call."
   ;;
 bk-both)
   # REAL WORK AND THE STAMP, IN ONE COMMIT — the normal shape of a working iteration.
@@ -210,8 +217,14 @@ BOTHLOG="$REPO/.chief/state/parallel/bk-both.log"
 both="$(cat "$WORK/turns-bk-both" 2>/dev/null || echo 0)"
 [ "$both" -gt "$ITERS" ] \
   || fail "the pairing case took $both turns against a $ITERS-iter budget — a commit carrying REAL work was scored as bookkeeping because it also wrote notes"
-grep -q "Iteration 1: progress (0/1 passing)" "$BOTHLOG" \
+prog1="$(grep -m1 'Iteration 1: progress' "$BOTHLOG" || true)"
+[ -n "$prog1" ] \
   || fail "an iteration that changed the product but flipped no story was not scored as progress"
+case "$prog1" in *"(0/1 passing)"*) ;; *) fail "the progress line lost its passing count: $prog1" ;; esac
+# US-3: the line NAMES what advanced. Iteration 1 flipped no story, so the only thing
+# it can name is the path outside the state dir — which is the whole point.
+case "$prog1" in *"src/step-1.txt"*) ;;
+  *) fail "the progress line does not say WHAT advanced: $prog1" ;; esac
 ! grep -q 'BOOKKEEPING ONLY' "$BOTHLOG" \
   || fail "a commit containing work outside ${CHIEF_STATE_DIR:-.chief/state}/ was reported as bookkeeping"
 ! grep -q 'no progress' "$BOTHLOG" || fail "a working iteration was scored as a stall"
@@ -228,5 +241,47 @@ git -C "$REPO" show "main:src/step-1.txt" >/dev/null 2>&1 || fail "the pairing c
 [ -f "$REPO/tasks/chief/completed/bk-both.json" ] || fail "the completed tasklist was not retired"
 notes="$(jq -r '.userStories[0].notes // empty' "$REPO/tasks/chief/completed/bk-both.json" 2>/dev/null || echo '')"
 [ -n "$notes" ] || fail "the retired record carries no notes — the state write was stripped somewhere"
+
+# ── 6. THE OPERATOR CAN SEE THE DIFFERENCE WITHOUT READING THE LOG ──────────
+# 6a. `progress (0/2 passing). Continuing...` must not be PRINTABLE. Stated over both
+# logs and the run log at once, because the sentence is a template and a single
+# surviving call site reproduces the whole misread.
+bad=""
+for f in "$LOG" "$BOTHLOG" "$WORK/run.log"; do
+  [ -f "$f" ] || continue
+  hit="$(LC_ALL=C grep -n ': progress ([0-9]' "$f" || true)"
+  [ -n "$hit" ] && bad="$bad
+$f: $hit"
+done
+[ -z "$bad" ] || fail "the nameless progress line is still printable — it asserts progress and a count and names nothing:$bad"
+
+# 6b. A tasklist stopped by the stall counter says WHY, in the RUN SUMMARY, and
+# distinguishably from a failed gate and from an unreachable provider.
+sum="$(cat "$WORK/run.log")"
+case "$sum" in *"STOPPED ADVANCING"*) ;;
+  *) fail "the run summary does not separate a tasklist that stopped advancing from any other failure" ;; esac
+case "$sum" in *"Not a failed gate, and not an unreachable provider"*) ;;
+  *) fail "the summary does not distinguish this stop from VERIFY-FAILED and PROVIDER-UNAVAILABLE" ;; esac
+# The REASON, not just the category: which of the two stalls this was.
+case "$sum" in *"bookkeeping, not progress"*) ;;
+  *) fail "the run summary does not name the bookkeeping stall as the cause" ;; esac
+# …and the INCOMPLETE headline carries it too, so a reader of the worker log gets the
+# same answer as a reader of the summary.
+head_line="$(grep -h 'INCOMPLETE' "$REPO/.chief/state/parallel/bk-spin.log" "$WORK/run.log" 2>/dev/null | head -1 || true)"
+case "$head_line" in *stalled:*) ;;
+  *) fail "the INCOMPLETE headline still reports a nameless budget exhaustion: $head_line" ;; esac
+# The tasklist that MERGED is not in the block — the report is about this stop, not
+# about every tasklist in the run. Asserted on the record the block is built FROM,
+# not on the rendered text: `bk-both` appears in the summary for legitimate reasons.
+[ ! -e "$REPO/.chief/state/parallel/bk-both.stalled" ] \
+  || fail "a merged tasklist was recorded as having stopped advancing"
+[ -s "$REPO/.chief/state/parallel/bk-spin.stalled" ] \
+  || fail "the stalled tasklist left no reason record for the summary to render"
+
+# 6c. The agent's own last words are SURFACED, not buried at iteration 10 of a log.
+# Chief matches nothing in them — the fixture's sentence could be any prose — it quotes
+# the final turn's output verbatim beneath the reason.
+case "$sum" in *"re-parking it would be the honest call"*) ;;
+  *) fail "the agent's closing words — the run's clearest signal that it should stop — are still only in the log" ;; esac
 
 echo "BOOKKEEPING PASS — $ITERS turns of state-only commits scored as stalls and stopped at the budget (pre-change: 20), reported as BOOKKEEPING ONLY, nothing merged; the work+notes pairing ran $both turns to COMPLETE with its notes intact on main"

@@ -164,6 +164,35 @@ Notes:
   the state directory in `touches` prints a note saying why the declaration made no
   difference. Do such work by hand outside a run, or give the tasklist a real product
   (the engine, `templates/`, `docs/`) to change.
+
+  **What the operator sees.** The per-iteration line names what advanced rather than
+  asserting that something did — `Iteration 3: progress — US-2 passed; 4 paths outside
+  .chief/state/ changed (e.g. engine/agent.sh) (2/3 passing)`. (`progress (0/2
+  passing). Continuing...` was the sentence formant's run printed eleven times: it
+  states progress and zero passing in the same breath and names nothing, so there is
+  nothing in it to disbelieve. Note that *zero passing* is an honest state on its own —
+  a tasklist mid-story, committing real files, whose single story flips at the end.)
+  And a tasklist the stall counter stops gets its own block in the run summary,
+  `STOPPED ADVANCING`, kept apart from the two failures it is otherwise indistinguishable
+  from: a `VERIFY-FAILED` gate (the work exists, the gate said no) and a
+  `PROVIDER UNAVAILABLE` block (no turn was ever taken — see
+  [provider-unavailability.md](provider-unavailability.md)). The three need opposite
+  responses, and raising `iters` fixes only the case where the budget really was the
+  binding constraint. The block quotes the agent's own closing words from its final
+  turn underneath the reason.
+
+  **What chief will not do: act on an agent asking to be stopped.** formant's agent
+  said, in prose, *"further iterations on this tasklist can only add churn; re-parking
+  it would be the honest call"* — and was re-driven five more times. Chief does not
+  detect that, deliberately. There is no signal to match on: a phrase list
+  (`re-parking`, `blocked on`, `cannot proceed`) fires on an agent *describing* a
+  blocker it then clears, misses every rephrasing, and rots silently as models change
+  their idiom. The only reliable form is a protocol token the way
+  `<promise>COMPLETE</promise>` is one, which is a change to the agent contract rather
+  than to the loop — and it would buy little now, because the stall counter reaches the
+  same stop within `STALL_LIMIT` iterations of the first churning turn. What was
+  actually lost was the reasoning, buried at iteration 10 of a log nobody re-reads, so
+  chief **quotes** those closing words in the summary and draws no conclusion from them.
 - **A criterion must be satisfiable from this tasklist's worktree.** One that names
   another repo is stopped before the run starts (`UNSATISFIABLE`) unless the tasklist
   declares `crossRepo`; `chief lint` reports the same finding while it is still a text

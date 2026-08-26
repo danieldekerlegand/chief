@@ -177,9 +177,13 @@ echo "   ok  exit 8"
 # THE ITERATION THAT RAN is scored as progress — unchanged, and asserted in the same
 # breath as the ones that did not, because a test that only pins the new behaviour
 # cannot show the two are told apart.
-grep -q 'progress (1/2 passing)' "$PL" \
-  || { tail -30 "$PL" >&2; fail "the iteration that RAN was not scored as progress"; }
-echo "   ok  iteration 1 → 'progress (1/2 passing)'"
+# The line NAMES what advanced (US-3, tasklist 112) — `progress (1/2 passing)` with
+# nothing between the word and the count is no longer printable — so the count is
+# matched where it actually sits, at the end of the sentence.
+progline="$(grep -m1 ': progress' "$PL" || true)"
+case "$progline" in *"(1/2 passing)"*) ;;
+  *) tail -30 "$PL" >&2; fail "the iteration that RAN was not scored as progress" ;; esac
+echo "   ok  iteration 1 → '$progline'"
 
 # THE ITERATIONS THAT DID NOT REACH THE MODEL are never scored against the work.
 # This is the regression, stated as flatly as it can be: the words 'no progress'

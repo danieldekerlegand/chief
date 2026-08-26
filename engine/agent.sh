@@ -200,6 +200,15 @@ rm -f "$LIMIT_RETRY_FILE"
 # reads it out of the worktree's state dir the moment the worker returns.
 NOTURN_FILE="$STATE_DIR/.provider-unavailable"
 rm -f "$NOTURN_FILE"
+# Its twin for the OTHER end of the loop. Written only when the loop gives up — the
+# stall arm or the hard ceiling — and read by the driver's INCOMPLETE arm, so a run
+# that stopped because the agent stopped ADVANCING is reported as that, and not as
+# the same nameless "budget ran out" a tasklist gets when it was genuinely working
+# and simply ran short. Three causes (stalled · gate failed · provider unreachable)
+# reported identically is what sends an operator to re-scope work that was fine.
+# Line 1 is the reason; the lines after it are the agent's own closing words.
+STALL_FILE="$STATE_DIR/.stalled"
+rm -f "$STALL_FILE"
 # THE RESEARCH DOCUMENT, in its two locations — declared HERE rather than beside the
 # RESEARCH PHASE below because _compose_prompt (next) reads it, and every story turn
 # is composed through that one function.
@@ -668,8 +677,17 @@ BOOKKEEPING_REL="${BOOKKEEPING_REL#./}"; BOOKKEEPING_REL="${BOOKKEEPING_REL%/}/"
 # run that is working. For a `repo:<sub>` tasklist the worktree is the submodule and
 # the state directory is not in it at all, so no path can match the prefix and every
 # commit counts — which is correct there, because the bookkeeping is not in that tree.
+#
+# It also RECORDS WHAT IT SAW — $PRODUCT_COUNT non-bookkeeping paths, the first of them
+# in $PRODUCT_FIRST — because the progress line has to name what advanced (US-3) and
+# the answer is already in this walk. A SET-A-GLOBAL rather than a second helper and a
+# second `git diff` fork, the same shape crossrepo.sh uses for its hot-loop readers.
+# Both are empty on a FAIL-OPEN: chief could not read the diff, so it says progress
+# (the old behaviour) and names nothing, which is the honest pair.
+PRODUCT_FIRST=""; PRODUCT_COUNT=0
 _product_changed() {
   local prev="$1" now="$2" files f
+  PRODUCT_FIRST=""; PRODUCT_COUNT=0
   if [ "$prev" = "$now" ]; then return 1; fi
   case "$prev" in ''|none) return 0 ;; esac
   case "$now"  in ''|none) return 0 ;; esac
@@ -679,11 +697,12 @@ _product_changed() {
     [ -n "$f" ] || continue
     # Quoted on purpose: the prefix is a path, and a `.` in it is a dot, not a regex.
     case "$f" in "$BOOKKEEPING_REL"*) continue ;; esac
-    return 0
+    PRODUCT_COUNT=$(( PRODUCT_COUNT + 1 ))
+    [ -n "$PRODUCT_FIRST" ] || PRODUCT_FIRST="$f"
   done <<EOF
 $files
 EOF
-  return 1
+  [ "$PRODUCT_COUNT" -gt 0 ]
 }
 
 # _touches_bookkeeping — does THIS tasklist declare chief's own state directory as one
@@ -1616,6 +1635,11 @@ echo "Starting Chief — Provider: $PROVIDER${MODEL:+ (model: $MODEL)} — budge
 # that helper reads and advances $waits. Resetting the counters after research would
 # hand the story loop a fresh wait budget it has already partly spent.
 i=0; stall=0; waits=0; noturn=0
+# $bk counts, within the CURRENT stall streak, the iterations that committed and
+# changed nothing but chief's own bookkeeping. It is what lets the give-up arm below
+# name WHICH kind of stall this was — the formant shape (a blocked agent re-stamping
+# its notes) or an agent that produced nothing at all.
+bk=0
 
 # --- RESEARCH PHASE (engine/research.sh) --------------------------------------
 # ONCE per tasklist, BEFORE the first story: map the code into a structured document
@@ -1806,7 +1830,11 @@ if research_enabled "$PRD_FILE"; then
   _research_refresh
 fi
 
-prev_pass=$(_passes); prev_head=$(_head)
+# $prev_ids is the SET behind $prev_pass, kept beside it so the progress line can name
+# WHICH story flipped. Not PASSED_IDS: that global belongs to the event stream and is
+# advanced the moment the provider returns, which is before _measure_boundary has had
+# its say — this one moves only with the count it explains.
+prev_pass=$(_passes); prev_head=$(_head); prev_ids=" $(_passed_ids) "
 while :; do
   # DRAIN CHECKPOINT (see OPERATOR PAUSE above). Asked here and nowhere else: the
   # previous iteration is fully accounted for (its commits are on the branch, its
@@ -2012,7 +2040,8 @@ while :; do
       stall=0
       # Re-baseline: a plan turn is not a code turn, and the next iteration's progress
       # check must not read anything it happened to touch as implementation progress.
-      prev_pass=$(_passes); prev_head=$(_head)
+      prev_pass=$(_passes); prev_head=$(_head); prev_ids=" $(_passed_ids) "
+      bk=0
       continue
     fi
     echo ""
@@ -2048,10 +2077,39 @@ while :; do
 
   # Progress check: did a story pass, or did a commit change something that is not
   # chief's own bookkeeping? (see _product_changed — the rule is on the DIFF)
-  now_pass=$(_passes); now_head=$(_head)
-  if [ "$now_pass" -gt "$prev_pass" ] || _product_changed "$prev_head" "$now_head"; then
-    stall=0
-    echo "Iteration $i: progress ($now_pass/$(_total) passing). Continuing..."
+  #
+  # _product_changed is called UNCONDITIONALLY rather than as the right arm of an `||`:
+  # its verdict is cheap (one `git diff --name-only`) and its side effects — the
+  # $PRODUCT_COUNT / $PRODUCT_FIRST evidence the line below prints — must be current
+  # even on the iteration where a story flip already settled the verdict.
+  now_pass=$(_passes); now_head=$(_head); now_ids=" $(_passed_ids) "
+  prod=0; _product_changed "$prev_head" "$now_head" && prod=1
+  if [ "$now_pass" -gt "$prev_pass" ] || [ "$prod" = 1 ]; then
+    stall=0; bk=0
+    # WHAT ADVANCED, IN THE LINE ITSELF. `progress (0/2 passing). Continuing...` is the
+    # sentence formant's run printed eleven times: it asserts progress and zero passing
+    # in the same breath and names nothing, so there is nothing in it for a reader to
+    # disbelieve. That is a whole class of misread — an operator glancing at the one
+    # place they look to decide whether to intervene — and it is fixed by saying what
+    # moved, not by saying it more emphatically. Note that `progress (0/1 passing)` is
+    # a perfectly HONEST state (a tasklist mid-story, committing real files, whose one
+    # story flips at the end); what was wrong was never the zero, it was the silence.
+    advanced=""
+    for sid in $now_ids; do
+      case "$prev_ids" in *" $sid "*) continue ;; esac
+      advanced="${advanced:+$advanced, }$sid"
+    done
+    advanced="${advanced:+$advanced passed}"
+    if [ "$PRODUCT_COUNT" = 1 ]; then
+      advanced="${advanced:+$advanced; }$PRODUCT_FIRST changed (outside ${BOOKKEEPING_REL})"
+    elif [ "$PRODUCT_COUNT" -gt 1 ]; then
+      advanced="${advanced:+$advanced; }$PRODUCT_COUNT paths outside ${BOOKKEEPING_REL} changed (e.g. $PRODUCT_FIRST)"
+    fi
+    # The fail-open case, said as itself: _product_changed could not read the diff, so
+    # it kept the pre-2026-08-26 behaviour and called it progress. A reader is owed the
+    # fact that chief did not actually see anything.
+    : "${advanced:=HEAD moved but the diff could not be read — counted as progress}"
+    echo "Iteration $i: progress — $advanced ($now_pass/$(_total) passing). Continuing..."
     live_set "$LIVE" phase=agent-turn stall=0 stall_limit="$STALL_LIMIT" \
       passing="$now_pass" total="$(_total)" story="$(_story)"
   else
@@ -2061,6 +2119,7 @@ while :; do
     # the two it was, because "no progress" beside a commit the operator can see in
     # `git log` reads like chief lost it.
     if [ "$now_head" != "$prev_head" ]; then
+      bk=$(( bk + 1 ))
       echo "Iteration $i: no progress — BOOKKEEPING ONLY (this iteration's commits touch nothing outside ${BOOKKEEPING_REL}) (stall $stall/$STALL_LIMIT)."
       # Not silently reclassified: a tasklist that declared the state directory in its
       # `touches` is told why that declaration did not exempt it (see _touches_bookkeeping).
@@ -2076,7 +2135,7 @@ while :; do
     # without knowing this run's $STALL_LIMIT.
     live_set "$LIVE" phase=stalled stall="$stall" stall_limit="$STALL_LIMIT"
   fi
-  prev_pass=$now_pass; prev_head=$now_head
+  prev_pass=$now_pass; prev_head=$now_head; prev_ids="$now_ids"
 
   # ITERATION-BOUNDARY HOOK. $CHIEF_ITER_HOOK is a command the driver wants run
   # BETWEEN iterations — today, re-integrating the base branch that sibling merges
@@ -2099,7 +2158,35 @@ while :; do
   # Give up only after spending the budget AND stalling, or at the hard ceiling.
   if [ "$stall" -ge "$STALL_LIMIT" ] && [ "$i" -ge "$MAX_ITERATIONS" ]; then
     echo ""
+    if [ "$bk" -gt 0 ]; then
+      stall_why="stalled: $bk of the last $stall iteration(s) committed nothing outside ${BOOKKEEPING_REL} — bookkeeping, not progress"
+    else
+      stall_why="stalled: the last $stall iteration(s) produced no commit at all"
+    fi
+    # RECORDED FOR THE DRIVER, and with the agent's own last words under it.
+    #
+    # Can chief ACT on an agent that asks to be stopped? formant's said, in prose, "further
+    # iterations on this tasklist can only add churn; re-parking it would be the honest
+    # call" — and kept being re-driven. The finding, recorded here rather than implemented:
+    # chief CANNOT detect that reliably. There is no signal to match on. Matching prose
+    # would mean a phrase list ("re-parking", "blocked on", "cannot proceed") that fires on
+    # an agent DESCRIBING a blocker it then resolves, misses every rephrasing, and rots
+    # silently as models change their idiom — exactly the shape 111 is fixing. The only
+    # reliable version is a PROTOCOL token the way `<promise>COMPLETE</promise>` is one,
+    # which is a change to the agent contract and not to this loop.
+    #
+    # And it would buy very little now: the stall counter reaches this arm within
+    # $STALL_LIMIT iterations of the agent's first churning turn, which is the outcome the
+    # prose was ASKING for. What was actually lost was the agent's reasoning, buried at
+    # iteration 10 of a log nobody re-reads — so that is what is surfaced. A QUOTE of the
+    # final turn, not a match against it: chief draws no conclusion from these lines and
+    # nothing branches on them.
+    { printf '%s (budget %s iters, stall limit %s)\n' "$stall_why" "$MAX_ITERATIONS" "$STALL_LIMIT"
+      printf 'the agent'"'"'s last words, iteration %s:\n' "$i"
+      printf '%s\n' "${OUTPUT:-}" | LC_ALL=C grep -v '^[[:space:]]*$' | tail -8 | cut -c1-160
+    } > "$STALL_FILE" 2>/dev/null || true
     echo "Chief stalled $stall iterations after its $MAX_ITERATIONS-iter budget without completing. Stopping."
+    echo "$stall_why."
     echo "Check $PROGRESS_FILE for status."
     # The one place `stalled` is a statement about now: the loop is over BECAUSE it
     # stalled. Published explicitly so the record does not exit carrying whatever the
@@ -2110,6 +2197,11 @@ while :; do
   fi
   if [ "$i" -ge "$HARD_MAX" ]; then
     echo ""
+    # The ceiling is a DIFFERENT stop from the stall arm above — it means the loop kept
+    # scoring progress all the way to $HARD_MAX — and the driver must not report the two
+    # as one thing either, so it gets its own line in the same file.
+    printf 'ran to the hard iteration ceiling (%s) while still scoring progress every iteration — never stalled, never finished\n' \
+      "$HARD_MAX" > "$STALL_FILE" 2>/dev/null || true
     echo "Chief hit the hard iteration ceiling ($HARD_MAX) without completing. Stopping."
     echo "Check $PROGRESS_FILE for status."
     exit 1
