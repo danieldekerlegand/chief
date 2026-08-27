@@ -49,7 +49,7 @@ deliverable is the verdict itself, or code that was waiting on it.
 | Action | The tasklist | The prepared branch |
 |---|---|---|
 | `--proceed` | stays live, any park cleared | **merges** — the next run reads the verdict and continues to the ordinary rebase → verify → merge path |
-| `--decline` | parks (`parkedReason: declined`), carrying the verdict | **never merges** — kept, with its worktree, at `DECISION-DECLINED` |
+| `--decline` | parks (`parkedReason: decision: declined`), carrying the verdict | **never merges** — kept, with its worktree, at `DECISION-DECLINED` |
 | `--retire ID` | filed to `completed/` with the verdict and `supersededBy` | untouched; nothing schedules it again |
 | `--unpark` | stays live, park cleared | untouched — the verdict is recorded and authorises no merge |
 
@@ -151,6 +151,43 @@ what makes a completed run record which human decided what — `state` carries t
 and `detail` carries the verdict, the note and the identity it was stamped with. The
 park or merge that follows is the transition; the decision event is the authority for
 it.
+
+## How a decision is reported
+
+`AWAITING-DECISION` is a **successful terminal state**, and every surface says so. It is
+reported beside the other holds — the usage-limit pause, the operator pause, the plan
+review, the overlap zone — and never among the failures:
+
+```
+   - licence-anchor                  awaiting-decision  [AWAITING-DECISION 2/2]
+   ⏸ AWAITING DECISION — 1 tasklist(s) parked on a human verdict (not failed, not blocked): licence-anchor
+    · licence-anchor                 AWAITING-DECISION 2/2 — brief: .chief/state/research/licence-anchor.md
+```
+
+`chief ps` / `chief monitor` render the same state as `⏸ decision`, with how long the
+hold has been held, and a headless run counts it as **held** (exit `7`), not failed.
+None of that was true before `v0.9.8`: `reap()` had no arm for the status line, so the
+scheduler state fell through to `failed` and the summary printed
+`failed [AWAITING-DECISION 2/2]` — contradicting itself in one line.
+
+**A dependent of an undecided tasklist is HELD, not blocked.** This is a deliberate
+policy, and it is the opposite of the one for a *declined* decision:
+
+| The dependency is… | Its dependents | Why |
+|---|---|---|
+| `AWAITING-DECISION` | stay `pending`, and the run names the decision they wait on | the verdict may be yes; the branch is intact and its stories are complete, so the work they are waiting on may still arrive. Cascading them to `blocked` would be a claim about an answer nobody has given yet — and the next run, after `chief decide`, schedules them with no further action. |
+| `DECISION-DECLINED` | cascade to `blocked`, naming the decline | the answer was no, so the work is never arriving. Leaving them pending against a branch that will never merge is the failure this whole family of bugs is made of. |
+
+Both halves are reported per tasklist: a held dependent's summary row carries
+`needs "<dep>", which is AWAITING A DECISION — NOT failed…`, and a cascaded one carries
+`needs "<dep>", which a human DECLINED`. Neither is ever told that a green tasklist
+failed.
+
+`chief status` agrees with all of this from the other side. It reads the backlog, not a
+run, so an undecided tasklist is simply **live** — it has work left and a run will pick
+it up. A declined one is **parked**, and its `parkedReason` carries the `decision:`
+class token, so `chief status --decision` counts it under `HUMAN_DECISION` rather than
+leaving it as prose no filter can see.
 
 ## ADR outcomes
 

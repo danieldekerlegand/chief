@@ -618,8 +618,8 @@ op_note() {   # $1 name  $2 stateroot -> one line
   printf '%s' "$note"
 }
 
-# The two HUMAN-VERDICT holds' detail lines — the plan-review park and the overlap-zone
-# park. Unlike the usage-limit and operator holds there is no per-tasklist ETA or budget
+# The HUMAN-VERDICT holds' detail lines — the plan-review park, the decision park and
+# the overlap-zone park. Unlike the usage-limit and operator holds there is no per-tasklist ETA or budget
 # to read: the whole answer is WHICH person has not looked yet, and how to unblock it.
 # They were written inline in render()'s row loop; they live here because both of them
 # were missing the one thing every other row already had — HOW LONG the hold has been
@@ -633,6 +633,16 @@ hold_note() { # $1 name $2 stateroot $3 coarse state -> one full '↳' line
   if [ "$3" = awaiting-review ]; then
     printf '       %s↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept%s · approve it, then: chief run%s\n' \
       "$CYN" "$held" "$RST"
+    return 0
+  fi
+  # The decision park. Its own sentence rather than the review one, because what is
+  # waiting is different in both halves an operator acts on: the artifact to open is a
+  # decision BRIEF, not a plan, and the thing that lifts it is `chief decide`, not an
+  # approval. Same ⏸ colouring and the same `held` age — a decision nobody has answered
+  # for three days is exactly the checkpoint this line exists to keep visible.
+  if [ "$3" = awaiting-decision ]; then
+    printf '       %s↳ awaiting decision: stories complete, branch + worktree + brief kept; only a human verdict finishes it%s · chief decide %s <verdict> --note … --proceed%s\n' \
+      "$CYN" "$held" "$1" "$RST"
     return 0
   fi
   # Reading the request the driver wrote: the interesting part is which domain stopped
@@ -886,7 +896,7 @@ render() {
         # record's phase here is always 'operator-paused', which would only repeat
         # the word without saying what was kept or how to pick it back up.
         printf '       %s↳ %s%s\n' "$YEL" "$(op_note "$n" "$state")" "$RST"
-      elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-approval ]; then
+      elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-decision ] || [ "$st" = awaiting-approval ]; then
         hold_note "$n" "$state" "$st"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)

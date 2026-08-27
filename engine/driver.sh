@@ -33,8 +33,9 @@
 #
 # SCHEDULER STATES (per tasklist, in $STATE/<name>.state):
 #   pending · running · done · failed · blocked · rate-limited · paused ·
-#   awaiting-review · awaiting-approval · provider-unavailable · decision-declined
-# FIVE of these are NON-TERMINAL, and none of them is a failure:
+#   awaiting-review · awaiting-decision · awaiting-approval · provider-unavailable ·
+#   decision-declined
+# SIX of these are NON-TERMINAL, and none of them is a failure:
 #   · 'rate-limited' — the worker's agent loop exited 2, i.e. it stopped on a Claude
 #     usage/session limit (see engine/agent.sh's exit-code contract). Nothing is
 #     wrong with that branch — it is merely blocked until the limit window resets —
@@ -53,6 +54,16 @@
 #     the siblings, and the next run resumes reading the verdict off disk instead of
 #     re-asking. Chief never manufactures the missing approval — an unreachable
 #     reviewer is not a yes.
+#   · 'awaiting-decision' — the tasklist's DELIVERABLE is a human judgement
+#     (docs/reference/decision-tasklists.md): its stories are complete, its brief is
+#     prepared, and no operator has recorded a verdict. The same park as the plan
+#     review above, and for the same reason it is a distinct state — the artifact to
+#     open is a decision brief and the command that lifts it is `chief decide`. This
+#     arm did not exist until v0.9.8, and its absence is the whole of tasklist 116's
+#     US-3: reap() fell through to 'failed', so a tasklist that did exactly what it
+#     was built to do printed `failed [AWAITING-DECISION 2/2]` and cascaded its
+#     dependents as broken. It is a SUCCESSFUL terminal state for the run and a hold
+#     for the tasklist; nothing here re-arms it, and only a verdict does.
 #   · 'awaiting-approval' — the MERGE POLICY LAYER held the branch: it changed a
 #     domain declared an OVERLAP ZONE with policy `review` (engine/zones.sh,
 #     docs/reference/overlap-zones.md), or a story blew the per-story DIFF-SIZE
@@ -79,7 +90,12 @@
 #     tries are spread across the outage rather than fired into it; a PERMANENT
 #     refusal reaches this state on the first try, without waiting.
 # dep_broken() treats NONE of them as broken: the dependents of a tasklist that is
-# only waiting stay 'pending' (schedulable) instead of cascading to 'blocked'.
+# only waiting stay 'pending' (schedulable) instead of cascading to 'blocked'. For
+# 'awaiting-decision' the scheduler goes one step further and SAYS SO on each held
+# dependent — staying pending silently is how five dependents of a green tasklist were
+# left with no reason at all once they stopped being told it had failed.
+# The one state that IS cascaded without being a failure is 'decision-declined': the
+# answer was no, so the work its dependents wait on is never arriving.
 #
 # OPERATOR PAUSE (the human lever, deliberately NOT the usage-limit one):
 #   • $STATE/.paused is armed by `chief pause` and cleared by `chief resume`. While
@@ -2994,7 +3010,7 @@ for n in $NAMES; do
   set_state "$n" pending
   rm -f "$STATE/$n.stalled" "$STATE/$n.cannot-complete" \
         "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
-        "$STATE/$n.files" "$STATE/$n.touches"
+        "$STATE/$n.files" "$STATE/$n.touches" "$STATE/$n.decision-hold"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
 done
 echo "Chief PARALLEL run — tool=$TOOL  max-parallel=$PARALLEL  auto-merge=$AUTO_MERGE_MAIN  verify=$([ "$NO_VERIFY" = 1 ] && echo off || echo on)$(mq_enabled && printf '  merge-batch=%s' "$(mq_batch_max)")"
@@ -3214,6 +3230,14 @@ reap() {   # collect any finished workers, update state
       # re-arms it (only a verdict can), and the run ends with the branch, the plan
       # and every annotation kept for the next `chief run`.
       AWAITING-REVIEW*) set_state "$n" awaiting-review ;;
+      # Parked on a HUMAN VERDICT, the other kind (docs/reference/decision-tasklists.md).
+      # This arm did not exist, and its absence is the whole of 116 US-3: the status line
+      # said AWAITING-DECISION and the fallthrough below wrote 'failed', so the summary
+      # printed `failed [AWAITING-DECISION 2/2]` — contradicting itself in one line — and
+      # dep_broken() then cascaded five dependents of a green tasklist as BROKEN. It is a
+      # hold on exactly the same terms as the review park above: branch, worktree and
+      # brief kept, nothing here re-arms it, only `chief decide` lifts it.
+      AWAITING-DECISION*) set_state "$n" awaiting-decision ;;
       # TERMINAL and NEGATIVE: an operator declined this decision, so unlike every
       # hold above there is nothing for a later run to resume — and unlike a failure,
       # nothing went wrong. Its own state so no surface has to call it either one.
@@ -3263,6 +3287,27 @@ while :; do
   # Mark tasklists whose dep failed as blocked (they can never run).
   for n in $NAMES; do
     [ "$(get_state "$n")" = "pending" ] || continue
+    # HELD BY A DECISION, not broken by one — the policy, decided deliberately and
+    # written down in docs/reference/decision-tasklists.md. A dep sitting at
+    # AWAITING-DECISION has complete stories, an intact branch and an unanswered
+    # question whose answer may well be yes, so it is pointedly NOT in dep_broken's set:
+    # its dependents stay 'pending' and the next run — after `chief decide` — schedules
+    # them, exactly as they do behind a usage limit or a plan review. What they may not
+    # do is stay SILENT. In the run that produced this tasklist, five dependents of a
+    # green tasklist were told their dependency had FAILED; a dependent that reports
+    # nothing at all is the other half of that same misreport, so the hold is SAID here
+    # and collected in the summary. Written once per run — this loop runs every poll, and
+    # the marker doubles as the summary's collector.
+    if [ ! -f "$STATE/$n.decision-hold" ]; then
+      for d in $(deps_of "$n"); do
+        dk="$(dep_key "$d")"
+        [ "$(get_state "$dk")" = "awaiting-decision" ] || continue
+        echo "needs \"$d\", which is AWAITING A DECISION — NOT failed: its stories are complete and its branch is intact, and a human verdict releases both (chief decide $dk <verdict> --note … --proceed)" >> "$STATE/$n.why"
+        : > "$STATE/$n.decision-hold"
+        echo "  ⏸ $n HELD — \"$d\" is awaiting a human decision (not failed, not blocked)"
+        break
+      done
+    fi
     dep_broken "$n" || continue
     set_state "$n" blocked
     for d in $(deps_of "$n"); do
@@ -3270,6 +3315,11 @@ while :; do
       case "$(get_state "$dk")" in
         failed)  echo "needs \"$d\", which FAILED in this run — see $STATE/$dk.log" >> "$STATE/$n.why" ;;
         blocked) echo "needs \"$d\", which is itself blocked (see its reason above)"  >> "$STATE/$n.why" ;;
+        # The one non-failure dep_broken cascades. It has to name itself, or the
+        # dependent of a DECLINED decision is blocked with no reason line at all —
+        # which is what shipped, while the code comment beside dep_broken claimed
+        # "the reason travels with the state".
+        decision-declined) echo "needs \"$d\", which a human DECLINED — not a failure: the work it gated is never merging, so this can never run. Repoint it, or retire it." >> "$STATE/$n.why" ;;
       esac
     done
     echo "  ⤬ $n BLOCKED"; [ -f "$STATE/$n.why" ] && sed 's/^/       /' "$STATE/$n.why"
@@ -3353,7 +3403,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""; noway=""
+ran=""; paused=""; parked=""; inreview=""; indecision=""; dechold=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""; noway=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -3364,13 +3414,21 @@ for n in $NAMES; do
   # check by hand.
   [ -s "$STATE/$n.pending" ] && sed 's/^/       ↳ /' "$STATE/$n.pending"
   case "$(head -1 "$STATE/$n.pending" 2>/dev/null || echo)" in "work pending:"*) workleft="$workleft $n" ;; esac
+  # Waiting on somebody ELSE's decision (the scheduler's decision-hold marker). Not a
+  # state of its own — these are ordinary 'pending' rows — so the summary collects the
+  # marker rather than a state, and reports them beside the decision they wait on.
+  [ -f "$STATE/$n.decision-hold" ] && dechold="$dechold $n"
   case "$(get_state "$n")" in
     done|failed) ran=1 ;;
     rate-limited) ran=1; paused="$paused $n" ;;   # it ran; it is paused, not failed
     provider-unavailable) ran=1; unserved="$unserved $n" ;;  # it ran; the API never answered
     paused) ran=1; parked="$parked $n" ;;         # it ran; the operator stopped it
     awaiting-review) ran=1; inreview="$inreview $n" ;;  # it ran; a human hasn't approved its plan
-    awaiting-decision) ran=1; inreview="$inreview $n" ;;
+    # Its OWN list, not folded in with the plan-review hold above: the thing to open
+    # is a decision brief rather than a plan, and the command that lifts it is
+    # `chief decide` rather than an approval — a row that named the wrong artifact and
+    # the wrong command would be one more surface saying the wrong thing about this state.
+    awaiting-decision) ran=1; indecision="$indecision $n" ;;
     decision-declined) ran=1 ;;   # it ran, and a human answered no — finished, not failed
     awaiting-approval) ran=1; inzone="$inzone $n" ;;   # it ran, rebased and verified green; a human hasn't approved the zone it changed
   esac
@@ -3571,6 +3629,31 @@ if [ -n "$inreview" ]; then
   done
   echo "    Approve the plan (docs/plan-review.md), then pick it up where it stopped:  chief run"
 fi
+# Parked on a HUMAN DECISION — a SUCCESSFUL terminal state, and its own block for the
+# reason this whole story exists. Until now `awaiting-decision` had no arm in reap()'s
+# status->state map, so the row printed `failed [AWAITING-DECISION 2/2]`, contradicting
+# itself in one line, and everything downstream believed it. Nothing is wrong with these
+# branches: their stories are complete, their verify has not been asked for yet, and the
+# one thing missing is an answer only a human can give. So they are reported here beside
+# the other holds, with the brief to open and the command that lifts it — never among
+# the failures, and never as an AWAITING-REVIEW row naming a plan that does not exist.
+if [ -n "$indecision" ]; then
+  echo "   ⏸ AWAITING DECISION — $(set -- $indecision; echo $#) tasklist(s) parked on a human verdict (not failed, not blocked):$indecision"
+  for n in $indecision; do
+    printf '    · %-30s %s — brief: %s\n' "$n" "$(cat "$STATE/$n.status" 2>/dev/null || echo AWAITING-DECISION)" \
+      "$RESEARCH_REL/$n.md"
+  done
+  echo "    Record the verdict, then pick it up where it stopped:"
+  echo "      chief decide <name> <verdict> --note '<why>' --proceed   # the gated work merges"
+  echo "      chief decide <name> <verdict> --note '<why>' --decline   # it does not; branch kept"
+  echo "    (--retire ID and --unpark file or unpark the tasklist and authorise no merge.)"
+  echo "    docs/reference/decision-tasklists.md"
+  # WHO IS WAITING ON THAT ANSWER. Deliberately NOT blocked (see the scheduler's
+  # decision-hold arm): the verdict may be yes, so these keep their place in the queue
+  # and the next run schedules them. Naming them here is the difference between a
+  # decision an operator answers today and one that quietly holds up a band for a week.
+  [ -n "$dechold" ] && echo "    (held behind the answer, NOT blocked:$dechold — the next run schedules them)"
+fi
 # Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
 # or an over-budget story (docs/reference/diff-budget.md). Reported apart from the
 # three holds above because what is true of this one is stronger: the branch is
@@ -3658,6 +3741,10 @@ for n in $NAMES; do
     paused|rate-limited)      hl_held=1 ;;
     provider-unavailable)     hl_held=1 ;;   # the API never served us — withheld, not failed
     awaiting-review)          hl_held=1 ;;   # withheld pending a human verdict, not failed
+    # The OTHER human verdict. Held, never failed — same terms as the plan review above,
+    # and the arm was missing, so a headless run whose decision tasklist did exactly what
+    # it was built to do exited 6 ("failed for another reason").
+    awaiting-decision)        hl_held=1 ;;
     awaiting-approval)        hl_held=1 ;;   # withheld pending a human approval, not failed
     # A DECLINED decision is a finished run, not a held or failed one: the question was
     # asked and answered. Counted with the other terminal-but-unmerged outcome

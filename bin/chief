@@ -1267,6 +1267,13 @@ cmd_decide() {
   # --proceed and --unpark only clear a park, because a parked tasklist is never
   # scheduled and authorising a merge without lifting the park authorises nothing.
   #
+  # The reason is written `decision: declined` rather than bare `declined` so that
+  # `chief status` AGREES with the run summary about what happened here. status.sh's
+  # park_reason_class reads the leading token before a colon, and only a classified
+  # reason is counted by `chief status --decision`; a bare word is opaque prose, so a
+  # declined decision was invisible to the one filter named after it. The remainder
+  # stays the operator's own vocabulary, exactly as that reader intends.
+  #
   # And `.verdict` is written into a tasklist file ONLY when that file will never be
   # REBASED again — the two actions that end the tasklist here. On the two that leave
   # it live, the branch is about to replay onto this base, and its own commits edit
@@ -1276,7 +1283,7 @@ cmd_decide() {
   # at the merge — where it is permanent, committed, and past every rebase.
   jq --argjson v "$vj" --arg action "$action" --arg superseded "$superseded" \
     'if   $action == "retire"  then (.verdict=$v | .supersededBy=$superseded)
-     elif $action == "decline" then (.verdict=$v | .parked=true | .parkedReason="declined")
+     elif $action == "decline" then (.verdict=$v | .parked=true | .parkedReason="decision: declined")
      elif (.parked // false)   then (.parked=false | del(.parkedReason))
      else . end' \
     "$f" > "$tmp" || { rm -f "$tmp"; echo "chief decide: invalid tasklist JSON" >&2; return 1; }

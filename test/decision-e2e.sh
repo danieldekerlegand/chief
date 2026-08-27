@@ -229,7 +229,10 @@ decide licence-b rejected --note 'The vendor licence forbids redistribution.' --
   || { cat "$WORK/decide.log" >&2; fail "chief decide --decline failed"; }
 case "$(cat "$WORK/decide.log")" in *waits-on-b*) ;;
   *) cat "$WORK/decide.log" >&2; fail "the decline did not name the dependents it strands" ;; esac
-jq -e '.verdict.action=="decline" and .parked==true and .parkedReason=="declined"' \
+# The park reason carries the CLASS token `chief status` reads (park_reason_class in
+# engine/status.sh), so the backlog report and the run summary agree that this is a
+# human-decision park rather than opaque prose no filter can see.
+jq -e '.verdict.action=="decline" and .parked==true and .parkedReason=="decision: declined"' \
   "$REPO/tasks/chief/licence-b.json" >/dev/null || fail "a declined tasklist was not parked as declined"
 # A declined tasklist never rebases, so its own JSON IS the right place for the verdict —
 # and it has to be committed, or the next run stops on the dirty tree instead of the park.
@@ -249,4 +252,54 @@ saw 'declined, run anyway' DECISION-DECLINED
 [ -n "$(cd "$REPO" && git branch --list 'chief/licence-b')" ] \
   || fail "the declined branch was discarded — declining work is not deleting it"
 
-echo 'DECISION-E2E PASS — halt -> unpark authorises nothing -> --proceed -> stale verdict refused -> merge -> retire; --decline never merges'
+# ── 8. HOW IT IS REPORTED: a hold, never a failure ───────────────────────────
+# The state worked and only its REPORT was wrong: reap() had no arm for
+# AWAITING-DECISION, so the scheduler state fell through to 'failed' and the summary
+# printed `failed [AWAITING-DECISION 2/2]` — contradicting itself in one line. Every
+# surface downstream believed it: five dependents of a green tasklist were told their
+# dependency had FAILED. Asserted with a DEPENDENT in the same run, because the
+# dependent is where the misreport did its damage.
+jq -n '{project:"licence",type:"DECISION",branchName:"chief/licence-c",
+        description:"Ship the third anchor, or do not",
+        iters:3,dependsOn:[],touches:[],warmup:[],
+        userStories:[{id:"US-1",title:"Prepare the third gated implementation",description:"",
+                      acceptanceCriteria:["shippable.txt exists"],passes:false,notes:""}]}' \
+  > "$REPO/tasks/chief/licence-c.json"
+jq -n '{project:"licence",branchName:"chief/waits-on-c",description:"waits on the third decision",
+        iters:2,dependsOn:["licence-c"],touches:[],warmup:[],
+        userStories:[{id:"US-1",title:"Downstream of a decision",description:"",
+                      acceptanceCriteria:["it runs once the verdict is in"],passes:false,notes:""}]}' \
+  > "$REPO/tasks/chief/waits-on-c.json"
+( cd "$REPO" && git add -A && git commit -q -m 'a third decision, and a dependent of it' ) \
+  || fail "third fixture commit failed"
+
+# `run` puts its extra arguments before the tasklist name, so this schedules both.
+run 'reporting' licence-c waits-on-c
+awaiting 'reporting'
+# The row itself. The status line and the scheduler state have to agree — one saying
+# AWAITING-DECISION while the other says failed IS the bug.
+[ "$(cat "$REPO/.chief/state/parallel/licence-c.state")" = awaiting-decision ] \
+  || fail "the scheduler state is not awaiting-decision (it is '$(cat "$REPO/.chief/state/parallel/licence-c.state")')"
+grep -E '^[[:space:]]+- +licence-c +' "$WORK/last.log" | grep -q failed \
+  && fail "the summary still reports an AWAITING-DECISION tasklist as failed"
+saw 'reporting' 'AWAITING DECISION —'
+saw 'reporting' 'not failed, not blocked'
+# The dependent: held, and told the truth about why.
+saw 'reporting' 'which is AWAITING A DECISION'
+grep -q 'waits-on-c BLOCKED' "$WORK/last.log" \
+  && fail "a dependent of an undecided tasklist was cascaded to BLOCKED"
+grep -E 'waits-on-c.*FAILED in this run' "$WORK/last.log" \
+  && fail "a dependent was told a green tasklist had FAILED"
+saw 'reporting' 'held behind the answer'
+
+# And the policy is real, not just wording: the hold is LIFTED by the verdict, and the
+# dependent that was never blocked runs in the very next run.
+decide licence-c approved --note 'Third licence review cleared it.' --proceed \
+  || { cat "$WORK/decide.log" >&2; fail "chief decide --proceed failed on licence-c"; }
+run 'released' licence-c waits-on-c
+saw 'released' DECIDED
+[ -f "$REPO/tasks/chief/completed/licence-c.json" ] || fail "the decided third tasklist did not merge"
+[ -f "$REPO/tasks/chief/completed/waits-on-c.json" ] \
+  || { cat "$WORK/last.log" >&2; fail "the dependent never ran once the verdict released it"; }
+
+echo 'DECISION-E2E PASS — halt -> unpark authorises nothing -> --proceed -> stale verdict refused -> merge -> retire; --decline never merges; the halt reports as a HOLD and its dependent is held, not failed'
