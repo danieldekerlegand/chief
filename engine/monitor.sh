@@ -116,7 +116,7 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
 #                      wedged one from out here, so: a longer threshold, not silence.
-STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting provider-unavailable '
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting provider-unavailable '
 
 # The CEILING on that exemption — quiet by design is not quiet forever. A usage window
 # that never reopens is exactly what an operator has to be told about, so the exemption
@@ -503,6 +503,10 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     # a reviewer who has not looked yet.
     awaiting-review) printf '%s⏸%s|in-review' "$CYN" "$RST" ;;
     awaiting-decision) printf '%s⏸%s|decision' "$CYN" "$RST" ;;
+    # The answer, once it is no. NOT a hold (nothing is waiting) and NOT a failure
+    # glyph (nothing went wrong) — the row's job is to say the question was decided
+    # against, so the work it gated is on a branch that is never going to merge.
+    decision-declined) printf '%s⊘%s|declined' "$CYN" "$RST" ;;
     # Held at an OVERLAP ZONE (docs/reference/overlap-zones.md). The same ⏸ once
     # more — it is a hold, not a fault — and its own label, because this row is the
     # one whose branch already PASSED everything: rebased, verified green, waiting

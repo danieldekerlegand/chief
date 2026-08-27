@@ -306,6 +306,23 @@ finalize_merged() {
   # unrelated check and then `exit 0`, and `vita`'s `72` against a workflow no
   # event chief produces could start. Both were found by hand; neither had to be.
   cigate_stamp_merge_record "$rec" "$work_repo" "$sha" "${VERIFY_HOOK:-}" "${NO_VERIFY:-0}" 2>/dev/null || true
+  # THE OPERATOR'S VERDICT, on the record that outlives the run. For a DECISION
+  # tasklist the live JSON is deliberately not where the verdict lives (engine/
+  # decision.sh's header says why: uncommitted, the isolation guard discards it;
+  # committed, it collides with the branch's own pass-flag edit at rebase) — and the
+  # durable record it lives in instead is gitignored. completed/ is the one file that
+  # is written ONCE, here, after the last rebase this tasklist will ever see, so it is
+  # where "who approved this, and why" can be kept for a reader six months out. Purely
+  # additive and never fatal: no verdict, no jq, or a bad read all leave $rec as it was.
+  local _fm_vf
+  if command -v decision_verdict_file >/dev/null 2>&1; then
+    _fm_vf="$(decision_verdict_file "$CHIEF_PROJECT" "$name")"
+    if [ -s "$_fm_vf" ] && [ -s "$rec" ]; then
+      if jq --slurpfile v "$_fm_vf" '.verdict=$v[0]' "$rec" > "$rec.verdict" 2>/dev/null; then
+        mv "$rec.verdict" "$rec"
+      else rm -f "$rec.verdict"; fi
+    fi
+  fi
   # Retire the source tasklist. MUST be -f: `git rm` REFUSES to remove a file with
   # local modifications (--ignore-unmatch only suppresses "no match"), and an agent
   # that reached out of its worktree to flip pass-flags in the PROJECT's copy leaves

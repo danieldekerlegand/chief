@@ -64,3 +64,58 @@ Addendum (same story, after the quality ratchet):
   surfaces one line after deciding rather than as a tasklist that halts again next run,
   which is exactly how 106 went unnoticed — and it gives the reader a second call site.
   **When the ratchet asks for a call site, look for the assertion you should have written.**
+
+## US-2 — The action set covers a decision that carries code
+Wed Aug 26 2026
+
+`--retire` and `--unpark` both assume the deliverable IS the verdict. A decision that
+carries code (lugh/460: 2,209 insertions gated on a licence call) fits neither, and
+nothing could say NO at all. Added the two AUTHORITY actions and made the flow survive
+the very next `chief run`.
+
+Files:
+- `engine/decision.sh` — `decision_authority ACTION -> merge|refuse|none`, the ONE place
+  the flag→authority mapping lives (the verdict WORD is the operator's vocabulary and is
+  never parsed). `decision_verdict_set` now sets `DECISION_AUTHORITY` + `DECISION_WHO`;
+  `decision_verdict_json` stamps `who` (git identity, else login). `decision_stop` has
+  three arms — merge / DECISION-DECLINED / halt-naming-the-flag — and emits
+  `tasklist.decision` into the RUN's event stream when it reads a verdict.
+- `bin/chief` `cmd_decide` — `--proceed`, `--decline`, `--no-commit`; the dependents scan
+  now serves both end-of-life actions (retire REFUSES, decline REPORTS); reads its own
+  write back through `decision_authority` as well as `decision_verdict_set`.
+- `engine/driver.sh` — `decision-declined` as a first-class terminal state across all five
+  surfaces (worker_park · reap · tasklist_outcome ×2 · summary · headless `hl_ok`), and
+  it IS cascaded by `dep_broken` — the one non-failure in that list, deliberately.
+- `engine/lib.sh` `finalize_merged` — stamps the verdict onto the completed/ record.
+- `engine/monitor.sh` — `⊘|declined` glyph + STALE_QUIET_PHASES.
+- `test/decision-e2e.sh` extended (unpark-authorises-nothing · --proceed · event stream ·
+  retire refusal · decline never merges), `test/decision.sh` updated for the new
+  placement rule. `VERSION` 0.9.6 → 0.9.7 + README/ROADMAP.
+
+### Learnings for future iterations
+
+- **`chief decide` leaving the tasklist DIRTY meant the next run never started.** The run's
+  startup guard ("uncommitted tracked changes on 'main' — commit or stash them") fires
+  before anything is scheduled, so US-1's flow only worked in its test because the stale
+  step happened to `git commit -am` in between. Any operator command that edits a tasklist
+  must commit it (`chief retire` already did — same shape, `--no-commit` escape) or write
+  nothing at all.
+- **Where a verdict may live, refined: a tasklist file may carry it only if that file will
+  never be REBASED again.** `--retire`/`--decline` end the tasklist on the spot, so their
+  JSON is safe and is the human-readable copy. `--proceed`/`--unpark` leave it live and its
+  branch is about to replay onto this base, editing that same file — so they write NOTHING
+  to it (an `--unpark` of an unparked tasklist writes no bytes at all, deliberately, because
+  a dirty tree is the failure above), and `finalize_merged` stamps the verdict onto the
+  `completed/` record instead. That record is written once, after the last rebase.
+- **AUTHORITY belongs to the flag, never to the verdict word.** "postgres", "approved",
+  "the MIT row" are the operator's vocabulary; chief has no dictionary that could tell a
+  yes from a no in it. One mapping (`decision_authority`), two call sites — the writer
+  asserts against it, the reader derives from it.
+- **A new terminal state is FIVE driver edits plus two viewers**, and missing one is how an
+  outcome gets mis-classified (this whole tasklist's family): `worker_park` arm, `reap`
+  status→state, `tasklist_outcome` (BOTH halves — the status arm and the get_state
+  fallback), the summary `case`, the headless `hl_*` bucket, then `monitor.sh`'s glyph and
+  `STALE_QUIET_PHASES`. `dep_broken` is a sixth, and a real decision: `decision-declined`
+  is in it because the work its dependents wait on is never arriving.
+- The ratchet's `single_use_functions` is AT tolerance (+2 of 2) on this branch. US-3 has
+  no room for a new single-call helper without deleting one.

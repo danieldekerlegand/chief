@@ -34,15 +34,51 @@ decision_verdict_file() {
   printf '%s/%s/decisions/%s.json\n' "${1%/}" "${CHIEF_STATE_DIR:-.chief/state}" "${2:-}"
 }
 
-# decision_verdict_json CHOICE NOTE ACTION STORIES_ID -> the record, as one object.
+# decision_verdict_json CHOICE NOTE ACTION STORIES_ID [WHO] -> the record, as one object.
 #
 # THE shape, written once and read once. cmd_decide puts it in two places — the
 # durable record above, and the `.verdict` field of the tasklist a human reads six
 # months later — and decision_verdict_set reads it back out of either. Three call
 # sites; one definition, here, so they cannot disagree about what a verdict is.
+#
+# ACTION is the AUTHORITY half and the reason a verdict word is never parsed: the
+# choice is the operator's own vocabulary ("postgres", "approved", "the MIT row"),
+# and chief holds no dictionary that could tell a yes from a no in it. What the
+# branch may do is carried by the flag the operator recorded it with, which is a
+# closed set — see decision_authority.
+#
+# WHO answers "which human decided this" on a record read six months later, and in
+# the event stream a host subscribes to. Best-effort by design: git's configured
+# identity, else the login name. Provenance for a human, never an authorisation
+# check — the authorisation is that `chief decide` is the only writer at all.
 decision_verdict_json() {
+  local who="${5:-}"
+  [ -n "$who" ] || who="$(git config user.email 2>/dev/null || true)"
+  [ -n "$who" ] || who="${USER:-$(id -un 2>/dev/null || echo unknown)}"
   jq -n --arg choice "${1:-}" --arg note "${2:-}" --arg action "${3:-}" --arg stories "${4:-}" \
-    '{choice:$choice, note:$note, action:$action, stories:$stories, recordedAt:(now|todateiso8601)}'
+     --arg who "$who" \
+    '{choice:$choice, note:$note, action:$action, stories:$stories, who:$who,
+      recordedAt:(now|todateiso8601)}'
+}
+
+# decision_authority ACTION -> what the flag the verdict was recorded with lets the
+# prepared branch DO. The one place that mapping exists, because it is the whole
+# safety property: `chief decide` validates the flag against this set, and the driver
+# reads its answer. A second opinion about which flags mean "ship it" is how a
+# mechanism that can only say yes gets built by accident.
+#
+#   merge   --proceed  the operator said the gated work may go: ordinary verify+merge
+#   refuse  --decline  the operator said no: the branch is kept, and never merged
+#   none    --unpark / --retire, or a record older than these flags. Both of those
+#           actions assume the DELIVERABLE IS THE VERDICT — one clears a park, the
+#           other files the tasklist — and neither is consent to merge code. A
+#           tasklist carrying code keeps halting until one of the two above is given.
+decision_authority() {
+  case "${1:-}" in
+    proceed) printf 'merge' ;;
+    decline) printf 'refuse' ;;
+    *)       printf 'none' ;;
+  esac
 }
 
 # decision_stories_id PRD -> a change-detector for the stories a verdict approves.
@@ -78,20 +114,24 @@ decision_stories_id() {
 #                    stale     a verdict exists, but not for THESE stories
 #                    recorded  a verdict bound to every state in hand
 #   DECISION_CHOICE  the verdict word · DECISION_NOTE its reasoning
-#   DECISION_ACTION  the flag it was recorded with
+#   DECISION_ACTION  the flag it was recorded with · DECISION_WHO who recorded it
+#   DECISION_AUTHORITY  what that flag lets the branch do (decision_authority);
+#                    'none' in every state but `recorded`, so a caller that reads
+#                    only this one global can never merge on a stale or absent verdict
 #   DECISION_DETAIL  a sentence for the operator, set in every state
 decision_verdict_set() {
   DECISION_STATE=none DECISION_CHOICE="" DECISION_NOTE="" DECISION_ACTION="" DECISION_DETAIL=""
+  DECISION_WHO="" DECISION_AUTHORITY=none
   local rec="${1:-}" bound now sp v; shift 2>/dev/null || true
   [ -r "$rec" ] || { DECISION_DETAIL="waiting for a human verdict"; return 0; }
   command -v jq >/dev/null 2>&1 || { DECISION_DETAIL="jq is unavailable — no verdict can be read"; return 0; }
   # `.verdict // .` normalises the two places cmd_decide writes the SAME object to.
   v="$(jq -r '(.verdict // .) as $v
-        | [($v.choice // ""), ($v.note // ""), ($v.action // ""), ($v.stories // "")]
+        | [($v.choice // ""), ($v.note // ""), ($v.action // ""), ($v.stories // ""), ($v.who // "")]
         | map(tostring | gsub("\n"; " ")) | join("\u001f")' "$rec" 2>/dev/null)"
   # US, not tab: tab is IFS whitespace, so an empty middle field (a verdict recorded
   # before `action` existed) would shift every field after it left.
-  IFS=$'\037' read -r DECISION_CHOICE DECISION_NOTE DECISION_ACTION bound <<EOF
+  IFS=$'\037' read -r DECISION_CHOICE DECISION_NOTE DECISION_ACTION bound DECISION_WHO <<EOF
 $v
 EOF
   [ -n "$DECISION_CHOICE" ] || { DECISION_DETAIL="waiting for a human verdict"; return 0; }
@@ -105,7 +145,15 @@ EOF
     fi
   done
   DECISION_STATE=recorded
-  DECISION_DETAIL="operator verdict '$DECISION_CHOICE'${DECISION_NOTE:+ — $DECISION_NOTE}"
+  DECISION_AUTHORITY="$(decision_authority "$DECISION_ACTION")"
+  DECISION_DETAIL="operator verdict '$DECISION_CHOICE'${DECISION_WHO:+ by $DECISION_WHO}${DECISION_NOTE:+ — $DECISION_NOTE}"
+  # A verdict recorded with a flag that authorises nothing is NOT a yes and must not
+  # read like one. `--unpark` and `--retire` both assume the deliverable is the verdict
+  # itself, so on a tasklist carrying code they leave the work exactly where it was —
+  # and the sentence has to name the flag that would move it, or the operator is back
+  # to reading the driver to find out why a recorded verdict changed nothing.
+  [ "$DECISION_AUTHORITY" != none ] || DECISION_DETAIL="$DECISION_DETAIL (recorded with \
+--${DECISION_ACTION:-none}, which authorises no merge — re-record with --proceed or --decline)"
   return 0
 }
 
@@ -127,6 +175,18 @@ EOF
 # to a specific brief: re-word the tasklist, or re-plan the branch, and it comes back
 # here to be decided again rather than merging on an approval given for something else.
 #
+# THREE outcomes, because a decision point that can only say yes is not one. What the
+# operator authorised is read off DECISION_AUTHORITY — the flag, never the verdict word,
+# which is the operator's own vocabulary and not a language chief speaks:
+#
+#   merge   the gated work continues to the ordinary rebase → verify → merge path
+#   refuse  DECISION-DECLINED: a terminal, successful, NEGATIVE outcome. The branch and
+#           worktree are kept — the operator declined the work, they did not lose it —
+#           and nothing merges. Dependents are cascaded (dep_broken in driver.sh) for a
+#           stated reason: what they depend on is never arriving
+#   none    a verdict exists but authorises no merge (--unpark / --retire) — halt, and
+#           say which flag would move it
+#
 # Returns 0 when the branch may PROCEED to the ordinary verify+merge path, 1 when it
 # was parked. $live/$total/$remaining/$STATE are run_worker's, by dynamic scope, and
 # worker_park is the driver's — the same convention engine/measure.sh's unmeasured_stop
@@ -134,11 +194,27 @@ EOF
 decision_stop() {
   local name="$1" repo="$2" src="$3" wtprd="$4"
   decision_verdict_set "$(decision_verdict_file "$repo" "$name")" "$src" "$wtprd"
-  if [ "$DECISION_STATE" != recorded ]; then
-    worker_park awaiting-decision "the decision brief is prepared; $DECISION_DETAIL" \
-      "!! $name AWAITING-DECISION — stories are complete, but only a human verdict can finish this tasklist ($DECISION_DETAIL)"
-    return 1
+  # WHICH HUMAN DECIDED WHAT, in the run's own event stream. 106 US-3 asked for this
+  # and nothing emitted it, so a completed run recorded the merge and not the consent
+  # behind it. Emitted for any verdict actually READ — the machine half is `state` (the
+  # action) and the human half is `detail`; the park/proceed event that follows is the
+  # transition, this is the authority for it. Guarded because decision.sh is also
+  # sourced by agent.sh and research.sh, which have no event stream.
+  if [ "$DECISION_STATE" = recorded ] && command -v event_emit >/dev/null 2>&1; then
+    event_emit tasklist.decision name="$name" state="${DECISION_ACTION:-none}" \
+      detail="verdict '$DECISION_CHOICE' by ${DECISION_WHO:-unknown} (--${DECISION_ACTION:-none} → ${DECISION_AUTHORITY}): ${DECISION_NOTE:-no note}"
   fi
-  echo ">> $name DECIDED — $DECISION_DETAIL; the work it gated continues to the ordinary verify+merge path"
-  return 0
+  case "$DECISION_AUTHORITY" in
+    merge)
+      echo ">> $name DECIDED — $DECISION_DETAIL; the work it gated continues to the ordinary verify+merge path"
+      return 0 ;;
+    refuse)
+      worker_park decision-declined "the operator DECLINED this decision; $DECISION_DETAIL — branch kept, nothing merged" \
+        "!! $name DECISION-DECLINED — the operator declined it, so the work it gated does NOT merge ($DECISION_DETAIL)"
+      return 1 ;;
+    *)
+      worker_park awaiting-decision "the decision brief is prepared; $DECISION_DETAIL" \
+        "!! $name AWAITING-DECISION — stories are complete, but only a human verdict can finish this tasklist ($DECISION_DETAIL)"
+      return 1 ;;
+  esac
 }

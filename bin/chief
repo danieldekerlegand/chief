@@ -171,15 +171,20 @@ Usage:
                               verdict is durable and bound by checksum to the change it approved,
                               so a restart never re-asks. No name (or --list) reports what is
                               waiting. See docs/reference/overlap-zones.md
-  chief decide NAME VERDICT  record the operator's verdict with --note NOTE, then
-       [--retire ID]          retire it to completed/ (without mergedToMain), or
-       [--unpark]             clear its park while retaining the verdict. The next run READS
-                              the verdict: a decision tasklist stops halting at
-                              AWAITING-DECISION and its branch continues to the ordinary
-                              verify+merge path, so a decision that carries code is
-                              finishable. Durable (.chief/state/decisions/), and bound by
-                              checksum to the stories it approved — re-word them and it asks
-                              again. See docs/reference/decision-tasklists.md
+  chief decide NAME VERDICT  record the operator's verdict with --note NOTE, and say what
+       [--proceed]            it authorises. A decision that CARRIES CODE is answered with
+       [--decline]            --proceed (the next run reads the verdict and the gated work
+       [--retire ID]          continues to the ordinary verify+merge path) or --decline (the
+       [--unpark]             branch is kept and never merges; the tasklist parks as
+                              'declined'). A decision whose deliverable IS the verdict is
+                              answered with --retire ID (file it in completed/, without
+                              mergedToMain; refused while live tasklists depend on it) or
+                              --unpark (clear its park, keep the verdict) — neither of those
+                              two authorises a merge. Durable (.chief/state/decisions/), and
+                              bound by checksum to the stories it approved — re-word them and
+                              it asks again. A tasklist edit it makes is committed for you
+                              (--no-commit opts out), because `chief run` refuses to start on
+                              a dirty tree. See docs/reference/decision-tasklists.md
   chief retire --negative     retire a tasklist whose delivered stories PASSED and whose remaining
        NAME [-n] [--no-commit] story TERMINATED FALSE — declared "terminalFalse" and carrying the
                               measurement behind the answer. Files the completed/ record (the
@@ -1199,7 +1204,8 @@ cmd_approve() {
 # ── operator decision verdicts (the only path that may make this transition) ──
 cmd_decide() {
   local name="" verdict="" note="" action="" superseded="" f rec tmp deps="" n vj vf
-  [ "$#" -ge 1 ] || { echo "usage: chief decide NAME VERDICT --note NOTE (--retire ID|--unpark)" >&2; return 2; }
+  local do_commit=1 changed=0 p2=""
+  [ "$#" -ge 1 ] || { echo "usage: chief decide NAME VERDICT --note NOTE (--proceed|--decline|--retire ID|--unpark) [--no-commit]" >&2; return 2; }
   name="${1%.json}"; shift
   case "${1:-}" in
     --verdict|-v) [ "$#" -ge 2 ] || { echo "chief decide: --verdict needs a value" >&2; return 2; }; verdict="$2"; shift 2 ;;
@@ -1212,26 +1218,39 @@ cmd_decide() {
       --retire) action=retire; shift; [ "$#" -gt 0 ] && [[ "$1" != -* ]] && { superseded="$1"; shift; } ;;
       --superseded-by) [ "$#" -ge 2 ] || { echo "chief decide: --superseded-by needs a value" >&2; return 2; }; superseded="$2"; shift 2 ;;
       --unpark) action=unpark; shift ;;
+      --no-commit) do_commit=0; shift ;;
+      # The two AUTHORITY flags (engine/decision.sh's decision_authority). Everything
+      # above answers "what happens to the tasklist"; these two answer the question a
+      # decision that CARRIES CODE actually asks — does the prepared branch merge.
+      --proceed) action=proceed; shift ;;
+      --decline) action=decline; shift ;;
       -*) echo "chief decide: unknown option $1" >&2; return 2 ;;
       *) echo "chief decide: unexpected argument $1" >&2; return 2 ;;
     esac
   done
   [ -n "$verdict" ] || { echo "chief decide: a verdict is required" >&2; return 2; }
   [ -n "$note" ] || { echo "chief decide: --note is required" >&2; return 2; }
-  [ -n "$action" ] || { echo "chief decide: choose --retire ID or --unpark" >&2; return 2; }
+  [ -n "$action" ] || { echo "chief decide: choose --proceed, --decline, --retire ID or --unpark" >&2; return 2; }
   [ "$action" != retire ] || [ -n "$superseded" ] || { echo "chief decide: --retire requires an ID" >&2; return 2; }
   load_project
   . "$ENGINE/decision.sh"
   f="$CHIEF_PROJECT/$CHIEF_TASKS_DIR/$name.json"
   [ -f "$f" ] || { echo "chief decide: no live tasklist '$name'" >&2; return 1; }
   is_decision_tasklist "$f" || { echo "chief decide: '$name' is not a DECISION tasklist" >&2; return 1; }
-  if [ "$action" = retire ]; then
+  # WHO IS WAITING ON THIS ANSWER. The same scan serves the two actions that end the
+  # tasklist, and they use it differently on purpose: a retirement is REFUSED (the
+  # dependents would block forever on a record that can never be stamped), while a
+  # DECLINE is the operator's answer and is not chief's to veto — so it is reported.
+  # Saying nothing would be the worst of the three: the dependents cascade at the next
+  # run and the reason is a flag recorded hours ago.
+  if [ "$action" = retire ] || [ "$action" = decline ]; then
     for n in "$CHIEF_PROJECT/$CHIEF_TASKS_DIR"/*.json; do
       [ -f "$n" ] || continue
       [ "$(basename "$n" .json)" = "$name" ] && continue
       if jq -e --arg d "$name" '(.dependsOn // []) | any(. == $d)' "$n" >/dev/null 2>&1; then deps="$deps $(basename "$n" .json)"; fi
     done
-    [ -z "$deps" ] || { echo "chief decide: refusing retirement of '$name'; live dependents:$deps" >&2; return 1; }
+    [ "$action" != retire ] || [ -z "$deps" ] \
+      || { echo "chief decide: refusing retirement of '$name'; live dependents:$deps" >&2; return 1; }
   fi
   tmp="${f}.decide.$$"
   # `stories` BINDS the verdict to what it approved (engine/decision.sh's
@@ -1241,11 +1260,29 @@ cmd_decide() {
   # re-planned story inherit its old approval.
   vj="$(decision_verdict_json "$verdict" "$note" "$action" "$(decision_stories_id "$f")")" \
     || { echo "chief decide: could not form the verdict record" >&2; return 1; }
+  # WHAT THE FLAG DOES TO THE TASKLIST, as distinct from what it authorises the branch
+  # to do. --decline PARKS it: the answer is no, so nothing should spend another agent
+  # turn on it — but it is not filed either, because "declined" and "superseded by X"
+  # are different records and only the operator knows whether one becomes the other.
+  # --proceed and --unpark only clear a park, because a parked tasklist is never
+  # scheduled and authorising a merge without lifting the park authorises nothing.
+  #
+  # And `.verdict` is written into a tasklist file ONLY when that file will never be
+  # REBASED again — the two actions that end the tasklist here. On the two that leave
+  # it live, the branch is about to replay onto this base, and its own commits edit
+  # this same file (the pass-flags): a verdict committed beside them is the
+  # REBASE-CONFLICT engine/decision.sh's header describes. Those two get the durable
+  # record instead, and finalize_merged stamps the verdict into the completed/ record
+  # at the merge — where it is permanent, committed, and past every rebase.
   jq --argjson v "$vj" --arg action "$action" --arg superseded "$superseded" \
-    '.verdict=$v |
-     if $action == "unpark" then (.parked=false | del(.parkedReason)) else (.supersededBy=$superseded) end' \
+    'if   $action == "retire"  then (.verdict=$v | .supersededBy=$superseded)
+     elif $action == "decline" then (.verdict=$v | .parked=true | .parkedReason="declined")
+     elif (.parked // false)   then (.parked=false | del(.parkedReason))
+     else . end' \
     "$f" > "$tmp" || { rm -f "$tmp"; echo "chief decide: invalid tasklist JSON" >&2; return 1; }
-  mv "$tmp" "$f"
+  # NO WRITE AT ALL when nothing changed — an --unpark of a tasklist that was never
+  # parked must not dirty the tree, because a dirty tree is what stops the next run.
+  if cmp -s "$tmp" "$f"; then rm -f "$tmp"; else mv "$tmp" "$f"; changed=1; fi
   # THE COPY THE DRIVER READS. The tasklist field above is the record a human opens;
   # this one is the record that survives (decision_verdict_file says why the tasklist
   # cannot be it). Same bytes, one shape, written together.
@@ -1259,16 +1296,45 @@ cmd_decide() {
   decision_verdict_set "$vf" "$f"
   [ "$DECISION_STATE" = recorded ] \
     || echo "chief decide: WARNING — the record just written reads back as '$DECISION_STATE' ($DECISION_DETAIL)" >&2
-  if [ "$action" = retire ]; then
-    rec="$CHIEF_PROJECT/$CHIEF_TASKS_DIR/completed/$name.json"
-    mkdir -p "$(dirname "$rec")"; mv "$f" "$rec"
-    echo "✓ $name retired in completed/ (supersededBy=$superseded; no mergedToMain)"
-  else
-    echo "✓ $name unparked with verdict '$verdict' — the next run reads it and continues to verify+merge"
+  # And the AUTHORITY half of the same assertion: the flag the operator typed and what
+  # the driver will read it as, compared here rather than discovered at the next run.
+  [ "$DECISION_AUTHORITY" = "$(decision_authority "$action")" ] \
+    || echo "chief decide: WARNING — --$action reads back as authority '$DECISION_AUTHORITY'" >&2
+  case "$action" in
+    retire)
+      rec="$CHIEF_PROJECT/$CHIEF_TASKS_DIR/completed/$name.json"
+      mkdir -p "$(dirname "$rec")"; mv "$f" "$rec"
+      echo "✓ $name retired in completed/ (supersededBy=$superseded; no mergedToMain)" ;;
+    proceed)
+      echo "✓ $name decided '$verdict' — the next run reads it and the work it gated continues to verify+merge" ;;
+    decline)
+      echo "✗ $name DECLINED with verdict '$verdict' — the branch is kept and will NOT merge; the tasklist is parked (parkedReason=declined)"
+      [ -z "$deps" ] || echo "   ↳ live dependents of a declined decision:$deps — what they wait on is not arriving; repoint or retire them" ;;
+    *)
+      echo "✓ $name unparked with verdict '$verdict' — recorded, but --unpark authorises no merge; use --proceed or --decline to answer for the branch" ;;
+  esac
+  # COMMIT WHAT WE CHANGED, or the next run never starts: `chief run` guards what the
+  # agent forks from and refuses outright on an uncommitted tracked change, so a decide
+  # that leaves the tasklist dirty is a verdict the operator cannot act on — which was
+  # the whole complaint. Same shape and the same escape hatch as `chief retire`.
+  [ "$action" != retire ] || p2="$CHIEF_TASKS_DIR/completed/$name.json"
+  if [ "$changed" = 1 ] && [ "$do_commit" = 1 ] && git -C "$CHIEF_PROJECT" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$CHIEF_PROJECT" add -- "$CHIEF_TASKS_DIR/$name.json" ${p2:+"$p2"} >/dev/null 2>&1 || true
+    if git -C "$CHIEF_PROJECT" commit -q -m "chore(chief): $name decided '$verdict' (--$action)" \
+         -- "$CHIEF_TASKS_DIR/$name.json" ${p2:+"$p2"} >/dev/null 2>&1; then
+      echo "   committed $(git -C "$CHIEF_PROJECT" rev-parse --short HEAD 2>/dev/null)"
+    else
+      echo "   (not committed — commit $CHIEF_TASKS_DIR/ yourself; 'chief run' refuses to start on a dirty tree)"
+    fi
   fi
   . "$ENGINE/events.sh"
+  # WHO DECIDED WHAT, at the moment it was decided. The run's own stream gets the same
+  # transition from decision_stop when the driver READS this record; this line is the
+  # one an operator deciding between runs still produces, and it carries the identity
+  # the record was stamped with rather than "a human, some time before the merge".
   CHIEF_EVENTS_FILE="${CHIEF_RUNS}/decisions.events.jsonl" CHIEF_EVENT_REPO="$CHIEF_PROJECT" \
-    event_emit "tasklist.decision" name="$name" state="$action" detail="$verdict — $note"
+    event_emit "tasklist.decision" name="$name" state="$action" \
+      detail="verdict '$verdict' by ${DECISION_WHO:-unknown} (--$action → $DECISION_AUTHORITY): $note"
 }
 
 # ── operator pause / resume (the human's quota lever) ────────────────────────

@@ -33,7 +33,7 @@
 #
 # SCHEDULER STATES (per tasklist, in $STATE/<name>.state):
 #   pending · running · done · failed · blocked · rate-limited · paused ·
-#   awaiting-review · awaiting-approval · provider-unavailable
+#   awaiting-review · awaiting-approval · provider-unavailable · decision-declined
 # FIVE of these are NON-TERMINAL, and none of them is a failure:
 #   · 'rate-limited' — the worker's agent loop exited 2, i.e. it stopped on a Claude
 #     usage/session limit (see engine/agent.sh's exit-code contract). Nothing is
@@ -356,6 +356,7 @@ tasklist_outcome() {
     CANNOT-COMPLETE*)                 printf 'cannot-complete' ;;
     AWAITING-REVIEW*)                 printf 'awaiting-review' ;;
     AWAITING-DECISION*)               printf 'awaiting-decision' ;;
+    DECISION-DECLINED*)               printf 'decision-declined' ;;
     AWAITING-APPROVAL*)               printf 'awaiting-approval' ;;
     BAD-REPO*)                        printf 'bad-repo' ;;
     # No status line (or one no worker writes): fall back to the scheduler state,
@@ -370,6 +371,7 @@ tasklist_outcome() {
          paused)          printf 'paused' ;;
          awaiting-review) printf 'awaiting-review' ;;
          awaiting-decision) printf 'awaiting-decision' ;;
+         decision-declined) printf 'decision-declined' ;;
          awaiting-approval) printf 'awaiting-approval' ;;
          *)               printf 'failed' ;;
        esac ;;
@@ -1638,9 +1640,14 @@ dep_broken() {   # a dep failed/blocked -> this tasklist can never run
   # not broken — it is unfinished work with its branch intact that the next
   # run resumes. Its dependents must therefore stay pending (schedulable on resume)
   # rather than cascade to 'blocked'.
+  # 'decision-declined' IS here, and it is the one non-failure in the list: an
+  # operator declined the decision, so the branch its dependents are waiting on is
+  # never merging. Cascading them is the honest answer — the alternative is leaving
+  # them pending against work that will not arrive. The reason travels with the state,
+  # so a dependent reports that its dependency was DECLINED, not that it failed.
   local d
   for d in $(deps_of "$1"); do
-    case "$(get_state "$(dep_key "$d")")" in failed|blocked) return 0 ;; esac
+    case "$(get_state "$(dep_key "$d")")" in failed|blocked|decision-declined) return 0 ;; esac
   done
   return 1
 }
@@ -2314,6 +2321,12 @@ worker_park() {
     cannot-complete) phase=cannot-complete; status=CANNOT-COMPLETE; ev=tasklist.cannot-complete; state=failed ;;
     awaiting-review) phase=awaiting-review; status=AWAITING-REVIEW; ev=tasklist.awaiting-review; state=awaiting-review ;;
     awaiting-decision) phase=awaiting-decision; status=AWAITING-DECISION; ev=tasklist.awaiting-decision; state=awaiting-decision ;;
+    # The NEGATIVE terminal of the same gate (engine/decision.sh's decision_stop): the
+    # operator read the brief and said no. Not a failure — the tasklist did exactly
+    # what it was for — and not a park either: nothing is waiting, and no later run
+    # changes the answer. The branch and worktree are KEPT, because declining work is
+    # not the same as discarding it.
+    decision-declined) phase=decision-declined; status=DECISION-DECLINED; ev=tasklist.decision-declined; state=decision-declined ;;
     # The one arm that fires INSIDE the merge phase, after the floor came back
     # green (engine/zones.sh). Its worktree is already gone — the merge phase
     # removes it to free the branch — so unlike its four siblings what is kept is
@@ -3201,6 +3214,11 @@ reap() {   # collect any finished workers, update state
       # re-arms it (only a verdict can), and the run ends with the branch, the plan
       # and every annotation kept for the next `chief run`.
       AWAITING-REVIEW*) set_state "$n" awaiting-review ;;
+      # TERMINAL and NEGATIVE: an operator declined this decision, so unlike every
+      # hold above there is nothing for a later run to resume — and unlike a failure,
+      # nothing went wrong. Its own state so no surface has to call it either one.
+      # dep_broken() DOES cascade it, deliberately: see the note there.
+      DECISION-DECLINED*) set_state "$n" decision-declined ;;
       # Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
       # or an over-budget story (docs/reference/diff-budget.md). Non-terminal on the
       # same terms again — but note what is different: this branch already passed the
@@ -3353,6 +3371,7 @@ for n in $NAMES; do
     paused) ran=1; parked="$parked $n" ;;         # it ran; the operator stopped it
     awaiting-review) ran=1; inreview="$inreview $n" ;;  # it ran; a human hasn't approved its plan
     awaiting-decision) ran=1; inreview="$inreview $n" ;;
+    decision-declined) ran=1 ;;   # it ran, and a human answered no — finished, not failed
     awaiting-approval) ran=1; inzone="$inzone $n" ;;   # it ran, rebased and verified green; a human hasn't approved the zone it changed
   esac
   # Collected off the STATUS, not the scheduler state: a refusal is 'failed' like any
@@ -3640,6 +3659,11 @@ for n in $NAMES; do
     provider-unavailable)     hl_held=1 ;;   # the API never served us — withheld, not failed
     awaiting-review)          hl_held=1 ;;   # withheld pending a human verdict, not failed
     awaiting-approval)        hl_held=1 ;;   # withheld pending a human approval, not failed
+    # A DECLINED decision is a finished run, not a held or failed one: the question was
+    # asked and answered. Counted with the other terminal-but-unmerged outcome
+    # (complete-unmerged) so a run whose only tasklist was declined does not report
+    # 'no-work' — nothing is left to do, which is the opposite claim.
+    decision-declined)        hl_ok=1 ;;
     blocked|not-launched)     ;;   # never ran — the no-work rule below covers these
     no-work)                  hl_failed=1 ;;   # the false-complete guard fired: a fault
     *)                        hl_failed=1 ;;

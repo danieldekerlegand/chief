@@ -22,7 +22,14 @@ out="$(cd "$tmp" && CHIEF_RUNS="$tmp/runs" "$ROOT/bin/chief" decide choice sqlit
 grep -q 'live dependents: dependent' <<<"$out" || { echo "$out" >&2; exit 1; }
 cd "$tmp" || exit 1
 CHIEF_RUNS="$tmp/runs" "$ROOT/bin/chief" decide choice sqlite --note 'portable and already supported' --unpark >/dev/null || exit 1
-jq -e '.verdict.note=="portable and already supported" and .parked==false and (has("parkedReason")|not)' tasks/chief/choice.json >/dev/null || exit 1
+# --unpark clears the park and NOTHING ELSE in the live tasklist: it leaves the tasklist
+# schedulable, so its branch will rebase onto this base, and a `.verdict` committed
+# beside the branch's own edits to this same file is the REBASE-CONFLICT engine/
+# decision.sh describes. The verdict is durable in .chief/state/decisions/ instead, and
+# is stamped onto the completed/ record at the merge.
+jq -e '.parked==false and (has("parkedReason")|not) and (has("verdict")|not)' tasks/chief/choice.json >/dev/null || exit 1
+jq -e '.note=="portable and already supported" and .choice=="sqlite" and .action=="unpark" and (.who|length>0)' \
+  .chief/state/decisions/choice.json >/dev/null || exit 1
 jq '.dependsOn=[]' tasks/chief/dependent.json > tasks/chief/dependent.tmp && mv tasks/chief/dependent.tmp tasks/chief/dependent.json
 CHIEF_RUNS="$tmp/runs" "$ROOT/bin/chief" decide choice sqlite --note 'portable and already supported' --retire replacement >/dev/null || exit 1
 jq -e '.verdict.choice=="sqlite" and .supersededBy=="replacement" and (has("mergedToMain")|not)' tasks/chief/completed/choice.json >/dev/null || exit 1

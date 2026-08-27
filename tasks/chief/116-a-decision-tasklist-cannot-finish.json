@@ -41,7 +41,8 @@
         "A NEGATIVE verdict is expressible on a tasklist carrying code: the operator declines, and the branch does NOT merge. A mechanism that can only say yes is not a decision point, and this is the story where that is easiest to get wrong.",
         "The verdict, its note and its action land in the event stream, so a completed run records which human decided what. `106` US-3 asked for this and nothing consumed it."
       ],
-      "notes": null
+      "notes": "decision-e2e (halt -> --unpark authorises nothing -> --proceed -> stale refused -> merge -> retire; --retire refused on a live dependent; --decline never merges): PASS. decision: PASS (refusal, unpark, retirement, event stream). decision-agent: PASS. smoke: PASS. noworkguard: PASS. ratelimit: PASS. park-reasons: PASS. status-json: PASS. headless: PASS. events: PASS. version-bump: PASS (0.9.7). doc-sync: PASS (README+ROADMAP v0.9.7). doc-links: 0 dead. quality ratchet: OK, no tracked metric regressed (function_length_max 598 -> 598, single_use_functions 68 -> 70, tol 2 — AT tolerance). chief lint: 1 tasklist clean. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck not installed on this host, CI carries that half.",
+      "passes": true
     },
     {
       "id": "US-3",
