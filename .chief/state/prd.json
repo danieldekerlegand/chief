@@ -54,7 +54,8 @@
         "`chief status` and `chief ps` agree with the summary. One surface calling it failed while the status file says `AWAITING-DECISION 2/2` is the inconsistency to remove.",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
       ],
-      "notes": null
+      "notes": "decision-e2e §8 (AWAITING-DECISION renders as a HOLD, not failed; scheduler state = awaiting-decision; dependent held not BLOCKED; verdict releases it and the dependent merges next run): PASS — and it REPRODUCES (reap arm removed -> \"the scheduler state is not awaiting-decision (it is 'failed')\"). decision: PASS. decision-agent: PASS. stall-flag: PASS (was RED on this branch before this story — US-2 published the decision-declined phase and no list classified it). smoke: PASS. ratelimit: PASS. noworkguard: PASS. five-cases: PASS. events: PASS. headless: PASS. park-reasons: PASS. status-json / status-deps / status-categories: PASS. liveliness: PASS. retire-negative: PASS. version-bump: PASS (0.9.8). doc-sync: PASS (README+ROADMAP v0.9.8). doc-links: 0 dead. quality ratchet: OK, no tracked metric regressed (function_length_max 598 -> 598, single_use_functions 68 -> 70, tol 2 — no new helper added). chief lint: 1 tasklist clean. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck not installed on this host, CI carries that half.",
+      "passes": true
     }
   ]
 }

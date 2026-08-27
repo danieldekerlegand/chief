@@ -119,3 +119,59 @@ Files:
   is in it because the work its dependents wait on is never arriving.
 - The ratchet's `single_use_functions` is AT tolerance (+2 of 2) on this branch. US-3 has
   no room for a new single-call helper without deleting one.
+
+## US-3 — AWAITING-DECISION stops being reported as a failure
+Wed Aug 26 2026
+
+The feature worked and only its REPORT was wrong. `reap()`'s status→state `case` had
+no `AWAITING-DECISION*` arm, so the status line said `AWAITING-DECISION 2/2` and the
+`*)` fallthrough wrote `failed` — the summary contradicted itself in one line, `chief
+ps` drew `✗ failed`, a headless run exited 6, and `dep_broken` cascaded five
+dependents of a green tasklist as broken.
+
+Files:
+- `engine/driver.sh` — the missing reap arm (one line, and it is the whole bug); the
+  header's SCHEDULER STATES list + a non-terminal bullet for it; `awaiting-decision`
+  split out of the `inreview` collector into its OWN summary block (brief path + the
+  two authority flags), because the review block names a plan artifact that a decision
+  tasklist does not have; `hl_held` in the headless contract; the scheduler's
+  decision-hold arm (says the hold on each held dependent, once per run, marker at
+  `$STATE/<n>.decision-hold` which doubles as the summary's collector); and a
+  `decision-declined)` arm in the blocked-`.why` writer.
+- `engine/monitor.sh` — `hold_note` gains the decision arm (brief + held-for +
+  `chief decide`), wired into the row dispatch beside awaiting-review/approval.
+- `bin/chief` — `--decline` writes `parkedReason: "decision: declined"`.
+- `docs/reference/decision-tasklists.md` — a "How a decision is reported" section
+  carrying the POLICY as a table. `test/decision-e2e.sh` §8, `test/stall-flag.sh`
+  classification. `VERSION` 0.9.7 → 0.9.8 + README/ROADMAP.
+
+### Learnings for future iterations
+
+- **The POLICY, written down so a later story does not re-derive it:** a dependent of
+  `AWAITING-DECISION` is HELD (stays `pending`, and the run NAMES the decision it waits
+  on); a dependent of `DECISION-DECLINED` is CASCADED to `blocked`. The split is whether
+  the work can still arrive — an unanswered question may be answered yes, a declined one
+  never will. Both halves now carry a `.why` line; before this story the declined half
+  had none at all, while `dep_broken`'s own comment claimed "the reason travels with the
+  state".
+- **A hold that stays silent is the other half of the misreport.** Fixing the reap arm
+  alone would have moved five dependents from "your dependency FAILED" to no line at all.
+  A non-cascading dep state needs a REPORT arm at the same time, or the run looks like a
+  no-op instead of a queue waiting on a person.
+- **`reap()`'s status→state `case` is a SIXTH surface** on top of CLAUDE.md's "five driver
+  edits plus two viewers" list, and it is the one that fails OPEN: its `*)` arm writes
+  `failed`, so a new terminal state that misses it is not merely unrendered — it is
+  actively reported as a failure and cascaded. Check it FIRST when adding a state.
+- **`test/stall-flag.sh` is a THIRD list to update when adding a live phase**, alongside
+  `monitor.sh`'s glyph `case` and `STALE_QUIET_PHASES`. It sources `$ROOT/engine/monitor.sh`
+  from the WORKTREE (not the installed shim), enumerates every phase the engine publishes,
+  and fails on one no list classifies. US-2 added `decision-declined` and left it red; this
+  story found it only because the gate was re-run from scratch. Run `test/stall-flag.sh`
+  after touching any phase literal.
+- **Reproduce before claiming a fix.** `test/decision-e2e.sh` §8 was checked by deleting
+  the reap arm and re-running: `the scheduler state is not awaiting-decision (it is
+  'failed')`. Without that step the section would have passed against the fixed engine
+  and proved nothing.
+- The behavioural tests install from `git rev-parse HEAD`, so `test/smoke.sh` fails with
+  "version wrong via installed shim" on an UNCOMMITTED `VERSION` bump. Commit, then run.
+- shellcheck is still not installable on this host; CI carries `shellcheck -S error`.
