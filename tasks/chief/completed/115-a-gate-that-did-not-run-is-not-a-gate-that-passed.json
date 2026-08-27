@@ -29,7 +29,17 @@
         "A test drives fixtures for each case: no workflows, workflows with a recent green run, workflows whose runs all failed to start, and workflows with no runs ever."
       ],
       "notes": "test/cigate.sh PASS — 5 fixtures (no workflows at all / a recent green run / runs that completed with zero steps / a workflow with no runs ever / no GitHub remote), plus gh-absent, an API refusal, and a green run on another commit; every could-not-measure arm lands on UNKNOWN. bash -n clean across bin/chief + engine/*.sh + test/*.sh; smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.9.3), doc-sync PASS (38 merged tasklists); quality ratchet OK (function_length_max 192 -> 200, tol 15). shellcheck not installed locally — CI enforces it. Counterfactual against the real portfolio: cuneiform 11/11 workflows DID NOT RUN, vita 1/1 DID NOT RUN, chief 1/1 DID NOT RUN, praxis RAN AND PASSED, pinakes 3 passed / 2 failed / 1 never run.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 12,
+        "lines": 847,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-2",
@@ -41,7 +51,17 @@
         "Counterfactual: pointing the check at vita's workflow as it stood on 2026-08-25 reports the mismatch. That file is the fixture."
       ],
       "notes": "test/cigate.sh PASS — the counterfactual runs against test/fixtures/vita-ci-2026-08-25.yml, vita/.github/workflows/ci.yml copied byte for byte (sha256 317fb0bb…), and reports the mismatch naming both halves: what it waits for (a pull request, a manual dispatch) and what chief does (merges into main locally and pushes main). 11 more trigger fixtures cover every `on:` form (scalar / flow seq / block map / quoted \"on\" / block seq), a comment that only looks like a trigger, a branches filter, branches-ignore, tags-only, a declared CHIEF_BASE_BRANCH, and a file with no `on:` at all (unreadable, never a pass); plus a green run that does NOT clear a mismatch. Zero new tool dependencies and no network — the nogh-PATH arm of the existing suite caught the two I had added (tr, grep) and both are gone. Gates: bash -n clean across bin/chief + engine/*.sh + test/*.sh + install.sh; cigate PASS, smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.9.4), doc-sync PASS (38 merged tasklists); doc-links 0 dead references; quality ratchet OK (function_length_max 192 -> 204, tol 15). shellcheck not installed locally — CI enforces it. Counterfactual against the real portfolio: vita 1/1 trigger mismatch (pull_request + workflow_dispatch), and 8 more the billing story would have hidden — cuneiform 3 (2 cron-only, 1 tags-only release), talos 3, pinakes 2 (1 cron-only, 1 workflow_dispatch-only); praxis 0.",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 10,
+        "lines": 810,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-3",
@@ -53,7 +73,18 @@
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
       ],
       "notes": "test/cigate.sh PASS — the merge record, both halves. STAMPED at merge (engine/lib.sh -> cigate_stamp_merge_record, offline and AFTER the merge commit exists): the local gate (hook ran / tasklist verify commands ran / NO_VERIFY=1 / no gate at all — the amphora shape — the last two recorded DID NOT RUN, never a pass) and the offline TRIGGER verdict per declared workflow, with whether CI then ran recorded UNKNOWN because no network call may sit on the merge path. READ BACK by `chief cigate --records`, which RECONSTRUCTS records written before the field from `git show <mergedToMain>:.github/workflows/…`. One vocabulary throughout — records carry the CIGATE_* tokens and cigate_label names them, asserted in the test. test/smoke.sh now asserts the stamp through the REAL merge path (it is in all three lists already). Gates: bash -n clean across bin/chief + engine/*.sh + test/*.sh + install.sh; cigate PASS, smoke PASS, ratelimit PASS, noworkguard PASS, version-bump PASS (VERSION 0.9.5), doc-sync PASS (38 merged tasklists), doc-links 0 dead references; quality ratchet OK (function_length_max 192 -> 206, tol 15; single_use_functions 21 -> 22, tol 2). shellcheck not installed locally — CI enforces it. Neutering cigate_stamp_merge_record makes the new block fail 7 assertions, so it does not pass by restating old behaviour. Counterfactual against the real portfolio (offline, no gh): vita 33 merged tasklists, 27 merged with a gate that DID NOT RUN — including 72-windows-linux-bundles, the one merged as auto-verified, now named off the file; cuneiform 354 of 378; talos 41 of 54; pinakes 36 of 41; praxis 0 of 23. Perf: cuneiform 70s -> 26s (all-trees memo instead of one-entry: 189 hits/189 misses -> 31 reads; printf -v instead of a fork per row; hoisted the per-iteration IFS substitution).",
-      "passes": true
+      "passes": true,
+      "diffSize": {
+        "files": 12,
+        "lines": 644,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     }
-  ]
+  ],
+  "mergedToMain": "fcd9238"
 }
