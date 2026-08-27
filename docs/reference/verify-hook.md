@@ -261,3 +261,122 @@ axis only. Chief deliberately ships **no** committed baseline: freezing this rep
 current `duplicate_blocks` as a zero-tolerance floor would make the next tasklist
 that adds a `test/*.sh` unmergeable through no fault of its own. That is the tradeoff
 the two axes exist to let each repo make for itself.
+
+## A gate that did not run is not a gate that passed
+
+The hook above draws a line locally that is easy to state and easy to lose: a check
+that was **skipped** is not a check that **passed**. `CHIEF_VERIFY_TESTS=0` says so
+out loud, and `scripts/check-engine-pin.sh` fails loudly rather than skip quietly.
+This section is that same line, pointed outward at the gate a repository *declares*
+but may not be running.
+
+### The three states, and the two non-findings
+
+Chief names a gate's state in exactly one vocabulary, wherever it reports one
+(`engine/cigate.sh`, and `chief cigate` on top of it):
+
+| State | Means |
+|---|---|
+| **RAN AND PASSED** | it executed, and it was green |
+| **RAN AND FAILED** | it executed, and it went red |
+| **DID NOT RUN** | no run recorded · a run that completed without executing a single step · a green run that never covered the commit in question · a workflow no event chief produces could start |
+| `UNKNOWN` | it could not be **measured**. Not a pass, ever. |
+| `NO GATE DECLARED` | the repo declares no CI. A legitimate state, and not a finding. |
+
+`UNKNOWN` is the load-bearing one. An absent `gh`, no network, no remote, an API
+that refuses — every one of those ends as `UNKNOWN` and is *printed* as unknown.
+Rounding an unmeasured gate up to green is the exact mistake this whole surface
+exists to end, so chief does not do it even when it would be convenient.
+
+`DID NOT RUN` and `NO GATE DECLARED` are deliberately different findings. A repo
+that never claimed to have CI is not failing at anything; a repo that declares a
+workflow which has never executed is.
+
+### Why this hid for so long: Actions is free for public repos and billed for private ones
+
+Measured across this portfolio on 2026-08-25:
+
+```
+praxis      PUBLIC    success  2026-08-15
+pinakes     PUBLIC    success  2026-08-25
+talos       PRIVATE   failure  2026-08-24
+cuneiform   PRIVATE   failure  2026-08-25
+vita        PRIVATE   failure  2026-08-25
+```
+
+All three private failures were byte-identical, and none was a code problem:
+
+> The job was not started because recent account payments have failed or your
+> spending limit needs to be increased.
+
+GitHub Actions minutes are **free for public repositories and billed for private
+ones**. One account-level billing block therefore killed CI on *every* private repo
+at once — while the public ones kept running, kept going green, and kept the whole
+setup looking normal. That asymmetry is why nobody noticed: the surface that would
+have raised the alarm was the surface that still worked.
+
+Before reading a `DID NOT RUN` finding as a code problem, **check billing.**
+
+### The second, independent version: the trigger mismatch
+
+`vita`'s workflow declared `on: [pull_request, workflow_dispatch]`. Chief merges a
+finished branch into the base **locally** and pushes the base branch — it never
+opens a pull request, and nobody clicks *Run workflow* on its behalf. So no event
+chief generates could ever have started that workflow. Its CI had not run once in
+the repository's history, and tasklist `72` was unparked and merged as
+`auto-verified` on the premise that it had.
+
+Nothing about the file looks wrong, and no amount of asking GitHub finds it: *"no
+runs"* is what a dead gate and a brand-new gate both look like, and only the trigger
+says which. Chief therefore reads the `on:` mapping **textually and offline** — no
+YAML dependency, no network call — and reports the mismatch in the operator's terms:
+*what the workflow waits for*, and *what chief actually does*. A passing run does
+**not** clear it: a green run on a `pull_request`-only workflow means someone opened
+a pull request by hand, and chief's merge was still ungated.
+
+If a workflow is genuinely meant to be a merge gate under chief, it needs a `push`
+trigger that accepts the base branch.
+
+### Reading a merge record afterwards
+
+A completed record carrying `mergedToMain` is evidence of a **merge**, not of a
+**check**. Since chief records gates, `finalize_merged` stamps each record with what
+it knew at the time:
+
+```json
+"gates": {
+  "local": { "state": "dead",
+             "detail": "no verify hook is configured and this tasklist declares no \"verify\" commands — NOTHING checked this merge" },
+  "ci":    [ { "workflow": "ci", "state": "dead",
+               "detail": "trigger mismatch: it waits for someone opening a pull request …" } ]
+}
+```
+
+The states are the tokens behind the table above, so one vocabulary renders old and
+new records alike. The local half is the `amphora` check — three tasklists there
+merged against a `.chief/verify.sh` that ran one unrelated check and then `exit 0`,
+which is green for the same reason an empty test suite is green. No hook, no
+per-tasklist `verify` commands, or `NO_VERIFY=1` are all recorded as **DID NOT RUN**,
+not as a pass.
+
+The CI half is the **offline trigger check only**. Nothing on the merge path may
+make a network call or fail because a third-party service is down, so whether a run
+then happened is written down as `UNKNOWN` — `chief cigate` is the command that asks
+GitHub, and it is deliberately not on this path.
+
+`chief cigate --records [paths…]` reads it all back, per repo:
+
+```
+⚑ 72-windows-linux-bundles [ci.yml] — DID NOT RUN: trigger mismatch: it waits for
+  someone opening a pull request … (reconstructed from the file at 1d0e72a)
+33 merged tasklist(s) in vita: 27 gate(s) DID NOT RUN across 27 of them · 0 UNKNOWN
+```
+
+Records written **before** the field existed are not lost: the trigger half is a
+pure function of the workflow files, so it is reconstructed from them *as they stood
+at the merge commit* (`git show <mergedToMain>:.github/workflows/…`) — offline, and
+historically accurate. That is how the four merges this surface exists because of
+became readable off the record instead of findable only by hand.
+
+Like everything else here, it **reports**. It exits 0 on a finding, it is never on
+the merge path, and it blocks nothing.

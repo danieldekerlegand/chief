@@ -524,11 +524,34 @@ HOOK
 chmod +x "$WORK/hook.sh"
 
 # The transcript: every phase the record holds, in order, deduped.
+#
+# SAMPLED FAST, AND FORK-FREE, because the state this has to catch is one
+# live_set wide. `stalled` is published at the boundary and the very next write
+# (`integrating`, below) takes it back, so the window it exists in is exactly the
+# preamble of that next write — measured 2026-08-26 at ~29ms, because live_set
+# forks once per field in $LIVE_FIELDS plus a `date`. The original sampler cost a
+# `live_get` fork AND `sleep 0.05` per turn of the loop, so its period measured
+# ~62ms: WIDER than the window it was looking for, and it caught the boundary
+# roughly half the time. That is not a flaky test, it is a coin flip — it failed
+# on main as readily as on a branch, and the assertion it guards (a phase that
+# EXPIRES, not one that was deleted) never got to mean anything.
+#
+# So: parse the phase with builtins only (no command substitution) and sleep 5ms.
+# Period ~6ms against a ~29ms window is ~5 samples inside it, and the margin only
+# WIDENS under parallel load — the window is 18 forks and grows when the machine
+# is busy, while the period is dominated by a real 5ms sleep and does not.
 ( prev=""
   while :; do
-    cur="$(live_get "$AGLIVE" phase)"
+    cur=""
+    if [ -f "$AGLIVE" ]; then
+      while IFS= read -r ln; do
+        case "$ln" in
+          *'"phase":'*) cur="${ln#*\": \"}"; cur="${cur%%\"*}"; break ;;
+        esac
+      done < "$AGLIVE" 2>/dev/null || true
+    fi
     if [ -n "$cur" ] && [ "$cur" != "$prev" ]; then printf '%s\n' "$cur" >> "$OBS/transcript"; prev="$cur"; fi
-    sleep 0.05
+    sleep 0.005
   done ) & poller=$!
 
 agent_rc=0

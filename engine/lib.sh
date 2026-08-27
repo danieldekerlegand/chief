@@ -10,6 +10,13 @@
 #   VERIFY_HOOK     absolute path to the project verify hook (or empty to skip)
 #   BASE_BRANCH     integration branch (e.g. main)
 
+# WHICH GATES ACTUALLY EXECUTED is written into the completed record here, so
+# engine/cigate.sh comes with it. Sourcing costs nothing (assignments and function
+# definitions only) and keeps the three-state vocabulary — RAN AND PASSED · RAN
+# AND FAILED · DID NOT RUN — stated in exactly one file.
+# shellcheck source=engine/cigate.sh
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cigate.sh"
+
 # chief_scan_descendants PID [EXTRA_PIDS] — collect every LIVE process descended
 # from PID (plus any still-live pid named in EXTRA_PIDS) into the global
 # CHIEF_DESCENDANTS, space-separated, DEEPEST layer first.
@@ -291,6 +298,14 @@ finalize_merged() {
   else
     jq --arg sha "$sha" '(.userStories |= map(if .terminalFalse == true then . else .passes=true end)) | .mergedToMain=$sha' "$src" > "$rec" 2>/dev/null || cp "$src" "$rec"
   fi
+  # WHICH GATES ACTUALLY EXECUTED, recorded while the answer is still knowable.
+  # Not on the merge path in any sense that can hurt: the merge commit already
+  # exists, nothing here touches the network, and every failure mode ends with the
+  # record exactly as it was. What it catches is the merge that had no gate at all
+  # — three tasklists in `amphora` merged against a verify hook that ran one
+  # unrelated check and then `exit 0`, and `vita`'s `72` against a workflow no
+  # event chief produces could start. Both were found by hand; neither had to be.
+  cigate_stamp_merge_record "$rec" "$work_repo" "$sha" "${VERIFY_HOOK:-}" "${NO_VERIFY:-0}" 2>/dev/null || true
   # Retire the source tasklist. MUST be -f: `git rm` REFUSES to remove a file with
   # local modifications (--ignore-unmatch only suppresses "no match"), and an agent
   # that reached out of its worktree to flip pass-flags in the PROJECT's copy leaves

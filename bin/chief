@@ -149,6 +149,20 @@ Usage:
                               in .chief/quality.conf; \`--write-baseline\` is the reviewable
                               re-baseline hatch; CHIEF_VERIFY_QUALITY=0 skips it.
                               See docs/reference/verify-hook.md
+  chief cigate [-a] [-v]      DID THE DECLARED CI GATE ACTUALLY RUN? A report, never a block.
+       [--head|--sha SHA]     \`--records\` reads it BACKWARDS off completed/: which gates
+       [--records] [paths…]   executed for the merges that already happened, offline.
+                              Per repo, the state of the most recent run of every workflow it
+                              DECLARES: RAN AND PASSED · RAN AND FAILED · DID NOT RUN (no run
+                              ever, a run that completed without executing a single step, or a
+                              green run that never covered the commit asked about). A repo with
+                              no workflows is not flagged. Also the TRIGGER MISMATCH: a workflow
+                              waiting for an event chief never produces (a pull request, a manual
+                              dispatch, a branch it does not push) — read from the file, offline,
+                              because "no runs" is what a dead gate and a new one both look like.
+                              OFFLINE-SAFE: no gh, no remote or no network is UNKNOWN — stated as
+                              unknown, never rounded to a pass.
+                              -a all known repos · -v also the healthy · always exits 0
   chief approve [names…]      release a branch HELD AT AN OVERLAP ZONE — a domain this repo
        [--list] [-m NOTE]     declared in .chief/zones.conf as one where a green gate is not
                               sufficient authority to merge. The branch is already rebased onto
@@ -1067,6 +1081,57 @@ cmd_reap()    { bash "$ENGINE/reap.sh" "$@" ; }
 # docs/reference/verify-hook.md.
 cmd_quality() { bash "$ENGINE/quality.sh" "$@" ; }
 
+# ── the DECLARED CI gate: did it actually run? (engine/cigate.sh) ────────────
+# A REPORT, never a block. Measured 2026-08-25, every private repo in this
+# portfolio had dead CI for an unknown period and nothing anywhere said so: GitHub
+# Actions is free for public repositories and billed for private ones, so one
+# account-level billing block killed the gate on every private repo while the
+# public ones kept working and kept looking normal. A gate that never EXECUTES is
+# otherwise indistinguishable, from every surface chief offers, from one that ran
+# and passed.
+#
+# Not gated on load_project: the question is about a REPO, not about a chief
+# project, and `--all` deliberately answers it for every repo in the registry at
+# once — which is the scope the failure had. Never on the merge path, and it exits
+# 0 on a finding, because chief refusing to merge over a third-party billing
+# problem would be a worse failure than the one it is reporting.
+cmd_cigate() {
+  # shellcheck source=engine/cigate.sh
+  . "$ENGINE/cigate.sh"
+  local verbose=0 sha="" head=0 records=0 roots=() r rows all_rows="" total=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -a|--all)     while IFS= read -r r; do [ -d "$r" ] && roots+=("$r"); done < <(cat "$CHIEF_REPOS" 2>/dev/null) ;;
+      -v|--verbose) verbose=1 ;;
+      --head)       head=1 ;;
+      --records)    records=1 ;;
+      --sha)        sha="${2:-}"; shift ;;
+      -*)           echo "chief cigate: unknown option $1" >&2; return 2 ;;
+      *)            roots+=("$1") ;;
+    esac
+    shift
+  done
+  if [ "${#roots[@]}" -eq 0 ]; then
+    r="$(git rev-parse --show-toplevel 2>/dev/null)" || r="$(find_project 2>/dev/null)"
+    [ -n "$r" ] || { echo "chief cigate: not inside a repo — pass a path, or -a for every known repo" >&2; return 2; }
+    roots=("$r")
+  fi
+  for r in "${roots[@]}"; do
+    [ -d "$r" ] || { echo "  ? $(basename "$r") — no such directory: $r"; continue; }
+    # --records asks the OTHER question: not "did the gate run", but "which gates
+    # ran for the merges that already happened". Offline, off the registry, and
+    # read straight off completed/ — no network call is made in this mode at all.
+    [ "$records" = 1 ] && { cigate_records_report "$r" "$verbose"; continue; }
+    [ "$head" = 1 ] && sha="$(git -C "$r" rev-parse HEAD 2>/dev/null || true)"
+    rows="$(cigate_scan "$r" "$sha")"
+    [ -n "$rows" ] || continue
+    all_rows="${all_rows}${rows}
+"
+    total=$((total + 1))
+  done
+  [ "$records" = 1 ] || cigate_summary "$all_rows" "$total" "$verbose"
+}
+
 # ── retiring a tasklist whose answer was NO (engine/retire.sh) ───────────────
 # The one retirement an operator makes by hand. Chief retires a FINISHED tasklist by
 # merging it; a tasklist whose remaining story TERMINATED FALSE (engine/terminal.sh)
@@ -1365,6 +1430,7 @@ case "$cmd" in
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   quality)              cmd_quality "$@" ;;
+  cigate)               cmd_cigate "$@" ;;
   retire)               cmd_retire "$@" ;;
   approve)              cmd_approve "$@" ;;
   decide)               cmd_decide "$@" ;;
