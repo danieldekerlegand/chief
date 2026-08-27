@@ -1,275 +1,66 @@
-# Chief Progress — 115-a-gate-that-did-not-run-is-not-a-gate-that-passed
-Started: Wed Aug 26 17:00:25 CDT 2026
+# Chief Progress — 116-a-decision-tasklist-cannot-finish
+Started: Wed Aug 26 19:38:22 CDT 2026
 ---
 
-## Codebase Patterns
+## US-1 — A recorded verdict is read, and the tasklist proceeds
+Wed Aug 26 2026
 
-- **A new `test/*.sh` is a gate only in THREE lists** (already in CLAUDE.md, restating
-  because this tasklist hit it): `.chief/verify.sh`'s `CHIEF_BYSTANDER_TESTS`,
-  `test/all.sh`'s `BASH_SUITE`, and `.github/workflows/ci.yml`.
-- **`usage()` in `bin/chief` is the repo's longest function (192 lines on main) and it
-  therefore OWNS `function_length_max`.** The ratchet's tolerance is 15 lines, so a
-  usage entry longer than ~14 lines blocks the merge on its own — and the next story
-  on the same branch measures against the SAME base, so every usage edit on a branch
-  shares one 15-line budget. Write the entry compact the first time.
-- **A `gh run list` fake is enough to test a CI probe hermetically.** Two calls are all
-  `engine/cigate.sh` makes (`run list`, `run view --json jobs`); a ~15-line fake `gh` on
-  PATH serving fixture JSON keyed by `--repo <slug>` covers every case, and a missing
-  fixture exits 1, which is exactly what an offline/unauthenticated `gh` does.
-- **Narrowing `PATH` to `/usr/bin:/bin` to simulate "tool absent" is a trap** — it also
-  drops tools the code legitimately needs, so the test can pass for the wrong reason.
-  Build a dir of symlinks to everything the code needs EXCEPT the one tool under test.
+`chief decide` wrote `.verdict` and nothing ever read it; the driver's decision halt
+parked unconditionally on every subsequent run. Closed the loop.
 
----
-
-## US-1 — A declared gate that never ran is reported, not assumed  (2026-08-26)
-
-Added `engine/cigate.sh` and the `chief cigate` subcommand.
-
-Files: `engine/cigate.sh` (new), `test/cigate.sh` (new), `bin/chief` (usage entry,
-`cmd_cigate`, dispatch arm), `.chief/verify.sh` + `test/all.sh` +
-`.github/workflows/ci.yml` (register the test), `README.md` (command-table row +
-version), `ROADMAP.md` (version), `VERSION` 0.9.2 -> 0.9.3.
-
-What it does: for each `.github/workflows/*.yml|*.yaml` a repo DECLARES, it reports the
-state of that workflow's most recent run — `RAN AND PASSED` / `RAN AND FAILED` /
-`DID NOT RUN` / `UNKNOWN` / `NO GATE DECLARED`. `DID NOT RUN` covers three shapes: no
-run ever recorded, a run that completed without executing a single step, and a green
-run that never covered the commit asked about (`--head` / `--sha`).
-
-**The measurement that made the "failed to start" case checkable.** A billing-blocked
-run completes in ~4s with jobs present, `conclusion: failure`, and `steps: []` on every
-job (cuneiform run 32944778403). A run that really executed has a populated `steps`
-array (pinakes run 32827758461: 10). So "at least one step recorded anywhere in the
-run" is the discriminator, and it is measured, not inferred from the conclusion string.
-
-**A real bug the counterfactual caught.** Matching a declared workflow to its runs by
-`name:` alone LOSES exactly the case this module exists for: when GitHub cannot parse
-the workflow file at that ref it reports the run under `.github/workflows/ci.yml`
-rather than the declared `name: ci` — so chief's own dead gate read as "no run ever
-recorded" instead of "never started". The matcher accepts the declared name OR the
-file path.
-
-Observed on the real portfolio: cuneiform 11/11 DID NOT RUN, vita 1/1 DID NOT RUN,
-chief 1/1 DID NOT RUN, praxis RAN AND PASSED, pinakes 3 passed / 2 failed / 1 never
-run. That reproduces the 2026-08-25 measurement in the tasklist description.
-
-Gates: `test/cigate.sh` PASS, `smoke` PASS, `ratelimit` PASS, `noworkguard` PASS,
-`version-bump` PASS, `doc-sync` PASS, `bash -n` clean, doc-links 0 dead vs 0 on main,
-quality ratchet OK (`function_length_max` 192 -> 200, tol 15). `shellcheck` is not
-installed on this host — CI enforces it.
+Files:
+- `engine/decision.sh` — the shape, defined once beside `is_decision_tasklist`:
+  `decision_verdict_file` (where the durable record lives), `decision_verdict_json`
+  (THE object, written to both places by one caller), `decision_stories_id` (the
+  checksum binding), `decision_verdict_set` (the reader → DECISION_STATE ∈
+  none|stale|recorded + CHOICE/NOTE/ACTION/DETAIL globals).
+- `bin/chief` `cmd_decide` — records the bound verdict into the tasklist AND into
+  `.chief/state/decisions/<name>.json`; usage text updated.
+- `engine/driver.sh` — the halt now calls `decision_verdict_set` and only parks when
+  the state is not `recorded`; a recorded verdict logs `>> NAME DECIDED — …` and falls
+  through to the ordinary verify+merge path.
+- `test/decision-e2e.sh` (new, in all three gate lists) — the sequence that had never
+  executed. `test/decision.sh` fixed: it copied `tasks/chief/106-…json`, which stopped
+  existing when 106 retired, so every assertion in it ran against a non-DECISION
+  tasklist. `VERSION` 0.9.5 → 0.9.6 + README/ROADMAP.
 
 ### Learnings for future iterations
 
-- The state vocabulary is already stated once, in `engine/cigate.sh`'s
-  `CIGATE_PASSED/FAILED/DEAD/UNKNOWN/NONE` + `cigate_label`. **US-3 must reuse those,
-  not invent a second set** — that is most of its first acceptance criterion.
-- `cigate_scan REPO [SHA]` is the one entry point; it already takes the commit the
-  verdict is about, which is what US-3's merge record needs.
-- `cigate_workflow_name FILE` is textual (`sed`, no YAML dependency) and returns the
-  path when the file declares no `name:` — US-2's trigger check should extend that same
-  textual reader rather than add a parser.
-- `cigate_classify` is a PURE function of (slug, one run record, sha) apart from the
-  jobs probe, which is why the fixtures can drive every branch of it.
+- **Where a verdict may NOT live: the tasklist JSON.** Two independent failures. (1)
+  `run_worker`'s isolation guard runs `git checkout -- "$TASKS_REL/$name.json"` in the
+  PROJECT checkout on every iteration — an uncommitted field there is silently
+  discarded before the decision arm ever reads it. (2) Committing it on the base is
+  worse: the branch waiting on the decision has almost always committed its own edit to
+  that same file (the pass-flags), so the verdict commit collides at rebase and ends the
+  decided tasklist in REBASE-CONFLICT. Gitignored state under `$STATE_ROOT` is invisible
+  to both — the same rule CLAUDE.md already states for pause/research/snapshot files.
+- **The driver reads `$SRC`/state, never the worktree copy, for anything an operator
+  authored.** The worktree's `tasks/…` and `.chief/state/prd.json` are both writable by
+  the agent; `test/decision-agent.sh` exists precisely because an agent will write a
+  `.verdict` if you let it count.
+- **Bind an approval by a PROJECTION, not by bytes.** `passes`/`notes` differ between
+  the copy an operator decided from and the copy about to merge, so a raw-bytes checksum
+  never matches once. `{id,title,acceptanceCriteria}` is what a human said yes to.
+  (`decision_stories_id`, mirroring `review_plan_id`.)
+- **`worker_park`'s `!!` line goes to `$STATE/parallel/<name>.log`, not to the run's
+  stdout** — the scheduler summary carries only the status line. A test asserting on a
+  park's REASON has to read the per-tasklist log.
+- **A test fixture built from a live `tasks/chief/*.json` rots the day that tasklist
+  retires**, and rots SILENTLY: `jq` on a missing file writes an empty target, and the
+  assertions then pass/fail for reasons unrelated to what they claim to test. Build
+  fixtures with `jq -n`.
+- shellcheck could not be installed on this host (homebrew permission failure), so only
+  `bash -n` was run locally; CI enforces `shellcheck -S error`.
 
-## US-2 — The trigger mismatch is detectable, because it is invisible otherwise  (2026-08-26)
-
-Extended `engine/cigate.sh` with the OFFLINE, TEXTUAL trigger check and laid it over
-every arm of the scan.
-
-Files: `engine/cigate.sh` (new `--- the TRIGGER MISMATCH ---` section + `cigate_row`,
-`cigate_scan`/`cigate_unknown_rows` routed through it, `cigate_summary` counts it),
-`test/cigate.sh` (the counterfactual + 11 `on:`-form fixtures), `test/fixtures/
-vita-ci-2026-08-25.yml` (new — vita's workflow byte for byte), `bin/chief` (usage),
-`README.md` (command row + version), `ROADMAP.md` (version), `VERSION` 0.9.3 -> 0.9.4.
-
-What it does: reads a workflow's `on:` mapping textually (`cigate_on_block` — one awk,
-no YAML dependency, no network) and asks whether a push of the repo's declared base
-branch would start it. If not, the row is `DID NOT RUN` with the reason in the
-operator's terms — what the workflow waits for, and what chief actually does — and
-whatever GitHub said is kept alongside rather than thrown away.
-
-**A MISMATCH WINS over a green run.** A passing run on a `pull_request`-only workflow
-means someone opened a PR by hand; chief's merge was still ungated. That reassuring
-surface is the exact thing this tasklist exists to stop trusting, so the row stays
-`DID NOT RUN` and names the passing run in the aside.
-
-**The mismatch is reported in the UNKNOWN arms too.** No remote / no `gh` / no network
-still yields a real verdict here, because the finding is measured from the FILE. That
-is the case worth having: a repo where nothing else could be measured.
-
-**`gh` cannot answer this question at all.** "No runs" is what a dead gate and a
-brand-new gate both look like; only the trigger says which. That is why US-1's network
-probe left vita indistinguishable from a repo that had just added CI.
-
-Counterfactual (real portfolio, 2026-08-26): vita 1/1 mismatch — `pull_request` +
-`workflow_dispatch`, exactly the shape tasklist `72` merged against. Eight more the
-billing story would have hidden: cuneiform 3 (two cron-only nightlies, one tags-only
-release), talos 3, pinakes 2. praxis 0.
-
-Gates: `test/cigate.sh` PASS, smoke PASS, ratelimit PASS, noworkguard PASS,
-version-bump PASS, doc-sync PASS, `bash -n` clean, doc-links 0 dead, quality ratchet OK
-(`function_length_max` 192 -> 204, tol 15). `shellcheck` not installed on this host.
-
-### Learnings for future iterations
-
-- **`function_length_max` headroom on this branch is now 3 LINES** (192 on main, 204
-  here, tolerance 15). `usage()` in `bin/chief` owns the metric, so US-3's usage edit
-  must add at most 3 lines — or move a block out of `usage()` to buy room.
-- **The nogh-PATH arm of `test/cigate.sh` is a DEPENDENCY GATE, and it works.** It
-  symlinks only the tools the module needs (`basename git sed head awk jq cut`), so
-  reaching for `tr` or `grep` fails the test immediately. Both of mine did; both were
-  replaced with `awk` and bash parameter expansion. Do not "fix" that by widening the
-  symlink list — the narrowness is the check.
-- **The shell this agent's Bash tool runs is `zsh`, not bash.** Unquoted `$var` does
-  NOT word-split there, so a `for x in $list` loop silently iterates once and a shell
-  test of engine code passes or fails for the wrong reason. Always drive engine
-  functions with `bash -c '...'` or `bash <<'SH'`, never a bare tool invocation.
-- **`case` globs cross `/` and GitHub's `*` does not** (`**` does). `cigate_branch_matches`
-  therefore matches slightly MORE than GitHub would, on purpose: reporting a live gate
-  as dead costs an operator's attention, and only the other direction is silent. Every
-  ambiguous call in this module errs the same way.
-- **A `schedule`-only nightly is reported as a mismatch, and that is a judgement call
-  worth revisiting.** It is literally true (chief's merge never starts it) and the
-  prose says "a cron clock rather than your change" — but a nightly is not usually
-  meant to be a merge gate, so it is arguably noise. If US-3 or a successor wants to
-  separate "cannot be started by chief" from "not intended as a merge gate", the seam
-  is `cigate_event_prose` + the `CIGATE_MISMATCH_TAG` count in `cigate_summary`.
-- **`CIGATE_MISMATCH_TAG` is the marker that lets a report find this finding again**
-  without a fifth TSV column. It is written in exactly ONE place (`cigate_row`) and
-  matched with `index($4, t) == 1`. US-3's merge record should key off the same tag
-  rather than re-matching the prose.
-
-## US-3 — The distinction is stated once, and reused  (2026-08-26)
-
-The third surface: the MERGE RECORD. `mergedToMain` is evidence of a MERGE, not of
-a CHECK — and that is the whole gap. Four tasklists in this portfolio merged against
-a gate that had never executed and every one was found BY HAND: vita's `72` against
-a workflow no event chief produces could start, three in `amphora` against a
-`.chief/verify.sh` that ran one unrelated check and then `exit 0`.
-
-Files: `engine/cigate.sh` (new `--- the MERGE RECORD ---` section + `cigate_config`
-lifted out of `cigate_base_branch`; `cigate_render` grew a `dead` mode),
-`engine/lib.sh` (sources cigate.sh; `finalize_merged` stamps), `bin/chief`
-(`--records`), `docs/reference/verify-hook.md` (the rule, the billing asymmetry, the
-record shape), `test/cigate.sh` (the whole block), `test/smoke.sh` (the stamp through
-the REAL merge path), README + ROADMAP + `VERSION` 0.9.4 -> 0.9.5.
-
-**Two halves, and the split is the scope rule.** `cigate_stamp_merge_record` runs in
-`finalize_merged`, AFTER the merge commit exists, and makes no network call: the
-LOCAL gate (hook ran / tasklist `verify` commands ran / `NO_VERIFY=1` / no gate at
-all) plus the OFFLINE TRIGGER verdict per declared workflow. Whether CI then ran is
-recorded `UNKNOWN` and printed as unknown, because measuring it needs the network and
-nothing on the merge path may.
-
-**The local half is the `amphora` check, and it is cheap.** A merge only happens
-after the gate came back green, so "it passed" is knowable without re-running
-anything — but so is the case that has NO gate. No hook, no `verify` commands, or
-`NO_VERIFY=1` are green for the same reason an empty test suite is green, and are
-recorded `DID NOT RUN`.
-
-**Records that predate the field are RECONSTRUCTED, not written off.** The trigger
-verdict is a pure function of the workflow files, so `cigate_reconstruct_set` reads
-them as they stood at the merge commit (`git show <mergedToMain>:.github/workflows/…`)
-— offline, historical, and the reason vita's `72` is now named off the file. Anything
-not reconstructable stays `UNKNOWN`; it is never rounded up.
-
-Counterfactual (real portfolio, 2026-08-26, no `gh` anywhere): vita 27 of 33 merged
-tasklists merged with a gate that DID NOT RUN, `72-windows-linux-bundles` among them;
-cuneiform 354/378; talos 41/54; pinakes 36/41; praxis 0/23.
-
-Gates: `test/cigate.sh` PASS, smoke PASS, ratelimit PASS, noworkguard PASS,
-version-bump PASS, doc-sync PASS, `bash -n` clean, doc-links 0 dead, quality ratchet
-OK (`function_length_max` 192 -> 206 tol 15; `single_use_functions` 21 -> 22 tol 2).
-`shellcheck` not installed on this host.
-
-### Learnings for future iterations
-
-- **`git rev-parse "<sha>:<path>"` PRINTS the argument it could not resolve** and
-  exits non-zero. Testing its stdout for emptiness therefore reads "no such tree" as
-  a tree literally named `<sha>:.github/workflows` — which silently dropped every
-  merge made before the repo had CI at all, the one case that most needed saying out
-  loud. Use `rev-parse --verify -q` (quiet, no echo) and check the status.
-- **`$( )` IS A SUBSHELL, so a memo written inside one dies with it** — not a slow
-  memo, NO memo, and silently. `cigate_tree_verdicts_set` / `cigate_reconstruct_set`
-  are SET-A-GLOBAL for that reason, all the way up to the accumulator in
-  `cigate_records_report`; this is the same discipline crossrepo.sh states for
-  `dep_record_set`, and it has to hold for the WHOLE call chain or it holds nowhere.
-- **A one-entry memo is a full cache only if the caller asks in the memo's order.**
-  deps.sh's is, because it asks about each record right after reading it. This reader
-  walks records in NAME order while trees change in MERGE order: measured on
-  cuneiform that is 189 hits / 189 misses — half a cache, and the misses are the
-  expensive half. Holding all 31 distinct trees costs nothing. 70s -> 26s with the
-  two fork fixes below.
-- **`while IFS="$(printf '\t')" read` re-runs that substitution EVERY ITERATION.**
-  It is a fork per row, and three loops in this module had it. Hoist `tab=` above
-  the loop. Likewise `var="$var$(printf …)"` in a hot loop is a fork per row —
-  `printf -v line …` then append is free.
-- **The three-state vocabulary now has THREE readers** (`chief cigate`, the record
-  stamp, `--records`) and still exactly one definition: `CIGATE_PASSED/FAILED/DEAD/
-  UNKNOWN/NONE` + `cigate_label`. Records store the TOKENS, never the labels, so a
-  record written by an older chief still renders correctly. Keep it that way.
-- **A `schedule`-only nightly is still reported as a mismatch** (US-2's open
-  judgement call), and at record scale it is loud: cuneiform's 354 findings are
-  mostly its two cron nightlies and one tags-only release, repeated per merge. The
-  seam is unchanged — `cigate_event_prose` + `CIGATE_MISMATCH_TAG` — and separating
-  "cannot be started by chief" from "not intended as a merge gate" is now the single
-  highest-value follow-up in this area.
-
----
-
-## Resume — the prior verification failure, resolved (no story work)
-
-Every story on this branch (US-1, US-2, US-3) was already `passes:true` and its code
-already on the branch. The only thing standing between the branch and the merge was the
-`⚠️ PRIOR VERIFICATION FAILED` block the driver prepended to this file: the merge-time
-gate had gone red on **`test/stall-flag.sh` part 8**, at
-
-    STALL-FLAG FAIL: the boundary does not read stalled → integrating → agent-turn → the next turn
-
-with a transcript that caught `stalled` at the SECOND iteration boundary and missed it at
-the first. That failure was already diagnosed and fixed in `cd3c7ff` ("stall-flag part 8
-sampled a window narrower than its own poll period") — a test-only change: the transcript
-poller cost a `live_get` fork plus `sleep 0.05` per turn (~62ms period) while the state it
-hunts, `stalled`, exists only for the preamble of the very next `live_set` (~29ms). It was
-sampling slower than the thing it was measuring. The fix parses the phase with builtins
-only and sleeps 5ms.
-
-**This iteration's job was to confirm that, not to redo it.** The engine is unchanged.
-
-Observed:
-- `test/stall-flag.sh` run **5 times**: 5 PASS, 0 FAIL. Every run's transcript reads
-  `agent-turn provider-waiting agent-turn stalled integrating` **twice** — both boundaries
-  caught, every time. (One run recorded a trailing third `stalled`; the assertion still
-  passed.) The pre-fix behaviour was ~1 of 2 boundaries, i.e. a coin flip, so five clean
-  runs is the evidence that mattered.
-- **`.chief/verify.sh` (the whole merge gate): exit 0, "verify: OK (allowing merge)"** —
-  all 51 behavioural tests under the bystander guard green, `stall-flag` among them.
-- Component gates re-run individually: `bash -n` clean over `bin/chief` + `engine/*.sh` +
-  `test/*.sh` + `install.sh`; `version-bump` PASS (VERSION 0.9.5); `doc-sync` PASS (README
-  and ROADMAP both v0.9.5, 38 merged tasklists named); `check-doc-links.mjs` 0 dead
-  references; `chief lint` 2 tasklists clean; quality ratchet OK (function_length_max
-  192 -> 206, tol 15; single_use_functions 25 -> 26, tol 2).
-- `shellcheck` is not installed on this host — skipped locally, CI enforces it.
-
-Files changed this iteration: `.chief/state/progress.txt` only.
-
-### Learnings for future iterations
-
-- **The driver's `⚠️ PRIOR VERIFICATION FAILED` block OVERWRITES this file** — it arrived
-  as 357 insertions / 214 deletions, i.e. it replaced the whole accumulated narrative with
-  a dump of the failing verify run. The `## Codebase Patterns` section that every future
-  iteration is told to read first was inside the part it deleted. If you resume onto that
-  block, restore the committed body (`git show HEAD:.chief/state/progress.txt`) and append
-  underneath it; do not just append to the block, or the patterns are gone from the next
-  turn's context.
-- **A gate that fails intermittently has not told you which side is broken.** Before
-  changing anything, ask whether the INSTRUMENT or the SUBJECT is at fault — here the
-  engine was correct and the test's sampler was too slow, and the giveaway was that the
-  same failure reproduced on `main`. A red gate on a branch that is equally red on the base
-  is not this branch's regression.
-- **One green run does not close a flaky gate.** The pre-fix failure rate was about 50%, so
-  a single pass is one coin flip. Re-run until the run count makes the old failure rate
-  implausible (5 runs => ~3% if it were still a coin flip), and record the count in `notes`.
-  This is the same discipline the tasklist itself is about: absence of a failure is not
-  evidence of a pass unless you actually measured enough to see one.
+Addendum (same story, after the quality ratchet):
+- The inline decision arm in `run_worker` tripped `function_length_max` (598 -> 617,
+  tol 15). Moved it to `decision_stop` in `engine/decision.sh` — worker_park by dynamic
+  scope, the `unmeasured_stop`/`criteria_scope_stop` convention — and driver.sh is back
+  to 598. **`run_worker` has no room left for an inline arm: any new stop belongs in a
+  module and is called in one line.**
+- That put `single_use_functions` at +3 (tol 2). The offset was not a deletion: `cmd_decide`
+  now READS ITS OWN WRITE BACK through `decision_verdict_set` and warns if the record does
+  not read as `recorded`. Genuinely useful — a writer/reader disagreement about the shape
+  surfaces one line after deciding rather than as a tasklist that halts again next run,
+  which is exactly how 106 went unnoticed — and it gives the reader a second call site.
+  **When the ratchet asks for a call site, look for the assertion you should have written.**

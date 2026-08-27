@@ -84,6 +84,18 @@ engine/
                      #   in one place — container-safe when $HOME is unset/read-only
   gitenv.sh          #   the git a CONTAINER hands us: safe.directory for a repo owned by another
                      #   uid ($CHIEF_GIT_SAFE_DIRECTORY), a committer identity when git can't find one
+  decision.sh        #   the DECISION tasklist and its verdict, both halves in one file because
+                     #   106 shipped only one of them: `chief decide` WROTE `.verdict` and the
+                     #   driver's halt parked unconditionally, so recording a verdict left the
+                     #   tasklist exactly where it was plus a field nothing read. is_decision_tasklist ·
+                     #   decision_verdict_file/json (where the durable record lives and what shape
+                     #   it is) · decision_stories_id (the BINDING — a projection over
+                     #   {id,title,acceptanceCriteria}, so a verdict recorded against one brief
+                     #   cannot authorise its re-worded successor, exactly as review.sh binds a
+                     #   plan approval) · decision_verdict_set (the reader) · decision_stop (the
+                     #   halt, and the one thing that lifts it). The record is `.chief/state/
+                     #   decisions/<name>.json` and NOT the tasklist JSON — see the durable-state
+                     #   invariant below for the two ways that loses a verdict
   crossrepo.sh       #   resolving a "<repo>:<stem>" REFERENCE to another repo's tasklist — the
                      #   lookup every cross-repo dependsOn has always used, lifted out of the
                      #   driver so the AUTHORING-time gates run the same one. Chief reads exactly
@@ -269,7 +281,13 @@ VERSION              # engine version — bump on any engine/bin/install change
   promotes back TO it the moment the artifact is valid — not at the end of the loop, or a mid-run death
   loses it. **For a `repo:<sub>` tasklist that snapshot IS the per-story record** — its tasklist is in the
   parent and its work branch in the submodule, so neither side commits "2 of 3" and only
-  `.chief/state/snapshots/<name>.json` can answer it on a resume (`prd_state_source` in `driver.sh`). Relatedly, a
+  `.chief/state/snapshots/<name>.json` can answer it on a resume (`prd_state_source` in `driver.sh`).
+  **Operator-authored state may not live in the tasklist JSON at all**, in either form: uncommitted, the
+  reconcile step's `git checkout -- "$TASKS_REL/$name.json"` (the ISOLATION GUARD, which exists to undo an
+  agent that reached out of its worktree) silently discards it before any arm reads it; committed on the
+  base, it collides at rebase with the branch's own edit to that same file — the pass-flags — and ends the
+  tasklist in REBASE-CONFLICT. Gitignored state under `$STATE_ROOT` is invisible to both (`engine/decision.sh`).
+  Relatedly, a
   new `agent.sh` exit code needs its `run_worker` arm placed **above** the EMPTY-NO-WORK guard whenever
   that stop can legitimately leave zero commits (as 2, 3, 4, 5 and 6 all can). Exit codes are a
   **contended namespace** across parallel tasklists — grep `AGENT_RC_` in `driver.sh` *and* agent.sh's

@@ -173,7 +173,13 @@ Usage:
                               waiting. See docs/reference/overlap-zones.md
   chief decide NAME VERDICT  record the operator's verdict with --note NOTE, then
        [--retire ID]          retire it to completed/ (without mergedToMain), or
-       [--unpark]             clear its park while retaining the verdict.
+       [--unpark]             clear its park while retaining the verdict. The next run READS
+                              the verdict: a decision tasklist stops halting at
+                              AWAITING-DECISION and its branch continues to the ordinary
+                              verify+merge path, so a decision that carries code is
+                              finishable. Durable (.chief/state/decisions/), and bound by
+                              checksum to the stories it approved — re-word them and it asks
+                              again. See docs/reference/decision-tasklists.md
   chief retire --negative     retire a tasklist whose delivered stories PASSED and whose remaining
        NAME [-n] [--no-commit] story TERMINATED FALSE — declared "terminalFalse" and carrying the
                               measurement behind the answer. Files the completed/ record (the
@@ -1192,7 +1198,7 @@ cmd_approve() {
 
 # ── operator decision verdicts (the only path that may make this transition) ──
 cmd_decide() {
-  local name="" verdict="" note="" action="" superseded="" f rec tmp deps="" n
+  local name="" verdict="" note="" action="" superseded="" f rec tmp deps="" n vj vf
   [ "$#" -ge 1 ] || { echo "usage: chief decide NAME VERDICT --note NOTE (--retire ID|--unpark)" >&2; return 2; }
   name="${1%.json}"; shift
   case "${1:-}" in
@@ -1228,17 +1234,37 @@ cmd_decide() {
     [ -z "$deps" ] || { echo "chief decide: refusing retirement of '$name'; live dependents:$deps" >&2; return 1; }
   fi
   tmp="${f}.decide.$$"
-  jq --arg choice "$verdict" --arg reason "$note" --arg action "$action" --arg superseded "$superseded" \
-    '.verdict={choice:$choice,note:$reason,recordedAt:(now|todateiso8601)} |
+  # `stories` BINDS the verdict to what it approved (engine/decision.sh's
+  # decision_stories_id). Without it a verdict recorded against one brief silently
+  # authorises whatever the tasklist is re-worded into afterwards; with it a
+  # re-planned tasklist has to be decided again, the way review.sh refuses to let a
+  # re-planned story inherit its old approval.
+  vj="$(decision_verdict_json "$verdict" "$note" "$action" "$(decision_stories_id "$f")")" \
+    || { echo "chief decide: could not form the verdict record" >&2; return 1; }
+  jq --argjson v "$vj" --arg action "$action" --arg superseded "$superseded" \
+    '.verdict=$v |
      if $action == "unpark" then (.parked=false | del(.parkedReason)) else (.supersededBy=$superseded) end' \
     "$f" > "$tmp" || { rm -f "$tmp"; echo "chief decide: invalid tasklist JSON" >&2; return 1; }
   mv "$tmp" "$f"
+  # THE COPY THE DRIVER READS. The tasklist field above is the record a human opens;
+  # this one is the record that survives (decision_verdict_file says why the tasklist
+  # cannot be it). Same bytes, one shape, written together.
+  vf="$(decision_verdict_file "$CHIEF_PROJECT" "$name")"
+  mkdir -p "$(dirname "$vf")" && printf '%s\n' "$vj" > "$vf" \
+    || echo "chief decide: could not write $vf — the next run will not see this verdict" >&2
+  # READ IT BACK, through the same reader the driver will use. If the writer and the
+  # reader ever disagree about the shape, the operator finds out here — one line after
+  # deciding — instead of at the next run, as a tasklist that halts again for a reason
+  # nothing on the surface explains. That is precisely how 106 went unnoticed.
+  decision_verdict_set "$vf" "$f"
+  [ "$DECISION_STATE" = recorded ] \
+    || echo "chief decide: WARNING — the record just written reads back as '$DECISION_STATE' ($DECISION_DETAIL)" >&2
   if [ "$action" = retire ]; then
     rec="$CHIEF_PROJECT/$CHIEF_TASKS_DIR/completed/$name.json"
     mkdir -p "$(dirname "$rec")"; mv "$f" "$rec"
     echo "✓ $name retired in completed/ (supersededBy=$superseded; no mergedToMain)"
   else
-    echo "✓ $name unparked with verdict '$verdict'"
+    echo "✓ $name unparked with verdict '$verdict' — the next run reads it and continues to verify+merge"
   fi
   . "$ENGINE/events.sh"
   CHIEF_EVENTS_FILE="${CHIEF_RUNS}/decisions.events.jsonl" CHIEF_EVENT_REPO="$CHIEF_PROJECT" \

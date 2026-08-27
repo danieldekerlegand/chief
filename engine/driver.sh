@@ -2771,11 +2771,11 @@ run_worker() {
     terminal_say_negative "$wtstate/prd.json" "$name" "$negative" "$total"
     # Passing stories prepare a decision brief; they are not the operator's
     # verdict. Keep the branch and worktree available for `chief decide` rather
-    # than letting the ordinary merge path turn model-authored passes into consent.
+    # than letting the ordinary merge path turn model-authored passes into consent —
+    # unless the operator has since RECORDED one, which is decision_stop's whole job
+    # (engine/decision.sh; it parks and returns 1, or lets the branch through).
     if is_decision_tasklist "$wtstate/prd.json"; then
-      worker_park awaiting-decision "the decision brief is prepared; waiting for a human verdict" \
-        "!! $name AWAITING-DECISION — stories are complete, but only a human verdict can finish this tasklist"
-      return 0
+      decision_stop "$name" "$REPO" "$SRC/$name.json" "$wtstate/prd.json" || return 0
     fi
     if [ "$AUTO_MERGE_MAIN" != "1" ]; then
       live_set "$live" phase=complete-unmerged story=

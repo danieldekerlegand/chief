@@ -29,7 +29,8 @@
         "A stale verdict cannot silently authorise later work. If the stories change after a verdict is recorded, the verdict must not carry over — bind it to what it approved, the way `review.sh` binds a plan verdict by checksum and refuses to let a re-planned story inherit the old approval.",
         "A test drives a decision tasklist through halt → `chief decide` → resume → merge. That end-to-end path has never once executed, which is why the gap survived shipping."
       ],
-      "notes": null
+      "notes": "decision-e2e (halt -> chief decide -> stale verdict refused -> resume -> verify -> merge -> retire): PASS. decision: green. decision-agent: PASS. smoke: PASS. noworkguard: PASS. ratelimit: PASS. quality ratchet: OK, no tracked metric regressed (function_length_max 598 -> 598, single_use_functions 46 -> 48, tol 2). version-bump: PASS (0.9.6). doc-sync: PASS. doc-links: 0 dead vs 0 on main. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck not installable on this host (homebrew permissions) so CI carries that half.",
+      "passes": true
     },
     {
       "id": "US-2",

@@ -1,6 +1,6 @@
 # Decision tasklists
 
-> **Status:** Current · **Updated:** 2026-08-21 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-26 · **Owner:** chief
 
 A decision tasklist is a tasklist whose deliverable is an operator's judgement rather
 than a merged branch. Declare it with `"type": "DECISION"`; `"kind": "DECISION"` and
@@ -55,6 +55,37 @@ tasklist, so the answer that released the work remains visible. `--retire` refus
 act while a live tasklist depends on the decision and names those dependents. Once safe,
 Chief sets `supersededBy`, deliberately does **not** add `mergedToMain`, and moves the
 record to `tasks/chief/completed/`. This is a retirement filing, not a code merge.
+
+## The verdict is read on the next run
+
+Recording a verdict is not a filing exercise: the next `chief run` reads it, and the
+tasklist stops halting. With a verdict present the branch continues to the ordinary
+rebase → verify → merge path, exactly like any other finished tasklist; without one it
+halts at `AWAITING-DECISION` as before. This is what makes a decision that **carries
+code** finishable — a licence call gating an implementation is a legitimate and common
+shape, and the deliverable is then the merged branch, not the verdict alone.
+
+Two properties make that safe to rely on:
+
+**The verdict is durable, and it is not something an agent can write.** It is recorded
+at `.chief/state/decisions/<tasklist>.json`, beside the driver's other per-tasklist
+state — gitignored, outside every worktree, and written only by `chief decide`. The
+`.verdict` field in the tasklist is the copy a human reads; the driver reads the record.
+It cannot live in the tasklist JSON alone for two reasons that each cost a verdict its
+life: the driver's isolation guard runs `git checkout -- tasks/<name>.json` on every
+iteration (undoing an agent that reached out of its worktree), which discards an
+uncommitted field; and *committing* the field collides at rebase with the branch's own
+edits to that same file, ending the decided tasklist in `REBASE-CONFLICT`.
+
+**The verdict is bound to what it approved.** `chief decide` records a checksum of the
+stories — their ids, titles and acceptance criteria, not their `passes` flags — the same
+way `review.sh` binds a plan approval to the plan it was given for. Re-word the tasklist
+or re-plan the branch after the verdict is recorded and the tasklist comes back to
+`AWAITING-DECISION` saying the verdict was given for different stories. Consent to one
+brief is not consent to its successor.
+
+`test/decision-e2e.sh` drives the whole sequence — halt → `chief decide` → resume →
+verify → merge → retire, plus the stale-verdict refusal.
 
 The transition is also emitted as `tasklist.decision` in the append-only event stream,
 so embedding hosts and `chief events` observe the same state change as the operator.
