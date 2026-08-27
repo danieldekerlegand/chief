@@ -175,3 +175,72 @@ Files:
 - The behavioural tests install from `git rev-parse HEAD`, so `test/smoke.sh` fails with
   "version wrong via installed shim" on an UNCOMMITTED `VERSION` bump. Commit, then run.
 - shellcheck is still not installable on this host; CI carries `shellcheck -S error`.
+
+## Post-story fix — the merge gate's flake in test/merge-batch.sh PART C
+Wed Aug 26 2026
+
+Every story on this branch was already `passes:true`, but the merge-time
+`.chief/verify.sh` had come back RED and left a `⚠️ PRIOR VERIFICATION FAILED` block at
+the top of this log. The single failure was NOT in this tasklist's code:
+
+    merge-batch| MERGE-BATCH FAIL: PART C: expected 2 verifications
+                 (1 batch tip for 2 + 1 floor for charlie), got 1
+    BYSTANDER FAIL: test/merge-batch.sh failed
+
+It is a pre-existing FLAKE in the test, not a regression from 116 — `test/merge-batch.sh`
+passes on this branch unmodified about half the time, and every other file the branch
+touches is unrelated to the merge queue.
+
+Root cause, reproduced 2/2 in an isolated PART C harness. `charlie` is the branch in a
+`review` overlap zone, so it is excluded from batching and takes the serialized floor.
+Its floor gate is served from the verify CACHE whenever it reaches the merge lock before
+its peers land — its own log says so:
+
+    >> charlie: chief/charlie is strictly ahead of main — rebase is a no-op, skipping it
+    >> verifying chief/charlie (rebased)
+    >> verify SKIPPED: tree 52e9018… (GREEN verdict from …/verify-cache/…; same base and verify hook)
+
+That is US-4's designed behaviour ("the agent verify and merge gate are not duplicated"):
+the agent boundary already ran the gate on that exact tree/base and recorded it, so a
+merge input that did not move reuses the verdict. The gate WAS paid — inside the
+worktree — but the fixture's counter is keyed by `basename "$PWD"`, so an agent-boundary
+run lands in `charlie.verifies` and only merge-phase runs land in `zoned.verifies`.
+Whether charlie or its peers reach the lock first is a race, so the count was 2 or 1.
+
+PART A already anticipates exactly this and accepts `2|3` with a comment; PART C was
+missed when US-4 landed.
+
+Files:
+- `test/merge-batch.sh` — PART C now asserts BOTH readings instead of one: charlie's own
+  log must show `>> verifying chief/charlie` (it took the floor's gate step — the claim
+  the part exists for), and then the counter is pinned to the reading that log reports —
+  1 when `verify SKIPPED` is present, 2 when it is not. Also documents that the counter's
+  cwd-basename key is load-bearing, not incidental: it is what keeps every other part's
+  number counting merge-phase gate runs only.
+
+No engine change, so no `VERSION` bump (test/version-bump.sh gates `bin/`/`engine/`/
+`scripts/`/`install.sh` only) and README/ROADMAP stay at v0.9.8.
+
+### Learnings for future iterations
+
+- **A verify-count assertion in a parallel test is racy the moment the verify CACHE can
+  serve it.** `verify_cache_try` (engine/lib.sh) hits when tree + base + hook are all
+  unchanged, which for the FIRST branch to reach the merge lock is the normal case —
+  its rebase is a no-op. Any test asserting "N gate runs for N tasklists" has to say
+  which reading it got, and the branch's own log is the witness (`verify SKIPPED …` vs a
+  fresh hook run). Prefer pinning the count to the log over widening it to a range: a
+  bare range also passes when the floor was never reached at all.
+- **The gate is paid in two different CWDs.** Merge-phase verify runs at the repo root
+  (`run_verify "$work_repo"`); the agent boundary runs the SAME hook with cwd = the
+  worktree (`_agent_verify_final` → `run_verify "$CHIEF_PROJECT"`). A fixture hook that
+  keys anything off `$PWD` therefore partitions the two, which is useful — but it means
+  "the gate did not run" and "the gate ran somewhere this counter cannot see" look
+  identical. Say which one you mean.
+- **A red merge gate is not always this branch's fault.** Check whether the failing test
+  passes on the branch unmodified before changing engine code: here it did, ~50% of the
+  time, and the fix belonged in the test rather than in anything 116 shipped.
+- **The driver RE-SEEDS `.chief/state/progress.txt` at run start**, replacing it with a
+  fresh header plus the `⚠️ PRIOR VERIFICATION FAILED` block. Since this repo TRACKS that
+  file, committing it as-found deletes every earlier note from the tree. Restore
+  `git show HEAD:.chief/state/progress.txt` first, then append — the log is append-only
+  by contract, and the driver's re-seed does not know that.

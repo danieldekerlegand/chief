@@ -113,6 +113,12 @@ chmod +x "$WORK/fakebin/claude"
 # One counter file per repo, outside the tree, so the number survives the worktree
 # churn and is readable from here. Serialized by $MERGE_LOCK in every part, so the
 # read-modify-write needs no lock of its own.
+#
+# The key is the CWD's basename, and that is load-bearing rather than incidental: the
+# merge phase runs the gate at the repo root and the agent boundary runs it inside the
+# worktree (cwd `<repo>-<hash>/<tasklist>`), so every number asserted below counts
+# MERGE-PHASE gate runs only, and an agent-boundary run lands in a file nothing reads.
+# What that does NOT do is hide a merge-phase run the cache skipped — see PART C.
 make_repo() {
   local repo="$1"; shift
   mkdir -p "$repo"
@@ -272,8 +278,29 @@ fi
   || fail "PART C: no approval request was written for the held branch"
 # Two gate runs for three tasklists: one batch tip covering alpha+bravo, and charlie's
 # own trip through the floor. The exclusion costs exactly the floor, and nothing more.
-[ "$(verifies "$REPO_C")" = 2 ] \
-  || fail "PART C: expected 2 verifications (1 batch tip for 2 + 1 floor for charlie), got $(verifies "$REPO_C")"
+#
+# The floor trip is asserted from charlie's OWN log, because the SECOND of those two
+# gate runs is conditional — for the reason PART A already states, and this part used
+# to miss. US-4 lets a merge input whose tree and base are unchanged reuse the GREEN
+# verdict the agent boundary already recorded for it, and charlie's rebase is a no-op
+# whenever it reaches the merge lock before its peers land ("strictly ahead of main —
+# rebase is a no-op"). Its gate was still PAID — at the agent boundary, in the
+# worktree, where this counter cannot see it (the hook keys the counter by cwd, so
+# merge-phase runs land under the repo and agent-boundary runs land under the
+# tasklist). So both readings are ASSERTED rather than tolerated: the floor asked for
+# the gate in either case, and exactly one of "it ran fresh" / "it reused its own
+# recorded verdict" must hold, with the counter pinned to that reading.
+CH_LOG="$REPO_C/.chief/state/parallel/charlie.log"
+grep -q '>> verifying chief/charlie' "$CH_LOG" \
+  || fail "PART C: charlie never reached the floor's verify step — the exclusion did not cost the floor"
+if grep -q 'verify SKIPPED' "$CH_LOG"; then
+  # charlie beat its peers to the merge lock: same tree, same base, cached green.
+  [ "$(verifies "$REPO_C")" = 1 ] \
+    || fail "PART C: charlie's floor gate was served from the agent-boundary cache, so exactly 1 batch-tip verification was expected, got $(verifies "$REPO_C")"
+else
+  [ "$(verifies "$REPO_C")" = 2 ] \
+    || fail "PART C: expected 2 verifications (1 batch tip for 2 + 1 floor for charlie), got $(verifies "$REPO_C")"
+fi
 grep -q 'merge queue: 1 batch-tip verification(s) covering 2 branch(es)' "$LOG" \
   || fail "PART C: the summary did not report a batch of 2"
 echo "merge-batch: PART C ok — the zoned branch took the floor and was held; its peers batched without it"
