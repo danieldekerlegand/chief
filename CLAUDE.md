@@ -303,6 +303,24 @@ VERSION              # engine version — bump on any engine/bin/install change
   quotes the engine's injected headings verbatim while explaining them, so grepping a
   prompt for one matches even when nothing was injected. Assert on a string only the
   engine emits, plus a marker your own fixture planted.
+- **"The gate ran N times" is a RACY assertion, and the verify CACHE is why.**
+  `verify_cache_try` (`engine/lib.sh`) serves a merge-phase verify from the verdict the
+  AGENT boundary already recorded whenever tree + base + hook are unchanged — which for
+  the first branch to reach the merge lock is the normal case, since its rebase is a
+  no-op ("strictly ahead of main"). So a parallel test counting gate invocations gets a
+  different number depending on who won the lock. The gate was still PAID; it ran in the
+  WORKTREE (`_agent_verify_final` → `run_verify "$CHIEF_PROJECT"`) rather than at the
+  repo root, so a fixture hook keyed off `$PWD` files it somewhere the assertion never
+  reads, and "did not run" is indistinguishable from "ran out of view". Pin the count to
+  the reading the branch's own log reports (`verify SKIPPED …` vs a fresh hook run) —
+  never widen it to a range, which also passes when the floor was never reached at all
+  (`test/merge-batch.sh` PART C; PART A is the same trap, caught earlier).
+- **The driver RE-SEEDS `.chief/state/progress.txt` at run start** — fresh header, plus a
+  `⚠️ PRIOR VERIFICATION FAILED` block when the last merge attempt came back red. That
+  file and `.chief/state/prd.json` are the two TRACKED exceptions to the gitignored
+  `.chief/state/`, so committing the re-seeded copy as found DELETES every earlier note
+  from the tree. Restore `git show HEAD:.chief/state/progress.txt` first, then append —
+  the log is append-only by contract and the re-seed does not know that.
 - **A backtick in an unquoted heredoc RUNS.** Every usage/help block in the engine is a
   `cat <<EOF` (it interpolates `$VERSION`, `${CHIEF_REAP_GRACE:-5}`, `$CHIEF_WT_ROOT_ALL`), and
   chief's prose is full of `` `chief monitor` ``-style backticks. Unescaped, that is command

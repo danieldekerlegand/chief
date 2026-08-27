@@ -244,3 +244,14 @@ No engine change, so no `VERSION` bump (test/version-bump.sh gates `bin/`/`engin
   file, committing it as-found deletes every earlier note from the tree. Restore
   `git show HEAD:.chief/state/progress.txt` first, then append — the log is append-only
   by contract, and the driver's re-seed does not know that.
+
+**Observed after the fix.** `test/merge-batch.sh` full six-part run: MERGE-BATCH OK
+(PART A/B/C/D/E/F all ok), exit 0. Isolated PART C harness: 4/4 PASS across BOTH
+interleavings — `verifies=2 skipped=0` (fresh floor gate) and `verifies=1 skipped=1`
+(floor gate served from the agent-boundary cache), the second being the one that used
+to fail. Full merge gate `bash .chief/verify.sh`: **exit 0, "verify: OK (allowing
+merge)"** — 54/54 behavioural tests green under the bystander guard, quality ratchet OK
+(no tracked metric regressed), version-bump PASS, doc-sync PASS (README + ROADMAP
+v0.9.8 == VERSION), doc-links 0 dead. `bash -n` clean on `test/merge-batch.sh`;
+shellcheck is still not installed on this host, so CI carries `shellcheck -S error`.
+The `⚠️ PRIOR VERIFICATION FAILED` block that opened this run is resolved.
