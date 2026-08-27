@@ -79,7 +79,11 @@ echo "stall-flag: part 1 — the exempt/flagged table"
 . "$ROOT/engine/monitor.sh" lib
 
 # QUIET — silence here is the state, and chief printed the reason for it already.
-QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting
+# `decision-declined` is here on the same terms as the two holds beside it, and it is
+# the one QUIET phase that is TERMINAL rather than waiting: an operator answered no, the
+# branch is kept and nothing is ever going to tick that record again. Flagging it would
+# turn every declined decision into a hang report an hour later.
+QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting
   provider-unavailable'
 # FLAGGED — every other phase the engine publishes, each against ITS OWN threshold.
 # `provider-waiting` heads the list on purpose: it is the whole duration of an agent

@@ -149,6 +149,15 @@ jobs:
       - name: NDJSON event stream (per-run log, versioned schema, merged + verify-failed sequences)
         run: bash test/events.sh
 
+      - name: Decision verdicts (refusal, unpark, retirement, event stream)
+        run: bash test/decision.sh
+
+      - name: Decision agent (an agent-authored verdict is never consent)
+        run: bash test/decision-agent.sh
+
+      - name: Decision end-to-end (halt -> chief decide -> resume -> verify -> merge -> retire)
+        run: bash test/decision-e2e.sh
+
       - name: Pickup-time base integration (a resumed branch follows base; conflicts go to the agent)
         run: bash test/stale-resume.sh
 

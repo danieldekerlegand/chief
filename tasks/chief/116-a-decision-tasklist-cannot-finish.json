@@ -29,7 +29,8 @@
         "A stale verdict cannot silently authorise later work. If the stories change after a verdict is recorded, the verdict must not carry over — bind it to what it approved, the way `review.sh` binds a plan verdict by checksum and refuses to let a re-planned story inherit the old approval.",
         "A test drives a decision tasklist through halt → `chief decide` → resume → merge. That end-to-end path has never once executed, which is why the gap survived shipping."
       ],
-      "notes": null
+      "notes": "decision-e2e (halt -> chief decide -> stale verdict refused -> resume -> verify -> merge -> retire): PASS. decision: green. decision-agent: PASS. smoke: PASS. noworkguard: PASS. ratelimit: PASS. quality ratchet: OK, no tracked metric regressed (function_length_max 598 -> 598, single_use_functions 46 -> 48, tol 2). version-bump: PASS (0.9.6). doc-sync: PASS. doc-links: 0 dead vs 0 on main. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck not installable on this host (homebrew permissions) so CI carries that half.",
+      "passes": true
     },
     {
       "id": "US-2",
@@ -40,7 +41,8 @@
         "A NEGATIVE verdict is expressible on a tasklist carrying code: the operator declines, and the branch does NOT merge. A mechanism that can only say yes is not a decision point, and this is the story where that is easiest to get wrong.",
         "The verdict, its note and its action land in the event stream, so a completed run records which human decided what. `106` US-3 asked for this and nothing consumed it."
       ],
-      "notes": null
+      "notes": "decision-e2e (halt -> --unpark authorises nothing -> --proceed -> stale refused -> merge -> retire; --retire refused on a live dependent; --decline never merges): PASS. decision: PASS (refusal, unpark, retirement, event stream). decision-agent: PASS. smoke: PASS. noworkguard: PASS. ratelimit: PASS. park-reasons: PASS. status-json: PASS. headless: PASS. events: PASS. version-bump: PASS (0.9.7). doc-sync: PASS (README+ROADMAP v0.9.7). doc-links: 0 dead. quality ratchet: OK, no tracked metric regressed (function_length_max 598 -> 598, single_use_functions 68 -> 70, tol 2 — AT tolerance). chief lint: 1 tasklist clean. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck not installed on this host, CI carries that half.",
+      "passes": true
     },
     {
       "id": "US-3",
@@ -52,7 +54,8 @@
         "`chief status` and `chief ps` agree with the summary. One surface calling it failed while the status file says `AWAITING-DECISION 2/2` is the inconsistency to remove.",
         "Bash 3.2 compatible; `bash -n` + `shellcheck -S error` clean; `VERSION` bumped (test/version-bump.sh)."
       ],
-      "notes": null
+      "notes": "decision-e2e §8 (AWAITING-DECISION renders as a HOLD, not failed; scheduler state = awaiting-decision; dependent held not BLOCKED; verdict releases it and the dependent merges next run): PASS — and it REPRODUCES (reap arm removed -> \"the scheduler state is not awaiting-decision (it is 'failed')\"). decision: PASS. decision-agent: PASS. stall-flag: PASS (was RED on this branch before this story — US-2 published the decision-declined phase and no list classified it). smoke: PASS. ratelimit: PASS. noworkguard: PASS. five-cases: PASS. events: PASS. headless: PASS. park-reasons: PASS. status-json / status-deps / status-categories: PASS. liveliness: PASS. retire-negative: PASS. version-bump: PASS (0.9.8). doc-sync: PASS (README+ROADMAP v0.9.8). doc-links: 0 dead. quality ratchet: OK, no tracked metric regressed (function_length_max 598 -> 598, single_use_functions 68 -> 70, tol 2 — no new helper added). chief lint: 1 tasklist clean. bash -n clean across bin/chief + engine/*.sh + test/*.sh; shellcheck not installed on this host, CI carries that half.",
+      "passes": true
     }
   ]
 }

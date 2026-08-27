@@ -116,7 +116,7 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
 #                      wedged one from out here, so: a longer threshold, not silence.
-STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision awaiting-approval machine-budget-waiting provider-unavailable '
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting provider-unavailable '
 
 # The CEILING on that exemption — quiet by design is not quiet forever. A usage window
 # that never reopens is exactly what an operator has to be told about, so the exemption
@@ -503,6 +503,10 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     # a reviewer who has not looked yet.
     awaiting-review) printf '%s⏸%s|in-review' "$CYN" "$RST" ;;
     awaiting-decision) printf '%s⏸%s|decision' "$CYN" "$RST" ;;
+    # The answer, once it is no. NOT a hold (nothing is waiting) and NOT a failure
+    # glyph (nothing went wrong) — the row's job is to say the question was decided
+    # against, so the work it gated is on a branch that is never going to merge.
+    decision-declined) printf '%s⊘%s|declined' "$CYN" "$RST" ;;
     # Held at an OVERLAP ZONE (docs/reference/overlap-zones.md). The same ⏸ once
     # more — it is a hold, not a fault — and its own label, because this row is the
     # one whose branch already PASSED everything: rebased, verified green, waiting
@@ -614,8 +618,8 @@ op_note() {   # $1 name  $2 stateroot -> one line
   printf '%s' "$note"
 }
 
-# The two HUMAN-VERDICT holds' detail lines — the plan-review park and the overlap-zone
-# park. Unlike the usage-limit and operator holds there is no per-tasklist ETA or budget
+# The HUMAN-VERDICT holds' detail lines — the plan-review park, the decision park and
+# the overlap-zone park. Unlike the usage-limit and operator holds there is no per-tasklist ETA or budget
 # to read: the whole answer is WHICH person has not looked yet, and how to unblock it.
 # They were written inline in render()'s row loop; they live here because both of them
 # were missing the one thing every other row already had — HOW LONG the hold has been
@@ -629,6 +633,16 @@ hold_note() { # $1 name $2 stateroot $3 coarse state -> one full '↳' line
   if [ "$3" = awaiting-review ]; then
     printf '       %s↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept%s · approve it, then: chief run%s\n' \
       "$CYN" "$held" "$RST"
+    return 0
+  fi
+  # The decision park. Its own sentence rather than the review one, because what is
+  # waiting is different in both halves an operator acts on: the artifact to open is a
+  # decision BRIEF, not a plan, and the thing that lifts it is `chief decide`, not an
+  # approval. Same ⏸ colouring and the same `held` age — a decision nobody has answered
+  # for three days is exactly the checkpoint this line exists to keep visible.
+  if [ "$3" = awaiting-decision ]; then
+    printf '       %s↳ awaiting decision: stories complete, branch + worktree + brief kept; only a human verdict finishes it%s · chief decide %s <verdict> --note … --proceed%s\n' \
+      "$CYN" "$held" "$1" "$RST"
     return 0
   fi
   # Reading the request the driver wrote: the interesting part is which domain stopped
@@ -882,7 +896,7 @@ render() {
         # record's phase here is always 'operator-paused', which would only repeat
         # the word without saying what was kept or how to pick it back up.
         printf '       %s↳ %s%s\n' "$YEL" "$(op_note "$n" "$state")" "$RST"
-      elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-approval ]; then
+      elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-decision ] || [ "$st" = awaiting-approval ]; then
         hold_note "$n" "$state" "$st"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)
