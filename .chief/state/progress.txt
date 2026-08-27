@@ -215,3 +215,61 @@ OK (`function_length_max` 192 -> 206 tol 15; `single_use_functions` 21 -> 22 tol
   seam is unchanged — `cigate_event_prose` + `CIGATE_MISMATCH_TAG` — and separating
   "cannot be started by chief" from "not intended as a merge gate" is now the single
   highest-value follow-up in this area.
+
+---
+
+## Resume — the prior verification failure, resolved (no story work)
+
+Every story on this branch (US-1, US-2, US-3) was already `passes:true` and its code
+already on the branch. The only thing standing between the branch and the merge was the
+`⚠️ PRIOR VERIFICATION FAILED` block the driver prepended to this file: the merge-time
+gate had gone red on **`test/stall-flag.sh` part 8**, at
+
+    STALL-FLAG FAIL: the boundary does not read stalled → integrating → agent-turn → the next turn
+
+with a transcript that caught `stalled` at the SECOND iteration boundary and missed it at
+the first. That failure was already diagnosed and fixed in `cd3c7ff` ("stall-flag part 8
+sampled a window narrower than its own poll period") — a test-only change: the transcript
+poller cost a `live_get` fork plus `sleep 0.05` per turn (~62ms period) while the state it
+hunts, `stalled`, exists only for the preamble of the very next `live_set` (~29ms). It was
+sampling slower than the thing it was measuring. The fix parses the phase with builtins
+only and sleeps 5ms.
+
+**This iteration's job was to confirm that, not to redo it.** The engine is unchanged.
+
+Observed:
+- `test/stall-flag.sh` run **5 times**: 5 PASS, 0 FAIL. Every run's transcript reads
+  `agent-turn provider-waiting agent-turn stalled integrating` **twice** — both boundaries
+  caught, every time. (One run recorded a trailing third `stalled`; the assertion still
+  passed.) The pre-fix behaviour was ~1 of 2 boundaries, i.e. a coin flip, so five clean
+  runs is the evidence that mattered.
+- **`.chief/verify.sh` (the whole merge gate): exit 0, "verify: OK (allowing merge)"** —
+  all 51 behavioural tests under the bystander guard green, `stall-flag` among them.
+- Component gates re-run individually: `bash -n` clean over `bin/chief` + `engine/*.sh` +
+  `test/*.sh` + `install.sh`; `version-bump` PASS (VERSION 0.9.5); `doc-sync` PASS (README
+  and ROADMAP both v0.9.5, 38 merged tasklists named); `check-doc-links.mjs` 0 dead
+  references; `chief lint` 2 tasklists clean; quality ratchet OK (function_length_max
+  192 -> 206, tol 15; single_use_functions 25 -> 26, tol 2).
+- `shellcheck` is not installed on this host — skipped locally, CI enforces it.
+
+Files changed this iteration: `.chief/state/progress.txt` only.
+
+### Learnings for future iterations
+
+- **The driver's `⚠️ PRIOR VERIFICATION FAILED` block OVERWRITES this file** — it arrived
+  as 357 insertions / 214 deletions, i.e. it replaced the whole accumulated narrative with
+  a dump of the failing verify run. The `## Codebase Patterns` section that every future
+  iteration is told to read first was inside the part it deleted. If you resume onto that
+  block, restore the committed body (`git show HEAD:.chief/state/progress.txt`) and append
+  underneath it; do not just append to the block, or the patterns are gone from the next
+  turn's context.
+- **A gate that fails intermittently has not told you which side is broken.** Before
+  changing anything, ask whether the INSTRUMENT or the SUBJECT is at fault — here the
+  engine was correct and the test's sampler was too slow, and the giveaway was that the
+  same failure reproduced on `main`. A red gate on a branch that is equally red on the base
+  is not this branch's regression.
+- **One green run does not close a flaky gate.** The pre-fix failure rate was about 50%, so
+  a single pass is one coin flip. Re-run until the run count makes the old failure rate
+  implausible (5 runs => ~3% if it were still a coin flip), and record the count in `notes`.
+  This is the same discipline the tasklist itself is about: absence of a failure is not
+  evidence of a pass unless you actually measured enough to see one.
