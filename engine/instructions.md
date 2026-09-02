@@ -25,6 +25,16 @@ story, so keep each iteration self-contained.
    the existing code's conventions. Keep the change focused and minimal.
 5. **Verify** using the project's quality checks — see the **project-specific
    instructions** appended below. Do not mark a story done on red checks.
+   **If you run the project's FULL gate yourself, run it as `chief verify`.** Chief
+   runs that same gate again at the end of your turn and again at merge, and it
+   SKIPS those runs when a green verdict for the identical tree, base and hook is
+   already recorded — but only `chief verify` writes that record. A bare
+   `./.chief/verify.sh` (or `cargo test --workspace`, or `npm test`) is a shell
+   command chief never sees, so it buys nothing and the suite gets paid twice for
+   one merge. `chief verify` records only for a **committed, clean** tree, so the
+   order is **commit, then `chief verify`**, then `--amend` if it comes back red;
+   it exits with the gate's own status either way. Cheap scoped checks — a
+   typecheck, one test file — need none of this; run them however you like.
 6. **Commit all changes** with message `feat: [Story ID] - [Story Title]`.
 7. **Mark the story done** by setting `"passes": true` for it in the runtime
    `.chief/state/prd.json`. That is what the driver counts and is **always** the

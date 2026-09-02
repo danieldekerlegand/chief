@@ -3,7 +3,13 @@
   "category": "fix",
   "branchName": "chief/117-the-agent-verify-records-but-never-tries",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/lib.sh", "test", "docs", "VERSION"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/lib.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
   "iters": 6,
   "warmup": [
     "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
@@ -17,8 +23,8 @@
     {
       "id": "US-1",
       "title": "The final verify consults the cache it already writes",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "verify_cache_try now runs before run_verify in _agent_verify_final, on the same (CHIEF_PROJECT, CHIEF_TASKLIST, BASE_BRANCH) triple verify_cache_record writes with; a cache hit returns 0 so COMPLETE_OK is unchanged. Observed: bash -n clean on engine/agent.sh; test/doc-sync.sh PASS (README+ROADMAP v0.9.9 == VERSION 0.9.9); test/version-bump.sh PASS; behavioural smoke/ratelimit/noworkguard/merge-batch all green (SMOKE PASS, RATELIMIT PASS, NOWORK PASS, MERGE-BATCH OK). shellcheck is not installed on this host; CI carries shellcheck -S error.",
       "acceptanceCriteria": [
         "`_agent_verify_final` calls `verify_cache_try` before `run_verify`, using the same `(cwd, name, base)` triple `verify_cache_record` writes with, so a GREEN verdict for the identical tree/base/hook skips the re-run. Reuse the existing helpers unchanged — this story adds a call, it does not add a cache.",
         "The skip is visible in the log and distinguishable from a fresh pass, which `verify_cache_try` already does ('verify SKIPPED: tree … GREEN verdict from …'). A silent skip would make a stale-cache bug undiagnosable.",
@@ -29,8 +35,8 @@
     {
       "id": "US-2",
       "title": "A recording path the agent can actually use",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "chief verify (bin/chief cmd_verify) runs the project verify hook and records the verdict through verify_cache_record; it refuses to record for anything but a clean HEAD tree (dirty tracked/untracked, or a HEAD that moved during the run) and never reads the cache. Documented in engine/instructions.md step 5 (the turn prompt), docs/reference/verify-hook.md, the README command table, usage() and CLAUDE.md. Observed: scratch-repo matrix 6/6 — clean+green RECORDED (status=0 record written, hook ran 1x), dirty tree NOT recorded (record count 1 -> 1), untracked file NOT recorded, red hook exit 1 recorded as status=1, --no-record wrote nothing, bad flag exit 2. Gates: bash -n clean on bin/chief + engine/quality.sh; test/doc-sync.sh PASS (README+ROADMAP v0.9.10 == VERSION 0.9.10, 40 merged tasklists named); test/version-bump.sh PASS; check-doc-links 0 dead; quality ratchet OK (single_use_functions +1, tol 2); behavioural smoke SMOKE PASS, ratelimit RATELIMIT PASS, noworkguard NOWORK PASS, merge-batch MERGE-BATCH OK. shellcheck is not installed on this host; CI carries shellcheck -S error.",
       "acceptanceCriteria": [
         "An agent-invocable way to run the verify hook that RECORDS its verdict, so an in-turn run populates the cache US-1 now reads. Whether that is a `chief` subcommand or an env-marked wrapper is the implementer's call; what matters is that it is reachable from an agent's shell and writes through `verify_cache_record`.",
         "It is documented where an agent will encounter it — the turn prompt or the verify-hook reference — since the entire point is that the current prose instruction does not work.",
@@ -41,8 +47,8 @@
     {
       "id": "US-3",
       "title": "Proof it bites, in both directions",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "test/verify-cache.sh drives engine/agent.sh directly against a scratch repo (no driver, ~1s) and counts HOOK INVOCATIONS, not log lines; the hook lives outside the repo via $CHIEF_VERIFY_HOOK so tree and hook-blob can be moved independently. Observed 5/5 parts: PART A hook ran 1x for two boundary verifies over one unmoved tree (skip, and \"verify SKIPPED\" in the log); PART B moved tree -> 2x; PART C edited hook blob at unmoved tree -> 3x; PART D red hook -> 4x, recorded status=1, agent exit non-zero, and a re-run at that same recorded red -> 5x (never skipped); PART E the same PART A sequence against a copy of the engine with the verify_cache_try call neutered -> 2x, so the file cannot pass by restating old behaviour. Reproduced against the real engine too: neutering engine/agent.sh made PART A fail with \"THE SKIP DID NOT HAPPEN — the hook ran 2x\". Registered in all three gate lists (.chief/verify.sh CHIEF_BYSTANDER_TESTS, test/all.sh BASH_SUITE, .github/workflows/ci.yml). Gates: bash -n clean on test/verify-cache.sh + .chief/verify.sh + test/all.sh; check-doc-links 0 dead; quality ratchet OK (single_use_functions +1, tol 2); doc-sync PASS (README + ROADMAP v0.9.10 == VERSION 0.9.10, 40 merged tasklists); behavioural smoke SMOKE PASS, ratelimit RATELIMIT PASS, noworkguard NOWORK PASS, merge-batch MERGE-BATCH OK, quality-ratchet PASS, cigate PASS, verify-cache VERIFY-CACHE OK. No engine/bin change, so no VERSION bump (test/version-bump.sh gates bin/, engine/, scripts/, install.sh only). shellcheck is not installed on this host; CI carries shellcheck -S error.",
       "acceptanceCriteria": [
         "A test proves the skip happens: record a GREEN verdict for a tree, run the final verify at that same tree, assert the hook did NOT execute a second time (count invocations rather than reading the log).",
         "A NEGATIVE CONTROL proves it does not over-skip: change the tree, and assert the hook DOES run. Then change only the verify hook's own content at an unchanged tree, and assert it runs again — the hook blob is part of the key precisely so an edited gate is not skipped by a verdict taken under the old one.",

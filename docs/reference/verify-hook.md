@@ -66,6 +66,61 @@ If you know your gate is not deterministic, say so rather than paying for the se
 `CHIEF_MERGE_BATCH_BISECT=0` makes a red tip dissolve to the floor immediately, and
 `CHIEF_MERGE_BATCH=1` (the default) opts out of batching altogether.
 
+## Running this gate yourself: `chief verify`
+
+Chief runs this hook **twice** on the way to a merge: once at the end of the agent
+turn that reports the tasklist complete, and once more in the merge phase after the
+rebase. Both of those reads are served from a **verdict cache** keyed on
+`tree · base · hook`, so when nothing moved between them the gate is paid once and
+the second read is a skip:
+
+```
+>> verify SKIPPED: tree 52e9018… (GREEN verdict from …/verify-cache/…; same base and verify hook)
+```
+
+An agent that runs the gate **itself** inside its turn — `./.chief/verify.sh`,
+`npm test`, `cargo test --workspace` — is issuing a plain shell command chief never
+sees, so it writes no verdict and buys nothing. That is not hypothetical: measured on
+2026-09-02, one tasklist paid a ~20-minute workspace suite inside the turn and another
+~21 minutes at the agent boundary, for one merge, over a tree neither run had moved.
+
+`chief verify` is the version that counts:
+
+```bash
+chief verify              # run the hook, record the verdict
+chief verify --no-record  # run the hook, write nothing
+```
+
+It runs the same hook the same way (same cwd, same `CHIEF_BASE_BRANCH` /
+`STRICT_VERIFY` / `NO_VERIFY` environment, a tasklist's own `"verify"` array
+honoured), exits with the hook's own status, and then records that status where the
+agent boundary and the merge phase will find it. Inside an agent turn it needs no
+arguments — the driver has already exported the worktree, the run's state directory,
+the tasklist and the work base, and those are preferred over `.chief/config`.
+
+**It records only for HEAD's tree.** The cache key is the *committed* tree while the
+hook tests the *working* one, so recording while those differ would let chief skip the
+merge gate for a tree nothing ever checked — the one failure mode of this mechanism
+that could merge a red tree. A dirty tree (tracked or untracked) is therefore checked
+and reported but **never** recorded, and neither is a run that HEAD moved under:
+
+```
+chief verify: the working tree is not HEAD's — this verdict will NOT be recorded.
+              COMMIT first and re-run `chief verify`, or the gate is paid again at merge.
+```
+
+So the order in an agent turn is **commit, then `chief verify`**, and `--amend` if it
+comes back red. Refusing to record is never refusing to check: the hook still runs and
+the exit status is still yours.
+
+`chief verify` deliberately never *reads* the cache. `tree · base · hook` says nothing
+about uncommitted work, and the one caller whose working tree is expected to be moving
+is this one — answering "green" about an edit made since the record would be worse than
+running the suite again.
+
+Cheap, scoped checks — a typecheck, one test file, a linter over the two files you
+touched — need none of this. This is for the full gate.
+
 ## Who checks what: chief, this hook, and you
 
 **Chief's own comment says it plainly — `verify.sh` is the real merge bar, not the
