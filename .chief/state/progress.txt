@@ -436,3 +436,46 @@ VERSION 0.9.10, 40 merged tasklists named). Behavioural: `smoke` SMOKE PASS,
 (PART A–F), `quality-ratchet` PASS, `cigate` PASS. No `bin/`/`engine/`/`scripts/`/
 `install.sh` change on this story, so `VERSION` stays 0.9.10 and `test/version-bump.sh`
 PASSes. shellcheck is not installed on this host; CI carries `shellcheck -S error`.
+
+## Final verification — the full gate, run through the mechanism this tasklist shipped
+Wed Sep  2 2026
+
+All three stories were already `passes:true` with a clean tree and no `⚠️ PRIOR
+VERIFICATION FAILED` block. The remaining work was to run the FULL gate as
+`chief verify` (per CLAUDE.md) so the end-of-turn and merge-time reads are served from
+the recorded verdict — which is US-1 + US-2 exercising themselves on their own branch.
+
+**Observed.** `bin/chief verify` → `verify: OK (allowing merge)`, **exit 0**, and
+`>> chief verify: exit 0 RECORDED for tree 6dba5fcb2ca4eee839746f720313a75c5755b155`.
+doc-links 0 dead vs 0 on main; quality ratchet OK over the 6 changed source files
+(duplicate_blocks 0→0, duplicate_line_pct 0→0, max_nesting_depth 6→6,
+function_length_max 281→281, function_length_mean 29.45→29.85, single_use_functions
+50→51 delta +1 tol 2 — no tracked metric regressed); `bash -n` clean; VERSION-BUMP PASS
+(VERSION 0.9.10 covers every engine/bin change on HEAD); BYSTANDER PASS (54 tests, decoy
+run from another install survived, genuine orphan reaped, no fixture leaked); DOC-SYNC
+PASS (README + ROADMAP **v0.9.10** == VERSION, 40 merged tasklists named); tasklists jq
+parse OK. shellcheck is not installed on this host; CI carries `shellcheck -S error`.
+
+Run separately, because the gate did not reach it (see below):
+`bash test/verify-cache.sh` → **VERIFY-CACHE OK**, PART A–E all ok.
+
+### Learnings for future iterations
+
+- **A `chief verify` inside a turn runs the PROJECT CHECKOUT's hook, not the
+  worktree's.** The log says so in its first line — `chief verify:
+  /Users/…/Development/chief/.chief/verify.sh (cwd=<worktree>, base=main)`. So this
+  branch's own new gate entry did not execute: `CHIEF_BYSTANDER_TESTS` in the WORKTREE's
+  `.chief/verify.sh` lists 55 tests, the run reported `[54/54]` and stepped straight from
+  `[51/54] merge-batch` to `[52/54] cigate` — `test/verify-cache.sh`, the file US-3 added,
+  was skipped because main's copy of the hook does not name it yet. **A story that adds
+  itself to `CHIEF_BYSTANDER_TESTS` must run its own test directly as well**; the
+  in-worktree gate cannot see the list entry it just wrote, and a silently-absent test
+  reads exactly like a passing one.
+- **That divergence is also why the recorded verdict is SAFE.** The cache key is
+  `tree.base.hook`, and at merge time the work repo has this BRANCH checked out — so the
+  hook blob at that same path is the branch's 55-test copy, not main's 54-test one. The
+  key therefore misses and the merge gate re-runs in full, with `verify-cache` included.
+  The recording is a genuine saving for the end-of-turn read (same hook, same tree) and
+  correctly buys nothing it has not actually paid for at merge.
+- The full gate takes **~11 minutes** here — past a 10-minute foreground tool timeout.
+  Run it backgrounded to a log and poll for a sentinel line rather than blocking on it.
