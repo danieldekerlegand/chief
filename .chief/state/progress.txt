@@ -366,3 +366,73 @@ previously-substituted lines literally. `test/doc-sync.sh` PASS (README + ROADMA
 SMOKE PASS, `ratelimit` RATELIMIT PASS, `noworkguard` NOWORK PASS, `merge-batch`
 MERGE-BATCH OK (PART A–F). shellcheck is not installed on this host; CI carries
 `shellcheck -S error`.
+
+## US-3 — Proof it bites, in both directions
+Wed Sep  2 2026
+
+US-1 is ONE LINE. A rebase, a "simplification" or a differently-keyed refactor could
+take it back out and nothing would go red — the only symptom is a suite that runs
+twice, which is the thing the tasklist was opened for. `test/verify-cache.sh` pins the
+skip and every way it must NOT happen.
+
+Files:
+- `test/verify-cache.sh` (new) — five parts, ~1 second total:
+  A the skip (green verdict, unmoved tree -> hook runs 1x for TWO boundary verifies,
+  and `verify SKIPPED` is in the log); B tree moved -> it runs; C the verify hook's own
+  content changed at an unmoved tree -> it runs; D a RED verdict never skips (recorded
+  `status=1` asserted on disk first, then a re-run at that same tree still pays the
+  gate); E REPRODUCTION against a copy of the engine with the `verify_cache_try` call
+  neutered.
+- `.chief/verify.sh` (`CHIEF_BYSTANDER_TESTS`), `test/all.sh` (`BASH_SUITE`),
+  `.github/workflows/ci.yml` — the three lists that make a test a gate.
+- `CLAUDE.md` — the layout's `test/` block names the new file and its two design
+  choices (count the hook, keep the hook outside the repo).
+
+### Learnings for future iterations
+
+- **`engine/agent.sh` can be driven DIRECTLY, and it is the cheap way to test an
+  iteration-boundary behaviour.** `test/provider-conformance.sh` established the shape:
+  a scratch git repo with `.chief/state/prd.json`, a fake `claude` on `PATH` that marks
+  the story and prints the token, and `bash engine/agent.sh 1`. No install, no driver,
+  no worktree — this file's five parts and eight agent turns run in about a second,
+  against the WORKING TREE's engine rather than `git rev-parse HEAD` (so an uncommitted
+  edit is visible, unlike the install-from-HEAD suite). Set `STALL_LIMIT=1` so a turn
+  whose verify FAILS ends the loop immediately instead of burning the stall budget.
+- **`env -u` is mandatory when a test runs the engine from inside a chief worktree.**
+  The driver exports `CHIEF_VERIFY_HOOK`, `CHIEF_VERIFY_CACHE_STATE`,
+  `CHIEF_VERIFY_{BASE,REPO,TASKS_DIR}`, `CHIEF_PAUSE_FILE`, `CHIEF_LIVE_FILE`,
+  `CHIEF_ITER_HOOK` and more; inheriting even one points the fixture at the REAL
+  repository's gate. US-2's scratch fixture hit this twice. Set the ones you mean and
+  unset the rest, explicitly.
+- **Put the fixture verify hook OUTSIDE the repo** (`$CHIEF_VERIFY_HOOK=$WORK/hook.sh`).
+  The cache key is `tree.base.hook`; a hook committed in the repo cannot be edited
+  without also moving the tree, so the negative control for "an edited gate is not
+  skipped" would be indistinguishable from "a moved tree is not skipped".
+- **Uncommitted files do NOT move the cache key.** `verify_cache_try`/`_record` read
+  `git rev-parse HEAD^{tree}`, so everything agent.sh writes into `.chief/state/` during
+  a turn is invisible to it. That is what makes "run the loop twice, once without a
+  commit" a clean same-tree fixture.
+- **Assert on the hook's own invocation COUNT, never on the log.** A log line is
+  chief's claim about what it did; a counter file the hook appends to is the
+  observation. This is the same lesson `test/merge-batch.sh` PART C learned the
+  expensive way — with the difference that here there is no parallelism, so the count
+  is exact rather than a reading that has to be pinned to a log.
+- **A one-line fix needs a REPRODUCTION in the test, not just in the author's shell.**
+  PART E copies `engine/` and rewrites `if verify_cache_try …` to `if false …`, asserts
+  the patch actually applied (both directions — the neuter is present AND no live call
+  survived), then re-runs PART A's sequence and requires the hook to run TWICE. Without
+  it the file could pass forever against an engine that never had the call.
+
+**Observed for US-3.** `bash test/verify-cache.sh` → VERIFY-CACHE OK, all five parts,
+hook counts 1 · 2 · 3 · 4 · 5 exactly as designed. Reproduced against the real engine:
+with `verify_cache_try` neutered in `engine/agent.sh`, PART A fails with `THE SKIP DID
+NOT HAPPEN — the hook ran 2x for two boundary verifies over one unmoved tree` (engine
+restored, `git diff --stat engine/agent.sh` empty). `bash -n` clean on
+`test/verify-cache.sh`, `.chief/verify.sh`, `test/all.sh`. `scripts/check-doc-links.mjs`
+0 dead references. Quality ratchet OK (`single_use_functions` 49 → 50, +1 of tol 2; no
+tracked metric regressed). `test/doc-sync.sh` PASS (README + ROADMAP **v0.9.10** ==
+VERSION 0.9.10, 40 merged tasklists named). Behavioural: `smoke` SMOKE PASS,
+`ratelimit` RATELIMIT PASS, `noworkguard` NOWORK PASS, `merge-batch` MERGE-BATCH OK
+(PART A–F), `quality-ratchet` PASS, `cigate` PASS. No `bin/`/`engine/`/`scripts/`/
+`install.sh` change on this story, so `VERSION` stays 0.9.10 and `test/version-bump.sh`
+PASSes. shellcheck is not installed on this host; CI carries `shellcheck -S error`.

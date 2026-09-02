@@ -261,6 +261,13 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   watcher survives, so the file cannot pass by restating behaviour that
                      #   always worked. In all.sh + CI but NOT the merge gate, like monitor.sh:
                      #   it asserts on refresh intervals and verify runs under parallel load
+                     #   verify-cache.sh — the AGENT BOUNDARY's half of the verdict cache
+                     #   (_agent_verify_final's verify_cache_try), driving engine/agent.sh
+                     #   DIRECTLY against a scratch repo — no driver, one second, and the
+                     #   assertion is the number of times the HOOK ITSELF executed, never a
+                     #   log line. Its hook lives OUTSIDE the repo (via $CHIEF_VERIFY_HOOK)
+                     #   so the `tree.base.hook` key's three halves can be moved one at a
+                     #   time. REPRODUCES first, like monitor-orphan.sh
 docs/                # tasklist schema · roadmap-input contract (chief gen) · chief status (scope + ignore list) ·
                      # verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace) ·
