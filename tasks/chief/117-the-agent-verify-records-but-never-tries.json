@@ -1,0 +1,54 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/117-the-agent-verify-records-but-never-tries",
+  "dependsOn": [],
+  "touches": ["engine/agent.sh", "engine/lib.sh", "test", "docs", "VERSION"],
+  "iters": 6,
+  "warmup": [
+    "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
+    "sed -n '/^verify_cache_try()/,/^}/p' engine/lib.sh",
+    "sed -n '/^verify_cache_record()/,/^}/p' engine/lib.sh",
+    "grep -rn 'verify_cache_try\\|verify_cache_record' engine/ bin/chief",
+    "sed -n '2925,2940p' engine/driver.sh"
+  ],
+  "description": "The verify verdict cache has ONE reader and TWO writers, and the missing read costs a full suite run on every completing tasklist.\n\nMEASURED on cuneiform 2026-09-02. A tasklist ran the workspace suite TWICE for one merge: once when the agent invoked `.chief/verify.sh` itself inside its turn (~20 minutes, producing /private/tmp/verify-381.log, ending 'all selected gates green — allowing merge'), and again in `_agent_verify_final` on the COMPLETE turn (~21 minutes and still going when this was written). The run showed `iter 2 · no progress last iter (1/2)`: iteration 1 was spent running a verify chief was about to run anyway.\n\nWHAT IS ALREADY RIGHT — DO NOT REBUILD IT. `verify_cache_try` / `verify_cache_record` in `engine/lib.sh` are correct, and their key is the right one: `tree.base.hook`, because 'a rebase can rewrite commit ids without changing the tree, so the tree is the correctness key'. `driver.sh:2929` already tries the cache before the merge gate, which is why the MERGE-gate duplicate does not happen. That half of the design works.\n\nTHE GAP. `grep -rn 'verify_cache_try' engine/` returns exactly one call site — driver.sh. `_agent_verify_final` (agent.sh:988) calls `run_verify` unconditionally and then `verify_cache_record`. It RECORDS but never TRIES. So a GREEN verdict already on disk for the identical tree, base and hook cannot save it, and no amount of the agent being careful can help: the agent's own invocation is a plain shell command chief never sees.\n\nWHY THIS IS NOT A DOCUMENTATION PROBLEM. `cuneiform/CLAUDE.md` already says 'Never run the full workspace suite inside a chief iteration — commit instead.' It is prose, agents ignore it, and it has now cost a full suite run three times in one day in one repository. The mechanism is the fix.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "The final verify consults the cache it already writes",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "`_agent_verify_final` calls `verify_cache_try` before `run_verify`, using the same `(cwd, name, base)` triple `verify_cache_record` writes with, so a GREEN verdict for the identical tree/base/hook skips the re-run. Reuse the existing helpers unchanged — this story adds a call, it does not add a cache.",
+        "The skip is visible in the log and distinguishable from a fresh pass, which `verify_cache_try` already does ('verify SKIPPED: tree … GREEN verdict from …'). A silent skip would make a stale-cache bug undiagnosable.",
+        "A skipped verify is still a PASSED verify for completion purposes — `COMPLETE_OK` is unchanged when the cache hits. Read the `[ \"$rc\" != 0 ]` branch and make sure a hit takes the same path a fresh green does.",
+        "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the version bump the engine-change gate requires."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "A recording path the agent can actually use",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "An agent-invocable way to run the verify hook that RECORDS its verdict, so an in-turn run populates the cache US-1 now reads. Whether that is a `chief` subcommand or an env-marked wrapper is the implementer's call; what matters is that it is reachable from an agent's shell and writes through `verify_cache_record`.",
+        "It is documented where an agent will encounter it — the turn prompt or the verify-hook reference — since the entire point is that the current prose instruction does not work.",
+        "It refuses to record a verdict for a tree that is not HEAD's. Recording someone else's tree as green is the one failure mode of this whole mechanism that would let a red tree merge, and it must be impossible rather than unlikely.",
+        "GATES: as US-1."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "Proof it bites, in both directions",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "A test proves the skip happens: record a GREEN verdict for a tree, run the final verify at that same tree, assert the hook did NOT execute a second time (count invocations rather than reading the log).",
+        "A NEGATIVE CONTROL proves it does not over-skip: change the tree, and assert the hook DOES run. Then change only the verify hook's own content at an unchanged tree, and assert it runs again — the hook blob is part of the key precisely so an edited gate is not skipped by a verdict taken under the old one.",
+        "A RED recorded verdict must never skip. `verify_cache_try` already returns non-zero unless `status=0`; assert it, because that is the difference between a cache and a way to merge a failing tree.",
+        "GATES: as US-1."
+      ]
+    }
+  ]
+}
