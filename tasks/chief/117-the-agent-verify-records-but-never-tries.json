@@ -3,7 +3,13 @@
   "category": "fix",
   "branchName": "chief/117-the-agent-verify-records-but-never-tries",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/lib.sh", "test", "docs", "VERSION"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/lib.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
   "iters": 6,
   "warmup": [
     "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
@@ -17,8 +23,8 @@
     {
       "id": "US-1",
       "title": "The final verify consults the cache it already writes",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "verify_cache_try now runs before run_verify in _agent_verify_final, on the same (CHIEF_PROJECT, CHIEF_TASKLIST, BASE_BRANCH) triple verify_cache_record writes with; a cache hit returns 0 so COMPLETE_OK is unchanged. Observed: bash -n clean on engine/agent.sh; test/doc-sync.sh PASS (README+ROADMAP v0.9.9 == VERSION 0.9.9); test/version-bump.sh PASS; behavioural smoke/ratelimit/noworkguard/merge-batch all green (SMOKE PASS, RATELIMIT PASS, NOWORK PASS, MERGE-BATCH OK). shellcheck is not installed on this host; CI carries shellcheck -S error.",
       "acceptanceCriteria": [
         "`_agent_verify_final` calls `verify_cache_try` before `run_verify`, using the same `(cwd, name, base)` triple `verify_cache_record` writes with, so a GREEN verdict for the identical tree/base/hook skips the re-run. Reuse the existing helpers unchanged — this story adds a call, it does not add a cache.",
         "The skip is visible in the log and distinguishable from a fresh pass, which `verify_cache_try` already does ('verify SKIPPED: tree … GREEN verdict from …'). A silent skip would make a stale-cache bug undiagnosable.",

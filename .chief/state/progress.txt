@@ -255,3 +255,46 @@ merge)"** — 54/54 behavioural tests green under the bystander guard, quality r
 v0.9.8 == VERSION), doc-links 0 dead. `bash -n` clean on `test/merge-batch.sh`;
 shellcheck is still not installed on this host, so CI carries `shellcheck -S error`.
 The `⚠️ PRIOR VERIFICATION FAILED` block that opened this run is resolved.
+
+================================================================================
+# Chief Progress — 117-the-agent-verify-records-but-never-tries
+Started: Wed Sep  2 15:31:49 CDT 2026
+---
+
+## US-1 — The final verify consults the cache it already writes
+Wed Sep  2 2026
+
+The verdict cache had ONE reader (`driver.sh:2929`, the merge gate) and TWO writers.
+`_agent_verify_final` recorded and never tried, so a GREEN verdict already on disk for
+the identical tree/base/hook could not save the very run that produced it — measured on
+cuneiform as two full workspace-suite runs (~20 min + ~21 min) for one merge over a tree
+neither run had moved.
+
+Files:
+- `engine/agent.sh` — `_agent_verify_final` calls `verify_cache_try "$CHIEF_PROJECT"
+  "$CHIEF_TASKLIST" "$BASE_BRANCH"` before `run_verify`. Same triple the existing
+  `verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"` writes with, so the two
+  halves cannot key differently. No cache was added; this is one call.
+- `VERSION` 0.9.8 → 0.9.9, README + ROADMAP bold `**v0.9.9**` in the same commit.
+
+### Learnings for future iterations
+
+- **agent.sh already has every global `verify_cache_try` needs**, set at
+  `engine/agent.sh:923-928` under the `CHIEF_VERIFY_CACHE_STATE` guard: `STATE`,
+  `TASKS_DIR`, `VERIFY_HOOK`, `BASE_BRANCH`. That is why this is a one-call fix rather
+  than a plumbing job — `lib.sh` is sourced there for exactly this reason.
+- **A cache hit must return through the SAME door as a fresh green.** `COMPLETE_OK` is
+  set from `_agent_verify_final`'s exit status alone (`agent.sh:2078`), so returning 0
+  early on a hit is the whole of "a skipped verify is still a passed verify". A RED
+  record cannot leak through: `verify_cache_try` returns non-zero for anything that is
+  not a recorded `status=0`, so it falls through to the re-run.
+- **The skip message comes from `verify_cache_try` itself** (`>> verify SKIPPED: tree
+  … GREEN verdict from …`), printed on its stdout. Callers must not swallow it — a
+  silent skip makes a stale-cache bug undiagnosable, which is why the driver's call
+  site does not capture it either.
+
+**Observed for US-1.** `bash -n engine/agent.sh` clean. `test/doc-sync.sh` PASS (README +
+ROADMAP `**v0.9.9**` == VERSION 0.9.9, 40 merged tasklists named). `test/version-bump.sh`
+PASS. Behavioural: `smoke` SMOKE PASS, `ratelimit` RATELIMIT PASS, `noworkguard` NOWORK
+PASS, `merge-batch` MERGE-BATCH OK (PART A–F). shellcheck is not installed on this host;
+CI carries `shellcheck -S error`.

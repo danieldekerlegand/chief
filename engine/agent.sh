@@ -985,11 +985,32 @@ _emit_story_events() {
   PASSED_IDS="$now"
   return 0
 }
+# THE AGENT BOUNDARY's half of the verdict cache — and until 117 it was the WRITE
+# half only. `verify_cache_record` below has always run here; `verify_cache_try` had
+# exactly one call site (driver.sh, the merge gate), so a GREEN verdict already on
+# disk for this identical tree/base/hook could not save the run that produced it.
+# Measured on cuneiform 2026-09-02: one tasklist paid the workspace suite TWICE for
+# one merge — ~20 minutes when the agent ran `.chief/verify.sh` itself inside its
+# turn, then ~21 more here on the COMPLETE turn, over a tree neither run had moved.
+#
+# The read goes FIRST, on the same (cwd, name, base) triple the record is written
+# with, so the two halves cannot key differently. Prose could not fix this: the
+# agent's own invocation is a plain shell command chief never sees, so the only way
+# an in-turn run counts is for it to write through the cache (`chief verify`, US-2)
+# and for this boundary to read it.
 _agent_verify_final() {
   local output rc=0
   [ -n "${CHIEF_VERIFY_CACHE_STATE:-}" ] || return 0
   [ -n "${CHIEF_TASKLIST:-}" ] || return 0
   [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
+  # A hit takes the SAME path a fresh green does — it returns 0, so COMPLETE_OK is
+  # untouched and completion proceeds. `verify_cache_try` returns non-zero for
+  # anything that is not a recorded `status=0`, so a RED verdict falls through to
+  # the re-run rather than skipping into an accepted completion.
+  if verify_cache_try "$CHIEF_PROJECT" "$CHIEF_TASKLIST" "$BASE_BRANCH"; then
+    echo ">> agent verification passed (recorded verdict reused; the gate was not re-run)"
+    return 0
+  fi
   output="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1)" || rc=$?
   printf '%s\n' "$output"
   verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"
