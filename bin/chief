@@ -149,6 +149,19 @@ Usage:
                               in .chief/quality.conf; \`--write-baseline\` is the reviewable
                               re-baseline hatch; CHIEF_VERIFY_QUALITY=0 skips it.
                               See docs/reference/verify-hook.md
+  chief verify [--no-record]  RUN THE PROJECT'S VERIFY HOOK AND RECORD THE VERDICT — the
+                              agent-invocable half of the verdict cache. Chief runs the same
+                              gate at the end of an agent turn and again at merge, and SKIPS
+                              those runs when a GREEN verdict for the identical tree, base and
+                              hook is already on record; only this command writes that record,
+                              so an agent that runs .chief/verify.sh directly pays the suite
+                              twice for one merge (measured: ~20 minutes, twice, one merge).
+                              It RECORDS ONLY FOR HEAD'S TREE: the key is the committed tree
+                              while the hook tests the working one, so a dirty tree (or a HEAD
+                              that moved during the run) is checked and reported but never
+                              recorded — commit first, then verify. Exits with the hook's own
+                              status. --no-record runs the gate and writes nothing.
+                              See docs/reference/verify-hook.md
   chief cigate [-a] [-v]      DID THE DECLARED CI GATE ACTUALLY RUN? A report, never a block.
        [--head|--sha SHA]     \`--records\` reads it BACKWARDS off completed/: which gates
        [--records] [paths…]   executed for the merges that already happened, offline.
@@ -183,7 +196,7 @@ Usage:
                               two authorises a merge. Durable (.chief/state/decisions/), and
                               bound by checksum to the stories it approved — re-word them and
                               it asks again. A tasklist edit it makes is committed for you
-                              (--no-commit opts out), because `chief run` refuses to start on
+                              (--no-commit opts out), because \`chief run\` refuses to start on
                               a dirty tree. See docs/reference/decision-tasklists.md
   chief retire --negative     retire a tasklist whose delivered stories PASSED and whose remaining
        NAME [-n] [--no-commit] story TERMINATED FALSE — declared "terminalFalse" and carrying the
@@ -1092,6 +1105,80 @@ cmd_reap()    { bash "$ENGINE/reap.sh" "$@" ; }
 # docs/reference/verify-hook.md.
 cmd_quality() { bash "$ENGINE/quality.sh" "$@" ; }
 
+# ── chief verify — run the gate YOURSELF and have the verdict count ──────────
+# The AGENT-INVOCABLE half of the verdict cache. `_agent_verify_final` (agent.sh)
+# reads that cache before running the gate, and the driver's merge phase has always
+# read it — but an agent that runs `.chief/verify.sh` itself inside its turn issues
+# a plain shell command chief never sees, so its ~20-minute suite run records
+# nothing and both later gates are still paid in full. Measured on cuneiform
+# 2026-09-02: one tasklist, one merge, the workspace suite run twice.
+#
+# Prose could not close that. cuneiform/CLAUDE.md already said "never run the full
+# workspace suite inside a chief iteration — commit instead", and it had cost three
+# full runs in one day in that one repository. This is the mechanism instead: the
+# same hook, run the same way, plus the record.
+#
+# WHAT IT REFUSES, which is the whole safety argument. The cache key is HEAD's
+# TREE; the hook tests the WORKING tree. Recording while those differ would let
+# chief skip the merge gate for a tree nothing ever checked — the one failure mode
+# of this mechanism that could merge a red tree. So a dirty tree records NOTHING,
+# and neither does a run that HEAD moved under. Both still RUN the gate and still
+# return its exit status: refusing to RECORD is never refusing to CHECK.
+#
+# It never READS the cache, deliberately. `verify_cache_try` keys on HEAD's tree
+# alone, so a green record plus an uncommitted edit would answer "green" about work
+# the agent had just written — the caller here is the one party whose tree is
+# expected to be moving.
+cmd_verify() {
+  local record=1 rc=0 dirty head0 head1 proj name
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-record) record=0 ;;
+      -*) echo "chief verify: unknown option $1  (usage: chief verify [--no-record])" >&2; return 2 ;;
+      *)  echo "chief verify: unexpected argument '$1'" >&2; return 2 ;;
+    esac
+    shift
+  done
+  # Inside an agent turn the driver has already exported the authoritative answers
+  # (the WORKTREE, the run's shared state dir, the tasklist, and the work base —
+  # which for a repo:<sub> tasklist is not the one .chief/config names). Prefer
+  # those; load_project supplies the defaults for a standalone invocation, and its
+  # hard exit on a repo with no .chief/config is the right one here.
+  proj="${CHIEF_VERIFY_CACHE_STATE:+${CHIEF_PROJECT:-}}"
+  load_project
+  [ -n "$proj" ] && CHIEF_PROJECT="$proj"
+  # shellcheck source=engine/lib.sh
+  . "$ENGINE/lib.sh"
+  STATE="${CHIEF_VERIFY_CACHE_STATE:-$CHIEF_PROJECT/$CHIEF_STATE_DIR}"
+  TASKS_DIR="${CHIEF_VERIFY_TASKS_DIR:-$CHIEF_PROJECT/$CHIEF_TASKS_DIR}"
+  VERIFY_HOOK="${CHIEF_VERIFY_HOOK:-$CHIEF_PROJECT/$CHIEF_VERIFY}"
+  VERIFY_CACHE_REPO="${CHIEF_VERIFY_REPO:-$CHIEF_PROJECT}"
+  BASE_BRANCH="${CHIEF_VERIFY_BASE:-$CHIEF_BASE_BRANCH}"; work_base="$BASE_BRANCH"
+  name="${CHIEF_TASKLIST:-}"
+  [ -x "$VERIFY_HOOK" ] || { echo "chief verify: no executable verify hook at $VERIFY_HOOK" >&2; return 2; }
+  head0="$(git -C "$CHIEF_PROJECT" rev-parse HEAD 2>/dev/null || echo)"
+  dirty="$(git -C "$CHIEF_PROJECT" status --porcelain 2>/dev/null)"
+  if [ -n "$dirty" ] && [ "$record" = 1 ]; then
+    record=0
+    echo "chief verify: the working tree is not HEAD's — this verdict will NOT be recorded."
+    echo "              COMMIT first and re-run \`chief verify\`, or the gate is paid again at merge."
+    printf '%s\n' "$dirty" | sed -n '1,8p' | sed 's/^/              /'
+  fi
+  echo ">> chief verify: $VERIFY_HOOK (cwd=$CHIEF_PROJECT, base=$BASE_BRANCH)"
+  run_verify "$CHIEF_PROJECT" "$name" || rc=$?
+  head1="$(git -C "$CHIEF_PROJECT" rev-parse HEAD 2>/dev/null || echo)"
+  if [ "$record" != 1 ]; then
+    echo ">> chief verify: exit $rc — NOT recorded"
+  elif [ "$head1" != "$head0" ] || [ -n "$(git -C "$CHIEF_PROJECT" status --porcelain 2>/dev/null)" ]; then
+    echo ">> chief verify: exit $rc — HEAD or the tree moved while the gate ran; NOT recorded"
+  else
+    verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"
+    echo ">> chief verify: exit $rc RECORDED for tree $(git -C "$CHIEF_PROJECT" rev-parse HEAD^{tree})"
+    [ "$rc" = 0 ] && echo "   chief will reuse this GREEN verdict and not re-run the gate for the same tree, base and hook"
+  fi
+  return $rc
+}
+
 # ── the DECLARED CI gate: did it actually run? (engine/cigate.sh) ────────────
 # A REPORT, never a block. Measured 2026-08-25, every private repo in this
 # portfolio had dead CI for an unknown period and nothing anywhere said so: GitHub
@@ -1529,6 +1616,7 @@ case "$cmd" in
   models)               cmd_models "$@" ;;
   reap)                 cmd_reap "$@" ;;
   quality)              cmd_quality "$@" ;;
+  verify)               cmd_verify "$@" ;;
   cigate)               cmd_cigate "$@" ;;
   retire)               cmd_retire "$@" ;;
   approve)              cmd_approve "$@" ;;

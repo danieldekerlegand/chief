@@ -70,7 +70,7 @@ chief quality — deterministic code-quality metrics (no model judgment anywhere
 Usage:
   chief quality measure [options] [FILE...]   # emit a metric record
   chief quality ratchet [options]             # BLOCK a merge that regressed one
-                                              # (`ratchet --help` for its options)
+                                              # (\`ratchet --help\` for its options)
 
   FILE...              repo-relative paths to measure. With none given, use
                        --files-from or --changed.

@@ -42,6 +42,10 @@ the parallel-safety model are in `docs/`.
 `.chief/verify.sh` runs the matching subset automatically at merge — it's path-scoped, so you only
 pay for what you changed. A tasklist may override it with its own `"verify":[...]` array.
 
+Run the FULL gate as **`chief verify`**, never as a bare `.chief/verify.sh`: chief runs the same
+hook again at the end of the turn and again at merge, and only `chief verify` records the verdict
+those two reads are served from. It records for HEAD's tree only, so commit first, then verify.
+
 | Area | Gate |
 |---|---|
 | Shell engine (`bin/chief`, `engine/*.sh`, `install.sh`, `test/*.sh`) | `bash -n` clean + `shellcheck -S error` clean; behavioral core `test/{smoke,ratelimit,noworkguard}.sh` green |
@@ -69,7 +73,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · models · reap · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · models · reap · pause · resume · verify · version · update
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
