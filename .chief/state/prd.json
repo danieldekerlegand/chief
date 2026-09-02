@@ -35,8 +35,8 @@
     {
       "id": "US-2",
       "title": "A recording path the agent can actually use",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "chief verify (bin/chief cmd_verify) runs the project verify hook and records the verdict through verify_cache_record; it refuses to record for anything but a clean HEAD tree (dirty tracked/untracked, or a HEAD that moved during the run) and never reads the cache. Documented in engine/instructions.md step 5 (the turn prompt), docs/reference/verify-hook.md, the README command table, usage() and CLAUDE.md. Observed: scratch-repo matrix 6/6 — clean+green RECORDED (status=0 record written, hook ran 1x), dirty tree NOT recorded (record count 1 -> 1), untracked file NOT recorded, red hook exit 1 recorded as status=1, --no-record wrote nothing, bad flag exit 2. Gates: bash -n clean on bin/chief + engine/quality.sh; test/doc-sync.sh PASS (README+ROADMAP v0.9.10 == VERSION 0.9.10, 40 merged tasklists named); test/version-bump.sh PASS; check-doc-links 0 dead; quality ratchet OK (single_use_functions +1, tol 2); behavioural smoke SMOKE PASS, ratelimit RATELIMIT PASS, noworkguard NOWORK PASS, merge-batch MERGE-BATCH OK. shellcheck is not installed on this host; CI carries shellcheck -S error.",
       "acceptanceCriteria": [
         "An agent-invocable way to run the verify hook that RECORDS its verdict, so an in-turn run populates the cache US-1 now reads. Whether that is a `chief` subcommand or an env-marked wrapper is the implementer's call; what matters is that it is reachable from an agent's shell and writes through `verify_cache_record`.",
         "It is documented where an agent will encounter it — the turn prompt or the verify-hook reference — since the entire point is that the current prose instruction does not work.",

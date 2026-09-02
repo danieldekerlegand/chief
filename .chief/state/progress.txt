@@ -298,3 +298,71 @@ ROADMAP `**v0.9.9**` == VERSION 0.9.9, 40 merged tasklists named). `test/version
 PASS. Behavioural: `smoke` SMOKE PASS, `ratelimit` RATELIMIT PASS, `noworkguard` NOWORK
 PASS, `merge-batch` MERGE-BATCH OK (PART A–F). shellcheck is not installed on this host;
 CI carries `shellcheck -S error`.
+
+## US-2 — A recording path the agent can actually use
+Wed Sep  2 2026
+
+US-1 taught `_agent_verify_final` to READ the verdict cache. Nothing an agent could
+run WROTE to it: `.chief/verify.sh` invoked from inside a turn is a plain shell
+command chief never sees, so the ~20-minute suite run bought nothing and both later
+gates were still paid in full. `chief verify` is the mechanism that replaces the prose
+instruction ("never run the full workspace suite inside a chief iteration") that had
+already failed three times in one day in one repo.
+
+Files:
+- `bin/chief` — `cmd_verify` (+ dispatch arm + `usage()` entry). Runs the SAME hook the
+  same way (`run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST"`, so a tasklist's own
+  `"verify"` array is honoured), exits with the hook's status, then
+  `verify_cache_record`s it. Inside a turn it needs no arguments — the driver has
+  already exported the worktree, the run's `$STATE`, the tasklist and the work base,
+  and those are PREFERRED over `.chief/config` (a `repo:<sub>` tasklist's base is not
+  the one the config names). `--no-record` runs the gate and writes nothing.
+- `engine/instructions.md` — step 5 of the turn prompt. This is the surface that
+  matters: the whole story exists because prose in a project CLAUDE.md did not reach
+  the agent at the moment it decided to run the suite.
+- `docs/reference/verify-hook.md` — "Running this gate yourself: `chief verify`".
+- `README.md` command table (doc-sync gates it), `CLAUDE.md` (CLI list + a line in the
+  quality-gates section), `VERSION` 0.9.9 → 0.9.10 with both bold version claims.
+- Drive-by: two UNESCAPED backticks inside unquoted heredocs — `bin/chief`'s
+  `usage()` (`` `chief run` ``) and `engine/quality.sh`'s `qq_usage` (`` `ratchet
+  --help` ``). Both were live command substitutions; `chief help` literally STARTED A
+  RUN. CLAUDE.md documents this exact hazard and the file had regressed into it twice.
+
+### Learnings for future iterations
+
+- **The refusal is the design, not a safety net bolted on.** The cache key is HEAD's
+  TREE; the hook tests the WORKING tree. Recording while those differ is the one
+  failure mode of this whole mechanism that could merge a red tree, so a dirty tree
+  (tracked OR untracked) records nothing, and neither does a run HEAD moved under.
+  Both still RUN the gate and still return its status — refusing to RECORD is never
+  refusing to CHECK. The agent-facing consequence is an ORDER: commit, then
+  `chief verify`, then `--amend` if it comes back red.
+- **`chief verify` deliberately never READS the cache.** `verify_cache_try` keys on
+  HEAD's tree alone and says nothing about uncommitted work, so a green record plus an
+  edit made since would answer "green" about code nothing had run. The agent boundary
+  and the merge gate can read it precisely because their trees are committed and
+  still; this caller's tree is the one that is expected to be moving.
+- **A `chief` subcommand run from inside an agent turn INHERITS the run's environment**,
+  and that is load-bearing, not incidental: `CHIEF_VERIFY_CACHE_STATE`,
+  `CHIEF_PROJECT`, `CHIEF_TASKLIST`, `CHIEF_VERIFY_{HOOK,BASE,TASKS_DIR,REPO}` are all
+  exported by driver.sh at `driver.sh:2599`. It also means any SCRATCH-REPO test of
+  such a command must `env -u` all of them: the first two attempts at this story's
+  fixture silently ran chief's own 20-minute gate against the WORKTREE instead of the
+  temp repo, because `load_project`'s answer was being overridden by the outer run's.
+- **`awk '/^name\(\)/,/^EOF$/' file | grep -n '[^\\]`'` is the check CLAUDE.md asks
+  for, and it finds real bugs** — run it over `bin/chief` and every `engine/*.sh` after
+  touching any usage text. `bash -n` is clean on a live command substitution and no
+  test renders `--help`, so nothing else catches it.
+
+**Observed for US-2.** Scratch-repo matrix, 6/6: clean tree + green hook → RECORDED
+(`status=0`, one record, hook ran once); dirty tracked file → NOT recorded (record
+count 1 → 1); untracked file → NOT recorded; red hook → exit 1 recorded as `status=1`;
+`--no-record` → wrote nothing; unknown flag → exit 2. `bash -n` clean on `bin/chief`
+and `engine/quality.sh`; `chief help` and `chief quality --help` both render the
+previously-substituted lines literally. `test/doc-sync.sh` PASS (README + ROADMAP
+**v0.9.10** == VERSION 0.9.10, 40 merged tasklists named), `test/version-bump.sh` PASS,
+`scripts/check-doc-links.mjs` 0 dead references, quality ratchet OK
+(`single_use_functions` +1, tol 2 — US-3 has one slot left). Behavioural: `smoke`
+SMOKE PASS, `ratelimit` RATELIMIT PASS, `noworkguard` NOWORK PASS, `merge-batch`
+MERGE-BATCH OK (PART A–F). shellcheck is not installed on this host; CI carries
+`shellcheck -S error`.
