@@ -30,7 +30,17 @@
         "The skip is visible in the log and distinguishable from a fresh pass, which `verify_cache_try` already does ('verify SKIPPED: tree … GREEN verdict from …'). A silent skip would make a stale-cache bug undiagnosable.",
         "A skipped verify is still a PASSED verify for completion purposes — `COMPLETE_OK` is unchanged when the cache hits. Read the `[ \"$rc\" != 0 ]` branch and make sure a hit takes the same path a fresh green does.",
         "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the version bump the engine-change gate requires."
-      ]
+      ],
+      "diffSize": {
+        "files": 7,
+        "lines": 153,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -42,7 +52,17 @@
         "It is documented where an agent will encounter it — the turn prompt or the verify-hook reference — since the entire point is that the current prose instruction does not work.",
         "It refuses to record a verdict for a tree that is not HEAD's. Recording someone else's tree as green is the one failure mode of this whole mechanism that would let a red tree merge, and it must be impossible rather than unlikely.",
         "GATES: as US-1."
-      ]
+      ],
+      "diffSize": {
+        "files": 11,
+        "lines": 246,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -54,7 +74,31 @@
         "A NEGATIVE CONTROL proves it does not over-skip: change the tree, and assert the hook DOES run. Then change only the verify hook's own content at an unchanged tree, and assert it runs again — the hook blob is part of the key precisely so an edited gate is not skipped by a verdict taken under the old one.",
         "A RED recorded verdict must never skip. `verify_cache_try` already returns non-zero unless `status=0`; assert it, because that is the difference between a cache and a way to merge a failing tree.",
         "GATES: as US-1."
-      ]
+      ],
+      "diffSize": {
+        "files": 8,
+        "lines": 294,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "2e79e65",
+  "gates": {
+    "local": {
+      "state": "passed",
+      "detail": "the project verify hook (verify.sh) ran and exited 0"
+    },
+    "ci": [
+      {
+        "workflow": "ci",
+        "state": "unknown",
+        "detail": "a push of main can start it; whether it RAN for 2e79e65 is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+      }
+    ]
+  }
 }
