@@ -959,3 +959,303 @@ tasklists) · tasklists jq parse OK · doc-links **0 dead references**. Verdict 
 tree `e5288a63`, then re-recorded once this note and the story notes were written in.
 Docs + tasklist only, so no `VERSION` bump is owed (`test/version-bump.sh` reads
 `engine/`/`bin/`/`scripts/`/`install.sh`, none of which this story touches).
+## US-1 — The final verify streams, so the record keeps moving
+Thu Sep  3 2026
+
+`_agent_verify_final` (engine/agent.sh) ran the gate inside a command substitution:
+
+    output="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1)" || rc=$?
+    printf '%s\n' "$output"
+
+Nothing reached the log until the hook RETURNED. That is the whole invisibility half
+of the incident: talos:83 ran 7h41m, read `stalled in agent-turn — no activity for
+1h06m`, and its log ENDED at the completion token — 192 of 192 lines — over a branch
+with 7 commits and 4/4 stories passing.
+
+Files:
+- `engine/agent.sh` — the capture is now a plain `run_verify … 2>&1 || rc=$?`. NO
+  pipeline: `| tee` would hand us tee's status, and a red gate reported green accepts
+  a completion it must refuse. `local output` dropped with it.
+- `test/verify-stream.sh` — new. PART A the first line is in the log while the hook is
+  still running · PART B the status is still the hook's (red refuses the completion,
+  both verdicts recorded, red streams too) · PART C REPRODUCTION against a copy of the
+  engine with the command substitution restored.
+- `.chief/verify.sh`, `test/all.sh`, `.github/workflows/ci.yml` — the three lists.
+- `VERSION` 0.9.13 → 0.9.14; README + ROADMAP bold version to match.
+- `ROADMAP.md` — a row for `118`, which merged onto main without one and was failing
+  `test/doc-sync.sh` on arrival (pre-existing, inherited from the base).
+
+### Learnings for future iterations
+
+- **A "did it stream?" test must be a HANDSHAKE, not a sleep.** The obvious shape —
+  hook prints, sleeps N, prints again, poller races the window — is exactly the
+  load-sensitive assertion CLAUDE.md warns about, and this file goes in the merge gate
+  where `-p N` workers run beside it. First draft did that and took 28s. Instead the
+  hook prints its marker and BLOCKS on a go-file that the prober touches the moment it
+  reads the marker out of the log. Streaming then costs no wall clock and cannot be
+  starved (the hook waits as long as the machine needs); buffering cannot be rescued by
+  the same generosity, because a captured line is physically unable to appear before the
+  hook exits — it just times out. 7.5s, and the verdict is not a race.
+- A done-file the hook touches as its LAST act is what turns "before it exited" into a
+  fact. Check it FIRST in the poll loop, so an already-exited hook can never be credited
+  with a live read — the conservative direction.
+- **A red gate does not end the agent loop** (that is what a red gate is for), so a
+  fixture provider that commits every turn keeps a red probe alive to the hard cap of 20
+  — 20 × the hook. `test/verify-cache.sh`'s `FAKE_COMMIT` flag exists for this; copy it.
+  Bounding the hook's own wait to the first invocation of a probe is the other half.
+- `test/doc-sync.sh` fails on the BASE's debt as soon as your branch touches any file in
+  its trigger set (`VERSION`, `README.md`, `ROADMAP.md`, `tasks/chief/completed/`). 118
+  merged without its roadmap row; the first branch to bump VERSION inherits that.
+
+## US-2 — It publishes the phase whose threshold already fits it
+Thu Sep  3 2026
+
+The second half of the talos:83 incident, and the nearly-free one. `monitor.sh`'s
+`STALE_PHASE_SECONDS` has given `verifying` **3060s** since it was measured, precisely
+because a gate legitimately runs for tens of minutes — but `grep -n 'phase=verifying'`
+returned exactly ONE publisher (driver.sh's merge-phase verify). `_agent_verify_final`
+never said it was verifying, so its gate was timed as an agent turn against 900s. The
+right threshold existed; this code path did not use it.
+
+Files:
+- `engine/agent.sh` — `_agent_verify_final` reads the current phase, publishes
+  `phase=verifying`, runs the gate, and restores the prior phase before recording the
+  verdict. The gate is now `run_verify … | _verify_tick` with `rc=${PIPESTATUS[0]}` on
+  the very next line — US-1's "no pipeline" was about a bare `$?` picking up tee's
+  status, and PIPESTATUS is the instrument `_capture_provider_output` already uses for
+  exactly that.
+- `engine/agent.sh` — new `_verify_tick`: stdin → stdout unchanged, bumping the
+  liveliness record as the bytes go past, rate-limited by `$SECONDS` (a builtin, so no
+  fork per line). **Deliberately not `_beat_start`**: that ticker beats on a TIMER, and
+  a timer here would tick a wedged gate forever and make `verifying` unflaggable — the
+  trade monitor.sh refuses in writing for provider-waiting. The record moves when the
+  OUTPUT moves.
+- `engine/agent.sh` — `_beat_start`'s HEAD-moved promotion no longer overwrites
+  `verifying` with `writing` (it falls back to a bare heartbeat), so streaming output
+  cannot re-label a verify on its first line.
+- `engine/monitor.sh` — the STALE_PHASE_SECONDS note said "neither phase has a ticker
+  behind it (only the agent turn does)", which this story falsifies; it now records the
+  two publishers and that the boundary one is output-driven on purpose.
+- `test/verify-stream.sh` — PART D (the record reads `verifying` mid-gate · the output
+  bumps it · `chief ps` renders it at 40m with no flag) and PART E (REPRODUCTION: drop
+  only the phase publish and the same gate reads `stalled in agent-turn`). PART C's sed
+  anchor followed the call line to the pipeline form.
+- `VERSION` 0.9.14 → 0.9.15 + README/ROADMAP bold.
+
+### Learnings for future iterations
+
+- **A heartbeat and a stall flag are the same instrument pointed opposite ways.** The
+  tempting fix — start `_beat_start` around the verify — makes the phase quiet-proof and
+  therefore hang-proof in the wrong sense: nothing could ever be reported stale in it
+  again. `monitor.sh` already writes the rule down for provider-waiting ("It wants a
+  LONGER threshold, not silence"); the same sentence decides the ticker's *source*. Tick
+  from the thing whose absence IS the failure — here, the gate's own output.
+- **`${PIPESTATUS[0]}` has to be read on the LINE AFTER the pipeline.** Any command in
+  between (an `echo`, a `[ … ]`, a `local`) replaces the array. The comment says so
+  because a later edit inserting one line is silent and turns a red gate green.
+- **`$SECONDS` is the cheap clock for a per-line rate limit.** `date +%s` is a fork, and
+  a verbose gate is tens of thousands of lines. Assigning it is safe only because the
+  body runs in a pipeline's subshell — say that where it is assigned.
+- **Backdate `phase_since` AND `heartbeat` together** when asking the render what it
+  would say at 40m (`test/stall-flag.sh`'s `mkrow` does both). `heartbeat` is what the
+  stall flag reads; `phase_since` is what `verifying for 40m` reads. Backdating one
+  gives a coherent-looking row that asserts on the wrong half — the first draft here
+  rendered `verifying for 2s · … 40m ago` and the `for 40m` assertion failed while the
+  flag half was already right. `live_set` PRESERVES `phase_since` across a write that
+  does not CHANGE the phase, which is exactly what lets a backdate survive the ticker
+  and become a probe OF the ticker.
+- **Mutation-check the ticker, not just the publish.** `cp -R engine test` to a temp
+  dir, stub `_verify_tick`'s `live_set` to `:`, and run the copied test (its `ROOT` is
+  `BASH_SOURCE`-relative, so it picks up the copied engine). PART D fails there, which
+  is what makes "the output bumps the record" an assertion rather than a hope.
+- The quality ratchet's `single_use_functions` went 17 → 18 (tol 2) on `_verify_tick`.
+  US-3 has one left before it has to dedupe.
+
+## US-3 — The stall flag still fires on a real hang
+Thu Sep  3 2026
+
+The negative control for US-2, and the reason US-2 is a fix rather than a trade. Moving
+a healthy gate out of the flag's way is only half a fix; if it moved a WEDGED one out
+with it, `verifying` would have become unflaggable and the incident would have been
+swapped for a blind spot. `monitor.sh` already refuses that trade in writing for
+provider-waiting — "It wants a LONGER threshold, not silence" — and the same sentence
+binds here.
+
+No engine change was needed: `_beat_stop` runs before `_agent_verify_final`, so no
+timer ticker is alive across the boundary gate, and `_verify_tick` only writes when
+output moves. The story is the ASSERTION that this is true, plus the doc an operator
+reads at 1am.
+
+Files:
+- `test/verify-stream.sh` — PART F, the two cases the incident conflated, held apart by
+  ONE record so the only variable is the emission. F1: a hook that produces no stdout
+  and does not return, record aged to 70m (past `verifying`'s own 3060s, so the longer
+  threshold has EXPIRED rather than exempted it) — the row reads
+  `⚠ stalled in verifying — no activity for 1h10m, past its 51m limit`, and the
+  heartbeat is byte-identical to the value it was aged to. F2: the same record, the same
+  `phase_since`, one line of output — the flag goes and `verifying for 1h10m` stays.
+- `test/verify-stream.sh` — `spawn_iteration` (the launcher, shared by the phase probe
+  and F so the control's environment IS its subject's) and `ps_row` (the synthesized run
+  registry + one `monitor.sh once` render, callable repeatedly, which is what lets F ask
+  the same question of the same record twice).
+- `docs/guides/monitoring.md` — a `verifying has two publishers` subsection under the
+  threshold table: which half of the engine wrote the row, what ticks each, how to read
+  `verifying for 41m` against `12s ago` as two separate facts, why the ticker is
+  output-driven and not a timer, and that a `stalled in agent-turn` over a log ending at
+  the completion token is a pre-0.9.15 engine.
+
+### Learnings for future iterations
+
+- **A fix to a stall flag is not finished until the flag has been shown to still
+  fire.** The whole class of change here — a longer threshold, a new phase, a ticker —
+  buys quiet, and quiet is indistinguishable from a blind spot unless something asserts
+  the alarm still works. Write the negative control in the same file, against the same
+  machinery, or the next person has no way to tell which one they inherited.
+- **The sharpest form of that control is ONE record read TWICE.** Two probes at two ages
+  invite "well, of course, 40m < 51m". Same record, same phase, same `phase_since`, one
+  line of output between the renders: the verdict flips and the only thing that changed
+  is the emission. `live_set` preserving `phase_since` across a non-phase write is what
+  makes it possible.
+- **Wait on the HEARTBEAT, not on the log line.** `_verify_tick` prints the line and
+  THEN writes the record, so a marker in the log is not yet a tick. Polling the log and
+  reading the record immediately is a race that fails under load; poll `live_get …
+  heartbeat` past its previous value instead.
+- **A gate with no stdout still needs a start signal, and a FILE is the honest one.**
+  The silent hook appends to a counter file to say it has been entered. That is exactly
+  the channel the monitor does not have, which is the point of the control — and it
+  keeps the "produces no output" claim literal.
+- **Mutation-check a negative control in BOTH directions it can rot.** Setting
+  `verifying:3060` to `999999` fails F1 alone (A–E stay green — the exemption is
+  invisible to every other part). Wrapping the gate in `_beat_start`/`_beat_stop` — the
+  tempting "just keep it beating" fix — fails F on the heartbeat assertion. Both had to
+  be run to know F is testing the policy and the ticker rather than restating them.
+- A mutation that trips an EARLIER part hides the one you are checking. `_beat_start`
+  around the gate fails PART E first; re-run with that part's `fail` sed-swapped to
+  `note` in a copy under `test/` — under `test/`, because the file derives `$ROOT` from
+  `${BASH_SOURCE[0]}` and a copy in `/tmp` looks for the engine at `/engine`.
+
+---
+
+## Verification recovery — test/verify-stream.sh PART D/E were RACY under load
+
+The branch came back from the merge gate red on `test/verify-stream.sh` PART D
+("the record was NOT bumped by the gate's own output") with all three stories
+already passing. The engine was NOT at fault — the flake is in the probe.
+
+WHAT REPRODUCES IT. Standalone the file is green every time; that is why it passed
+in US-2's and US-3's own runs and failed under `test/bystander.sh`, which runs it
+as 1 of 58. Six concurrent runs of the file: 2 failed, in two different places —
+PART D on `HB_TICKED=0`, and PART E with the row rendering
+`↳ agent-turn for 40m · iter 1 · 0s ago`, i.e. a heartbeat that was never aged.
+
+THE CAUSE, one race with two faces. `_verify_tick` PRINTS a line and THEN writes
+the record, so at the instant a marker reaches the log that `live_set` is still in
+flight, and `phase_probe` sampled once on each side of it:
+
+  - `backdate` (live_get + sed + mv) races that write. The tick lands after the
+    `sed` and restores `heartbeat` to `now`, so the baseline `hb_before` is `now`
+    and the second line cannot beat it by 100 -> PART D. In PART E the same
+    clobber leaves a fresh heartbeat at 40m, so no stall flag -> the reproduction
+    stops reproducing. (Quieter variant: a tick between backdate's own `live_get`
+    and its `sed` leaves the pattern unmatched, and a no-op backdate looks exactly
+    like a successful one.)
+  - `hb_after` was read the moment `MARK_SECOND` hit the log — before the bump —
+    so a working ticker reads as a dead one.
+
+PART F already had both right and said so ("The marker reaching the LOG is not the
+tick"), and established quiescence by hand before its own backdate. D and E did
+not. The fix factors F's discipline into two helpers so the parts cannot drift:
+`backdate_settled` (re-assert until a read-back comes back aged — bounded, because
+every call site is a point where the hook is BLOCKED on a release file, so at most
+one tick is in flight) and `await_tick` (poll for the bump past a floor instead of
+sampling once). Test-only change; no engine edit, so VERSION stays 0.9.15.
+
+MEASURED. Before the fix: 2 of 6 concurrent runs failed (PART D once, PART E once)
+— that is the reproduction, run before the fix, and it is the mutation check.
+After: 16 of 16 concurrent runs green, plus standalone green at ~20s wall.
+test/stall-flag.sh PASS, test/liveliness.sh PASS, test/verify-cache.sh PASS,
+test/doc-sync.sh PASS, test/version-bump.sh PASS. bash -n clean over bin/chief,
+engine/*.sh, test/*.sh, install.sh. check-doc-links: 0 dead references.
+Quality ratchet OK — no tracked metric regressed. shellcheck not installed on this
+host (CI enforces it).
+
+### Learnings for future iterations
+
+- **A test that samples a record around a marker in the log is racy by
+  construction.** Everywhere in this engine the pattern is *emit the bytes, then
+  write the record* — `_verify_tick` does it, and it is the right order (the
+  record is stamped for output that has actually left). So the log marker is
+  strictly EARLIER than the state change it implies. Never read the record on the
+  strength of having grepped the log: **poll the record**. Write the assertion as
+  "wait until the value moves past X, with a deadline", never as "read it once".
+- **An external write to a liveliness record must be CONFIRMED, not issued.**
+  `live_set` is a read-modify-write and so is any `sed`-in-place backdate; they
+  clobber each other silently and in both directions. Re-assert until a read-back
+  agrees. This is only bounded because the fixture can park the subject first
+  (a hook blocked on a release file) — a probe with no such quiescent point has
+  no safe backdate at all, and needs a different instrument.
+- **Green standalone is not green in the suite.** `test/bystander.sh` runs 58
+  files and the box is loaded; a timing-sensitive new test should be run ~8-way
+  concurrent before it is called done. That reproduces in seconds what otherwise
+  surfaces as one red merge gate ten minutes into a verify.
+- **When the merge gate comes back red with every story passing, suspect the test
+  before the engine** — but prove it: reproduce the failure first, on the unfixed
+  file, and keep that reproduction as the mutation check.
+
+---
+## BASE INTEGRATION — rebased onto main @81dc98b (2026-09-03)
+
+Not a user story. All three stories were already `passes:true` and committed; the
+branch could not merge because `900-dead-code-paydown` landed on `main` underneath
+it and chief's automatic rebase conflicted (8 commits behind, forensics at
+`.chief/state/snapshots/119-a-long-verify-is-not-a-hang.rebase-conflict.md`).
+
+FIRST, THE STALE ALARM. `progress.txt` was re-seeded with a
+`⚠️ PRIOR VERIFICATION FAILED` block naming `test/verify-stream.sh` PART D. That
+block is from `…verify-failed.log` stamped **14:15**; the fix for exactly that
+failure is commit `5d8bd4b` at **14:24**. The driver re-seeds from the last
+recorded failure and has no way to know a later commit addressed it — so check
+the log's mtime against the branch's own log before re-fixing anything. PART D is
+green standalone here (A-F, "VERIFY-STREAM OK", 19.0s).
+
+THE FOUR CONFLICTS, and the rule each was resolved under:
+
+- `.chief/state/prd.json` — took the BRANCH side whole. `main`'s copy is 900's
+  runtime tasklist, not a change to this one; there is nothing to merge.
+- `.chief/state/progress.txt` — UNION, both sides kept. This file is
+  **accumulative across tasklists**, which is worth knowing before resolving it:
+  `main`'s header is still `116-a-decision-tasklist-cannot-finish` and 900 appended
+  under it. Taking one side would silently delete a merged tasklist's notes. The
+  two sides appended disjoint sections, so the resolution is deleting the three
+  marker lines — and `^=======$` as a sed pattern is safe here only because the
+  file's own rules are 80 `=` characters, not 7.
+- `.chief/verify.sh` — UNION of `CHIEF_BYSTANDER_TESTS`. 900 registered
+  `parked-decisions` + `update-reroot`; this branch added `verify-stream`. Taking
+  either side alone silently unregisters the other's tests, which is the failure
+  mode 900 exists to fix (a test in zero gate lists reads as coverage). 60 entries.
+- `ROADMAP.md` — both sides were the SAME row (118) worded differently, so `main`'s
+  already-merged text was kept and this branch's reword dropped. One row for 118.
+
+THEN THE INHERITED DEBT. With the rebase done, `doc-sync` went red: 900 merged and
+`ROADMAP.md` never named it. Fixed in `e0ecc74`.
+
+### Learnings for future iterations
+
+- **A `⚠️ PRIOR VERIFICATION FAILED` block can be older than the fix.** It is seeded
+  from `$SNAP/<name>.verify-failed.log`, which is only rewritten by the next failing
+  merge attempt — so a commit made after that log was written leaves the block
+  standing and accusing. `ls -la` the snapshot against `git log --date=iso` before
+  spending an iteration re-fixing something HEAD already fixed.
+- **`git add` on `.chief/state/*` needs `-f` mid-rebase.** `prd.json` and
+  `progress.txt` are tracked exceptions inside a gitignored directory; staging a
+  conflict resolution in them fails with "paths are ignored by one of your
+  .gitignore files" and the rebase will not continue until you force it.
+- **`.chief/verify.sh`'s test list is a union point, not a version.** Two branches
+  registering different tests conflict on one line, and either `--ours` or
+  `--theirs` compiles, passes `bash -n`, and quietly drops a merge gate. Diff the
+  two lists as SETS before resolving.
+- **Retiring a tasklist is a roadmap edit and nothing automates it.** The driver's
+  retire commit writes `tasks/chief/completed/<stem>.json` and does not touch
+  `ROADMAP.md`, so every merge arms `doc-sync` for the *next* branch that touches
+  `VERSION`/`README.md`/`ROADMAP.md`. 118 charged 900 for this; 900 charged 119.
+  Adding your own row while the branch is still in flight is what stops the chain.

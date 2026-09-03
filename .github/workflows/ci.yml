@@ -218,6 +218,9 @@ jobs:
       - name: Verdict cache at the agent boundary (green verdict skips the re-run; moved tree / edited hook / red verdict never do)
         run: bash test/verify-cache.sh
 
+      - name: Final verify STREAMS (first line in the log before the hook exits; status still the hook's)
+        run: bash test/verify-stream.sh
+
       - name: Declared CI gate (dead gate reported; no-CI and green not flagged; unmeasurable never reads as a pass)
         run: bash test/cigate.sh
 

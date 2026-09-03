@@ -3,7 +3,13 @@
   "category": "fix",
   "branchName": "chief/119-a-long-verify-is-not-a-hang",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/monitor.sh", "test", "docs", "VERSION"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/monitor.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
   "iters": 6,
   "warmup": [
     "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
@@ -17,8 +23,8 @@
     {
       "id": "US-1",
       "title": "The final verify streams, so the record keeps moving",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "engine/agent.sh streams the gate instead of capturing it; no pipeline, so $? is still the hook's. test/verify-stream.sh: PART A/B/C green — \"VERIFY-STREAM OK\", 7.5s wall (a handshake, not a sleep: the first draft with a fixed 8s window took 28s). bash -n clean over bin/chief, engine/*.sh, test/*.sh, install.sh. test/doc-sync.sh: PASS — README and ROADMAP state v0.9.14, all 42 merged tasklists named. shellcheck not installed on this host (CI enforces it).",
       "acceptanceCriteria": [
         "`_agent_verify_final` streams the verify hook's output to the log as it is produced rather than capturing it in a command substitution. The exit status must still be the hook's — a pipeline that returns the wrong status here would let a red verify accept a completion, which is worse than the bug being fixed.",
         "The verdict is still recorded through `verify_cache_record` exactly as now, and a failure still sets `COMPLETE_OK=0`. This story changes when bytes appear, not what the gate decides.",
@@ -29,8 +35,8 @@
     {
       "id": "US-2",
       "title": "It publishes the phase whose threshold already fits it",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "engine/agent.sh publishes phase=verifying around the boundary gate and restores the prior phase; the gate streams through _verify_tick, whose live_set is driven by the OUTPUT (not a timer), and rc comes from ${PIPESTATUS[0]}. _beat_start no longer promotes writing over verifying. test/verify-stream.sh: PART A/B/C/D/E green — \"VERIFY-STREAM OK\", 16.6s wall. PART D observes chief ps on a real running verify: \"● vs  running  0/1  chief/vs  ↳ verifying for 40m · iter 1 · 40m ago\" — no ⚠, no stall note. PART E (phase publish removed) reproduces \"stalled in agent-turn\". Mutation-checked: stubbing the ticker's live_set fails PART D. test/stall-flag.sh OK, test/liveliness.sh PASS, test/verify-cache.sh OK, test/doc-sync.sh PASS (v0.9.15, 42 merged tasklists). bash -n clean over bin/chief, engine/*.sh, test/*.sh, install.sh; quality ratchet OK (single_use_functions 17 -> 18, tol 2). shellcheck not installed on this host (CI enforces it).",
       "acceptanceCriteria": [
         "`_agent_verify_final` publishes `phase=verifying` for the duration of the hook and restores the prior phase afterwards. The threshold it needs already exists in `STALE_PHASE_SECONDS` at 3060s and had exactly one publisher; this adds the second.",
         "The heartbeat keeps ticking across the verify, and `_beat_start` does NOT clobber `verifying` with `writing` when output moves. Streaming output would otherwise re-label a verify as writing on its first line, which trades one wrong phase for another.",
@@ -41,8 +47,8 @@
     {
       "id": "US-3",
       "title": "The stall flag still fires on a real hang",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "test/verify-stream.sh PART F (the negative control) + docs/guides/monitoring.md. PART F1: a hook that emits nothing and never returns, record aged to 70m (past verifying's own 3060s/51m) — chief ps renders \"⚠ vs running 0/1 chief/vs ↳ verifying for 1h10m · iter 1 · ⚠ stalled in verifying — no activity for 1h10m, past its 51m limit\", and the heartbeat is byte-identical to the value it was aged to (nothing ticks a silent gate). PART F2: the SAME record, same phase, same phase_since — one line of output and the flag is gone, \"verifying for 1h10m\" kept. Full file green: PART A/B/C/D/E/F, \"VERIFY-STREAM OK\", 19.0s wall. MUTATION-CHECKED both ways: verifying:3060 -> 999999 fails F1 alone (A-E still ok); adding _beat_start/_beat_stop around the gate (the tempting timer fix) fails F on \"something bumped the record while the gate produced nothing\". test/stall-flag.sh OK, test/liveliness.sh PASS, test/doc-sync.sh PASS (v0.9.15, 42 merged tasklists), test/version-bump.sh PASS (no engine change in this story). bash -n clean over bin/chief, engine/*.sh, test/*.sh, install.sh; check-doc-links 0 dead references; quality ratchet OK (no metric regressed). shellcheck not installed on this host (CI enforces it).",
       "acceptanceCriteria": [
         "A NEGATIVE CONTROL: a hook that produces no output and never exits must STILL be reported stale once `verifying`'s threshold passes. The fix must not buy quiet by exempting the phase — `monitor.sh` refuses that trade explicitly for provider-waiting ('It wants a LONGER threshold, not silence'), and the same reasoning binds here.",
         "A test distinguishes the two cases the incident conflated: a long verify that is emitting (not stale) and a dead verify that is not (stale). Both assertions, or the change has moved the problem rather than fixed it.",
