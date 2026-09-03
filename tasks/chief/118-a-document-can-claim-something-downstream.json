@@ -1,0 +1,54 @@
+{
+  "project": "chief",
+  "category": "feature",
+  "branchName": "chief/118-a-document-can-claim-something-downstream",
+  "dependsOn": [],
+  "touches": ["engine/counterpart.sh", "engine/crossrepo.sh", "bin/chief", "test", "docs", "VERSION"],
+  "iters": 7,
+  "warmup": [
+    "sed -n '1,40p' engine/counterpart.sh",
+    "sed -n '/^counterpart_scan()/,/^}/p' engine/counterpart.sh",
+    "sed -n '/^resolve_repo()/,/^}/p' engine/crossrepo.sh",
+    "sed -n '440,460p' bin/chief",
+    "grep -rn 'counterpart' docs/reference/*.md | head"
+  ],
+  "description": "`downstreamCounterpart` connects a TASKLIST to the tasklist that completes it. Nothing connects a DOCUMENT to the downstream tree it makes a claim about, and that gap has now cost a week three times.\n\nTHE MEASURED CASE. koine's `docs/reference/kcs-encoding-gate-verification.md` recorded that three KCS pressure tests had no encoding and that 'three encodings now wait on nobody'. agora closed all three in `378fd3c` — 'encode koine's three unencoded pressure tests, the console count gate is closed' — at 2026-08-26 12:30:18, **49 minutes after** koine's doc was last written at 11:41:14. koine did not learn for a week, its promotability ladder repeated the claim, and two tasklists were authored on 2026-09-02 carrying it into a run before the tree was read.\n\nIT IS NOT ONE INCIDENT. The KGP gate is the same shape with the sign reversed: koine believed a downstream deliverable HAD landed when it had not, found only by reading the merge commit (`kgp-projection-gate-verification.md`). And `agora/77` shipped three stories with `passes: true`, two of them flipped by a retire commit with `notes: null`. In every case the obligation runs DOWNSTREAM-TO-UPSTREAM and nothing carries it: agora has no reason to know koine wrote a gate against it.\n\nEXTEND, DO NOT DUPLICATE. `counterpart.sh`'s existing design is right and its header states the principle this work inherits: 'PROSE IS NOT THE MECHANISM, and that is the point of putting it in a field.' The same rule applies here — a document that names a downstream fact only in its text is invisible, and must stay invisible, because the alternative is grepping prose for claims.\n\nAND KEEP ITS DISCIPLINE. The counterpart check is print-only on purpose: 'The check REPORTS and never fails anything… retiring a marker is a judgement.' Correcting a stale document is equally a judgement. This must not fail a lint or refuse a run on the strength of somebody else's merge.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A document declares a checkable claim about another repo",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "A repo can declare, in a machine-readable place, that a named document asserts something about another repo's tree. Reuse `crossrepo.sh`'s `resolve_repo` for the repo half — a second resolver would drift from the first, which is the bug class this whole tasklist is about.",
+        "The claim vocabulary is deliberately SMALL and every member is mechanically checkable — at minimum 'this path exists downstream' and 'this path does not exist downstream'. A claim that cannot be reduced to a predicate does not belong in the registry; it stays prose, and stays invisible, exactly as an undeclared `downstreamCounterpart` does.",
+        "koine's real case is the acceptance test: a claim that `agora console/src/kcs/scenarios/resume-checkpoint.ts` is ABSENT must report as violated against today's agora, where it exists.",
+        "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the VERSION bump the engine-change gate requires."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "The report reads like counterpart's, and fails nothing",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "Violations render one line each, naming the document, the claim and what the downstream tree actually shows — the shape `counterpart_shipped_report` already uses, because 'the next action is [correcting] that [document] and it should not need a second investigation to start'.",
+        "The check is PRINT-ONLY. It must not fail `chief lint`, must not refuse a run, and must not block authoring — the existing counterpart check's reasoning applies unchanged: a judgement call on somebody else's merge should not stop work that is otherwise fine.",
+        "An unresolvable repo reports as unresolvable rather than as a violation, distinguishing 'that repo is not checked out here' from 'the claim is false'. `crossrepo_locate` already draws that line; do not redraw it.",
+        "GATES: as US-1."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "Proof it catches the case that motivated it, and does not cry wolf",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "A test reconstructs the koine/agora incident: a document claiming a downstream path is absent, a downstream tree where it is present, and an assertion that the check names the document and the path. This is the 49-minute case, and if the test cannot express it the mechanism does not cover it.",
+        "A NEGATIVE CONTROL proves it does not over-report: a claim that still holds must produce NO output. A checker that flags everything is as useless as one that flags nothing, and this one runs against repos that legitimately drift.",
+        "A document with no declared claims produces no output and costs nothing. Most documents will never declare one, and the mechanism must not make them pay for it.",
+        "GATES: as US-1."
+      ]
+    }
+  ]
+}
