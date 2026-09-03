@@ -1,0 +1,59 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/120-a-red-verdict-is-re-earned",
+  "dependsOn": [],
+  "touches": [
+    "engine/lib.sh",
+    "engine/agent.sh",
+    "engine/driver.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
+  "iters": 6,
+  "warmup": [
+    "sed -n '/^verify_cache_try()/,/^}/p' engine/lib.sh",
+    "sed -n '/^verify_cache_record()/,/^}/p' engine/lib.sh",
+    "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
+    "grep -rn 'verify_cache_try\\|verify_cache_record' engine/",
+    "ls ~/.chief/worktrees 2>/dev/null | head"
+  ],
+  "description": "The verify cache reuses a GREEN verdict and re-earns a RED one, so an agent that cannot fix a gate pays the ENTIRE gate again on every iteration to be told the same thing. Measured on cuneiform, 2026-09-03.\n\nTHE LINE. `engine/lib.sh:215`, inside `verify_cache_try`:\n\n    [ \"$(sed -n 's/^status=//p' \"$rec\" | head -1)\" = 0 ] || return 1\n\nThe key is already exactly right for this — `tree.base.hook`, built one line above from `git rev-parse HEAD^{tree}`, the base sha and `git hash-object \"$VERIFY_HOOK\"`. A record under that key is a statement about a SPECIFIC tree gated by a SPECIFIC hook against a SPECIFIC base. If the tree has not moved, the hook has not changed and the base has not changed, the gate is a deterministic function of those three and its verdict cannot have changed either. The cache already trusts that reasoning completely for `status=0`. It discards it for every other status.\n\nWHAT IT COST. `cuneiform:388-the-panel-emission-contract` ran from 01:55 to 07:52 and merged nothing. Its log holds FIVE full gate runs (`grep -c 'verify: gating 28 changed file'`), and SIX identical failures:\n\n    ✗ verify: gate \"engine-build\" FAILED (selected by changed path\n      core/engine/assets/render-templates/_mcp/mcp_server.py.j2) — blocking merge\n\nEvery one of them was the same single assertion in `render_tool_extension_payload_contract.rs`. Between them the agent wrote, in its own words, 'All four stories read `passes: true` … Nothing left to implement this iteration.' It had nothing to change, changed nothing, and the tree was therefore BYTE-IDENTICAL across those runs — the exact case the key was designed to recognise.\n\nOne of those gate runs costs 11.6 minutes of test execution in that repo (summed from the log's own `finished in` lines, one run: 697.8s). Four of the five were re-derivations of a verdict already on disk. That is ~46 minutes of the ~6 hours, spent proving a known red verdict four more times.\n\nWHY THIS IS NOT THE FLAKY-TEST ARGUMENT. The objection to caching a failure is that a red verdict may be noise, and re-running is how noise gets shaken out. That objection applies to re-running the same gate after SOMETHING CHANGED — a different tree, a moved base, an edited hook — and in every one of those cases the key already changes and the cache already misses. It does not apply here: nothing changed, and a second identical run is not a second sample of a flaky test, it is the same computation. An escape hatch belongs in the design anyway, and the operator must be able to reach it.\n\nWHAT THIS IS NOT. It is NOT the double-verify `117` fixed (that was running a verify whose verdict was already recorded THIS iteration) and NOT the invisibility `119` fixes (a long verify reading as a hang). Those two make one gate run cheaper and legible. This one stops the gate running at all when its answer is already known. All three were visible in the same 6-hour window and none of them subsumes another.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A recorded verdict is reused whatever its status",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "`verify_cache_try` reuses a record whose `tree`, base and hook all match, REGARDLESS of its recorded status — a red verdict short-circuits to the recorded failure exactly as a green one short-circuits to success, and returns the recorded exit status to its caller.",
+        "The caller's behaviour on a reused RED is identical to a freshly-run red: `COMPLETE_OK` is set to 0 and completion is refused. A reused red must never read as a pass. Assert this over `_agent_verify_final` itself, not only over `verify_cache_try` in isolation — the bug this guards against is a status inverted on the way out.",
+        "The announcement line distinguishes the two: the green path keeps its existing `verify SKIPPED: … (GREEN verdict from …)` wording, and the red path says so in its own words, naming the record it came from. An operator reading a log must never have to guess whether a gate ran.",
+        "The recorded FAILURE OUTPUT is replayed, not just the status. A reused red that prints no reason leaves the agent with a blocked completion and no failing test named — which is the `119` invisibility bug reintroduced through a different door. If the current record does not retain enough output to do this, `verify_cache_record` is extended to retain it."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "The operator can force a re-run",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "An explicit escape hatch re-runs the gate and overwrites the record even when a matching one exists — an env var in the same style as the rest of the engine's toggles, documented where the other toggles are documented.",
+        "The hatch is asserted by a test: with a red record present and the hatch set, the hook RUNS (drive a hook that appends to a file and assert the file grew); with it unset, the hook does not run.",
+        "A genuinely flaky gate therefore stays reachable, and the reasoning for why the default is safe — identical tree, identical base, identical hook is the same computation — is written down next to the code rather than only in this description."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "The saving is demonstrated, not asserted",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "A test drives the real loop shape that produced this: a hook that fails, an agent iteration that changes nothing, and a second iteration. Assert the hook is invoked ONCE across both, and that both iterations refuse completion.",
+        "A follow-up iteration that DOES change the tree re-runs the hook — the key moves, the cache misses. Assert this in the same test so the fix cannot be over-applied into a cache that never invalidates.",
+        "`docs/` records the cache's contract in one place: what the key is made of, why each of its three components is in it, and that the verdict is reused for any status. The `117` entry is updated to point at this rather than left implying green-only is deliberate."
+      ]
+    }
+  ]
+}
