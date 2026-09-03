@@ -1285,7 +1285,26 @@ Files:
   replayable.
 - `test/verify-cache.sh` — PART D inverted to the new contract (reuse + replay + still
   refuses completion), plus the red-path invalidation control.
-- `VERSION` 0.9.15 → 0.9.16, README + ROADMAP bold version with it.
+- `VERSION` 0.9.15 → 0.9.17, README + ROADMAP bold version with it.
+
+### The key grew a FOURTH component, and that is the real find here
+
+Reusing a red exposed a latent unsoundness in `tree.base.hook`. A project worktree
+never initializes its submodules, so the AGENT BOUNDARY runs the hook with `dep/` an
+empty directory; the MERGE PHASE runs `submodules_sync` first (93) and runs the same
+hook, over the same tree, against a submodule checked out to match the gitlink. Same
+tree sha, same base, same hook — a different filesystem, and CHIEF ITSELF is what
+moved it. `test/submodule-gitlink.sh` is exactly that gate: with three parts it read
+the boundary's legitimate red ("submodule working tree is STALE") back at the merge
+and never re-ran the check `93` exists to guarantee, ending a mergeable tasklist
+VERIFY-FAILED three attempts running.
+
+The same hole exists for GREEN and pre-dates this tasklist (it arrived with 117's
+boundary read) — a boundary green taken over a stale submodule tree could be reused at
+merge, which is the direction that MERGES something unchecked. Nothing had noticed
+because a green boundary verify over an empty `dep/` is rare; a red one is not.
+`verify_cache_subs` (a cksum of `git submodule status --recursive`, `nosub` where
+there are none) closes both.
 
 ### Learnings for future iterations
 
@@ -1303,8 +1322,22 @@ Files:
   provider that commits every turn never stops making progress and runs to the hard
   iteration ceiling (observed: 20 iterations, 24 hook runs). It now skips the commit
   when its token is already in `product.txt`.
+- **A verdict cache key must name every input the gate READS, not every input the
+  COMMIT names.** The tree sha describes the repository's content; the hook runs
+  against a FILESYSTEM, and for a superproject those differ by exactly the submodule
+  checkout — which chief moves between its own two reads. Anything else chief mutates
+  between a record and its reuse belongs in the key on the same argument.
 - **`run_worker` (driver.sh) is the `function_length_max` ceiling.** It measured
   596 → 616 raw lines; a 12-line addition put the ratchet at +14 against a tolerance
   of 15. Condensing the arm to 11 lines and moving the scratch-file handling into
   `verify_cache_record` brought it to +6. Any story touching that function should
   check `bash engine/quality.sh ratchet` before it is happy.
+- **A follow-up commit touching `engine/` re-stales `VERSION`,** exactly as CLAUDE.md
+  says. The submodule-key fix landed as its own commit and `chief verify` blocked on
+  VERSION-BUMP before running a single test; 0.9.16 -> 0.9.17 plus both bold README /
+  ROADMAP versions cleared it.
+- **`test/ratelimit.sh` can fail inside the bystander block under host load** while
+  passing 3/3 standalone. Observed once here: its run reached `● rl finished →
+  MERGED @29dc2e0` and was then TERMed, with load average 5.65 and two other repos'
+  chief runs live on the machine. Re-run it standalone before believing a bystander
+  ratelimit failure.

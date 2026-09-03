@@ -357,6 +357,18 @@ VERSION              # engine version — bump on any engine/bin/install change
   the reading the branch's own log reports (`verify SKIPPED …` vs a fresh hook run) —
   never widen it to a range, which also passes when the floor was never reached at all
   (`test/merge-batch.sh` PART C; PART A is the same trap, caught earlier).
+- **The verdict cache key names every input the GATE READS — four of them.**
+  `verify_cache_try`/`verify_cache_record` (`engine/lib.sh`) key on
+  `tree.base.hook.subs`, and a record is reused for **any** status: identical tree,
+  base, hook and submodule checkout is the same computation, so a RED verdict is
+  short-circuited exactly as a green one is (with the gate's own output replayed from
+  `<key>.out`). The fourth component exists because chief itself moves it — a project
+  worktree never initializes its submodules, so the AGENT BOUNDARY runs the hook with
+  a submodule directory that is EMPTY while the MERGE PHASE runs `submodules_sync`
+  first and runs the same hook over the same tree against a synced one. Same tree sha,
+  different filesystem, different answer (`test/submodule-gitlink.sh`). Generally:
+  **anything chief mutates between a record and its reuse belongs in the key**, and
+  the tree sha is not a proxy for the filesystem the hook actually tests.
 - **The driver RE-SEEDS `.chief/state/progress.txt` at run start** — fresh header, plus a
   `⚠️ PRIOR VERIFICATION FAILED` block when the last merge attempt came back red. That
   file and `.chief/state/prd.json` are the two TRACKED exceptions to the gitignored
