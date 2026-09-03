@@ -310,8 +310,8 @@ it is chief-cloud's, not a chief convenience).
 
 | Status | Thread | Disposition |
 |---|---|---|
-| ⬜ | **Binding a cross-worktree conflict predictor** behind the `touches` seam (Clash, Grove; ccswarm checked and excluded) | **Declined 2026-08-17, seam left open.** `touches` is consumed at *admission*, when the candidate branch has no worktree and no diff — a predictor derives its verdict from diffs between live worktrees and has nothing to read at that instant. Chief built the registry itself (`91`); a predictor could later supply *additional* zone matches at the merge-time seam as an optional input whose absence changes nothing, behind a config flag and an installed binary. Reversal conditions are recorded in [`docs/decisions/conflict-predictor-adoption-decision.md`](docs/decisions/conflict-predictor-adoption-decision.md) |
-| ⬜ | **Desktop monitor app** | **Decided CLI-only** — see the `79` row above; the GUI surface is chief-cloud's ([`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md)) |
+| ✅ | **Binding a cross-worktree conflict predictor** behind the `touches` seam (Clash, Grove; ccswarm checked and excluded) | **Declined 2026-08-17, seam left open.** `touches` is consumed at *admission*, when the candidate branch has no worktree and no diff — a predictor derives its verdict from diffs between live worktrees and has nothing to read at that instant. Chief built the registry itself (`91`); a predictor could later supply *additional* zone matches at the merge-time seam as an optional input whose absence changes nothing, behind a config flag and an installed binary. Reversal conditions are recorded in [`docs/decisions/conflict-predictor-adoption-decision.md`](docs/decisions/conflict-predictor-adoption-decision.md) |
+| ✅ | **Desktop monitor app** | **Decided CLI-only** — see the `79` row above; the GUI surface is chief-cloud's ([`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md)) |
 
 ---
 
