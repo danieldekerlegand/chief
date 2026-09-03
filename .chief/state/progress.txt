@@ -1201,3 +1201,61 @@ host (CI enforces it).
 - **When the merge gate comes back red with every story passing, suspect the test
   before the engine** — but prove it: reproduce the failure first, on the unfixed
   file, and keep that reproduction as the mutation check.
+
+---
+## BASE INTEGRATION — rebased onto main @81dc98b (2026-09-03)
+
+Not a user story. All three stories were already `passes:true` and committed; the
+branch could not merge because `900-dead-code-paydown` landed on `main` underneath
+it and chief's automatic rebase conflicted (8 commits behind, forensics at
+`.chief/state/snapshots/119-a-long-verify-is-not-a-hang.rebase-conflict.md`).
+
+FIRST, THE STALE ALARM. `progress.txt` was re-seeded with a
+`⚠️ PRIOR VERIFICATION FAILED` block naming `test/verify-stream.sh` PART D. That
+block is from `…verify-failed.log` stamped **14:15**; the fix for exactly that
+failure is commit `5d8bd4b` at **14:24**. The driver re-seeds from the last
+recorded failure and has no way to know a later commit addressed it — so check
+the log's mtime against the branch's own log before re-fixing anything. PART D is
+green standalone here (A-F, "VERIFY-STREAM OK", 19.0s).
+
+THE FOUR CONFLICTS, and the rule each was resolved under:
+
+- `.chief/state/prd.json` — took the BRANCH side whole. `main`'s copy is 900's
+  runtime tasklist, not a change to this one; there is nothing to merge.
+- `.chief/state/progress.txt` — UNION, both sides kept. This file is
+  **accumulative across tasklists**, which is worth knowing before resolving it:
+  `main`'s header is still `116-a-decision-tasklist-cannot-finish` and 900 appended
+  under it. Taking one side would silently delete a merged tasklist's notes. The
+  two sides appended disjoint sections, so the resolution is deleting the three
+  marker lines — and `^=======$` as a sed pattern is safe here only because the
+  file's own rules are 80 `=` characters, not 7.
+- `.chief/verify.sh` — UNION of `CHIEF_BYSTANDER_TESTS`. 900 registered
+  `parked-decisions` + `update-reroot`; this branch added `verify-stream`. Taking
+  either side alone silently unregisters the other's tests, which is the failure
+  mode 900 exists to fix (a test in zero gate lists reads as coverage). 60 entries.
+- `ROADMAP.md` — both sides were the SAME row (118) worded differently, so `main`'s
+  already-merged text was kept and this branch's reword dropped. One row for 118.
+
+THEN THE INHERITED DEBT. With the rebase done, `doc-sync` went red: 900 merged and
+`ROADMAP.md` never named it. Fixed in `e0ecc74`.
+
+### Learnings for future iterations
+
+- **A `⚠️ PRIOR VERIFICATION FAILED` block can be older than the fix.** It is seeded
+  from `$SNAP/<name>.verify-failed.log`, which is only rewritten by the next failing
+  merge attempt — so a commit made after that log was written leaves the block
+  standing and accusing. `ls -la` the snapshot against `git log --date=iso` before
+  spending an iteration re-fixing something HEAD already fixed.
+- **`git add` on `.chief/state/*` needs `-f` mid-rebase.** `prd.json` and
+  `progress.txt` are tracked exceptions inside a gitignored directory; staging a
+  conflict resolution in them fails with "paths are ignored by one of your
+  .gitignore files" and the rebase will not continue until you force it.
+- **`.chief/verify.sh`'s test list is a union point, not a version.** Two branches
+  registering different tests conflict on one line, and either `--ours` or
+  `--theirs` compiles, passes `bash -n`, and quietly drops a merge gate. Diff the
+  two lists as SETS before resolving.
+- **Retiring a tasklist is a roadmap edit and nothing automates it.** The driver's
+  retire commit writes `tasks/chief/completed/<stem>.json` and does not touch
+  `ROADMAP.md`, so every merge arms `doc-sync` for the *next* branch that touches
+  `VERSION`/`README.md`/`ROADMAP.md`. 118 charged 900 for this; 900 charged 119.
+  Adding your own row while the branch is still in flight is what stops the chain.
