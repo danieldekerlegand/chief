@@ -1259,3 +1259,52 @@ THEN THE INHERITED DEBT. With the rebase done, `doc-sync` went red: 900 merged a
   `ROADMAP.md`, so every merge arms `doc-sync` for the *next* branch that touches
   `VERSION`/`README.md`/`ROADMAP.md`. 118 charged 900 for this; 900 charged 119.
   Adding your own row while the branch is still in flight is what stops the chain.
+
+## 120/US-1 — A recorded verdict is reused whatever its status
+Thu Sep  3 2026
+
+The verify cache reused a GREEN verdict and re-earned a RED one, so an agent that
+could not fix a gate paid the entire gate again on every iteration to be told the
+same thing (cuneiform 2026-09-03: `388-the-panel-emission-contract` ran 01:55→07:52,
+merged nothing, five full ~11.6-min gate runs, six identical failures, one
+byte-identical tree).
+
+Files:
+- `engine/lib.sh` — `verify_cache_try` honours ANY recorded status and RETURNS the
+  recorded exit status on a hit, 1 on a miss, with `$VERIFY_CACHE_HIT` /
+  `$VERIFY_CACHE_STATUS` / `$VERIFY_CACHE_RECORD` set on every call. New
+  `verify_cache_output` replays the retained report. `verify_cache_record` takes an
+  optional 4th arg (a file, or `-` for stdin) and retains the tail of a RED gate's
+  output as `<key>.out`, pruned together with its record.
+- `engine/agent.sh` — `_agent_verify_final` gained a third arm: a red hit replays the
+  report and returns 1, so `COMPLETE_OK=0` exactly as a fresh red does. The gate's
+  output is `tee`d into a scratch file on the way past so the record can carry it.
+- `engine/driver.sh` — the merge-phase verify is three arms for the same reason; a red
+  hit fills `$vout` from the replay, so `.verify-failed.log` still names what broke.
+- `bin/chief` — `cmd_verify` tees too, so a red recorded by `chief verify` is
+  replayable.
+- `test/verify-cache.sh` — PART D inverted to the new contract (reuse + replay + still
+  refuses completion), plus the red-path invalidation control.
+- `VERSION` 0.9.15 → 0.9.16, README + ROADMAP bold version with it.
+
+### Learnings for future iterations
+
+- **A HIT/MISS predicate that also carries a status must fail in the SAFE direction.**
+  `verify_cache_try` cannot signal both from its return alone (miss and red hit are
+  both non-zero), so the choice is which confusion a careless caller makes. Returning
+  the RECORDED STATUS means a caller that ignores `$VERIFY_CACHE_HIT` re-runs a red
+  hit — wasteful, never wrong. The inverse (0 = hit) would make the same oversight
+  skip the gate and accept a failing tree.
+- **`verify_cache_record` reads its output file TWICE** (line count, then tail), so a
+  process substitution silently records nothing on the second read. The `-` stdin mode
+  exists for callers that already hold the output in a variable.
+- **The FAKE PROVIDER in test/verify-cache.sh must commit at most ONCE per
+  `run_agent`.** A red gate refuses the completion, so the loop takes another turn; a
+  provider that commits every turn never stops making progress and runs to the hard
+  iteration ceiling (observed: 20 iterations, 24 hook runs). It now skips the commit
+  when its token is already in `product.txt`.
+- **`run_worker` (driver.sh) is the `function_length_max` ceiling.** It measured
+  596 → 616 raw lines; a 12-line addition put the ratchet at +14 against a tolerance
+  of 15. Condensing the arm to 11 lines and moving the scratch-file handling into
+  `verify_cache_record` brought it to +6. Any story touching that function should
+  check `bash engine/quality.sh ratchet` before it is happy.
