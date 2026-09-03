@@ -36,8 +36,8 @@
     {
       "id": "US-2",
       "title": "The report reads like counterpart's, and fails nothing",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "Print-only report wired into `chief lint`. Against the REAL trees (CHIEF_PROJECT=koine, 6 declarations): the violated claim rendered `⚑ <koine-doc> — claims agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: /Users/.../agora/...`, the three could-not-check cases rendered as `?` lines naming why (repo not checked out / no such document / unknown verb), and the two claims that still hold printed nothing. `chief lint` with a violated claim exited **rc=0** and still reported `✓ 3 tasklist(s) clean (0 \"downstreamCounterpart\" + 2 document-claim declaration(s) checked)`; with no registry it printed nothing and cost one [ -f ]. claims.sh is sourced by bin/chief only — grep shows no reference in driver.sh/agent.sh/lib.sh, so no run path can refuse. Gates: bash -n clean over bin/chief + engine/*.sh + install.sh + test/*.sh; doc-links **0 dead vs 0 on main**; doc-sync **PASS** (README + ROADMAP v0.9.12 == VERSION 0.9.12, 41 merged tasklists named); version-bump **PASS**; behavioral core smoke/ratelimit/noworkguard all **PASS**; quality ratchet OK (no tracked metric regressed). shellcheck is not installed on this host; CI carries `shellcheck -S error`.",
       "acceptanceCriteria": [
         "Violations render one line each, naming the document, the claim and what the downstream tree actually shows — the shape `counterpart_shipped_report` already uses, because 'the next action is [correcting] that [document] and it should not need a second investigation to start'.",
         "The check is PRINT-ONLY. It must not fail `chief lint`, must not refuse a run, and must not block authoring — the existing counterpart check's reasoning applies unchanged: a judgement call on somebody else's merge should not stop work that is otherwise fine.",

@@ -154,3 +154,65 @@ claims_scan() {
   done
   return 0
 }
+
+# --- the report as a human reads it -------------------------------------------
+# The check REPORTS and never fails anything, and that is counterpart.sh's reasoning
+# inherited rather than re-argued: correcting a stale document is a JUDGEMENT. The
+# tree may have moved on and the document be simply out of date; the tree may have
+# regressed and the document be right; the claim may have been written about a path
+# that was later renamed. None of those is a thing a gate may decide, and a lint that
+# returned non-zero — or a run that refused to launch — on the strength of somebody
+# else's merge would block authoring work that is otherwise fine. Every caller here
+# is print-only, and `claims_report_block` returns 0 unconditionally.
+
+# claims_correction_note — printed next to the finding rather than filed in a doc,
+# because this is the moment somebody is about to act on it. The FIRST move is not
+# editing the sentence: it is reading the downstream commit that changed the tree,
+# because a claim is usually load-bearing somewhere else (koine's ladder repeated its
+# stale one, and two tasklists were authored carrying it into a run).
+claims_correction_note() {
+  cat <<'NOTE'
+    ↳ read the downstream change FIRST, then correct the document — a claim this
+      stale is usually repeated somewhere that reads the document (a ladder, a
+      tasklist description, a gate's rationale), and correcting only the sentence
+      leaves every copy of it standing. If the claim was right and the tree
+      regressed, the finding belongs downstream, not in the document.
+NOTE
+}
+
+# claims_stale_report — claims_scan rendered for a human, one line each. Every line
+# names the DOCUMENT, the CLAIM it makes, and what the downstream tree actually shows,
+# because the next action is correcting that document and it should not need a second
+# investigation to start (counterpart_shipped_report's shape, and deliberately so).
+#
+# `unresolvable` renders as a QUESTION, never as a violation: "that repo is not
+# checked out here" and "the claim is false" are different facts, and a check that
+# conflated them would make a partial checkout read as a wall of stale documents.
+# crossrepo.sh already draws that line; this only preserves it.
+claims_stale_report() {
+  local st doc claim ref detail
+  claims_scan | while IFS="$(printf '\t')" read -r st doc claim ref detail; do
+    case "$st" in
+      violated)     printf '  ⚑ %s — claims %s is %s, but %s\n' "$doc" "$ref" "$(printf '%s' "$claim" | tr '[:lower:]' '[:upper:]')" "$detail" ;;
+      unresolvable) printf '  ? %s — its claim about %s could not be checked (%s)\n' "$doc" "$ref" "$detail" ;;
+    esac
+  done
+}
+
+# claims_report_block — the whole block, or nothing at all. One rendering shared by
+# every caller, so two commands cannot drift into two accounts of one finding.
+#
+# The heading follows the content, as counterpart's does: an `unresolvable` line on
+# its own is not "a document is stale", it is a check that could not run, and the
+# correction note belongs only where there is something to correct.
+claims_report_block() {
+  local rep; rep="$(claims_stale_report)"
+  [ -n "$rep" ] || return 0
+  case "$rep" in
+    *'⚑'*) printf 'a document here claims something its downstream tree does not support:\n' ;;
+    *)     printf 'declared document claims could not be checked:\n' ;;
+  esac
+  printf '%s\n' "$rep"
+  case "$rep" in *'⚑'*) claims_correction_note ;; esac
+  return 0
+}

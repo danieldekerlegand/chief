@@ -166,3 +166,28 @@ English for assertions. `chief lint` reports how many declarations it saw, so
 
 Chief reads no file across the boundary for this. It asks the filesystem whether a
 path exists, and nothing else. `$CHIEF_CLAIMS_FILE` relocates the registry.
+
+### What it prints
+
+`chief lint` renders the findings, one line each, naming the document, the claim, and
+what the downstream tree actually shows — because the next action is correcting that
+document and it should not need a second investigation to start:
+
+```
+a document here claims something its downstream tree does not support:
+  ⚑ docs/reference/<the-doc>.md — claims agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: /…/agora/console/src/kcs/scenarios/resume-checkpoint.ts
+  ? docs/reference/<the-doc>.md — its claim about lugh:a/b.ts could not be checked (repo "lugh" is not checked out here)
+```
+
+A claim that still holds prints **nothing**. `⚑` is a violation; `?` is a check that
+could not run — a repo not checked out here, a document that has been renamed or
+deleted, a verb outside the vocabulary, a path trying to leave the repo. *"That repo
+is not on this machine"* and *"the claim is false"* are different facts, and a partial
+checkout must not read as a wall of stale documents.
+
+**The check is print-only.** It does not fail `chief lint`, does not refuse a run, and
+does not block authoring — the same reasoning `downstreamCounterpart`'s forward check
+is built on, one register up. Correcting a stale document is a **judgement**: the tree
+may have moved on and the document be out of date, or the tree may have regressed and
+the document be right. A gate does not decide that, and failing on the strength of
+somebody else's merge would block authoring work that is otherwise fine.

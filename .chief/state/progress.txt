@@ -539,3 +539,65 @@ CI carries `shellcheck -S error`.
   Both work at runtime, but a literal control byte is invisible in a diff, survives
   no copy-paste, and cannot be written through tooling that rejects control
   characters in its input.
+
+## US-2 — The report reads like counterpart's, and fails nothing
+Thu Sep  3 2026
+
+US-1 built the check; nothing rendered it and nothing called it. Added the report
+layer and wired it into `chief lint`, on counterpart.sh's terms exactly.
+
+Files:
+- `engine/claims.sh` — `claims_stale_report` (one line per finding: DOCUMENT, the
+  claim, and what the tree actually shows — `counterpart_shipped_report`'s shape),
+  `claims_correction_note`, `claims_report_block` (heading follows the content; the
+  note prints only where there is something to correct; returns 0 unconditionally).
+  `⚑` = violated, `?` = could-not-check, and the two stay apart.
+- `bin/chief` `cmd_lint` — sources `claims.sh`, calls `claims_report_block` beside
+  `counterpart_report_block`, and the "what the gate SAW" sentence now carries the
+  claim count too (`0 "downstreamCounterpart" + N document-claim declaration(s)
+  checked`). US-1's doc already promised that sentence; it is now true.
+- `docs/reference/cross-repo-dependencies.md` — a "What it prints" subsection: the
+  rendering, `⚑` vs `?`, and the print-only rule with its reasoning.
+- `VERSION` 0.9.11 → 0.9.12 + README + ROADMAP bold version.
+- `tasks/chief/118-….json` — US-1's `notes` had a bare `docs/reference/kcs-…md` in
+  it, which is a DEAD LINK to the doc-link ratchet (see below). Backticked.
+
+**Observed for US-2.** With `CHIEF_PROJECT=koine` and six declarations: the violated
+one rendered `⚑ docs/reference/kcs-encoding-gate-verification.md — claims
+agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: …`;
+the three could-not-check cases each rendered as a `?` line naming why (repo not
+checked out here / no such document in this repo / unknown claim "improved"); the two
+claims that still hold printed **nothing**. `chief lint` with a violated claim exited
+**rc=0** and still printed `✓ 3 tasklist(s) clean (0 "downstreamCounterpart" + 2
+document-claim declaration(s) checked…)`; with no registry it printed nothing.
+`grep` confirms `claims.sh` is sourced by `bin/chief` alone — driver.sh, agent.sh and
+lib.sh never mention it, so no run path can refuse on a claim. Gates: `bash -n` clean
+over `bin/chief` + `engine/*.sh` + `install.sh` + `test/*.sh`; doc-links **0 dead vs
+0 on main**; `test/doc-sync.sh` **PASS** (v0.9.12 == VERSION 0.9.12, 41 merged
+tasklists named); `test/version-bump.sh` **PASS**; `smoke` / `ratelimit` /
+`noworkguard` all **PASS**; quality ratchet OK. shellcheck absent on this host; CI
+carries it.
+
+### Learnings for future iterations
+
+- **The doc-link ratchet dedupes by TARGET, so one bare path in a `notes` string can
+  cost a later story the gate.** US-1 measured `0 dead vs 0 on main` and then wrote
+  `koine docs/reference/kcs-…md` into its own `notes` — `tasks/chief/*.json` is
+  tracked, `BARE_DOC` matches a space-preceded `docs/…md`, and the branch went red on
+  a reference nobody had read since. Measure doc-links **after** writing notes, not
+  before, and backtick any `docs/…` path in prose you are about to commit.
+- **A `docs/…` path inside a fenced EXAMPLE OUTPUT block is checked too.** Rendering a
+  report in a doc means rendering it with a placeholder (`docs/reference/<the-doc>.md`)
+  unless the file really exists in this repo.
+- **The Bash tool's shell here is zsh, and sourcing `engine/*.sh` into it silently
+  produces wrong answers** — `claims_scan` returned nothing under zsh with six valid
+  records, and returned all six under `bash -c`. Drive engine functions through
+  `bash -c '…'`, never a bare `( . engine/x.sh; f )`.
+- **`crossrepo_root` reads `$REPO`/`$CHIEF_PROJECT` before `$PWD`, and the agent runs
+  with `CHIEF_PROJECT` exported**, so `cd`ing to another repo to exercise a cross-repo
+  helper changes nothing. Set `CHIEF_PROJECT=<that repo>` for the run instead.
+- And it caught me in the same turn: the US-2 `notes` I wrote about that trap quoted
+  the report line `⚑ docs/reference/kcs-…md — claims …`, whose path is preceded by a
+  SPACE (the backtick opens before the `⚑`), so it read as a dead link too. A quoted
+  report line needs the path elided as well. `tasks/chief/*.json` is scanned;
+  `.chief/state/*` is not.
