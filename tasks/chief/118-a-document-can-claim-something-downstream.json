@@ -3,7 +3,14 @@
   "category": "feature",
   "branchName": "chief/118-a-document-can-claim-something-downstream",
   "dependsOn": [],
-  "touches": ["engine/counterpart.sh", "engine/crossrepo.sh", "bin/chief", "test", "docs", "VERSION"],
+  "touches": [
+    "engine/counterpart.sh",
+    "engine/crossrepo.sh",
+    "bin/chief",
+    "test",
+    "docs",
+    "VERSION"
+  ],
   "iters": 7,
   "warmup": [
     "sed -n '1,40p' engine/counterpart.sh",
@@ -17,8 +24,8 @@
     {
       "id": "US-1",
       "title": "A document declares a checkable claim about another repo",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "claims_scan against the REAL case: koine `docs/reference/kcs-encoding-gate-verification.md` claiming agora console/src/kcs/scenarios/resume-checkpoint.ts is `absent` reported `violated ... it EXISTS: /Users/.../agora/console/src/kcs/scenarios/resume-checkpoint.ts`, while two claims that still hold (present scenarios/, absent no-such-thing.ts) stayed silent — 6 declarations read, 4 records emitted. bash -n clean over bin/chief + engine/*.sh + install.sh + test/*.sh; doc-links 0 dead vs 0 on main; doc-sync PASS (README + ROADMAP v0.9.11 == VERSION 0.9.11, 41 merged tasklists named). shellcheck absent on this host; CI carries it.",
       "acceptanceCriteria": [
         "A repo can declare, in a machine-readable place, that a named document asserts something about another repo's tree. Reuse `crossrepo.sh`'s `resolve_repo` for the repo half — a second resolver would drift from the first, which is the bug class this whole tasklist is about.",
         "The claim vocabulary is deliberately SMALL and every member is mechanically checkable — at minimum 'this path exists downstream' and 'this path does not exist downstream'. A claim that cannot be reduced to a predicate does not belong in the registry; it stays prose, and stays invisible, exactly as an undeclared `downstreamCounterpart` does.",
@@ -29,8 +36,8 @@
     {
       "id": "US-2",
       "title": "The report reads like counterpart's, and fails nothing",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "Print-only report wired into `chief lint`. Against the REAL trees (CHIEF_PROJECT=koine, 6 declarations): the violated claim rendered `⚑ <koine-doc> — claims agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: /Users/.../agora/...`, the three could-not-check cases rendered as `?` lines naming why (repo not checked out / no such document / unknown verb), and the two claims that still hold printed nothing. `chief lint` with a violated claim exited **rc=0** and still reported `✓ 3 tasklist(s) clean (0 \"downstreamCounterpart\" + 2 document-claim declaration(s) checked)`; with no registry it printed nothing and cost one [ -f ]. claims.sh is sourced by bin/chief only — grep shows no reference in driver.sh/agent.sh/lib.sh, so no run path can refuse. Gates: bash -n clean over bin/chief + engine/*.sh + install.sh + test/*.sh; doc-links **0 dead vs 0 on main**; doc-sync **PASS** (README + ROADMAP v0.9.12 == VERSION 0.9.12, 41 merged tasklists named); version-bump **PASS**; behavioral core smoke/ratelimit/noworkguard all **PASS**; quality ratchet OK (no tracked metric regressed). shellcheck is not installed on this host; CI carries `shellcheck -S error`.",
       "acceptanceCriteria": [
         "Violations render one line each, naming the document, the claim and what the downstream tree actually shows — the shape `counterpart_shipped_report` already uses, because 'the next action is [correcting] that [document] and it should not need a second investigation to start'.",
         "The check is PRINT-ONLY. It must not fail `chief lint`, must not refuse a run, and must not block authoring — the existing counterpart check's reasoning applies unchanged: a judgement call on somebody else's merge should not stop work that is otherwise fine.",
@@ -41,8 +48,8 @@
     {
       "id": "US-3",
       "title": "Proof it catches the case that motivated it, and does not cry wolf",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "test/doc-claims.sh: CLAIMS PASS. The incident, reconstructed against fixtures — koine document claims an agora path is `absent`, agora has it — reports `⚑ <doc> — claims agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: <resolved path>` and `chief lint` still exits 0. Negative controls: both predicates holding print NOTHING while the gate still reports `2 document-claim declaration(s) checked` (silence with a witness); an unresolved repo and a deleted document stay `?` and cost no neighbouring finding; with no registry the reader makes **0 jq invocations** under a shimmed jq (and **1** with a registry, so the counter is proven live). MUTATION-CHECKED both ways in a copy of the tree: neutering the violated emission fails section 1, emitting regardless of the predicate fails section 3. Also repaired test/crossrepo.sh, which US-2 had left RED (its `1 \"downstreamCounterpart\" declaration(s) checked` fragment was split by the new claim count) — XREPO PASS. Gates: bystander block smoke/ratelimit/noworkguard/crossrepo/doc-claims **BYSTANDER PASS (5 tests, bystander alive, no fixture leaked)**; bash -n clean over bin/chief + engine/*.sh + install.sh + templates/*.sh + test/*.sh; quality ratchet OK (no tracked metric regressed); doc-links **0 dead vs 0 on main**; doc-sync PASS; version-bump PASS — and no VERSION bump was due, the bump gate scoping to engine/ bin/ scripts/ install.sh while this story touches only test/, .github/, .chief/ and CLAUDE.md. shellcheck is not installed on this host; CI carries it.",
       "acceptanceCriteria": [
         "A test reconstructs the koine/agora incident: a document claiming a downstream path is absent, a downstream tree where it is present, and an assertion that the check names the document and the path. This is the 49-minute case, and if the test cannot express it the mechanism does not cover it.",
         "A NEGATIVE CONTROL proves it does not over-report: a claim that still holds must produce NO output. A checker that flags everything is as useless as one that flags nothing, and this one runs against repos that legitimately drift.",

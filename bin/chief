@@ -383,6 +383,12 @@ cmd_gen() {
 # the downstream tasklist that will complete it, and a declaration pointing at a repo
 # or stem that does not exist is worse than no declaration — it reads as checked.
 # Resolution is the driver's own (engine/crossrepo.sh), so the two cannot disagree.
+#
+# And the DOCUMENT CLAIM one register up (engine/claims.sh): what a document in this
+# repo asserts about another repo's tree. Both are REPORTS — a counterpart that merged
+# and a document gone stale are each somebody else's merge, and a judgement about what
+# to do next; neither may fail this lint or refuse a run.
+#
 # The park cell `chief list` prints, computed by the jq that already reads the file: a
 # park with no "parkedReason" renders exactly as it always has, "  (parked)", which is
 # what keeps `chief list` a different tool with unchanged output.
@@ -405,6 +411,7 @@ cmd_lint() {
   . "$ENGINE/criteria.sh"
   . "$ENGINE/crossrepo.sh"
   . "$ENGINE/counterpart.sh"
+  . "$ENGINE/claims.sh"
   . "$ENGINE/terminal.sh"
   local d="$CHIEF_PROJECT/$CHIEF_TASKS_DIR" f n rep findings=0 checked=0 declared=0
   local files=()
@@ -463,10 +470,16 @@ cmd_lint() {
   # merge would block authoring work that is otherwise fine. Rendered by the module,
   # so this and `chief list` cannot drift into two accounts of the same finding.
   counterpart_report_block "$CHIEF_TASKS_DIR" "${files[@]}"
-  # What the gate SAW, always — the marker link is a field, and a counterpart named
-  # only in a description is not detected here and is not claimed to be. "0 declared"
-  # means nobody wrote the field, never that nobody has a counterpart.
-  local seen="$declared \"$COUNTERPART_FIELD\" declaration(s) checked; a counterpart named only in prose is invisible to this gate"
+  # The DOCUMENT CLAIM (engine/claims.sh), on exactly the same terms: a document in
+  # this repo asserting something about another repo's tree, checked as a predicate
+  # over a path. Print-only for counterpart's reason one register up — correcting a
+  # stale document is a judgement, and a lint that failed on the strength of somebody
+  # else's merge would block authoring work that is otherwise fine.
+  claims_report_block
+  # What the gate SAW, always — both links are FIELDS, and a counterpart or a claim
+  # named only in a description is not detected here and is not claimed to be.
+  # "0 declared" means nobody wrote the field, never that nobody has one.
+  local seen="$declared \"$COUNTERPART_FIELD\" + $(claims_count) document-claim declaration(s) checked; either one named only in prose is invisible to this gate"
   if [ "$findings" -gt 0 ]; then
     echo "✗ $findings finding(s) across $checked tasklist(s) ($seen). A cross-repo criterion is either rewritten as work in THIS repo, or declared: \"crossRepo\": [\"<repo>\"]." >&2
     return 1

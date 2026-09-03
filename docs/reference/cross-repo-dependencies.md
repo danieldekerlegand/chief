@@ -106,3 +106,88 @@ That is exactly what the satisfaction test reads. Write it only when the
 prerequisite genuinely holds, never to silence a block. Prefer a real
 `<repo>:<tasklist>` dep whenever the upstream work *is* a chief tasklist — the
 marker duplicates state that then has to be kept honest by hand.
+
+## Document claims — what a *document* asserts about another repo
+
+`dependsOn` and `downstreamCounterpart` connect one **tasklist** to another. Neither
+connects a **document** to the tree it makes a claim about, and that gap runs the
+wrong way to close itself: the repo that changes has no reason to know that a
+document somewhere else asserted something about its tree.
+
+Measured: koine's `docs/reference/kcs-encoding-gate-verification.md` recorded that
+three KCS pressure tests had no encoding. agora encoded all three **49 minutes
+later**. koine did not learn for a week, its promotability ladder repeated the claim,
+and two tasklists were authored from it before anybody read the tree.
+
+So a repo declares its checkable claims in `.chief/claims.json`:
+
+```json
+{
+  "claims": [
+    {
+      "document": "docs/reference/<the-doc-making-the-claim>.md",
+      "claim":    "absent",
+      "repo":     "agora",
+      "path":     "console/src/kcs/scenarios/resume-checkpoint.ts"
+    }
+  ]
+}
+```
+
+(`document` takes a real repo-relative path — koine's is
+`docs/reference/kcs-encoding-gate-verification.md`; it is written as a placeholder
+above only because a literal one would read as a dead link to chief's own doc-link
+gate, which resolves `docs/…` against *this* repo.)
+
+A bare top-level array works too. All four fields are required. `repo` is resolved by
+the **same** lookup the table above describes — path, `~/…`, `../…`, or a registry
+name — because a second resolver would drift from the first.
+
+| Field | Meaning |
+|---|---|
+| `document` | path, relative to this repo's root, of the document making the claim |
+| `claim` | `present` or `absent` — the whole vocabulary |
+| `repo` | the other repo, in the `<repo>` notation above |
+| `path` | path, relative to *that* repo's root, the claim is about |
+
+**The vocabulary is deliberately small, and every member is a predicate over a path.**
+`present` means that path exists in the other repo's tree; `absent` means it does not.
+A claim that cannot be reduced to a predicate does not belong here — it stays prose,
+and stays invisible, exactly as a counterpart named only in a `description` does.
+Growing the vocabulary means adding a checkable predicate, never a checkable-*sounding*
+one.
+
+**Prose is not the mechanism.** A document that names a downstream fact only in its
+text is invisible to this check, and is meant to be: the alternative is grepping
+English for assertions. `chief lint` reports how many declarations it saw, so
+"0 checked" reads as *nobody declared one*, never as *nothing is stale*.
+
+**A repo with no `.chief/claims.json` pays one `[ -f ]`** — no jq, no scan, no output.
+
+Chief reads no file across the boundary for this. It asks the filesystem whether a
+path exists, and nothing else. `$CHIEF_CLAIMS_FILE` relocates the registry.
+
+### What it prints
+
+`chief lint` renders the findings, one line each, naming the document, the claim, and
+what the downstream tree actually shows — because the next action is correcting that
+document and it should not need a second investigation to start:
+
+```
+a document here claims something its downstream tree does not support:
+  ⚑ docs/reference/<the-doc>.md — claims agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: /…/agora/console/src/kcs/scenarios/resume-checkpoint.ts
+  ? docs/reference/<the-doc>.md — its claim about lugh:a/b.ts could not be checked (repo "lugh" is not checked out here)
+```
+
+A claim that still holds prints **nothing**. `⚑` is a violation; `?` is a check that
+could not run — a repo not checked out here, a document that has been renamed or
+deleted, a verb outside the vocabulary, a path trying to leave the repo. *"That repo
+is not on this machine"* and *"the claim is false"* are different facts, and a partial
+checkout must not read as a wall of stale documents.
+
+**The check is print-only.** It does not fail `chief lint`, does not refuse a run, and
+does not block authoring — the same reasoning `downstreamCounterpart`'s forward check
+is built on, one register up. Correcting a stale document is a **judgement**: the tree
+may have moved on and the document be out of date, or the tree may have regressed and
+the document be right. A gate does not decide that, and failing on the strength of
+somebody else's merge would block authoring work that is otherwise fine.

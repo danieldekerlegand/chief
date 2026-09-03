@@ -131,6 +131,20 @@ engine/
                      #   breath (repoint dependents FIRST, then stamp supersededBy and file),
                      #   because a filed marker carries no mergedToMain and blocks its dependents
                      #   forever on a record that can never be stamped
+  claims.sh          #   the DOCUMENT CLAIM: counterpart.sh one register up. A TASKLIST can name
+                     #   the tasklist that completes it; nothing let a DOCUMENT name the
+                     #   downstream tree it asserts something about, and the obligation runs
+                     #   the wrong way to fix itself — agora has no reason to know koine wrote
+                     #   a gate against agora's tree. Measured: koine's kcs-encoding-gate doc
+                     #   said three tests had no encoding; agora encoded all three 49 MINUTES
+                     #   later, and koine carried the claim into two authored tasklists a week
+                     #   on. So `.chief/claims.json` declares {document, claim, repo, path} and
+                     #   the repo half goes through crossrepo.sh's `resolve_repo` — the same
+                     #   lookup dependsOn and downstreamCounterpart use, because a second
+                     #   resolver drifting from the first IS the bug class. The vocabulary is
+                     #   TWO predicates over a path (`present` · `absent`) and stays that small
+                     #   on purpose: a claim that cannot be reduced to a predicate stays prose
+                     #   and stays INVISIBLE, exactly as an undeclared counterpart does
   criteria.sh        #   the SCOPE rule on acceptance criteria: a criterion naming ANOTHER repo
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
@@ -268,6 +282,23 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   log line. Its hook lives OUTSIDE the repo (via $CHIEF_VERIFY_HOOK)
                      #   so the `tree.base.hook` key's three halves can be moved one at a
                      #   time. REPRODUCES first, like monitor-orphan.sh
+                     #   doc-claims.sh — engine/claims.sh against the incident it exists
+                     #   for: koine's document claiming an agora path is ABSENT, an agora
+                     #   tree where it EXISTS, and the assertion that the report names the
+                     #   DOCUMENT and the PATH. Half the file is NEGATIVE CONTROL, because
+                     #   this checker runs against repos that legitimately drift — a claim
+                     #   that still holds prints nothing AND the count sentence proves it
+                     #   was read, an unresolvable repo stays a `?`, and "no registry costs
+                     #   nothing" is measured as jq INVOCATIONS under a shimmed jq (the
+                     #   with-registry probe runs first, or the counter could be dead)
+                     #   merge-checkout.sh — the BASE CHECKOUT half of the merge, both
+                     #   claims, deterministically: a `git` shim holds a real
+                     #   .git/index.lock across `checkout <base>`. Held for ONE attempt,
+                     #   work_checkout retries and the tasklist merges (the flake);
+                     #   held for every attempt, the tasklist ends CHECKOUT-FAILED with
+                     #   no merge commit, no completed/ record and NO retire commit
+                     #   stranded on the branch. MUTATION-CHECKED both ways — on the
+                     #   unfixed engine both parts report `MERGED @<branch tip>`
 docs/                # tasklist schema · roadmap-input contract (chief gen) · chief status (scope + ignore list) ·
                      # verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace) ·
@@ -366,6 +397,22 @@ VERSION              # engine version — bump on any engine/bin/install change
   `engine/monitor.sh` render the SAME progress number from two different sources; a
   change to one is a change to both, or which reader a caller happens to reach decides
   what the operator sees.
+- **A failed `git checkout <base>` is a merge that SUCCEEDS.** The merge phase ends
+  `work_checkout <base>` then `git merge --no-ff <branch>`. If the checkout fails, HEAD
+  is still on the BRANCH, and merging a branch into itself prints `Already up to date.`
+  and exits **zero** — so an unguarded call site records `MERGED @<branch tip>` and
+  `finalize_merged` writes the completed record and the retire commit onto the FEATURE
+  BRANCH, while the base never moves and `completed/` stays empty. The branch checkout
+  was guarded from the start and the base one was not; that asymmetry is the bug, and
+  `work_checkout_or_stop` (driver.sh) is now both. The cause of the failure is the
+  SHARED project index: sibling workers mutate it from the reconcile step's isolation
+  guard and from `finalize_merged` (both take `idx_lock`), and a checkout that loses
+  that race dies `Unable to create '.git/index.lock'` and rc 128 — transiently, which
+  is why `work_checkout` now retries (`CHIEF_CHECKOUT_RETRIES`, default 3). An
+  `idx_lock` around it would not be enough on its own: git processes chief does not own
+  contend for the same file, and holding chief's lock across a rebase and a ten-minute
+  verify is not an option. Generally: **any git command whose no-op case exits 0 needs
+  its precondition checked, not its own exit status** (`test/merge-checkout.sh`).
 - **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
   after one inside a `jq -n '…'` program parses as an expression and silently replaces the
   field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in

@@ -363,7 +363,15 @@ mq_merge_member() {
     return 1
   fi
   live_set "$live" phase=merging
-  work_checkout "$repo" "$base" "$name"
+  # GUARDED for the same reason the branch checkout above is, and it matters more here:
+  # a failed `checkout <base>` leaves HEAD on $branch, and merging a branch into itself
+  # prints "Already up to date." and exits ZERO — a merge that reports success, retires
+  # the tasklist onto the feature branch, and never moves the base (see
+  # work_checkout_or_stop in driver.sh).
+  work_checkout "$repo" "$base" "$name" || {
+    mq_member_fail "$name" checkout-failed CHECKOUT-FAILED tasklist.checkout-failed \
+      "git checkout $base failed in $repo" "!! $name: could not check out $base to merge $branch into it — nothing merged"
+    return 1; }
   if git -C "$repo" merge --no-ff "$branch" -m "Merge $branch (chief, auto-verified)"; then
     sha="$(git -C "$repo" rev-parse --short HEAD)"
     finalize_merged "$name" "$branch" "$sha" "$repo" "$sub"

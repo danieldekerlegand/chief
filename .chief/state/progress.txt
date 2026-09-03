@@ -479,3 +479,289 @@ Run separately, because the gate did not reach it (see below):
   correctly buys nothing it has not actually paid for at merge.
 - The full gate takes **~11 minutes** here — past a 10-minute foreground tool timeout.
   Run it backgrounded to a log and poll for a sentinel line rather than blocking on it.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chief Progress — 118-a-document-can-claim-something-downstream
+# ─────────────────────────────────────────────────────────────────────────────
+
+## US-1 — A document declares a checkable claim about another repo
+Thu Sep  3 2026
+
+`downstreamCounterpart` links a TASKLIST to the tasklist that completes it. Nothing
+linked a DOCUMENT to the downstream tree it asserts something about, and the
+obligation runs downstream-to-upstream so it cannot close itself. New module
+`engine/claims.sh`, deliberately counterpart.sh's shape one register up.
+
+Files:
+- `engine/claims.sh` (new) — `.chief/claims.json` (`$CHIEF_CLAIMS_FILE` relocates it)
+  holds `{document, claim, repo, path}` records. `claims_records` (US-separated, one
+  jq) · `claims_count` (what the gate SAW) · `claims_scan` (TAB records:
+  `violated` / `unresolvable`, silent when the predicate holds). The repo half goes
+  through crossrepo.sh's `resolve_repo` — the same lookup `dependsOn` and
+  `downstreamCounterpart` use.
+- `docs/reference/cross-repo-dependencies.md` — new "Document claims" section: the
+  schema, the field table, the vocabulary rule, the prose-is-not-the-mechanism rule.
+- `CLAUDE.md` — layout entry for `engine/claims.sh`.
+- `VERSION` 0.9.10 → 0.9.11 + README + ROADMAP bold version.
+- `ROADMAP.md` — a ✅ row for `117-the-agent-verify-records-but-never-tries`, which
+  merged and retired on main without one. Not scope creep: `doc-sync` is a merge
+  blocker for any branch touching `VERSION`/`engine/`/`bin/`, so this branch inherits
+  a red gate it did not cause and cannot merge without fixing.
+
+**Observed for US-1.** Against the real trees: koine's
+`docs/reference/kcs-encoding-gate-verification.md` claiming agora's
+`console/src/kcs/scenarios/resume-checkpoint.ts` is `absent` →
+`violated … it EXISTS: …/agora/console/src/kcs/scenarios/resume-checkpoint.ts`.
+Six declarations read, four records emitted — the two claims that still hold
+(`present` on `console/src/kcs/scenarios`, `absent` on `no-such-thing.ts`) were
+silent, and the three could-not-check cases (unknown repo, missing document, verb
+outside the vocabulary) each got their own `unresolvable` sentence. `bash -n` clean
+over `bin/chief` + `engine/*.sh` + `install.sh` + `test/*.sh`; `check-doc-links.mjs`
+**0 dead vs 0 on main**; `test/doc-sync.sh` **PASS** (README + ROADMAP **v0.9.11** ==
+VERSION 0.9.11, 41 merged tasklists named). shellcheck is not installed on this host;
+CI carries `shellcheck -S error`.
+
+### Learnings for future iterations
+
+- **A literal `docs/….md` inside a JSON example in a doc or a shell comment is a DEAD
+  LINK to `scripts/check-doc-links.mjs`.** Its `BARE_DOC` regex has a negative
+  lookbehind for `` ` ``, `/`, `.`, `-` and word chars — so backticked prose
+  (`` `docs/x.md` ``) is invisible to it, but `"document": "docs/x.md"` is preceded by
+  a quote and is checked against THIS repo. A cross-repo document path in an example
+  therefore has to be a placeholder with a non-matching character in it
+  (`docs/reference/<the-doc>.md`) or an existing local file. The `.json` walk that
+  exempts `{repo: …, path: "docs/…"}` objects only runs for files that ARE `.json`;
+  a fenced JSON block inside a `.md` gets no such exemption.
+- **`docs/.linkignore` ignores by CITING FILE, not by target** (`rel.startsWith(g)`),
+  so it cannot excuse one foreign path in an otherwise-checked document — it would
+  switch the whole file off.
+- **Write jq's US separator as the escape `\u001f`, never as a literal 0x1f byte.**
+  Both work at runtime, but a literal control byte is invisible in a diff, survives
+  no copy-paste, and cannot be written through tooling that rejects control
+  characters in its input.
+
+## US-2 — The report reads like counterpart's, and fails nothing
+Thu Sep  3 2026
+
+US-1 built the check; nothing rendered it and nothing called it. Added the report
+layer and wired it into `chief lint`, on counterpart.sh's terms exactly.
+
+Files:
+- `engine/claims.sh` — `claims_stale_report` (one line per finding: DOCUMENT, the
+  claim, and what the tree actually shows — `counterpart_shipped_report`'s shape),
+  `claims_correction_note`, `claims_report_block` (heading follows the content; the
+  note prints only where there is something to correct; returns 0 unconditionally).
+  `⚑` = violated, `?` = could-not-check, and the two stay apart.
+- `bin/chief` `cmd_lint` — sources `claims.sh`, calls `claims_report_block` beside
+  `counterpart_report_block`, and the "what the gate SAW" sentence now carries the
+  claim count too (`0 "downstreamCounterpart" + N document-claim declaration(s)
+  checked`). US-1's doc already promised that sentence; it is now true.
+- `docs/reference/cross-repo-dependencies.md` — a "What it prints" subsection: the
+  rendering, `⚑` vs `?`, and the print-only rule with its reasoning.
+- `VERSION` 0.9.11 → 0.9.12 + README + ROADMAP bold version.
+- `tasks/chief/118-….json` — US-1's `notes` had a bare `docs/reference/kcs-…md` in
+  it, which is a DEAD LINK to the doc-link ratchet (see below). Backticked.
+
+**Observed for US-2.** With `CHIEF_PROJECT=koine` and six declarations: the violated
+one rendered `⚑ docs/reference/kcs-encoding-gate-verification.md — claims
+agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: …`;
+the three could-not-check cases each rendered as a `?` line naming why (repo not
+checked out here / no such document in this repo / unknown claim "improved"); the two
+claims that still hold printed **nothing**. `chief lint` with a violated claim exited
+**rc=0** and still printed `✓ 3 tasklist(s) clean (0 "downstreamCounterpart" + 2
+document-claim declaration(s) checked…)`; with no registry it printed nothing.
+`grep` confirms `claims.sh` is sourced by `bin/chief` alone — driver.sh, agent.sh and
+lib.sh never mention it, so no run path can refuse on a claim. Gates: `bash -n` clean
+over `bin/chief` + `engine/*.sh` + `install.sh` + `test/*.sh`; doc-links **0 dead vs
+0 on main**; `test/doc-sync.sh` **PASS** (v0.9.12 == VERSION 0.9.12, 41 merged
+tasklists named); `test/version-bump.sh` **PASS**; `smoke` / `ratelimit` /
+`noworkguard` all **PASS**; quality ratchet OK. shellcheck absent on this host; CI
+carries it.
+
+### Learnings for future iterations
+
+- **The doc-link ratchet dedupes by TARGET, so one bare path in a `notes` string can
+  cost a later story the gate.** US-1 measured `0 dead vs 0 on main` and then wrote
+  `koine docs/reference/kcs-…md` into its own `notes` — `tasks/chief/*.json` is
+  tracked, `BARE_DOC` matches a space-preceded `docs/…md`, and the branch went red on
+  a reference nobody had read since. Measure doc-links **after** writing notes, not
+  before, and backtick any `docs/…` path in prose you are about to commit.
+- **A `docs/…` path inside a fenced EXAMPLE OUTPUT block is checked too.** Rendering a
+  report in a doc means rendering it with a placeholder (`docs/reference/<the-doc>.md`)
+  unless the file really exists in this repo.
+- **The Bash tool's shell here is zsh, and sourcing `engine/*.sh` into it silently
+  produces wrong answers** — `claims_scan` returned nothing under zsh with six valid
+  records, and returned all six under `bash -c`. Drive engine functions through
+  `bash -c '…'`, never a bare `( . engine/x.sh; f )`.
+- **`crossrepo_root` reads `$REPO`/`$CHIEF_PROJECT` before `$PWD`, and the agent runs
+  with `CHIEF_PROJECT` exported**, so `cd`ing to another repo to exercise a cross-repo
+  helper changes nothing. Set `CHIEF_PROJECT=<that repo>` for the run instead.
+- And it caught me in the same turn: the US-2 `notes` I wrote about that trap quoted
+  the report line `⚑ docs/reference/kcs-…md — claims …`, whose path is preceded by a
+  SPACE (the backtick opens before the `⚑`), so it read as a dead link too. A quoted
+  report line needs the path elided as well. `tasks/chief/*.json` is scanned;
+  `.chief/state/*` is not.
+
+## US-3 — Proof it catches the case that motivated it, and does not cry wolf
+Thu Sep  3 2026
+
+US-1 built the check and US-2 rendered it; nothing had ever driven either against the
+incident. New `test/doc-claims.sh` reconstructs it and pins the three ways a checker
+of this shape goes wrong.
+
+Files:
+- `test/doc-claims.sh` (new) — two scaffolded repos under a temp dir, hermetic in
+  `$CHIEF_RUNS`/`$CHIEF_REPOS`, no agent (this is `chief lint` plus the module's own
+  reader). Five sections: (1) THE INCIDENT — koine's document claims an agora path is
+  `absent`, agora has it, and the report must name the DOCUMENT, the PATH, the claim
+  (`is ABSENT`), what the tree shows (`it EXISTS`) and the resolved location, with
+  `chief lint` still exiting 0; (2) the sign REVERSED, the KGP shape, so the `present`
+  predicate cannot rot unnoticed; (3) NEGATIVE CONTROL — both predicates holding
+  produce no ⚑, no heading and no correction note, asserted **together with**
+  `2 document-claim declaration(s) checked` so the silence cannot come from having
+  read nothing; (4) unresolvable ≠ violated (a repo not checked out, and a document
+  that no longer exists), and one unresolvable record must not cost the finding beside
+  it; (5) NO REGISTRY COSTS NOTHING, measured as jq INVOCATIONS under a shimmed `jq`.
+- `test/crossrepo.sh` — two assertions repaired. US-2 widened lint's "what the gate
+  SAW" sentence to carry both links, which split the fragment
+  `1 "downstreamCounterpart" declaration(s) checked` in two; the branch was carrying a
+  red gate US-2 never ran. Now asserted as the whole sentence.
+- `.chief/verify.sh` (`CHIEF_BYSTANDER_TESTS`), `test/all.sh` (`BASH_SUITE`) and
+  `.github/workflows/ci.yml` — the three lists that make a test a gate.
+- `CLAUDE.md` — the layout entry for the new test.
+
+**Observed for US-3.** `test/doc-claims.sh` **CLAIMS PASS**; `test/crossrepo.sh`
+**XREPO PASS** (it FAILED before the repair, on the split sentence). The behavioural
+block under the bystander guard — smoke · ratelimit · noworkguard · crossrepo ·
+doc-claims — **BYSTANDER PASS, 5 tests, bystander alive, orphan reaped, no fixture
+leaked**. `bash -n` clean over `bin/chief` + `engine/*.sh` + `install.sh` +
+`templates/*.sh` + `test/*.sh` + `.chief/verify.sh`; quality ratchet **OK — no tracked
+metric regressed**; doc-links **0 dead vs 0 on main**; `test/doc-sync.sh` **PASS**;
+`test/version-bump.sh` **PASS**. No VERSION bump: this story touches `test/`,
+`.github/`, `.chief/` and `CLAUDE.md` only, and the bump gate's scope is
+`engine/ bin/ scripts/ install.sh` — bumping anyway would be a version nobody can
+distinguish by behaviour. shellcheck is not installed on this host; CI carries
+`shellcheck -S error`.
+
+### Learnings for future iterations
+
+- **MUTATE THE ENGINE TO PROVE THE TEST.** A new test that passes on its first run has
+  proved nothing yet. Two mutations, each in a `cp -R bin engine templates test` copy
+  of the tree (the test derives `$ROOT` from its own location, so a copy is enough —
+  no `git show`, which CI's shallow clone cannot serve): neuter the `violated` emission
+  → section 1 fails with "the stale claim was not reported at all"; make it emit
+  regardless of the predicate → section 3 fails with "a claim that still holds was
+  reported as a finding". Both arms of a report/silence pair need their own mutation,
+  or one of them is decorative.
+- **A silence assertion needs a WITNESS in the same breath.** "No output" is what a
+  correct checker and a checker that read nothing both produce. Section 3 asserts the
+  count sentence (`2 … declaration(s) checked`) beside the silence, and section 5's
+  jq probe runs the WITH-registry case FIRST and requires ≥1 — otherwise "0 jq calls"
+  would also pass with a dead counter.
+- **Widening a shared summary line breaks the tests that assert a fragment of it.**
+  US-2 inserted `+ N document-claim` into lint's count sentence; two `test/crossrepo.sh`
+  assertions matched across the insertion point and went red on a branch that never ran
+  that test. Adding a clause to a line another test greps means grepping for that line
+  across `test/` in the same edit.
+- **A backtick in a double-quoted string inside a test RUNS, and `bash -n` is clean on
+  it.** `fail "a `present` claim was not reported"` is command substitution. Same trap
+  as the engine's heredocs, one register down; check with
+  `grep -n '[^\\]`' test/<file>.sh` before committing.
+
+## Post-story fix — the merge phase reported MERGED on a checkout that never happened
+Thu Sep  3 2026
+
+Every story on this branch was already `passes:true`, but the merge-time
+`.chief/verify.sh` came back RED and left a `⚠️ PRIOR VERIFICATION FAILED` block at the
+top of this log. One failure, and it was NOT in this tasklist's code:
+
+    merge-batch| MERGE-BATCH FAIL: PART A: alpha was not retired to completed/
+    BYSTANDER FAIL: test/merge-batch.sh failed
+
+Unlike 116's PART C flake, **the test was right and the engine was wrong.** Isolated
+PART A harness: reproduced 1 in 4 under load. The failing repo's evidence:
+
+    alpha.log|  Already up to date.
+    alpha.log|    !! branch kept: chief/alpha is not an ancestor of main (unmerged work)
+    alpha.log|  >> alpha MERGED @f19d300        <-- f19d300 is alpha's STORY commit
+    reflog|  @{15} checkout: moving from main to chief/alpha
+    reflog|  @{14} commit: chore(chief): alpha complete @f19d300 — record + retire
+    reflog|  @{13} checkout: moving from chief/alpha to main
+
+There is no `chief/alpha -> main` entry between @{15} and @{14}: the merge phase's
+`work_checkout "$work_repo" "$work_base"` **failed and was ignored** (its output is
+`>/dev/null 2>&1` and its return value was unused). HEAD stayed on the branch, so
+`git merge --no-ff chief/alpha` merged the branch into itself — `Already up to date.`,
+**exit 0** — and the site read that as success: status `MERGED @<branch tip>`,
+`finalize_merged` writing the completed record + retire commit onto **chief/alpha**
+(@{14}), main never moving, `completed/` never getting a record, and the run summary
+printing `alpha  done  [MERGED @e4619e0]`. @{13} is the EXIT trap's identical checkout
+landing first time seconds later — which is what makes the cause transient.
+
+Confirmed the mechanism deterministically in a scratch repo: with `.git/index.lock`
+held, `git checkout main` exits **128** and HEAD does not move; `git merge --no-ff feat`
+then prints `Already up to date.` and exits **0**. The contention is real — the project
+index is SHARED, and the reconcile step's isolation guard (`git checkout -- tasks/…`)
+and `finalize_merged`'s `rm`/`add`/`commit` both mutate it, which is why both already
+take `idx_lock`. `work_checkout` never did.
+
+Files:
+- `engine/driver.sh` — `work_checkout` RETRIES (`CHIEF_CHECKOUT_RETRIES`, default 3,
+  1s apart) instead of losing a race git does not retry for us; new
+  `work_checkout_or_stop` is the GUARDED form and is used at BOTH ends of the merge
+  phase. The branch checkout's existing 3-line inline arm collapses into it, so
+  `run_worker` gets one line SHORTER, not longer, and the helper has two call sites.
+- `engine/mergequeue.sh` — `mq_merge_member`'s base checkout guarded the same way, via
+  the `mq_member_fail` shape its own branch checkout already used.
+- `test/merge-checkout.sh` (new, in all three gate lists) — a `git` shim holds a REAL
+  `.git/index.lock` across `checkout <base>`. PART A holds it for ONE attempt (retried,
+  merged, retired); PART B holds it for every attempt (CHECKOUT-FAILED, 0 merge commits,
+  nothing retired, nothing stranded on the branch, no `>> solo MERGED`).
+- `VERSION` 0.9.12 → 0.9.13 + README/ROADMAP bold; `CLAUDE.md` invariant.
+
+### Learnings for future iterations
+
+- **A git command whose no-op case exits 0 needs its PRECONDITION checked, not its own
+  exit status.** `git merge --no-ff X` cannot fail when HEAD is already X — so the merge
+  site's success check was structurally incapable of catching a base checkout that did
+  not happen. The same shape is worth auditing anywhere the engine does
+  "position, then act".
+- **A guarded call and an unguarded call to the same helper, three lines apart, is the
+  smell.** driver.sh checked `work_checkout`'s return for the BRANCH and ignored it for
+  the BASE. The asymmetry was the whole bug; the fix was to give both ends one guarded
+  helper rather than to add a second inline arm (which `run_worker` has no room for).
+- **`idx_lock` was NOT the right instrument here.** It would not cover git processes
+  chief does not own (an operator's editor, a `git status` in the same checkout), and
+  holding it across a rebase + a ten-minute verify would make every peer's isolation
+  guard wait out its 120s break. A bounded retry plus an honest non-zero is proportionate.
+- **Reproduce a load-dependent failure in an ISOLATED harness before touching anything.**
+  `sed -n '47,199p' test/merge-batch.sh` + a pinned `ROOT` ran PART A alone in ~90s and
+  hit 1 in 4; the full test is six parts. Keep the temp dir on failure (`trap` printing
+  `WORK=` instead of `rm -rf`) — the reflog was the whole diagnosis and it lives there.
+- **Then make it DETERMINISTIC for the committed test.** A shim that holds the real lock
+  turns "1 in 4 under load" into "always", and the same lever expresses both the
+  transient and the persistent case. A flaky reproduction is not a regression test.
+- **Mutation-check a fix like this in a COPY of the tree** (`cp -R` the worktree,
+  `git checkout HEAD -- engine/driver.sh engine/mergequeue.sh` in the copy). Both parts
+  failed there with the exact production symptom — `MERGED @<branch tip>` in the summary
+  beside `unmerged branches for review: chief/solo`. Note the copy shares the worktree's
+  gitdir, so check `git status` in the REAL tree afterwards.
+- The driver RE-SEEDS `.chief/state/progress.txt` at run start; this file is tracked, so
+  it was restored from `git show HEAD:` before appending (as 116's note already warned).
+
+## Verification recovery — checkout-race regression
+Thu Sep 3 2026
+
+The prior merge-time failure is resolved by the committed checkout guard. Observed
+`test/merge-checkout.sh`: **MERGE-CHECKOUT PASS** — a one-attempt index-lock race is
+retried and merged/retired; a persistent race returns CHECKOUT-FAILED with zero merges
+and no retirement. The previous `test/merge-batch.sh` failure was specifically PART A's
+missing retirement; its isolated rerun reached PART C green before the host's existing
+parallel test load made the long queue fixture overlap, so it was stopped rather than
+allowed to contaminate another run. The recorded full `chief verify` below is the final
+merge-bar witness.
+
+### Learnings for future iterations
+
+- A long, stateful integration fixture must run as one invocation: do not retry it while
+  a previous invocation still owns its temporary child processes.
