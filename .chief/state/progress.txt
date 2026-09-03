@@ -667,3 +667,84 @@ distinguish by behaviour. shellcheck is not installed on this host; CI carries
   it.** `fail "a `present` claim was not reported"` is command substitution. Same trap
   as the engine's heredocs, one register down; check with
   `grep -n '[^\\]`' test/<file>.sh` before committing.
+
+## Post-story fix — the merge phase reported MERGED on a checkout that never happened
+Thu Sep  3 2026
+
+Every story on this branch was already `passes:true`, but the merge-time
+`.chief/verify.sh` came back RED and left a `⚠️ PRIOR VERIFICATION FAILED` block at the
+top of this log. One failure, and it was NOT in this tasklist's code:
+
+    merge-batch| MERGE-BATCH FAIL: PART A: alpha was not retired to completed/
+    BYSTANDER FAIL: test/merge-batch.sh failed
+
+Unlike 116's PART C flake, **the test was right and the engine was wrong.** Isolated
+PART A harness: reproduced 1 in 4 under load. The failing repo's evidence:
+
+    alpha.log|  Already up to date.
+    alpha.log|    !! branch kept: chief/alpha is not an ancestor of main (unmerged work)
+    alpha.log|  >> alpha MERGED @f19d300        <-- f19d300 is alpha's STORY commit
+    reflog|  @{15} checkout: moving from main to chief/alpha
+    reflog|  @{14} commit: chore(chief): alpha complete @f19d300 — record + retire
+    reflog|  @{13} checkout: moving from chief/alpha to main
+
+There is no `chief/alpha -> main` entry between @{15} and @{14}: the merge phase's
+`work_checkout "$work_repo" "$work_base"` **failed and was ignored** (its output is
+`>/dev/null 2>&1` and its return value was unused). HEAD stayed on the branch, so
+`git merge --no-ff chief/alpha` merged the branch into itself — `Already up to date.`,
+**exit 0** — and the site read that as success: status `MERGED @<branch tip>`,
+`finalize_merged` writing the completed record + retire commit onto **chief/alpha**
+(@{14}), main never moving, `completed/` never getting a record, and the run summary
+printing `alpha  done  [MERGED @e4619e0]`. @{13} is the EXIT trap's identical checkout
+landing first time seconds later — which is what makes the cause transient.
+
+Confirmed the mechanism deterministically in a scratch repo: with `.git/index.lock`
+held, `git checkout main` exits **128** and HEAD does not move; `git merge --no-ff feat`
+then prints `Already up to date.` and exits **0**. The contention is real — the project
+index is SHARED, and the reconcile step's isolation guard (`git checkout -- tasks/…`)
+and `finalize_merged`'s `rm`/`add`/`commit` both mutate it, which is why both already
+take `idx_lock`. `work_checkout` never did.
+
+Files:
+- `engine/driver.sh` — `work_checkout` RETRIES (`CHIEF_CHECKOUT_RETRIES`, default 3,
+  1s apart) instead of losing a race git does not retry for us; new
+  `work_checkout_or_stop` is the GUARDED form and is used at BOTH ends of the merge
+  phase. The branch checkout's existing 3-line inline arm collapses into it, so
+  `run_worker` gets one line SHORTER, not longer, and the helper has two call sites.
+- `engine/mergequeue.sh` — `mq_merge_member`'s base checkout guarded the same way, via
+  the `mq_member_fail` shape its own branch checkout already used.
+- `test/merge-checkout.sh` (new, in all three gate lists) — a `git` shim holds a REAL
+  `.git/index.lock` across `checkout <base>`. PART A holds it for ONE attempt (retried,
+  merged, retired); PART B holds it for every attempt (CHECKOUT-FAILED, 0 merge commits,
+  nothing retired, nothing stranded on the branch, no `>> solo MERGED`).
+- `VERSION` 0.9.12 → 0.9.13 + README/ROADMAP bold; `CLAUDE.md` invariant.
+
+### Learnings for future iterations
+
+- **A git command whose no-op case exits 0 needs its PRECONDITION checked, not its own
+  exit status.** `git merge --no-ff X` cannot fail when HEAD is already X — so the merge
+  site's success check was structurally incapable of catching a base checkout that did
+  not happen. The same shape is worth auditing anywhere the engine does
+  "position, then act".
+- **A guarded call and an unguarded call to the same helper, three lines apart, is the
+  smell.** driver.sh checked `work_checkout`'s return for the BRANCH and ignored it for
+  the BASE. The asymmetry was the whole bug; the fix was to give both ends one guarded
+  helper rather than to add a second inline arm (which `run_worker` has no room for).
+- **`idx_lock` was NOT the right instrument here.** It would not cover git processes
+  chief does not own (an operator's editor, a `git status` in the same checkout), and
+  holding it across a rebase + a ten-minute verify would make every peer's isolation
+  guard wait out its 120s break. A bounded retry plus an honest non-zero is proportionate.
+- **Reproduce a load-dependent failure in an ISOLATED harness before touching anything.**
+  `sed -n '47,199p' test/merge-batch.sh` + a pinned `ROOT` ran PART A alone in ~90s and
+  hit 1 in 4; the full test is six parts. Keep the temp dir on failure (`trap` printing
+  `WORK=` instead of `rm -rf`) — the reflog was the whole diagnosis and it lives there.
+- **Then make it DETERMINISTIC for the committed test.** A shim that holds the real lock
+  turns "1 in 4 under load" into "always", and the same lever expresses both the
+  transient and the persistent case. A flaky reproduction is not a regression test.
+- **Mutation-check a fix like this in a COPY of the tree** (`cp -R` the worktree,
+  `git checkout HEAD -- engine/driver.sh engine/mergequeue.sh` in the copy). Both parts
+  failed there with the exact production symptom — `MERGED @<branch tip>` in the summary
+  beside `unmerged branches for review: chief/solo`. Note the copy shares the worktree's
+  gitdir, so check `git status` in the REAL tree afterwards.
+- The driver RE-SEEDS `.chief/state/progress.txt` at run start; this file is tracked, so
+  it was restored from `git show HEAD:` before appending (as 116's note already warned).

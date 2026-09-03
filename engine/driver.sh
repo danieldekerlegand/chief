@@ -1079,11 +1079,51 @@ submodules_sync() {
 # ref move, and the very next thing every caller does is ask whether the tree is clean.
 # Returns the checkout's own status (git's chatter is suppressed exactly as it was at
 # each call site; the sync's is not — a submodule that moved under the operator says so).
+#
+# RETRIED, because the project index is SHARED and git does not retry for us. Every
+# sibling worker mutates the same index — the reconcile step's isolation guard
+# (`git checkout -- $TASKS_REL/<name>.json`) and finalize_merged's `rm`/`add`/`commit`
+# both do, which is why both already take idx_lock. A checkout that loses that race
+# dies with `Unable to create '.git/index.lock': File exists` and rc 128, and the very
+# next attempt succeeds — which is exactly what main's reflog showed the one time this
+# was caught (no base checkout entry at all, then the EXIT trap's identical checkout
+# landing first time, seconds later). An idx_lock here would not be enough on its own:
+# git processes chief does not own — an operator's editor, a `git status` in the same
+# checkout — contend for that file too, and holding chief's lock across a rebase and a
+# ten-minute verify is not an option. So: bounded attempts, then an honest non-zero.
 work_checkout() {
-  local repo="$1" ref="$2" label="${3:-chief}" rc=0
-  git -C "$repo" checkout "$ref" >/dev/null 2>&1 || rc=$?
+  local repo="$1" ref="$2" label="${3:-chief}" rc=0 try=0
+  while :; do
+    rc=0; git -C "$repo" checkout "$ref" >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] && break
+    [ "$try" -ge "${CHIEF_CHECKOUT_RETRIES:-3}" ] && break
+    try=$(( try + 1 )); sleep 1
+  done
   [ "$rc" = 0 ] && submodules_sync "$repo" "$label"
   return "$rc"
+}
+
+# work_checkout_or_stop REPO REF NAME LIVE — the GUARDED form, at BOTH ends of the merge
+# phase (onto the branch to rebase+verify it, then back onto the base to merge it).
+# Non-zero means STOP: nothing was merged and the branch is untouched.
+#
+# The BASE half is why this exists. A `git checkout <base>` that fails leaves HEAD on
+# the BRANCH — and `git merge --no-ff <branch>` against its own tip prints
+# "Already up to date." and exits ZERO. So the merge site read success: it recorded
+# `MERGED @<branch tip>`, and finalize_merged wrote the completed record and the retire
+# commit onto the FEATURE BRANCH. The base never moved, the tasklist's work was absent
+# from it, `completed/` had no record, and the run summary still said done — the one
+# failure shape this engine must never produce. Caught by test/merge-batch.sh PART A,
+# whose `retired` assertion was the only thing that noticed. The branch checkout above
+# was already guarded and the base checkout was not; that asymmetry was the whole bug.
+work_checkout_or_stop() {
+  local repo="$1" ref="$2" name="$3" live="$4"
+  work_checkout "$repo" "$ref" "$name" && return 0
+  live_set "$live" phase=checkout-failed
+  event_emit tasklist.checkout-failed name="$name" state=failed detail="git checkout $ref failed in $repo"
+  echo "CHECKOUT-FAILED" > "$STATE/$name.status"
+  echo "!! $name: git could not check out $ref in $repo (retried) — nothing merged, $ref untouched, branch kept for the next run"
+  return 1
 }
 
 # Why would `git rebase` REFUSE to even start? A non-zero rebase exit is NOT by
@@ -2850,9 +2890,7 @@ run_worker() {
       remove_worktree "$wt" "$name"
       # work_checkout, never a bare `git checkout` — a gitlink the ref moves and the
       # working tree does not is not uncommitted work (see its header).
-      work_checkout "$work_repo" "$branch" "$name" || { live_set "$live" phase=checkout-failed
-          event_emit tasklist.checkout-failed name="$name" state=failed detail="git checkout $branch failed in $work_repo"
-          echo "CHECKOUT-FAILED" > "$STATE/$name.status"; exit 0; }
+      work_checkout_or_stop "$work_repo" "$branch" "$name" "$live" || exit 0
       # The fork point, read BEFORE the rebase rewrites the branch onto base — it is
       # what makes "which commits landed on base under this file" answerable in
       # EITHER conflict arm (see conflict_report). One rev-parse on the happy path.
@@ -2951,7 +2989,7 @@ run_worker() {
         exit 0
       fi
       live_set "$live" phase=merging
-      work_checkout "$work_repo" "$work_base" "$name"
+      work_checkout_or_stop "$work_repo" "$work_base" "$name" "$live" || exit 0
       if git -C "$work_repo" merge --no-ff "$branch" -m "Merge $branch (chief, auto-verified)"; then
         sha="$(git -C "$work_repo" rev-parse --short HEAD)"
         # finalize writes the completed record + retires the tasklist in the PROJECT,

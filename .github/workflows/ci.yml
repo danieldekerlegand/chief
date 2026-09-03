@@ -206,6 +206,9 @@ jobs:
       - name: Merge queue (batch tip verified ONCE; red tip bisected; ratchet attributed; absent, the floor verifies N times)
         run: bash test/merge-batch.sh
 
+      - name: Merge base checkout (a lost index.lock race is retried; a checkout that never lands never reports MERGED)
+        run: bash test/merge-checkout.sh
+
       - name: Verdict cache at the agent boundary (green verdict skips the re-run; moved tree / edited hook / red verdict never do)
         run: bash test/verify-cache.sh
 
