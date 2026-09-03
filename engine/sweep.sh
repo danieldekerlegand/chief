@@ -434,6 +434,5 @@ chief_sweep_startup() {
     done
   done
   echo "chief startup sweep: $([ "$dry" = "-n" ] && echo WOULD free || echo freed) $(chief_sweep_human "$bytes") across $n unreferenced worktree(s)"
-  CHIEF_SWEEP_STARTUP_BYTES="$bytes"; CHIEF_SWEEP_STARTUP_COUNT="$n"
   return 0
 }

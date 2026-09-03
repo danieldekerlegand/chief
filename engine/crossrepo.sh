@@ -18,19 +18,21 @@
 #
 # bash 3.2: no associative arrays, no mapfile.
 
-# SET-A-GLOBAL / PRINT-IT PAIRS. Every helper here that a hot loop calls comes in
-# two forms: a `_set` that assigns a global and forks nothing, and the printing form
-# callers have always used, implemented in terms of it. `$(f)` is a fork, and a
+# SET-A-GLOBAL / PRINT-IT PAIRS. Every helper here that a hot loop calls assigns a
+# global and forks nothing; where a caller reads the answer inline rather than
+# through that global, the printing form it has always used is implemented in terms
+# of the `_set` — never as a second copy of the rule. `$(f)` is a fork, and a
 # report resolving one edge per tasklist across a portfolio pays it thousands of
 # times — enough, measured, to cost more than every jq in the run put together. The
 # rule each pair expresses is still written once; only the way the answer comes back
-# differs.
+# differs. A printing form with no such caller is not part of the rule and is not
+# kept for symmetry: `crossrepo_completed` was one, and was removed as dead
+# (docs/explanation/dead-code-audit.md).
 CROSSREPO_ROOT=""
 CROSSREPO_COMPLETED=""
 crossrepo_root_set()      { CROSSREPO_ROOT="${REPO:-${CHIEF_PROJECT:-$PWD}}"; }
 crossrepo_completed_set() { CROSSREPO_COMPLETED="${COMPLETED:-${REPO:-${CHIEF_PROJECT:-$PWD}}/${TASKS_REL:-${CHIEF_TASKS_DIR:-tasks/chief}}/completed}"; }
 crossrepo_root()      { crossrepo_root_set;      printf '%s' "$CROSSREPO_ROOT"; }
-crossrepo_completed() { crossrepo_completed_set; printf '%s' "$CROSSREPO_COMPLETED"; }
 
 # A reference may be QUALIFIED as "<repo>:<tasklist>" to name work in a different
 # repo — e.g. "pinakes:10-koine-align". Bare names stay repo-local. <repo> is either
