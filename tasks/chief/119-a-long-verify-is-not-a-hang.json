@@ -1,0 +1,54 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/119-a-long-verify-is-not-a-hang",
+  "dependsOn": [],
+  "touches": ["engine/agent.sh", "engine/monitor.sh", "test", "docs", "VERSION"],
+  "iters": 6,
+  "warmup": [
+    "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
+    "sed -n '/^_beat_start()/,/^}/p' engine/agent.sh",
+    "sed -n '155,170p' engine/monitor.sh",
+    "grep -n 'phase=verifying' engine/driver.sh",
+    "sed -n '/provider-waiting     the DEFAULT/,/produced 0 bytes/p' engine/monitor.sh"
+  ],
+  "description": "`_agent_verify_final` runs the project's verify hook inside a COMMAND SUBSTITUTION and under the wrong phase, so a legitimately long final verify is indistinguishable from a hang. Measured on talos, 2026-09-03.\n\nWHAT WAS OBSERVED. `talos:83-slice-lane-execution` ran 7h41m and read `⚠ stalled in agent-turn — no activity for 1h06m, past its 15m limit`. The branch was HEALTHY: 7 commits, 58 files, 2,752 insertions, 4/4 stories passing, `stall: 0`. The agent emitted `<promise>COMPLETE</promise>` at log line 192 and the log ENDS THERE — 192 of 192 lines. It did not hang working; it hung finishing, invisibly.\n\nWHY IT WAS INVISIBLE — the first half:\n\n    output=\"$(run_verify \"$CHIEF_PROJECT\" \"$CHIEF_TASKLIST\" 2>&1)\" || rc=$?\n    printf '%s\\n' \"$output\"\n\nCommand substitution. Nothing reaches the log until the verify RETURNS. And `_beat_start` flips the phase to `writing` only when `_head` moves — so with the output captured, nothing moves, the record stops advancing, and the monitor has no signal but silence.\n\nWHY IT FLAGGED AT 15 MINUTES — the second half, and this one is nearly free. `monitor.sh`'s `STALE_PHASE_SECONDS` already gives `verifying` **3060s** against `provider-waiting`'s 900s, precisely because a verify legitimately takes tens of minutes. But `grep -n 'phase=verifying' engine/` returns exactly ONE call site — `driver.sh:2928`. `_agent_verify_final` never publishes it, so its verify is timed as an agent turn. The right threshold exists and this code path does not use it.\n\nWHAT MADE IT LONG RATHER THAN WEDGED. `83`'s diff touched 17 files under `talos/slices/` and `vendor/insimul/`, which arms the gate whose own comment states the cost: 'one Godot launch and one editor'. `test_godot_slice_driver.py` launches a real Godot process three times through `BridgeLauncher`; `test_unity_slice_driver.py` drives a `UnityEditor`. That is minutes at best and can block. The verify was probably doing its job — nobody could tell.\n\nRELATED AND NOT SUFFICIENT. `117` stopped `_agent_verify_final` re-running a verify whose verdict is already recorded. It did nothing about the case where the verify legitimately runs, which is this one. `117` also was not INSTALLED on the machine that produced this — `~/.chief/src` was 0.9.8 against a repo at 0.9.10 — so the run paid the duplication too. That is an operator gap, not a code gap, and this tasklist does not try to fix it.\n\nTHE MONITOR'S OWN RULE IS THE SPEC. `live.sh`: 'a wait must never render as work or as a hang.' `monitor.sh` on the provider-waiting threshold: '15m of silence in this phase is ~60 missed beats: the turn is not long, the ticker is DEAD.' Both are right, and both were defeated by a code path that goes quiet on purpose.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "The final verify streams, so the record keeps moving",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "`_agent_verify_final` streams the verify hook's output to the log as it is produced rather than capturing it in a command substitution. The exit status must still be the hook's — a pipeline that returns the wrong status here would let a red verify accept a completion, which is worse than the bug being fixed.",
+        "The verdict is still recorded through `verify_cache_record` exactly as now, and a failure still sets `COMPLETE_OK=0`. This story changes when bytes appear, not what the gate decides.",
+        "A test asserts output appears BEFORE the hook exits — drive a hook that prints, sleeps, then prints, and assert the first line is observable while it still runs. Asserting only on the final log contents cannot tell streaming from buffering.",
+        "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the VERSION bump the engine-change gate requires."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "It publishes the phase whose threshold already fits it",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "`_agent_verify_final` publishes `phase=verifying` for the duration of the hook and restores the prior phase afterwards. The threshold it needs already exists in `STALE_PHASE_SECONDS` at 3060s and had exactly one publisher; this adds the second.",
+        "The heartbeat keeps ticking across the verify, and `_beat_start` does NOT clobber `verifying` with `writing` when output moves. Streaming output would otherwise re-label a verify as writing on its first line, which trades one wrong phase for another.",
+        "`chief ps` on a running final verify reads as verifying with a live tick — not as a stalled agent turn. State what it renders; a phase nobody can see in the monitor has not been published where it matters.",
+        "GATES: as US-1."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "The stall flag still fires on a real hang",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "A NEGATIVE CONTROL: a hook that produces no output and never exits must STILL be reported stale once `verifying`'s threshold passes. The fix must not buy quiet by exempting the phase — `monitor.sh` refuses that trade explicitly for provider-waiting ('It wants a LONGER threshold, not silence'), and the same reasoning binds here.",
+        "A test distinguishes the two cases the incident conflated: a long verify that is emitting (not stale) and a dead verify that is not (stale). Both assertions, or the change has moved the problem rather than fixed it.",
+        "`docs/guides/monitoring.md`'s phase table records that `verifying` now has two publishers and what a reader should conclude from it, since that table is what an operator consults at 1am.",
+        "GATES: as US-1."
+      ]
+    }
+  ]
+}
