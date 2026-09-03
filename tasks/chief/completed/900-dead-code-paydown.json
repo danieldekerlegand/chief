@@ -19,7 +19,17 @@
         "Separate genuinely-dead from deliberately-unexercised. The second class exists here on purpose (refusal paths, guards, unreached tiers that say so) and deleting it removes a stated contract.",
         "Include duplicated implementations as first-class findings, not just unused ones — two implementations of one behaviour is the failure mode that costs most later, because they drift.",
         "GATES: the repo's own verify green."
-      ]
+      ],
+      "diffSize": {
+        "files": 5,
+        "lines": 424,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-2",
@@ -31,7 +41,17 @@
         "The full gate passes after each step. A removal that needs a test deleted to stay green is a removal of something live — say so and stop rather than adjusting the test.",
         "Anything NOT removed that looked dead is recorded with why it survived. That record is worth more than the deletions: it is what stops the next sweep re-litigating the same files.",
         "GATES: the repo's own verify green."
-      ]
+      ],
+      "diffSize": {
+        "files": 14,
+        "lines": 260,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -42,7 +62,31 @@
         "Report candidates the sweep could not resolve — reachable only through dynamic dispatch, reflection, generated code, or a consumer outside this repo — and leave them in place. An honest 'undecidable' list is a legitimate result.",
         "State the limits of the method: what a static search over this tree cannot see. Cross-repo consumers are the obvious one, and this portfolio has already been bitten by exactly that.",
         "GATES: the repo's own verify green."
-      ]
+      ],
+      "diffSize": {
+        "files": 4,
+        "lines": 353,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "48cc0ba",
+  "gates": {
+    "local": {
+      "state": "passed",
+      "detail": "the project verify hook (verify.sh) ran and exited 0"
+    },
+    "ci": [
+      {
+        "workflow": "ci",
+        "state": "unknown",
+        "detail": "a push of main can start it; whether it RAN for 48cc0ba is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+      }
+    ]
+  }
 }
