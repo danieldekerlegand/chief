@@ -291,6 +291,52 @@ backdate() { # backdate FILE AGE
   done
 }
 
+# THE ONE RACE THIS FILE HAS TO PROBE AROUND, and it is not a defect in the engine.
+# `_verify_tick` prints a line and THEN writes the record — so at the instant a marker
+# reaches the log, that write is still in flight. Sampling either side of it once is
+# wrong in both directions, and both were observed under the parallel load of the
+# bystander suite (6 concurrent runs of this file; standalone it never showed):
+#
+#   the backdate is CLOBBERED — the in-flight tick lands after the `sed` and restores
+#   the record to `now`. PART D then measures a heartbeat that was never aged and reads
+#   HB_TICKED=0; PART E's 40m row renders `↳ agent-turn for 40m · iter 1 · 0s ago` and
+#   takes no flag, so the reproduction stops reproducing.
+#
+#   the tick HAS NOT LANDED — `hb_after` is read the moment the marker appears, which
+#   is before the bump, and a working ticker reads as a dead one.
+#
+# PART F states the rule for the second half in its own words ("The marker reaching the
+# LOG is not the tick") and establishes quiescence by hand for the first. These two
+# helpers are that discipline, factored so D and E cannot drift from it.
+
+# backdate_settled FILE AGE — backdate, and CONFIRM the write survived. Every call site
+# is a point where the hook is BLOCKED on a release file, so at most one tick can be in
+# flight: once a read-back comes back aged it STAYS aged, and re-asserting until it does
+# is bounded. Also covers the quieter form of the clobber — a tick landing between
+# `backdate`'s own `live_get` and its `sed` leaves the pattern unmatched and the file
+# untouched, which looks identical to success.
+backdate_settled() { # backdate_settled FILE AGE
+  local v deadline; deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    backdate "$1" "$2"
+    v="$(live_get "$1" heartbeat)"; [ -n "$v" ] || v=0
+    [ "$(( $(date +%s) - v ))" -ge "$(( $2 / 2 ))" ] && return 0
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 0.2
+  done
+}
+
+# await_tick FILE FLOOR — wait for the heartbeat to rise past FLOOR, rather than
+# sampling it once and calling a write that has not happened yet a ticker that is dead.
+await_tick() { # await_tick FILE FLOOR
+  local deadline; deadline=$(( $(date +%s) + 60 ))
+  while [ "$(live_get "$1" heartbeat)" -le "$2" ]; do
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 0.2
+  done
+  return 0
+}
+
 # shellcheck source=engine/live.sh
 . "$ROOT/engine/live.sh"
 
@@ -348,7 +394,7 @@ EOF
 # observed from outside while it runs. Sets $PHASE_AT_VERIFY, $HB_TICKED (1 = the
 # output moved the record after it was backdated) and $PS_ROW.
 phase_probe() {
-  local label="$1" engine="$2" repo st live apid hb_before hb_after
+  local label="$1" engine="$2" repo st live apid hb_before
   repo="$WORK/repo-$label"; scratch_repo "$repo"
   st="$WORK/state-$label"; live="$st/parallel/vs.live.json"
   mkdir -p "$st/parallel"
@@ -356,18 +402,22 @@ phase_probe() {
   spawn_iteration "$label" "$repo" "$engine" "$live" "$WORK/cache-$label" "$WORK/phook.sh"
   apid=$APID
 
-  PHASE_AT_VERIFY=""; HB_TICKED=0; PS_ROW=""
+  PHASE_AT_VERIFY=""; HB_TICKED=0; PS_ROW=""; hb_before=""
   if await "$MARK_FIRST" "$LAST_OUT" "$apid"; then
     PHASE_AT_VERIFY="$(live_get "$live" phase)"
-    backdate "$live" 4000                       # the ticker's only way to prove itself
+    # The ticker's only way to prove itself — and it has to SURVIVE the first line's
+    # own tick, or the baseline it is measured against is just `now`.
+    backdate_settled "$live" 4000 \
+      || fail "PART D/E: the backdate never held — something kept restoring the record while the gate was blocked, so the ticker cannot be measured against it"
     hb_before="$(live_get "$live" heartbeat)"
   fi
   : > "$GO"
   if await "$MARK_SECOND" "$LAST_OUT" "$apid"; then
-    hb_after="$(live_get "$live" heartbeat)"
-    [ -n "${hb_before:-}" ] && [ "${hb_after:-0}" -gt "$(( hb_before + 100 ))" ] && HB_TICKED=1
-    # …and now what `chief ps` says about it at 40m of quiet.
-    backdate "$live" "$STALE_AGE"
+    if [ -n "$hb_before" ] && await_tick "$live" "$(( hb_before + 100 ))"; then HB_TICKED=1; fi
+    # …and now what `chief ps` says about it at 40m of quiet. The second line's tick
+    # has landed by here and the hook is blocked on $GO2, so the record is quiescent.
+    backdate_settled "$live" "$STALE_AGE" \
+      || fail "PART D/E: the record would not stay aged to ${STALE_AGE}s for the render"
     PS_ROW="$(ps_row "$label" "$apid" "$repo" "$st")"
   fi
   : > "$GO2"

@@ -1133,3 +1133,71 @@ Files:
   around the gate fails PART E first; re-run with that part's `fail` sed-swapped to
   `note` in a copy under `test/` — under `test/`, because the file derives `$ROOT` from
   `${BASH_SOURCE[0]}` and a copy in `/tmp` looks for the engine at `/engine`.
+
+---
+
+## Verification recovery — test/verify-stream.sh PART D/E were RACY under load
+
+The branch came back from the merge gate red on `test/verify-stream.sh` PART D
+("the record was NOT bumped by the gate's own output") with all three stories
+already passing. The engine was NOT at fault — the flake is in the probe.
+
+WHAT REPRODUCES IT. Standalone the file is green every time; that is why it passed
+in US-2's and US-3's own runs and failed under `test/bystander.sh`, which runs it
+as 1 of 58. Six concurrent runs of the file: 2 failed, in two different places —
+PART D on `HB_TICKED=0`, and PART E with the row rendering
+`↳ agent-turn for 40m · iter 1 · 0s ago`, i.e. a heartbeat that was never aged.
+
+THE CAUSE, one race with two faces. `_verify_tick` PRINTS a line and THEN writes
+the record, so at the instant a marker reaches the log that `live_set` is still in
+flight, and `phase_probe` sampled once on each side of it:
+
+  - `backdate` (live_get + sed + mv) races that write. The tick lands after the
+    `sed` and restores `heartbeat` to `now`, so the baseline `hb_before` is `now`
+    and the second line cannot beat it by 100 -> PART D. In PART E the same
+    clobber leaves a fresh heartbeat at 40m, so no stall flag -> the reproduction
+    stops reproducing. (Quieter variant: a tick between backdate's own `live_get`
+    and its `sed` leaves the pattern unmatched, and a no-op backdate looks exactly
+    like a successful one.)
+  - `hb_after` was read the moment `MARK_SECOND` hit the log — before the bump —
+    so a working ticker reads as a dead one.
+
+PART F already had both right and said so ("The marker reaching the LOG is not the
+tick"), and established quiescence by hand before its own backdate. D and E did
+not. The fix factors F's discipline into two helpers so the parts cannot drift:
+`backdate_settled` (re-assert until a read-back comes back aged — bounded, because
+every call site is a point where the hook is BLOCKED on a release file, so at most
+one tick is in flight) and `await_tick` (poll for the bump past a floor instead of
+sampling once). Test-only change; no engine edit, so VERSION stays 0.9.15.
+
+MEASURED. Before the fix: 2 of 6 concurrent runs failed (PART D once, PART E once)
+— that is the reproduction, run before the fix, and it is the mutation check.
+After: 16 of 16 concurrent runs green, plus standalone green at ~20s wall.
+test/stall-flag.sh PASS, test/liveliness.sh PASS, test/verify-cache.sh PASS,
+test/doc-sync.sh PASS, test/version-bump.sh PASS. bash -n clean over bin/chief,
+engine/*.sh, test/*.sh, install.sh. check-doc-links: 0 dead references.
+Quality ratchet OK — no tracked metric regressed. shellcheck not installed on this
+host (CI enforces it).
+
+### Learnings for future iterations
+
+- **A test that samples a record around a marker in the log is racy by
+  construction.** Everywhere in this engine the pattern is *emit the bytes, then
+  write the record* — `_verify_tick` does it, and it is the right order (the
+  record is stamped for output that has actually left). So the log marker is
+  strictly EARLIER than the state change it implies. Never read the record on the
+  strength of having grepped the log: **poll the record**. Write the assertion as
+  "wait until the value moves past X, with a deadline", never as "read it once".
+- **An external write to a liveliness record must be CONFIRMED, not issued.**
+  `live_set` is a read-modify-write and so is any `sed`-in-place backdate; they
+  clobber each other silently and in both directions. Re-assert until a read-back
+  agrees. This is only bounded because the fixture can park the subject first
+  (a hook blocked on a release file) — a probe with no such quiescent point has
+  no safe backdate at all, and needs a different instrument.
+- **Green standalone is not green in the suite.** `test/bystander.sh` runs 58
+  files and the box is loaded; a timing-sensitive new test should be run ~8-way
+  concurrent before it is called done. That reproduces in seconds what otherwise
+  surfaces as one red merge gate ten minutes into a verify.
+- **When the merge gate comes back red with every story passing, suspect the test
+  before the engine** — but prove it: reproduce the failure first, on the unfixed
+  file, and keep that reproduction as the mutation check.
