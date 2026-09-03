@@ -31,7 +31,17 @@
         "The claim vocabulary is deliberately SMALL and every member is mechanically checkable — at minimum 'this path exists downstream' and 'this path does not exist downstream'. A claim that cannot be reduced to a predicate does not belong in the registry; it stays prose, and stays invisible, exactly as an undeclared `downstreamCounterpart` does.",
         "koine's real case is the acceptance test: a claim that `agora console/src/kcs/scenarios/resume-checkpoint.ts` is ABSENT must report as violated against today's agora, where it exists.",
         "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the VERSION bump the engine-change gate requires."
-      ]
+      ],
+      "diffSize": {
+        "files": 9,
+        "lines": 369,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -43,7 +53,17 @@
         "The check is PRINT-ONLY. It must not fail `chief lint`, must not refuse a run, and must not block authoring — the existing counterpart check's reasoning applies unchanged: a judgement call on somebody else's merge should not stop work that is otherwise fine.",
         "An unresolvable repo reports as unresolvable rather than as a violation, distinguishing 'that repo is not checked out here' from 'the claim is false'. `crossrepo_locate` already draws that line; do not redraw it.",
         "GATES: as US-1."
-      ]
+      ],
+      "diffSize": {
+        "files": 9,
+        "lines": 186,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -55,7 +75,31 @@
         "A NEGATIVE CONTROL proves it does not over-report: a claim that still holds must produce NO output. A checker that flags everything is as useless as one that flags nothing, and this one runs against repos that legitimately drift.",
         "A document with no declared claims produces no output and costs nothing. Most documents will never declare one, and the mechanism must not make them pay for it.",
         "GATES: as US-1."
-      ]
+      ],
+      "diffSize": {
+        "files": 9,
+        "lines": 282,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "678ac94",
+  "gates": {
+    "local": {
+      "state": "passed",
+      "detail": "the project verify hook (verify.sh) ran and exited 0"
+    },
+    "ci": [
+      {
+        "workflow": "ci",
+        "state": "unknown",
+        "detail": "a push of main can start it; whether it RAN for 678ac94 is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+      }
+    ]
+  }
 }
