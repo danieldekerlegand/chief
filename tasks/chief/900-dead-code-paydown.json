@@ -12,8 +12,8 @@
     {
       "id": "US-1",
       "title": "An inventory, measured before anything is removed",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "Inventory shipped as docs/explanation/dead-code-audit.md, linked from docs/README.md. Every candidate names its search command and scope. Measured: 560 production shell functions scanned, exactly 1 with zero references (crossrepo_completed, engine/crossrepo.sh:33); 98 single-call-site (excluded as a decomposition metric, not liveness); 142 CHIEF_* identifiers scanned, 3 write-only; 12 duplicate definitions found and ALL 12 classified as deliberate degradation stubs (Class B, do not remove); 3 test files in zero gate lists; 1 script invoked by nothing; 0 commented-out blocks; 0 unreferenced docs/templates/fixtures. Genuinely-dead (Class A) and deliberately-unexercised (Class B) are separate sections, and Section 5 records 11 candidates that looked dead and are live, with why. Gate: chief verify exit 0, GREEN — path-scoped to the changed paths (docs + tasklists): doc-links 0 dead vs 0 on main, tasklists jq parse OK; verdict RECORDED for tree 45c5aafe. chief lint: 4 tasklists clean. quality ratchet: no code diff vs main.",
       "acceptanceCriteria": [
         "Produce a checked-in inventory of candidates with, for each, the SEARCH that found it unreferenced — the command and its scope. A candidate list without its method is unreviewable, and this is the artifact a human approves before deletion.",
         "Separate genuinely-dead from deliberately-unexercised. The second class exists here on purpose (refusal paths, guards, unreached tiers that say so) and deleting it removes a stated contract.",

@@ -765,3 +765,53 @@ merge-bar witness.
 
 - A long, stateful integration fixture must run as one invocation: do not retry it while
   a previous invocation still owns its temporary child processes.
+
+---
+## 900-dead-code-paydown — US-1: An inventory, measured before anything is removed (2026-09-03)
+
+Wrote `docs/explanation/dead-code-audit.md` — the checked-in candidate inventory, with
+the exact search behind every finding, and linked it from `docs/README.md` (whose own
+rule is "a document not linked here does not exist"). No code changed.
+
+WHAT THE SEARCHES ACTUALLY FOUND (numbers, so US-2 does not re-derive them):
+  • 560 production shell functions (bin/chief + engine/*.sh + install.sh) checked for
+    references across every TRACKED file, word-boundary, definition line excluded.
+    Exactly ONE has zero references: `crossrepo_completed()` (engine/crossrepo.sh:33).
+    98 have exactly one — that is the quality ratchet's `single_use_functions` metric,
+    NOT a liveness finding, and several are one-call-site by stated design.
+  • 12 function names defined in two production files. ALL TWELVE are degradation
+    stubs behind `if [ -f "$DIR/<module>.sh" ] … else <stub> fi`, each with the reason
+    written at the site. Deleting them would leave every test green and remove chief's
+    entire older-engine-tree compatibility story. This is the single most important
+    line in the audit.
+  • 142 CHIEF_* identifiers split into reads/writes. Three are write-only:
+    CHIEF_SWEEP_REFUSED (but its own comment declares it an output, so Class B) and
+    CHIEF_SWEEP_STARTUP_BYTES/_COUNT (nothing declares those — Class A).
+  • 3 test files registered in ZERO of the three gate lists: parked-decisions, ps-all,
+    update-reroot. parked-decisions is cited as run in three of 106's story notes, so
+    it LOST its registration. Likely a re-registration, not a deletion.
+  • scripts/check-tasklist-categories.mjs (109 lines) is invoked by nothing —
+    verify.sh runs check-doc-links.mjs and not this one.
+  • ZERO commented-out code blocks, ZERO unreferenced docs/templates/fixtures.
+
+## Learnings for future iterations
+
+- **`mapfile` does not exist on this host** (bash 3.2, macOS) and **the Bash tool's
+  shell is zsh**, which does NOT word-split unquoted `$VAR`. Two scans silently
+  returned "everything is dead" and "nothing is dead" before that was noticed. Any
+  multi-file scan goes in a `/tmp/*.sh` run as `bash /tmp/x.sh`, and uses `git grep`
+  (tracked files, no file-list array needed) rather than expanding a path list.
+- **Substring matching makes a dead-code scan useless.** `grep -F "$fn"` over short
+  names (`status`, `field`, `render`) reports every function as live. The scan must be
+  `git grep -nE "(^|[^A-Za-z0-9_])${fn}([^A-Za-z0-9_]|$)"` with the DEFINING line
+  filtered out by `file:line:` prefix.
+- **In this engine, a second definition of a name is a compatibility STUB, not
+  duplication.** engine/agent.sh, engine/monitor.sh each carry a block of them. Check
+  for the enclosing `if [ -f "$_AGENT_DIR/x.sh" ]` / `if [ -f "$_MON_DIR/x.sh" ]`
+  before calling anything a duplicate.
+- **`shellcheck` is not installed locally** (it is in CI at `-S error`, which reports
+  neither SC2034 nor SC2317). A dead-variable scan here is hand-rolled and strictly
+  weaker than shellcheck's — say so rather than implying coverage.
+- The two structural false-positive generators for a shell dead-variable scan are
+  `awk -v NAME=…` bindings and `eval "_pfx_$key=…"` indirect expansion
+  (engine/live.sh's `_lv_*`). Both are read; neither is greppable.
