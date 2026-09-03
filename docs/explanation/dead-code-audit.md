@@ -1,7 +1,8 @@
 # Dead-code audit — the inventory, and the searches behind it
 
 > **Status:** Current · **Audited:** 2026-09-03 against `VERSION` 0.9.13 ·
-> **Disposition:** §8, 2026-09-03 against `VERSION` 0.9.14 · **Owner:** chief
+> **Disposition:** §8, 2026-09-03 against `VERSION` 0.9.14 ·
+> **Undecidable + limits:** §§9–10, same day · **Owner:** chief
 
 This is the artifact a human approves **before** anything is deleted. Every candidate
 below names the search that found it, and the scope that search ran over, so the
@@ -285,7 +286,9 @@ more than reading it.
 
 ## 6. Limits of this method
 
-Recorded here in outline; US-3 states them in full.
+The outline, written while the inventory was being taken. **§10 states these
+in full** — including the ones this outline did not know about — and **§9** is
+the list of candidates they leave undecidable.
 
 - **`shellcheck` is not installed on the audit host**, so `SC2034` (assigned but
   unused) and `SC2317` (unreachable command) contributed nothing. CI runs shellcheck
@@ -397,3 +400,263 @@ wonder why they are in the diff.
 - The **CI parse failure** in §8.2, which was found by asking whether a CI
   registration means anything.
 
+
+---
+
+## 9. Undecidable — what the sweep could not resolve, and left in place
+
+Written 2026-09-03 against `VERSION` 0.9.14, after the removals in §8.
+
+§§2–4 are the findings the searches **resolved**. This section is the other
+result, and it is a legitimate one: candidates a static search over this tree
+**cannot decide**, because the thing that would decide them is not in the tree.
+Every row below was examined and **left exactly where it is**. None of it is
+scheduled for a later sweep — an item here is not "deferred", it is *reported as
+undecidable*, which is the honest terminal state until something outside a grep
+(a trace, a subscriber inventory, a sibling-repo scan) is brought to it.
+
+The classes are ordered by how far the missing evidence lives from this file.
+
+### 9.1 Names that do not exist until runtime — `eval` and indirect expansion
+
+**Ten** executable `eval` sites and **one** `${!VAR}` in the production tree:
+
+```sh
+git grep -nE '(^|[^A-Za-z0-9_])eval[[:space:]]' -- bin engine install.sh scripts templates
+git grep -nE '\$\{![A-Za-z_]' -- bin engine install.sh scripts templates
+```
+
+They split into two kinds, and only the second is undecidable *within* this repo.
+
+| Site | What it constructs | Decidable here? |
+|---|---|---|
+| `engine/live.sh:148,154,167` | `_lv_<key>` for each key in `$LIVE_FIELDS` | **No** by grep — but `LIVE_FIELDS` (live.sh:101) is a literal list of 16 names, so the family is closed and enumerable *by reading that line*. This is why `CLAUDE.md` states `live_set`'s three-edit rule: the compiler cannot see it either |
+| `engine/gitenv.sh:64,65` | `GIT_CONFIG_KEY_$n` / `GIT_CONFIG_VALUE_$n` | **No** — and doubly so: the consumer is **git itself**, not chief. Nothing in this repo will ever reference those names |
+| `engine/quality.sh:766` (`qq_tol`) | `CHIEF_QUALITY_TOL_<metric>`, metric from data | Closed **today**: `QUALITY_METRICS_KNOWN` names 11 metrics and `qq_default_tolerances` gives exactly 11 defaults. A twelfth metric would read a name that appears nowhere in this tree, and no search would notice |
+| `engine/quality.sh:799,801` (`eval "$line"`) | any `CHIEF_QUALITY_*` name found in `.chief/quality.conf` or `.chief/config` | **No, and unboundedly so** — the names come from a config file in whatever repo the ratchet is run against |
+| `engine/agent.sh:2283`, `engine/driver.sh:2613`, `engine/lib.sh:188` | nothing — they evaluate **operator-supplied shell**: `CHIEF_ITER_HOOK`, the warm-up commands, the per-tasklist `verify` array | **No.** These are the boundary at which chief executes text this repository does not contain. A hook may call any chief function; a scan here sees an empty string |
+
+Nothing was removed on account of any of these. The `awk -v` bindings in §5 are
+the same phenomenon one language down.
+
+### 9.2 Called through a variable that holds a function name
+
+`engine/sweep.sh:327` and `:425` call `"$livefn" "$wt"` — the liveness predicate
+is **injected by name**, deliberately (`sweep.sh:288–296`: the rule belongs to
+`engine/reap.sh`, the deletion belongs to `sweep.sh`, and a test can then pin both
+halves against a fixture).
+
+It is decidable **today only by luck**: both callers pass the literal token
+`chief_reap_wt_live` (`engine/driver.sh:2264`, `engine/reap.sh:1245`), so a
+word-boundary grep finds it. The moment any caller composes the name — a
+`chief_reap_${kind}_live` — the callee becomes invisible and reads as a
+zero-reference function, which is precisely the shape §2.1 deleted on. Recorded
+so a future sweep checks the *call site*, not just the count.
+
+### 9.3 Call sites guarded by a runtime capability probe
+
+`command -v <function> >/dev/null 2>&1 && <function> …` is how the engine
+degrades when a module is absent (§3's twelve stubs are the other half of the
+same mechanism). **13** production functions are probed this way:
+
+```sh
+# per function name: references, minus the definition line, split on the probe form
+git grep -nE "command -v[[:space:]]+${fn}([^A-Za-z0-9_]|$)" -- bin engine
+```
+
+| Probed function | probe refs | other refs |
+|---|---|---|
+| `live_set` | 2 | 102 |
+| `event_emit` | 1 | 48 |
+| `live_get` | 1 | 46 |
+| `measure_gate` · `chief_prefix` · `chief_pid_alive` · `chief_scan_descendants` · `repeat_bump` · `chief_ns_foreign` · `research_validate` · `decision_verdict_file` · `chief_sweep_candidate` · `review_ask` | 1 each | 18 · 17 · 13 · 12 · 12 · 11 · 9 · 8 · 6 · 3 |
+
+**Measured result: none is probe-only.** Every one has real call sites, by an
+order of magnitude. So this generated no finding today — but the probe string
+*is* a textual reference, and it survives the deletion of the last genuine call
+site. A function whose last caller went away would still count as referenced,
+once, forever. This is the audit's clearest false-**negative** generator, and the
+only defence is the one used here: read the hits, do not count them.
+
+### 9.4 Reachable only from outside this repository
+
+Chief is installed onto a host and driven by hand and by sibling repos. Four
+dispatch arms are invoked by **nothing** in this tree, named in **no** README
+row, **no** document, and **no** usage block:
+
+| Alias | Primary |
+|---|---|
+| `generate` | `gen` |
+| `watch` | `monitor` |
+| `tail` | `logs` |
+| `subscribe` | `events` |
+
+```sh
+sed -n '/^case "\$cmd"/,/^esac/p' bin/chief        # the dispatch table
+git grep -nE "chief (generate|watch|tail|subscribe)([^a-z-]|$)" -- . 
+```
+
+They are undecidable in the ordinary way (someone's muscle memory or someone's
+script may type `chief watch`) and they are **structurally invisible to the gate
+that would otherwise catch them**: `test/doc-sync.sh:95` reduces each arm to
+`primary="${arm%%|*}"` before checking README coverage, so an alias can never
+fail doc-sync. That is a defensible choice for a gate about *documentation
+drift*; it means the four names have no reader in this repo at all. Left in
+place — deleting a synonym breaks a habit that leaves no trace here, and it is
+`901`'s call whether to document them instead.
+
+### 9.5 Operator input: read by the engine, assigned by nobody
+
+**13** `CHIEF_*` names are dereferenced in the production tree and assigned
+nowhere in it — they exist to be set by an operator, a container environment, or
+a sibling repo's `.chief/config`:
+
+```sh
+git grep -ohE 'CHIEF_[A-Z0-9_]+' -- bin engine install.sh templates .chief scripts | sort -u
+# per name: writes anywhere  vs  reads in bin/engine/install.sh
+git grep -nE "(^|[^A-Za-z0-9_])${v}=" -- .
+git grep -nE "\\\$\{?${v}[^A-Za-z0-9_]" -- bin engine install.sh
+```
+
+Whether any of them is ever set is **not decidable from this tree** — an
+environment variable has no declaration site. What *is* decidable is whether a
+reader of this repository could ever learn the name exists, and on that four of
+the thirteen fail: their **only** occurrence in any tracked file is the read
+itself.
+
+| Undiscoverable | Only occurrence | Effect if never set |
+|---|---|---|
+| `CHIEF_QUALITY_CONFIG` | `engine/quality.sh:790` | ratchet config path stays `.chief/quality.conf` |
+| `CHIEF_SWEEP_DEPTH` | `engine/sweep.sh:167` | artifact scan stays `-maxdepth 6` |
+| `CHIEF_SWEEP_MAX` | `engine/driver.sh:2264`, `engine/sweep.sh:390` (both reads) | startup sweep stays capped at 100 worktrees |
+| `CHIEF_SWEEP_STARTUP_DRY_RUN` | `engine/driver.sh:2262` | startup sweep deletes rather than reports |
+
+The other nine are reachable knowledge: `CHIEF_REAP_GRACE`, `CHIEF_CHECKOUT_RETRIES`
+(`CLAUDE.md`), `CHIEF_SWEEP_MIN_AGE` (`chief reap --help`, `engine/reap.sh:1291`),
+`CHIEF_EVENTS_KEEP_DAYS`, `CHIEF_IGNORE`, `CHIEF_STATUS_DEPTH`, `CHIEF_CLAIMS_FILE`,
+`CHIEF_ZONES`, `CHIEF_TEARDOWN_CRITICAL_GRACE` (all documented, and `CHIEF_ZONES`
+has three tests).
+
+None is a removal candidate — every one is a live default with a live read.
+The four are a **documentation** finding, which is `901`'s subject, not this
+tasklist's; recorded here so it inherits them measured.
+
+### 9.6 The event stream — a published surface with its consumer elsewhere
+
+`engine/events.sh` exists to be subscribed to by chief-cloud and embedding hosts
+(`docs/reference/events.md`). So "does anything read this event?" is a question
+about *other systems*.
+
+```sh
+git grep -ohE 'event_emit[[:space:]]+"?[a-z][a-z._-]+' -- bin engine \
+  | sed -E 's/event_emit[[:space:]]+"?//' | grep '\.' | sort -u
+# per type: named in test/ ?  named in docs/ or README ?
+```
+
+**33 distinct event types. 21 are asserted by no test. Four have no in-tree
+consumer of any kind** — no test, no document:
+
+| Emitted, and nothing here reads it |
+|---|
+| `story.unverified` |
+| `tasklist.queued` |
+| `tasklist.terminal-negative` |
+| `tasklist.unsatisfiable` |
+
+All four are emitted on real transitions the engine takes, so none is dead code
+by any reading. The undecidable half is on the **subscriber** side, and a
+subscriber outside this repository cannot subscribe to an event no document
+names — so these four are, again, discoverable-only-by-reading-the-source.
+Left in place; the same `901` note applies.
+
+### 9.7 Scaffolded into other repositories
+
+`templates/` is copied into a target repo by `chief init`; its contents then run
+**there**. `templates/tasklist.example.json` is referenced by no test:
+
+```sh
+for f in $(git ls-files templates); do
+  printf '%-40s tests=%s\n' "$f" "$(git grep -lF "$(basename "$f")" -- test | grep -c .)"; done
+```
+
+`verify.sh` (53), `config` (21), `agent-context.md` (3), `quality.conf` (2) and
+`zones.conf` (2) are all exercised; `tasklist.example.json` is the one whose only
+reader is a human in a repo `chief init` has run in. §1.5 correctly reported it
+as *referenced* — `bin/chief`'s `cmd_init` copies it by name — which is exactly
+the distinction this section exists to draw: **copied is not read.**
+
+### 9.8 Text whose consumer is a language model
+
+`engine/agent.sh` composes the prompt. Its headings, its ordering, and the
+`templates/agent-context.md` block appended to it are consumed by a model's
+attention, and no static or dynamic analysis of this repository decides whether a
+sentence in a prompt is load-bearing. `CLAUDE.md` already records the one
+mechanical trap here (a behavioural test must not grep a prompt for a string that
+`templates/agent-context.md` also quotes, or it matches when nothing was
+injected). Prompt text was therefore **excluded from this audit's scope
+entirely** rather than sampled — an audit that deleted a heading because no code
+read it would be measuring the wrong thing.
+
+---
+
+## 10. Limits of the method, in full
+
+§6 is the outline written while the inventory was being taken. This is the
+complete statement, including the limits §6 did not know about yet.
+
+**What the search is.** `git grep`, word-boundary, over tracked files, from the
+repo root, at a point in time. That is the whole instrument. Everything below
+follows from it.
+
+1. **No `shellcheck`.** It is not installed on the audit host; CI runs it at
+   `-S error`, which reports neither `SC2034` (assigned and unused) nor `SC2317`
+   (unreachable command) — the two checks that would matter most here. The §1.3
+   variable scan is a hand-rolled substitute and is **strictly weaker** than
+   either. No claim in this document should be read as "shellcheck agrees".
+2. **Runtime reachability was never measured.** No `set -x` trace, no coverage
+   run, no instrumented `chief run`. Every statement is about *text*, not about
+   *execution*. A function called on a path no test takes and a function called
+   on every iteration are indistinguishable to this method.
+3. **Constructed names are invisible** — §9.1. `eval`, `${!n}`, `awk -v`, and
+   config-file-driven variable creation each defeat grep completely.
+4. **A textual mention counts as a reference**, and three kinds of mention are
+   not calls: prose in `docs/` and `CLAUDE.md`, a `command -v <fn>` probe
+   (§9.3, 13 names), and a name inside a usage heredoc. *Measured:* re-running
+   the §1.1 scan restricted to executable paths
+   (`-- bin engine install.sh test scripts .chief .github templates`) leaves
+   **zero** functions with no reference — so prose kept nothing alive in this
+   tree today. The inflation is real and it produced no false negative here.
+5. **Deletion changes the question.** Reference counts were taken against one
+   tree. Removing a call site can turn a live function into a dead one, and the
+   audit does not re-run itself. §8's rule — re-run the search immediately
+   before each deletion and paste it into the commit — exists for exactly this.
+6. **Scope is tracked files, and the worktree is the boundary.** Gitignored
+   state, `$CHIEF_PREFIX`, and every sibling repository are outside it. This
+   audit ran **inside a git worktree**, where reaching up to the project checkout
+   or across to a sibling repo is forbidden by chief's own agent contract — so no
+   cross-repo consumer was checked, and none *could* have been. `bin/chief` is
+   installed onto a host and invoked by other repos' hooks; `engine/*.sh` is
+   sourced by `${BASH_SOURCE[0]}`-relative path from installs that may be older
+   or newer than this checkout. **This is the exact failure mode the portfolio
+   has already been bitten by** (the `content_qa` caller, the `docs/studioos`
+   tree cited by 93 files), and it is unmitigated here.
+7. **Version skew is a consumer this tree cannot enumerate.** An older install
+   sourcing a newer `engine/` module — and the reverse — is what §3's twelve
+   degradation stubs are for. Whether any host is actually running such a
+   combination is not knowable from here, which is why "every test stays green
+   without them" is not an argument for deleting one.
+8. **A published API has no local caller by design** — §9.6's event types,
+   §9.4's aliases, the `.chief/verify.sh` hook contract, `chief`'s exit codes.
+   For these, "no reference in this repo" is the *expected* reading and carries
+   no information about liveness.
+9. **Time.** §§1–5 were measured 2026-09-03 against `VERSION` 0.9.13; §§8–10 the
+   same day against 0.9.14, after the removals. Any later divergence is real —
+   re-run the searches rather than trusting the counts.
+
+**What would make the undecidable decidable**, in the order the cost is worth
+paying: install `shellcheck` (limit 1, minutes); a subscriber inventory for the
+event stream, owned wherever chief-cloud is (limits 8 and §9.6); a portfolio-wide
+`git grep` for `chief <subcommand>` run from *above* the repos rather than inside
+a worktree (limits 6 and §9.4); a traced `chief run` (limit 2). None of them is
+this tasklist's, and none of them is a reason to have deleted anything without
+them.

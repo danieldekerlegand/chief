@@ -881,3 +881,81 @@ this branch; +2 are the new merge-gate registrations) with the decoy alive and a
 orphan still reaped, doc-sync PASS (v0.9.14, 42 merged tasklists), tasklist jq parse +
 category coverage OK. Verdict RECORDED for tree fb83c89c. The CI-parse invariant is now
 in CLAUDE.md, beside the heredoc-backtick one it rhymes with.
+
+---
+## 900-dead-code-paydown — US-3: What the sweep could not decide (2026-09-03)
+
+Docs only, no code touched, nothing removed. `docs/explanation/dead-code-audit.md`
+gains **§9** (the undecidable list) and **§10** (the limits of the method, in full);
+§6 — which had promised "US-3 states them in full" — now points forward at both, and
+the header status line records them.
+
+WHY IT IS TWO SECTIONS. §9 is a list of *candidates*; §10 is a list of *properties of
+the instrument*. They are not the same claim, and collapsing them is how "we could not
+tell" turns into "we did not look". Each §9 class names the search that produced it and
+the number it produced, so an undecidable finding is re-runnable exactly like a
+decidable one.
+
+THE EIGHT CLASSES, with what each actually measured on this tree:
+
+- **9.1 constructed names** — 10 executable `eval` sites + 1 `${!VAR}`. Three of them
+  evaluate OPERATOR-SUPPLIED SHELL (`CHIEF_ITER_HOOK`, driver warm-ups, the per-tasklist
+  `verify` array): the boundary at which chief runs text this repo does not contain.
+  `gitenv.sh`'s `GIT_CONFIG_KEY_$n` is doubly undecidable — its consumer is **git**.
+  `LIVE_FIELDS` is a closed literal list of 16; the quality tolerance family is closed
+  today (11 KNOWN metrics, 11 defaults) and would silently open on a twelfth.
+- **9.2 dispatch through a variable** — `"$livefn" "$wt"` (sweep.sh:327,425). Decidable
+  ONLY because both callers pass the literal `chief_reap_wt_live`.
+- **9.3 `command -v <fn>` capability probes** — 13 functions. **None is probe-only**
+  (probe refs 1–2 against other refs 3–102). A measured negative, and the audit's
+  clearest false-NEGATIVE generator: the probe string outlives the last real caller.
+- **9.4 consumers outside the repo** — 4 dispatch aliases (`generate` `watch` `tail`
+  `subscribe`) invoked by nothing, in no README row, no doc, no usage block, and
+  STRUCTURALLY invisible to `test/doc-sync.sh:95`, which checks `${arm%%|*}` only.
+- **9.5 operator input** — 13 `CHIEF_*` read by the engine and assigned nowhere in the
+  tree; 4 (`CHIEF_QUALITY_CONFIG`, `CHIEF_SWEEP_DEPTH`, `CHIEF_SWEEP_MAX`,
+  `CHIEF_SWEEP_STARTUP_DRY_RUN`) occur ONLY at the read.
+- **9.6 the event stream** — 33 types, 21 asserted by no test, 4 with no in-tree
+  consumer of any kind.
+- **9.7 scaffolded code** — `templates/tasklist.example.json`, 0 test references
+  (verify.sh 53 · config 21 · agent-context.md 3 · quality.conf 2 · zones.conf 2).
+- **9.8 prompt text** — excluded from scope rather than sampled.
+
+§10's nine limits are the instrument: no shellcheck, no runtime trace, constructed
+names, mention-counted-as-reference (measured: 0 functions kept alive by prose alone),
+deletion changing the question, tracked-files-and-the-worktree-is-the-boundary,
+version skew, published-API-has-no-local-caller, and time. It closes with what would
+LIFT each, in cost order.
+
+### Learnings for future iterations
+
+- **"Undecidable" is a result, not a deferral — and it has to be measured like one.**
+  Every class here names its command and its count. Three of the eight came back as
+  measured NEGATIVES (no probe-only function, no prose-only function, the tolerance
+  family closed) and those are the most valuable rows in the section: they are what
+  stops 901 or a future sweep re-running the same scan.
+- **The `command -v <fn>` probe is a reference a grep cannot discount.** 13 names in
+  this engine carry one. If a future sweep counts references rather than reading them,
+  every one of those functions is permanently un-deletable and permanently un-auditable.
+- **An audit run inside a worktree cannot see a cross-repo consumer, by contract.**
+  Chief's agent rules forbid reaching out of the worktree, which is exactly the scope a
+  cross-repo liveness question needs. That is not a gap to be quietly fixed by reaching
+  anyway — it is stated as §10's limit 6, with "a `git grep` run from ABOVE the repos"
+  named as what would lift it.
+- **A gate can be structurally blind and still be right.** `test/doc-sync.sh` reduces
+  each dispatch arm to its primary name before checking README coverage, so four aliases
+  can never fail it. That is a defensible choice for a documentation-drift gate; it just
+  means the aliases have no reader in this repo, and a liveness audit has to know which
+  gate would have caught what.
+- macOS/zsh again: the multi-file scans went in `/tmp/*.sh` run as `bash`, `git grep`
+  throughout, word-boundary `-E` patterns with the defining `file:line:` prefix filtered
+  out. `grep -c .` rather than `wc -l` when the input may be a single empty line — `wc`
+  counts one where there is nothing.
+
+GATE (US-3): `chief verify` **exit 0, GREEN** — bystander block **57 test(s)** with the
+decoy run alive (orphan 23896 reaped, bystander 8730 left alone) · verify-cache OK (PARTS
+B–E) · CIGATE PASS · XREPO PASS · CLAIMS PASS · GEN OK · DOC-SYNC PASS (v0.9.14, 42 merged
+tasklists) · tasklists jq parse OK · doc-links **0 dead references**. Verdict RECORDED for
+tree `e5288a63`, then re-recorded once this note and the story notes were written in.
+Docs + tasklist only, so no `VERSION` bump is owed (`test/version-bump.sh` reads
+`engine/`/`bin/`/`scripts/`/`install.sh`, none of which this story touches).
