@@ -26,7 +26,7 @@
 #   PART A  a GREEN verdict for an unmoved tree SKIPS the re-run   (hook runs 1x, not 2x)
 #   PART B  the tree moves -> the hook RUNS                        (negative control)
 #   PART C  the hook blob changes, tree unmoved -> it RUNS         (negative control)
-#   PART D  a RED verdict NEVER skips                              (a cache, not a merge hole)
+#   PART D  a RED verdict is REUSED too, and still refuses completion (120)
 #   PART E  REPRODUCTION — the same PART A sequence against an engine whose
 #           `verify_cache_try` call is neutered must NOT skip, or this file is
 #           restating behaviour that always worked.
@@ -75,7 +75,10 @@ set -eu
 cat > /dev/null
 jq '(.userStories[0].passes)=true' .chief/state/prd.json > .chief/state/prd.tmp
 mv .chief/state/prd.tmp .chief/state/prd.json
-if [ "${FAKE_COMMIT:-0}" = 1 ]; then
+# ONCE per run_agent, not once per turn: a red gate refuses the completion, so the
+# loop takes another turn, and a provider that commits every time never stops making
+# progress and runs to the hard iteration ceiling. The label is unique per run.
+if [ "${FAKE_COMMIT:-0}" = 1 ] && ! grep -qxF "$FAKE_COMMIT_TOKEN" product.txt; then
   printf '%s\n' "$FAKE_COMMIT_TOKEN" >> product.txt
   git add -A product.txt
   git commit -q -m "fixture: move the tree ($FAKE_COMMIT_TOKEN)"
@@ -158,23 +161,55 @@ run_agent c1 "$REPO" "$ROOT/engine" 0 || fail "PART C: iteration exited non-zero
 skipped && fail "PART C: an edited verify hook was skipped on a verdict taken under the old one"
 note "PART C ok — an edited gate re-runs even at an unmoved tree"
 
-# ═══ PART D — a RED verdict never skips ══════════════════════════════════════
+# ═══ PART D — a RED verdict is REUSED, and still refuses completion ═════════
+# The key is `tree.base.hook`. If none of the three moved, the gate is the same
+# computation and its verdict cannot have changed — a statement about the INPUTS,
+# which does not become false when the answer is red. Until 120 only `status=0` was
+# honoured, so an agent that could not fix a gate paid the whole gate again every
+# iteration to be told the same thing (cuneiform 2026-09-03: five full ~11.6-minute
+# runs, six identical failures, one byte-identical tree).
+#
+# What must NOT change is what the reuse MEANS to the caller: a reused red refuses
+# the completion exactly as a fresh red does. That is the assertion this part exists
+# for — a status inverted on the way out of the cache is a way to merge a red tree,
+# and it would look like a speedup.
 write_hook RED
 red_rc=0; run_agent d1 "$REPO" "$ROOT/engine" 0 || red_rc=$?
 [ "$red_rc" != 0 ] || fail "PART D: a failing boundary verify was accepted as a completion"
 [ "$(hook_runs)" = 4 ] || fail "PART D: the red gate ran $(hook_runs)x, expected 4"
 grep -q 'agent verification failed' "$LAST_OUT" || fail "PART D: the failure was not reported"
-# The RED verdict must be ON DISK — otherwise the re-run below proves only that nothing
-# was recorded, which is a different (and much weaker) statement than "red never skips".
-grep -lq '^status=1' "$WORK/state/verify-cache/"*/* 2>/dev/null \
-  || fail "PART D: the red verdict was not recorded, so the re-run below cannot prove that a recorded red is refused"
+# The RED verdict must be ON DISK, with the gate's own report beside it — the reuse
+# below is only safe if it can say WHY, and a record with no output would make the
+# next assertion pass while leaving the agent with a blocked completion and no reason.
+RED_REC="$(grep -l '^status=1' "$WORK/state/verify-cache/"*/* 2>/dev/null | head -1)"
+[ -n "$RED_REC" ] || fail "PART D: the red verdict was not recorded, so the reuse below cannot be tested"
+[ -s "$RED_REC.out" ] || fail "PART D: the red verdict was recorded WITHOUT the gate's output — a reused red could then name no failing test, which is the 119 invisibility bug through another door"
+grep -q 'fixture verify hook (RED) ran' "$RED_REC.out" \
+  || fail "PART D: the retained output is not the gate's own report"
 
 red_rc=0; run_agent d2 "$REPO" "$ROOT/engine" 0 || red_rc=$?
-[ "$red_rc" != 0 ] || fail "PART D: a failing boundary verify was accepted as a completion on the second pass"
+[ "$red_rc" != 0 ] \
+  || fail "PART D: A REUSED RED WAS ACCEPTED AS A COMPLETION — the recorded status was inverted on the way out of the cache"
+[ "$(hook_runs)" = 4 ] \
+  || fail "PART D: THE RED SKIP DID NOT HAPPEN — the hook ran $(hook_runs)x, expected 4. Nothing moved between the two iterations, so the gate was re-derived for a verdict already on disk."
+skipped || fail "PART D: the gate was skipped but nothing said so"
+grep -q 'RED verdict' "$LAST_OUT" \
+  || fail "PART D: the skip did not say the verdict it reused was RED — an operator cannot tell a reused failure from a reused pass"
+grep -qF "$RED_REC" "$LAST_OUT" || fail "PART D: the skip did not name the record it came from"
+grep -q 'fixture verify hook (RED) ran' "$LAST_OUT" \
+  || fail "PART D: the recorded failure OUTPUT was not replayed — a blocked completion with no failing test named"
+grep -q 'agent verification failed' "$LAST_OUT" || fail "PART D: the reused failure was not reported as a failure"
+note "PART D ok — a recorded red is reused (hook 4x for two red boundary verifies), replayed, and still refuses completion"
+
+# The invalidation half, on the RED path specifically: a fix must be re-gated. The
+# green path proves this in PARTS B and C, but a cache that never invalidates a red
+# is the over-application of this fix — an agent that FIXED the gate would be served
+# its own stale failure forever.
+red_rc=0; run_agent d3 "$REPO" "$ROOT/engine" 1 || red_rc=$?
+[ "$red_rc" != 0 ] || fail "PART D: the hook is still RED, so this run must still refuse completion"
 [ "$(hook_runs)" = 5 ] \
-  || fail "PART D: A RECORDED RED VERDICT WAS SKIPPED (hook ran $(hook_runs)x, expected 5) — that is not a cache, it is a way to merge a failing tree"
-skipped && fail "PART D: 'verify SKIPPED' was logged for a recorded status=1 verdict"
-note "PART D ok — a recorded red verdict is refused, twice over"
+  || fail "PART D: OVER-SKIP — the agent committed (the tree moved) and the hook ran $(hook_runs)x, expected 5. A red record must invalidate exactly as a green one does, or an agent that FIXED the gate would be served its own stale failure forever."
+note "PART D ok — and a moved tree re-runs the red gate rather than replaying it"
 
 # ═══ PART E — REPRODUCTION ═══════════════════════════════════════════════════
 # Neuter the one call US-1 added, in a COPY of the engine (not `git show HEAD~N`: CI

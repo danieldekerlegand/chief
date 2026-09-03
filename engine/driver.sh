@@ -2964,11 +2964,17 @@ run_worker() {
         echo ">> verifying $branch (rebased${sub:+, in $sub})"
         local vout vrc
         live_set "$live" phase=verifying
+        # Three arms, not two (120): a GREEN hit, a RED hit — reused on the same
+        # terms now, the verdict AND the gate's own report, so the .verify-failed.log
+        # below still names what broke — and a miss. verify_cache_try (engine/lib.sh)
+        # returns the RECORDED status; $VERIFY_CACHE_HIT is what tells red from miss.
         if verify_cache_try "$work_repo" "$name" "$work_base"; then
           vrc=0; vout=""
+        elif [ "${VERIFY_CACHE_HIT:-0}" = 1 ]; then
+          vrc="${VERIFY_CACHE_STATUS:-1}"; vout="$(verify_cache_output)"
         else
           vout="$(run_verify "$work_repo" "$name" 2>&1)"; vrc=$?
-          verify_cache_record "$work_repo" "$work_base" "$vrc"
+          printf '%s\n' "$vout" | verify_cache_record "$work_repo" "$work_base" "$vrc" -
         fi
         printf '%s\n' "$vout"
         if [ "$vrc" != "0" ]; then

@@ -202,24 +202,87 @@ verify_cache_dir() {
   printf '%s/verify-cache/%s' "$STATE" "$(printf '%s' "$root" | cksum | awk '{print $1}')"
 }
 
-# Return 0 only for a recorded GREEN verdict. The message names the tree and
-# record source so a skip is distinguishable from a fresh pass in logs.
+# verify_cache_try CWD NAME BASE — is this exact gate run already answered?
+#
+# THE KEY IS THE WHOLE ARGUMENT. `tree.base.hook` names the three inputs the gate is
+# a function of: HEAD's tree, the base commit it is measured against, and the blob of
+# the hook doing the measuring. If none of the three has moved, a second run is not a
+# second sample — it is the SAME COMPUTATION, and its answer cannot have changed.
+# That reasoning says nothing about the verdict's VALUE, so a RED record is reused on
+# exactly the same terms a green one is.
+#
+# It did not used to be. Until 120 only `status=0` was honoured and every other
+# status fell through to a full re-run, so an agent that could not fix a gate paid
+# the whole gate again each iteration to be told the same thing. Measured on
+# cuneiform 2026-09-03: `388-the-panel-emission-contract` ran 01:55→07:52, merged
+# nothing, and spent FIVE full gate runs (~11.6 min each) reporting the SAME single
+# assertion failure six times — over a tree the agent had, in its own words, nothing
+# left to change in, and therefore never changed.
+#
+# THIS IS NOT THE FLAKY-TEST CASE. The argument for re-running a red gate is that the
+# red may be noise. That argument is about re-running after SOMETHING CHANGED — a
+# different tree, a moved base, an edited hook — and in every one of those cases the
+# key has already moved and this function has already missed. Here nothing changed.
+# A gate that really is non-deterministic needs an escape hatch, not a default
+# that re-derives every known answer; that hatch is the next story's.
+#
+# RETURNS THE RECORDED EXIT STATUS on a hit, and 1 on a miss — deliberately in that
+# direction, because the two are not distinguishable from the return alone and one of
+# the two confusions is much worse than the other. A caller that checks only the
+# return treats a red hit as a miss and re-runs the gate: wasteful, never wrong. The
+# inverse convention (0 = hit) would make the same oversight skip the gate and accept
+# a failing tree. $VERIFY_CACHE_HIT is how a caller tells a red hit from a miss;
+# $VERIFY_CACHE_RECORD names the record and $VERIFY_CACHE_STATUS its verdict.
 verify_cache_try() {
-  local cwd="$1" name="$2" base="$3" dir key rec tree
+  local cwd="$1" name="$2" base="$3" dir key rec tree st
+  VERIFY_CACHE_HIT=0; VERIFY_CACHE_STATUS=""; VERIFY_CACHE_RECORD=""
   [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 1
   [ -z "$(jq -r '(.verify // [])[]' "$TASKS_DIR/$name.json" 2>/dev/null || true)" ] || return 1
   dir="$(verify_cache_dir "$cwd")"
   tree="$(git -C "$cwd" rev-parse HEAD^{tree} 2>/dev/null || echo)"
   key="$tree.$(git -C "$cwd" rev-parse "$base" 2>/dev/null || echo).$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook)"
   rec="$dir/$key"; [ -f "$rec" ] || return 1
-  [ "$(sed -n 's/^status=//p' "$rec" | head -1)" = 0 ] || return 1
+  st="$(sed -n 's/^status=//p' "$rec" | head -1)"
+  case "$st" in ''|*[!0-9]*) return 1 ;; esac          # unreadable record = no record
   [ "$(sed -n 's/^tree=//p' "$rec" | head -1)" = "$tree" ] || return 1
-  echo ">> verify SKIPPED: tree $tree (GREEN verdict from $rec; same base and verify hook)"
+  VERIFY_CACHE_HIT=1; VERIFY_CACHE_STATUS="$st"; VERIFY_CACHE_RECORD="$rec"
+  if [ "$st" = 0 ]; then
+    echo ">> verify SKIPPED: tree $tree (GREEN verdict from $rec; same base and verify hook)"
+  else
+    # Named in its own words: an operator reading a log must never have to work out
+    # whether the gate ran, and "SKIPPED" alone beside a refused completion reads as
+    # a contradiction unless the verdict it was skipped ON is on the same line.
+    echo ">> verify SKIPPED: tree $tree (RED verdict, exit $st, from $rec; same base and verify hook) — the gate was NOT re-run; its recorded output follows"
+  fi
+  return "$st"
+}
+
+# verify_cache_output — replay the failing gate's own output for the record
+# `verify_cache_try` just hit, on stdout, for the caller to log or persist.
+#
+# The status alone is not enough. A reused red that names no failing test leaves the
+# agent with a blocked completion and nothing to act on — the invisibility 119 fixed,
+# arriving through a different door — so the output is retained with the record and
+# replayed with it. Prints nothing for a green hit or a miss.
+verify_cache_output() {
+  local rec="${VERIFY_CACHE_RECORD:-}"
+  [ "${VERIFY_CACHE_HIT:-0}" = 1 ] || return 0
+  [ -n "$rec" ] && [ "${VERIFY_CACHE_STATUS:-0}" != 0 ] || return 0
+  if [ -s "$rec.out" ]; then
+    cat "$rec.out"
+  else
+    echo "   (this verdict was recorded without its output — the gate's own report is not available for replay)"
+  fi
   return 0
 }
 
+# verify_cache_record CWD BASE STATUS [OUTPUT_FILE] — write the verdict for HEAD's
+# tree. OUTPUT_FILE, when given and the verdict is RED, is retained beside the record
+# as `<key>.out` so `verify_cache_output` can replay WHY it failed. Tail-bounded:
+# these accumulate per tree and a gate's own report of what broke is at the end of
+# its output, not the start.
 verify_cache_record() {
-  local cwd="$1" base="$2" status="$3" dir key rec tmp tree hook base_sha
+  local cwd="$1" base="$2" status="$3" out="${4:-}" dir key rec tmp tree hook base_sha cap lines
   [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
   dir="$(verify_cache_dir "$cwd")"; mkdir -p "$dir" || return 0
   tree="$(git -C "$cwd" rev-parse HEAD^{tree} 2>/dev/null || echo)"
@@ -227,7 +290,28 @@ verify_cache_record() {
   hook="$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook)"
   key="$tree.$base_sha.$hook"; rec="$dir/$key"; tmp="$rec.tmp.$$"
   { echo "status=$status"; echo "tree=$tree"; echo "base=$base_sha"; echo "hook=$hook"; } > "$tmp" && mv "$tmp" "$rec"
-  find "$dir" -type f -name '*.*.*' -print 2>/dev/null | sort -r | sed -n '33,$p' | while IFS= read -r old; do rm -f "$old"; done
+  rm -f "$rec.out"          # a green re-record must not leave the old red's report behind
+  if [ "$status" != 0 ] && [ -n "$out" ]; then
+    # OUTPUT_FILE of `-` reads the output from STDIN, so a caller that already has it
+    # in a variable needs no scratch file of its own. It is read TWICE (line count,
+    # then tail) — which is also why a process substitution would not do here.
+    if [ "$out" = - ]; then cat > "$tmp.in"; out="$tmp.in"; fi
+    cap="${VERIFY_CACHE_OUTPUT_LINES:-500}"
+    lines="$(wc -l < "$out" 2>/dev/null | tr -d ' ')"; lines="${lines:-0}"
+    if [ -s "$out" ]; then
+      {
+        if [ "$lines" -gt "$cap" ] 2>/dev/null; then
+          echo "   … ($(( lines - cap )) earlier lines elided from the recorded gate output)"
+        fi
+        tail -n "$cap" "$out"
+      } > "$tmp" 2>/dev/null && mv "$tmp" "$rec.out" || rm -f "$tmp"
+    fi
+    rm -f "$tmp.in"
+  fi
+  # Enumerate RECORDS only — never the `.out` companions or a raced `.tmp.` — and
+  # drop each with its own, or a pruned pair could leave a record whose report is gone.
+  find "$dir" -type f -name '*.*.*' ! -name '*.out' ! -name '*.tmp.*' -print 2>/dev/null \
+    | sort -r | sed -n '33,$p' | while IFS= read -r old; do rm -f "$old" "$old.out"; done
 }
 
 # bump_submodule_chain PROJECT SUB NAME SHA — stage the submodule-pointer bump for SUB,

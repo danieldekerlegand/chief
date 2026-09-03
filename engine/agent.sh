@@ -1029,17 +1029,25 @@ _verify_tick() {
   return 0
 }
 _agent_verify_final() {
-  local rc=0 prev_phase=""
+  local rc=0 prev_phase="" vlog
   [ -n "${CHIEF_VERIFY_CACHE_STATE:-}" ] || return 0
   [ -n "${CHIEF_TASKLIST:-}" ] || return 0
   [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
-  # A hit takes the SAME path a fresh green does — it returns 0, so COMPLETE_OK is
-  # untouched and completion proceeds. `verify_cache_try` returns non-zero for
-  # anything that is not a recorded `status=0`, so a RED verdict falls through to
-  # the re-run rather than skipping into an accepted completion.
+  # A hit takes the SAME path a fresh run of that verdict does, in BOTH directions
+  # (120): a green hit returns 0, COMPLETE_OK is untouched and completion proceeds;
+  # a red hit sets COMPLETE_OK=0 and refuses completion exactly as a freshly-run red
+  # does, with the recorded gate output replayed so the agent has the failing test
+  # named and not just a blocked exit. `verify_cache_try` returns the RECORDED
+  # STATUS, so the `if` below is a green hit and the `elif` is every other hit; a
+  # MISS also returns non-zero and is told apart by $VERIFY_CACHE_HIT.
   if verify_cache_try "$CHIEF_PROJECT" "$CHIEF_TASKLIST" "$BASE_BRANCH"; then
     echo ">> agent verification passed (recorded verdict reused; the gate was not re-run)"
     return 0
+  elif [ "${VERIFY_CACHE_HIT:-0}" = 1 ]; then
+    rc="${VERIFY_CACHE_STATUS:-1}"
+    verify_cache_output
+    echo "!! agent verification failed (exit $rc, recorded verdict reused); completion will not be accepted"
+    return 1
   fi
   # STREAMED, not captured. This used to be `output="$(run_verify …)"` followed by a
   # single `printf` — which meant NOTHING reached the log until the gate returned, and
@@ -1065,13 +1073,18 @@ _agent_verify_final() {
   # already existed; this is the second publisher of the phase that earns it.
   prev_phase="$(live_get "$LIVE" phase)"
   live_set "$LIVE" phase=verifying
-  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 | _verify_tick
+  vlog="$(mktemp "${TMPDIR:-/tmp}/chief-verify.XXXXXX")"
+  # `tee` into $vlog on the way past: the bytes still stream (nothing is buffered
+  # into a capture), and a RED verdict is recorded WITH the report that explains it,
+  # which is what makes the reuse above safe to show an agent.
+  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 | tee "$vlog" | _verify_tick
   rc=${PIPESTATUS[0]}
   # Restored, not left behind: a red gate returns to the loop, which goes on to the
   # progress/stall accounting under whatever phase the turn was actually in. A phase
   # that outlives the thing it describes is the same defect one register on.
   [ -n "$prev_phase" ] && live_set "$LIVE" phase="$prev_phase"
-  verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"
+  verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc" "$vlog"
+  rm -f "$vlog"
   if [ "$rc" != 0 ]; then
     echo "!! agent verification failed (exit $rc); completion will not be accepted"
     return 1
