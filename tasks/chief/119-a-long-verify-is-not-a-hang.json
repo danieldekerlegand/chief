@@ -35,8 +35,8 @@
     {
       "id": "US-2",
       "title": "It publishes the phase whose threshold already fits it",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "engine/agent.sh publishes phase=verifying around the boundary gate and restores the prior phase; the gate streams through _verify_tick, whose live_set is driven by the OUTPUT (not a timer), and rc comes from ${PIPESTATUS[0]}. _beat_start no longer promotes writing over verifying. test/verify-stream.sh: PART A/B/C/D/E green — \"VERIFY-STREAM OK\", 16.6s wall. PART D observes chief ps on a real running verify: \"● vs  running  0/1  chief/vs  ↳ verifying for 40m · iter 1 · 40m ago\" — no ⚠, no stall note. PART E (phase publish removed) reproduces \"stalled in agent-turn\". Mutation-checked: stubbing the ticker's live_set fails PART D. test/stall-flag.sh OK, test/liveliness.sh PASS, test/verify-cache.sh OK, test/doc-sync.sh PASS (v0.9.15, 42 merged tasklists). bash -n clean over bin/chief, engine/*.sh, test/*.sh, install.sh; quality ratchet OK (single_use_functions 17 -> 18, tol 2). shellcheck not installed on this host (CI enforces it).",
       "acceptanceCriteria": [
         "`_agent_verify_final` publishes `phase=verifying` for the duration of the hook and restores the prior phase afterwards. The threshold it needs already exists in `STALE_PHASE_SECONDS` at 3060s and had exactly one publisher; this adds the second.",
         "The heartbeat keeps ticking across the verify, and `_beat_start` does NOT clobber `verifying` with `writing` when output moves. Streaming output would otherwise re-label a verify as writing on its first line, which trades one wrong phase for another.",

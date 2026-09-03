@@ -998,8 +998,38 @@ _emit_story_events() {
 # agent's own invocation is a plain shell command chief never sees, so the only way
 # an in-turn run counts is for it to write through the cache (`chief verify`, US-2)
 # and for this boundary to read it.
+#
+# _verify_tick — stdin -> stdout unchanged, bumping the liveliness heartbeat as the
+# bytes go past. THE TICKER FOR THE VERIFY PHASE, and deliberately not `_beat_start`.
+#
+# WHY NOT `_beat_start`. That ticker beats on a TIMER: once every $LIVE_BEAT_SECONDS,
+# whether or not anything happened. It is right for a provider turn (a `claude --print`
+# call is opaque from out here, and HEAD moving is the only signal there is) and it is
+# WRONG here, because a verify hook that wedged with its output half-written would then
+# be ticked forever and could never read as stale. That is not a smaller version of the
+# bug being fixed, it is the bug in the other direction: `monitor.sh` refuses exactly
+# this trade for provider-waiting — "It wants a LONGER threshold, not silence" — and
+# `verifying` already HAS the longer threshold (3060s). So the record moves when the
+# OUTPUT moves, and a gate that stops emitting stops beating.
+#
+# Rate-limited to one write per beat interval via $SECONDS — a bash builtin, so a
+# chatty gate costs no fork per line. Safe to assign: this body only ever runs in a
+# pipeline's subshell, so the parent's $SECONDS is untouched. `|| [ -n "$line" ]`
+# keeps a final line that carries no newline, which `read` alone would drop.
+_verify_tick() {
+  local line next=0
+  SECONDS=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s\n' "$line"
+    if [ "$SECONDS" -ge "$next" ]; then
+      next=$(( SECONDS + LIVE_BEAT_SECONDS ))
+      live_set "$LIVE"
+    fi
+  done
+  return 0
+}
 _agent_verify_final() {
-  local rc=0
+  local rc=0 prev_phase=""
   [ -n "${CHIEF_VERIFY_CACHE_STATE:-}" ] || return 0
   [ -n "${CHIEF_TASKLIST:-}" ] || return 0
   [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
@@ -1019,10 +1049,28 @@ _agent_verify_final() {
   # healthy branch whose log ENDED at the completion token. The bytes now appear as the
   # hook produces them, so "long" and "hung" stop looking the same.
   #
-  # NO PIPELINE HERE, deliberately. `run_verify … | tee` would hand us tee's status,
-  # and a red gate reported as green accepts a completion it must refuse — strictly
-  # worse than the invisibility being fixed. Plain redirection keeps `$?` the hook's.
-  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 || rc=$?
+  # THE STATUS IS STILL THE HOOK'S. `run_verify … | tee` and a bare `$?` would hand us
+  # TEE's status, and a red gate reported as green accepts a completion it must refuse
+  # — strictly worse than the invisibility being fixed. `${PIPESTATUS[0]}` is read on
+  # the very next line instead, the same instrument `_capture_provider_output` already
+  # uses to keep the provider's own status out of the tee's hands. Nothing between the
+  # pipeline and that read, ever.
+  #
+  # AND THE PHASE IS PUBLISHED FOR THE DURATION. `verifying` carries a 3060s staleness
+  # threshold in monitor.sh's table precisely because a gate legitimately runs for tens
+  # of minutes — and until now it had exactly ONE publisher (driver.sh's merge-phase
+  # verify). This boundary never said it was verifying, so its gate was timed as an
+  # agent turn against 900s: talos:83 read `stalled in agent-turn — no activity for
+  # 1h06m` while the gate it was waiting on was doing its job. The right threshold
+  # already existed; this is the second publisher of the phase that earns it.
+  prev_phase="$(live_get "$LIVE" phase)"
+  live_set "$LIVE" phase=verifying
+  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 | _verify_tick
+  rc=${PIPESTATUS[0]}
+  # Restored, not left behind: a red gate returns to the loop, which goes on to the
+  # progress/stall accounting under whatever phase the turn was actually in. A phase
+  # that outlives the thing it describes is the same defect one register on.
+  [ -n "$prev_phase" ] && live_set "$LIVE" phase="$prev_phase"
   verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"
   if [ "$rc" != 0 ]; then
     echo "!! agent verification failed (exit $rc); completion will not be accepted"
@@ -1272,13 +1320,25 @@ LIVE_BEAT_SECONDS="${LIVE_BEAT_SECONDS:-15}"
 # honest proxy for "there is something to resume onto", and it is a value this loop
 # already computes. Sticky because the flip may follow the commit by a tick, and a
 # tick that sees no further HEAD movement must not un-bank it.
+#
+# AND IT NEVER OVERWRITES `verifying`. The promotion to `writing` is only ever an
+# improvement on `provider-waiting`; against a phase that was published deliberately it
+# is a downgrade, and `verifying` is the one that costs something — it is what buys the
+# gate monitor.sh's 3060s threshold instead of an agent turn's 900s, so re-labelling it
+# on the first line of output would trade one wrong phase for another and put the stall
+# flag back where the incident found it. The check is a read of the record rather than a
+# flag in this shell because the two are different processes: the ticker is a fork, and
+# whoever set the phase may have done so after it started.
 _beat_start() {
   [ -n "$LIVE" ] || return 0
   ( last="$(_head)"; moved=""
     while :; do
       sleep "$LIVE_BEAT_SECONDS"
       now_h="$(_head)"
-      if [ "$now_h" != "$last" ]; then live_set "$LIVE" phase=writing; last="$now_h"; moved=1
+      if [ "$now_h" != "$last" ]; then
+        if [ "$(live_get "$LIVE" phase)" = verifying ]; then live_set "$LIVE"
+        else live_set "$LIVE" phase=writing; fi
+        last="$now_h"; moved=1
       else live_set "$LIVE"; fi
       [ -n "$moved" ] && _prd_promote
     done ) 2>/dev/null &

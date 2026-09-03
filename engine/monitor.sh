@@ -143,10 +143,14 @@ case "$STALE_QUIET_AFTER" in ''|*[!0-9]*) STALE_QUIET_AFTER=23400 ;; esac
 #                        block-buffers its output, so cuneiform:314 ran 36m (2160s)
 #                        quiet on 2026-08-13 while working — sampling the child PID
 #                        showed the test binary CHANGING between samples
-#                        (render_oauth_session_gate -> render_offline_walker). Neither
-#                        phase has a ticker behind it (only the agent turn does), so
-#                        the gate's silence IS the record's silence, and the flag has
-#                        to clear the longest gate actually seen plus one window.
+#                        (render_oauth_session_gate -> render_offline_walker). The
+#                        gate's silence IS the record's silence — `verifying` has TWO
+#                        publishers now (driver.sh's merge verify, and agent.sh's
+#                        boundary verify since 119) and neither beats on a TIMER: the
+#                        merge verify has no ticker at all, and the boundary one is
+#                        ticked by the gate's own OUTPUT, deliberately, so a wedged
+#                        hook still goes quiet and still flags. So the figure has to
+#                        clear the longest gate actually seen plus one window.
 #   provider-waiting     the DEFAULT, stated here rather than left to fall through —
 #                        an explicit entry is what makes "we looked at this one" a
 #                        fact in the table rather than an omission. agent.sh's

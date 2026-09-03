@@ -38,6 +38,12 @@
 #   PART C  REPRODUCTION — the same probe against an engine whose call is restored to
 #           the command-substitution form must NOT see the line live, or PART A is
 #           asserting something that was already true.
+#   PART D  the PHASE half of the same incident: mid-gate the record reads `verifying`,
+#           the gate's own output keeps bumping it, and `chief ps` renders it at 40m
+#           quiet with no stall flag (40m is past an agent turn's 900s and inside the
+#           3060s this phase has earned since it was measured).
+#   PART E  REPRODUCTION for D — drop ONLY the phase publish and the same working gate
+#           reads `stalled in agent-turn` again, which is the line talos:83 printed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -180,7 +186,7 @@ write_hook red
 REPO2="$WORK/repo-red"; scratch_repo "$REPO2"
 probe b1 "$REPO2" "$ROOT/engine" "$WORK/state-red" 0 "$TICKS_STREAM"
 [ "$AGENT_RC" != 0 ] \
-  || fail "PART B: a RED gate was accepted as a completion — a streamed run must not lose the hook's exit status (this is why the fix is a redirection and not a \`| tee\` pipeline)"
+  || fail "PART B: a RED gate was accepted as a completion — a streamed run must not lose the hook's exit status (this is what \${PIPESTATUS[0]} is for; a bare \$? would be the ticker's)"
 grep -q 'agent verification failed' "$LAST_OUT" || fail "PART B: the failure was not reported to the log"
 grep -lq '^status=1' "$WORK/state-red/verify-cache/"*/* 2>/dev/null \
   || fail "PART B: the RED verdict was not recorded"
@@ -192,12 +198,16 @@ note "PART B ok — red still refuses the completion, both verdicts still record
 # CI clones shallow) and run PART A's probe again. If the marker is STILL seen live,
 # this file is not testing the call it claims to test.
 cp -R "$ROOT/engine" "$WORK/engine-old"
-sed -i.bak 's#^  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 || rc=\$?#  _o="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>\&1)" || rc=$?; printf "%s\\n" "$_o"#' \
+sed -i.bak \
+  -e 's#^  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 | _verify_tick#  _o="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>\&1)" || rc=$?; printf "%s\\n" "$_o"#' \
+  -e 's#^  rc=\${PIPESTATUS\[0\]}#  :#' \
   "$WORK/engine-old/agent.sh" && rm -f "$WORK/engine-old/agent.sh.bak"
 grep -q '_o="\$(run_verify ' "$WORK/engine-old/agent.sh" \
   || fail "PART C: could not restore the command-substitution form — its anchor moved. Fix this patch, do not delete the reproduction."
 grep -qE '^  run_verify "\$CHIEF_PROJECT"' "$WORK/engine-old/agent.sh" \
   && fail "PART C: the patch left the streaming call behind — the control proves nothing"
+grep -q 'rc=\${PIPESTATUS\[0\]}' "$WORK/engine-old/agent.sh" \
+  && fail "PART C: the patch left the PIPESTATUS read behind — it would report the status of a pipeline that is no longer there"
 bash -n "$WORK/engine-old/agent.sh" || fail "PART C: the patched engine does not parse"
 
 write_hook green
@@ -208,5 +218,174 @@ grep -q "$MARK_FIRST" "$LAST_OUT" || fail "PART C: the buffered engine lost the 
 [ "$FIRST_SEEN_LIVE" = 0 ] \
   || fail "PART C: the command-substitution engine ALSO streamed — PART A is not observing the change it claims to observe"
 note "PART C ok — restoring the capture reinstates the silence; PART A is measuring the fix"
+
+
+# ═══ PART D — the phase whose threshold was written for exactly this ════════
+# The second half of the incident, and the nearly-free one. `monitor.sh`'s
+# STALE_PHASE_SECONDS has given `verifying` 3060s since it was measured — a gate
+# legitimately runs for tens of minutes — but the phase had exactly ONE publisher
+# (driver.sh's merge-phase verify). `_agent_verify_final` never said it was verifying,
+# so ITS gate was timed as an agent turn against 900s. talos:83 read
+# `⚠ stalled in agent-turn — no activity for 1h06m` while the gate it was waiting on
+# was doing its job. The right threshold existed; this path did not use it.
+#
+# Three facts, against a REAL running verify rather than a synthetic record:
+#   1. while the hook is mid-run the record reads `phase=verifying`
+#   2. the heartbeat is bumped BY THE OUTPUT — the record is backdated mid-verify and
+#      the next line the hook emits brings it back. That is what makes it a ticker and
+#      not a single publish, and it is why a gate that stops emitting stops beating
+#      (the negative control that guards is US-3's).
+#   3. `chief ps` renders it. A phase nobody can see in the monitor has not been
+#      published where it matters — so the record is aged to 40m, which is past an
+#      agent turn's 900s and inside a verify's 3060s, and the row is read.
+GO2="$WORK/hook.go2"
+STALE_AGE=2400          # 40m: > provider-waiting/agent-turn's 900s, < verifying's 3060s
+
+# The three-marker hook: emit, block, wait out a beat interval, emit, block, exit.
+# The 1.5s gap is the only sleep in this file and it is load-SAFE in the one direction
+# that matters: $SECONDS can only be larger under load, never smaller, so the tick the
+# second marker is asserted to cause can be late but cannot be skipped.
+write_phase_hook() {
+  cat > "$WORK/phook.sh" <<EOF
+#!/usr/bin/env bash
+printf 'ran\n' >> "$COUNT"
+echo "$MARK_FIRST"
+_w=0; while [ ! -f "$GO" ] && [ "\$_w" -lt $TICKS_STREAM ]; do sleep 0.2; _w=\$(( _w + 1 )); done
+sleep 1.5
+echo "$MARK_SECOND"
+_w=0; while [ ! -f "$GO2" ] && [ "\$_w" -lt $TICKS_STREAM ]; do sleep 0.2; _w=\$(( _w + 1 )); done
+: > "$DONE"
+exit 0
+EOF
+  chmod +x "$WORK/phook.sh"
+}
+
+# await MARKER LOG PID -> 0 when the marker reached the log while $PID was still alive
+await() {
+  local m="$1" log="$2" pid="$3" deadline
+  deadline=$(( $(date +%s) + 180 ))
+  while kill -0 "$pid" 2>/dev/null; do
+    grep -q "$m" "$log" 2>/dev/null && return 0
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 0.2
+  done
+  return 1
+}
+# Rewrite the record's clocks to AGE seconds ago, in place — live.sh always stamps
+# `now`, so this is the only way to ask the render what it would say at 40m without
+# waiting 40m. Same instrument test/stall-flag.sh's mkrow uses, and both fields for the
+# same reason it uses both: `heartbeat` is what the stall flag reads and `phase_since`
+# is what "verifying for 40m" reads, and the row has to be coherent in both.
+# live_set preserves phase_since across a write that does not CHANGE the phase, so a
+# backdate survives the ticker — which is exactly what makes it a probe of the ticker.
+backdate() { # backdate FILE AGE
+  local k v t now; now="$(date +%s)"
+  for k in heartbeat phase_since; do
+    v="$(live_get "$1" "$k")"; t="$1.bd"
+    sed "s/\"$k\": $v/\"$k\": $(( now - $2 ))/" "$1" > "$t" && mv "$t" "$1"
+  done
+}
+
+# shellcheck source=engine/live.sh
+. "$ROOT/engine/live.sh"
+
+# phase_probe LABEL ENGINE_DIR — one iteration whose gate is the three-marker hook,
+# observed from outside while it runs. Sets $PHASE_AT_VERIFY, $HB_TICKED (1 = the
+# output moved the record after it was backdated) and $PS_ROW.
+phase_probe() {
+  local label="$1" engine="$2" repo st par live apid hb_before hb_after
+  repo="$WORK/repo-$label"; scratch_repo "$repo"
+  st="$WORK/state-$label"; par="$st/parallel"; live="$par/vs.live.json"
+  mkdir -p "$par"
+  LAST_OUT="$WORK/$label.out"; : > "$LAST_OUT"
+  rm -f "$DONE" "$GO" "$GO2"
+  ( cd "$repo" && env \
+      -u CHIEF_PRESET -u CHIEF_TOOL -u CHIEF_VERBOSE -u CHIEF_MODEL -u CHIEF_AGENT_CONTEXT \
+      -u CHIEF_PAUSE_FILE -u CHIEF_EVENTS_FILE -u CHIEF_ITER_HOOK \
+      -u CHIEF_PRD_SNAPSHOT -u CHIEF_UNVERIFIED_FILE -u CHIEF_RESEARCH -u CHIEF_RESEARCH_FILE \
+      -u CHIEF_REVIEW -u CHIEF_TASKS_DIR -u NO_VERIFY -u STRICT_VERIFY \
+      FAKE_COMMIT=1 FAKE_COMMIT_TOKEN="$label" LIVE_BEAT_SECONDS=1 \
+      CHIEF_PROVIDER=claude CHIEF_PROJECT="$repo" CHIEF_HOME="$engine" \
+      CHIEF_STATE_DIR=.chief/state CHIEF_TASKLIST=vs CHIEF_LIVE_FILE="$live" \
+      CHIEF_VERIFY_CACHE_STATE="$WORK/cache-$label" CHIEF_VERIFY_HOOK="$WORK/phook.sh" \
+      CHIEF_VERIFY_TASKS_DIR="$repo/tasks/chief" CHIEF_VERIFY_BASE=main \
+      CHIEF_VERIFY_REPO="$repo" STALL_LIMIT=1 \
+      PATH="$WORK/fakebin:$PATH" bash "$engine/agent.sh" 1 ) >"$LAST_OUT" 2>&1 &
+  apid=$!
+
+  PHASE_AT_VERIFY=""; HB_TICKED=0; PS_ROW=""
+  if await "$MARK_FIRST" "$LAST_OUT" "$apid"; then
+    PHASE_AT_VERIFY="$(live_get "$live" phase)"
+    backdate "$live" 4000                       # the ticker's only way to prove itself
+    hb_before="$(live_get "$live" heartbeat)"
+  fi
+  : > "$GO"
+  if await "$MARK_SECOND" "$LAST_OUT" "$apid"; then
+    hb_after="$(live_get "$live" heartbeat)"
+    [ -n "${hb_before:-}" ] && [ "${hb_after:-0}" -gt "$(( hb_before + 100 ))" ] && HB_TICKED=1
+    # …and now what `chief ps` says about it at 40m of quiet.
+    backdate "$live" "$STALE_AGE"
+    echo running > "$par/vs.state"
+    mkdir -p "$WORK/runs-$label" "$repo/tasks/chief"
+    cat > "$WORK/runs-$label/$apid.run" <<EOF
+pid=$apid
+repo=$repo
+base=main
+parallel=1
+tool=claude
+automerge=1
+limitmax=3
+started=$(date +%s)
+state=$st
+staterel=.chief/state
+tasks=$repo/tasks/chief
+wt=$WORK/wt
+names=vs
+EOF
+    PS_ROW="$(CHIEF_RUNS="$WORK/runs-$label" bash "$ROOT/engine/monitor.sh" once 2>/dev/null \
+                | grep -A1 'vs ' | tr -d '\n')"
+  fi
+  : > "$GO2"
+  AGENT_RC=0; wait "$apid" || AGENT_RC=$?
+  return 0
+}
+
+write_phase_hook
+: > "$COUNT"
+phase_probe d1 "$ROOT/engine"
+[ "$AGENT_RC" = 0 ] || fail "PART D: the iteration exited $AGENT_RC (a green hook + a committed COMPLETE must end the loop at 0)"
+[ "$PHASE_AT_VERIFY" = verifying ] \
+  || fail "PART D: the record read '$PHASE_AT_VERIFY' while the final verify was running, not 'verifying' — the gate is still being timed as an agent turn (900s) instead of against the 3060s the phase already earns"
+[ "$HB_TICKED" = 1 ] \
+  || fail "PART D: the record was NOT bumped by the gate's own output — a phase published once and then left is a single write, not a heartbeat, and the row goes quiet exactly as it did before"
+case "$PS_ROW" in
+  *'verifying for 40m'*) ;;
+  *) fail "PART D: chief ps did not render the running verify as 'verifying for 40m': $PS_ROW" ;;
+esac
+case "$PS_ROW" in
+  *stalled*) fail "PART D: chief ps flagged a 40m verify as stalled — 40m is inside the 3060s that phase earned: $PS_ROW" ;;
+  *'⚠'*)     fail "PART D: chief ps still took the ⚠ glyph on a 40m verify: $PS_ROW" ;;
+esac
+note "PART D ok — mid-gate the record reads 'verifying', the output keeps bumping it, and chief ps renders '$(printf '%s' "$PS_ROW" | sed 's/.*\(verifying for [0-9a-z]*\).*/\1/')' with no stall flag"
+
+# ═══ PART E — REPRODUCTION ══════════════════════════════════════════════════
+# Drop ONLY the phase publish from a copy of the engine — the streaming and the ticker
+# stay — and the same 40m of a working gate becomes the incident's own line again.
+cp -R "$ROOT/engine" "$WORK/engine-nophase"
+sed -i.bak 's#^  live_set "$LIVE" phase=verifying$#  :#' "$WORK/engine-nophase/agent.sh" \
+  && rm -f "$WORK/engine-nophase/agent.sh.bak"
+grep -q '^  live_set "\$LIVE" phase=verifying$' "$WORK/engine-nophase/agent.sh" \
+  && fail "PART E: the patch left the phase publish in place — the control proves nothing"
+bash -n "$WORK/engine-nophase/agent.sh" || fail "PART E: the patched engine does not parse"
+
+: > "$COUNT"
+phase_probe e1 "$WORK/engine-nophase"
+[ "$PHASE_AT_VERIFY" != verifying ] \
+  || fail "PART E: the un-published engine ALSO read 'verifying' — PART D is not observing the change it claims to observe"
+case "$PS_ROW" in
+  *stalled*) ;;
+  *) fail "PART E: without the publish a 40m gate was NOT flagged ('$PS_ROW'); the control has to reproduce the incident, or PART D's silence means nothing" ;;
+esac
+note "PART E ok — with the publish removed the same 40m gate reads '$(printf '%s' "$PS_ROW" | sed 's/.*\(stalled in [a-z-]*\).*/\1/')', which is the line the incident printed"
 
 echo "VERIFY-STREAM OK"

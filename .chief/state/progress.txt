@@ -1006,3 +1006,67 @@ Files:
 - `test/doc-sync.sh` fails on the BASE's debt as soon as your branch touches any file in
   its trigger set (`VERSION`, `README.md`, `ROADMAP.md`, `tasks/chief/completed/`). 118
   merged without its roadmap row; the first branch to bump VERSION inherits that.
+
+## US-2 — It publishes the phase whose threshold already fits it
+Thu Sep  3 2026
+
+The second half of the talos:83 incident, and the nearly-free one. `monitor.sh`'s
+`STALE_PHASE_SECONDS` has given `verifying` **3060s** since it was measured, precisely
+because a gate legitimately runs for tens of minutes — but `grep -n 'phase=verifying'`
+returned exactly ONE publisher (driver.sh's merge-phase verify). `_agent_verify_final`
+never said it was verifying, so its gate was timed as an agent turn against 900s. The
+right threshold existed; this code path did not use it.
+
+Files:
+- `engine/agent.sh` — `_agent_verify_final` reads the current phase, publishes
+  `phase=verifying`, runs the gate, and restores the prior phase before recording the
+  verdict. The gate is now `run_verify … | _verify_tick` with `rc=${PIPESTATUS[0]}` on
+  the very next line — US-1's "no pipeline" was about a bare `$?` picking up tee's
+  status, and PIPESTATUS is the instrument `_capture_provider_output` already uses for
+  exactly that.
+- `engine/agent.sh` — new `_verify_tick`: stdin → stdout unchanged, bumping the
+  liveliness record as the bytes go past, rate-limited by `$SECONDS` (a builtin, so no
+  fork per line). **Deliberately not `_beat_start`**: that ticker beats on a TIMER, and
+  a timer here would tick a wedged gate forever and make `verifying` unflaggable — the
+  trade monitor.sh refuses in writing for provider-waiting. The record moves when the
+  OUTPUT moves.
+- `engine/agent.sh` — `_beat_start`'s HEAD-moved promotion no longer overwrites
+  `verifying` with `writing` (it falls back to a bare heartbeat), so streaming output
+  cannot re-label a verify on its first line.
+- `engine/monitor.sh` — the STALE_PHASE_SECONDS note said "neither phase has a ticker
+  behind it (only the agent turn does)", which this story falsifies; it now records the
+  two publishers and that the boundary one is output-driven on purpose.
+- `test/verify-stream.sh` — PART D (the record reads `verifying` mid-gate · the output
+  bumps it · `chief ps` renders it at 40m with no flag) and PART E (REPRODUCTION: drop
+  only the phase publish and the same gate reads `stalled in agent-turn`). PART C's sed
+  anchor followed the call line to the pipeline form.
+- `VERSION` 0.9.14 → 0.9.15 + README/ROADMAP bold.
+
+### Learnings for future iterations
+
+- **A heartbeat and a stall flag are the same instrument pointed opposite ways.** The
+  tempting fix — start `_beat_start` around the verify — makes the phase quiet-proof and
+  therefore hang-proof in the wrong sense: nothing could ever be reported stale in it
+  again. `monitor.sh` already writes the rule down for provider-waiting ("It wants a
+  LONGER threshold, not silence"); the same sentence decides the ticker's *source*. Tick
+  from the thing whose absence IS the failure — here, the gate's own output.
+- **`${PIPESTATUS[0]}` has to be read on the LINE AFTER the pipeline.** Any command in
+  between (an `echo`, a `[ … ]`, a `local`) replaces the array. The comment says so
+  because a later edit inserting one line is silent and turns a red gate green.
+- **`$SECONDS` is the cheap clock for a per-line rate limit.** `date +%s` is a fork, and
+  a verbose gate is tens of thousands of lines. Assigning it is safe only because the
+  body runs in a pipeline's subshell — say that where it is assigned.
+- **Backdate `phase_since` AND `heartbeat` together** when asking the render what it
+  would say at 40m (`test/stall-flag.sh`'s `mkrow` does both). `heartbeat` is what the
+  stall flag reads; `phase_since` is what `verifying for 40m` reads. Backdating one
+  gives a coherent-looking row that asserts on the wrong half — the first draft here
+  rendered `verifying for 2s · … 40m ago` and the `for 40m` assertion failed while the
+  flag half was already right. `live_set` PRESERVES `phase_since` across a write that
+  does not CHANGE the phase, which is exactly what lets a backdate survive the ticker
+  and become a probe OF the ticker.
+- **Mutation-check the ticker, not just the publish.** `cp -R engine test` to a temp
+  dir, stub `_verify_tick`'s `live_set` to `:`, and run the copied test (its `ROOT` is
+  `BASH_SOURCE`-relative, so it picks up the copied engine). PART D fails there, which
+  is what makes "the output bumps the record" an assertion rather than a hope.
+- The quality ratchet's `single_use_functions` went 17 → 18 (tol 2) on `_verify_tick`.
+  US-3 has one left before it has to dedupe.
