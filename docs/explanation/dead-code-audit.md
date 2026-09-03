@@ -1,6 +1,7 @@
 # Dead-code audit — the inventory, and the searches behind it
 
-> **Status:** Current · **Audited:** 2026-09-03 against `VERSION` 0.9.13 · **Owner:** chief
+> **Status:** Current · **Audited:** 2026-09-03 against `VERSION` 0.9.13 ·
+> **Disposition:** §8, 2026-09-03 against `VERSION` 0.9.14 · **Owner:** chief
 
 This is the artifact a human approves **before** anything is deleted. Every candidate
 below names the search that found it, and the scope that search ran over, so the
@@ -134,7 +135,7 @@ comment, deliberately quoted.
 
 ---
 
-## 2. Class A — candidates for removal
+## 2. Class A — candidates for removal  ·  **both removed, 2026-09-03**
 
 ### 2.1 `crossrepo_completed()` — engine/crossrepo.sh:33
 
@@ -213,7 +214,7 @@ Also Class B: **`CHIEF_SWEEP_REFUSED`** (see §2.2) and **`crossrepo_completed`*
 
 ---
 
-## 4. Class D — code that runs nowhere
+## 4. Class D — code that runs nowhere  ·  **all four registered, 2026-09-03**
 
 ### 4.1 Three test files in zero gate lists
 
@@ -306,3 +307,93 @@ Recorded here in outline; US-3 states them in full.
 `chief verify` (the repo's full gate) was green when this inventory was committed;
 the observation is recorded in `tasks/chief/900-dead-code-paydown.json`'s US-1 note.
 No code changed in the commit that added this file.
+
+The removals in §8 were verified the same way, on the tree that carries them:
+`chief verify` **exit 0**, ~20 minutes — quality ratchet OK, `bash -n` clean,
+`test/version-bump.sh` PASS at `0.9.14`, the behavioural block **57 tests** (55
+before this branch; the two added are the new merge-gate registrations) run under
+`test/bystander.sh` with the decoy run alive and a genuine orphan still reaped,
+`test/doc-sync.sh` PASS over 42 merged tasklists, tasklist JSON and category
+coverage OK. Verdict recorded for tree `fb83c89c`.
+
+---
+
+## 8. Disposition — what US-2 did with each finding, and why
+
+Written the day the removals landed. §§2–5 above are the inventory **as measured**
+and are left as they were, so the searches can still be re-run against the state
+that produced them; this section is the *decision* taken on each one. Where the two
+disagree, this section is later.
+
+**The rule this sweep applied**, stated once so the next one does not re-derive it:
+
+> **Unreferenced code is deleted. Working code that no gate invokes is registered.**
+
+Both are "dead" under this tasklist's definition — but they fail differently.
+Nothing calls `crossrepo_completed`, so nothing can notice it going. A test in zero
+gate lists is *worse than absent*, because it reads as coverage; deleting it would
+destroy working coverage to make a count go down. Four of the six findings were the
+second kind.
+
+### 8.1 Removed
+
+| Finding | Where | Commit | The search, re-run immediately before the deletion |
+|---|---|---|---|
+| `crossrepo_completed()` | `engine/crossrepo.sh` | step 1/3 | `git grep -n "crossrepo_completed" -- .` → 3 hits, all inside `crossrepo.sh` itself (the `_set`, the removed printing form, and the `_set`'s one caller) |
+| `CHIEF_SWEEP_STARTUP_BYTES`, `CHIEF_SWEEP_STARTUP_COUNT` | `engine/sweep.sh` | step 1/3 | `git grep -n "CHIEF_SWEEP_STARTUP_BYTES\|CHIEF_SWEEP_STARTUP_COUNT" -- .` → 1 hit, and it is the write |
+
+§2.1 could not resolve `crossrepo_completed` on its own, because the module header
+stated the SET/PRINT pair as a *rule* and deleting one half would have made the
+header false. That is now answered rather than dodged: the header says what the pair
+is **for** — a caller that reads the answer inline — instead of implying that
+symmetry is the point, and it names this removal so the half is not re-added out of
+tidiness. Cost of being wrong: one line, in a function whose `_set` half is intact.
+
+### 8.2 Registered rather than removed
+
+| Finding | Resolution | Why not deletion |
+|---|---|---|
+| `test/parked-decisions.sh` | all three lists | Passes today (0.36s, hermetic), and `106`'s story notes cite it as *run* — it lost a registration it once had |
+| `test/update-reroot.sh` | all three lists | Passes today (5.6s, hermetic), and pins a production failure: an install frozen on a force-pushed re-root |
+| `test/ps-all.sh` | `BASH_SUITE` + CI, deliberately **not** the merge gate | The one that was RED. Its second half starts a real watcher and read it after a fixed `sleep 0.2`, which no longer holds (~400ms to first render on a loaded host; 3/3 failures). It now waits for the render, bounded at 10s — same output, same assertion, 3/3 green. Excluded from the merge gate for `monitor.sh`'s reason, stated in its own header |
+| `scripts/check-tasklist-categories.mjs` | `.chief/verify.sh` + CI | It enforces category **coverage**, which chief structurally cannot: `category` is an opaque string to the engine, and `chief status --enforce-order` — what [`docs/reference/status.md`](../reference/status.md) says replaces a vendored guard — replaces the ordering half only and never fails on an uncategorized tasklist. Observed: `OK — 4 tasklists categorized` |
+
+**A registration is a claim about a gate, so the gate had to be readable.** It was
+not: `.github/workflows/ci.yml` **had not parsed since 2026-08-25**. Five step names
+added that day begin with a backtick, a reserved indicator in YAML, so
+`- name: ` + `` `chief status` … `` is not a legal plain scalar. GitHub reports this
+as a run of *the file* — name `.github/workflows/ci.yml` rather than the workflow
+`ci` — with **zero jobs**: run `33047688561`, 2026-08-27, head `55b94f0`,
+conclusion `failure`, `jobs = []`. The five names are now quoted and the file parses
+(72 steps). This is not a claim that CI is green — every run in the last 20 is a
+failure, which is `115`'s subject, not this tasklist's.
+
+### 8.3 Not removed, and this is the durable half of the record
+
+Nothing below is a deferral. Each was examined and **kept**, and the reason is
+recorded here so the next sweep does not spend its budget re-litigating the same
+files.
+
+| Kept | Why it survived |
+|---|---|
+| All **12** duplicate function definitions (§3) | Every one is a degradation stub inside an `if [ -f "$DIR/<module>.sh" ] … else` guard, with the reason written at the site. They are unreachable *in a correct install by design*, so deleting them leaves every test green and removes chief's whole older-engine-tree compatibility story. This is the single most expensive mistake this sweep could have made |
+| `CHIEF_SWEEP_REFUSED` (§2.2) | Written twice, read nowhere — but `engine/sweep.sh:187` names it as one of three accumulators *"for a caller that wants to total across a run"*, and its two named siblings **are** read. The comment is a live contract with one member that has no consumer yet. Withdrawing the contract is a decision about the API, not a cleanup |
+| The **98** single-call-site functions | One call site is `chief quality ratchet`'s `single_use_functions` metric — a decomposition question, not a liveness one. Several are one-call-site by stated design (the SET/PRINT pairs, `engine/status.sh`'s per-render row builders) |
+| Every row of §5 | `awk -v` bindings, `eval`-indirect `_lv_*` expansion, `ps` format specs, exported-for-children env vars, `cmd_*` dispatch arms, the `examples/minimal` fixtures consumed by directory. All were raw-scan artefacts; none is a finding |
+| `engine/reap.sh:14`'s commented shell | The one commented-out-looking line in the tree, and it is an illustrative anti-pattern quoted inside a header comment |
+
+### 8.4 Found while removing, fixed, and not dead code
+
+Recorded because both are the same *shape* as the findings above — a check that
+exists and does not run — and because a reader of this document will otherwise
+wonder why they are in the diff.
+
+- **`ROADMAP.md` did not name `118-a-document-can-claim-something-downstream`.** Its
+  retire commit (`b381350`) filed the `completed/` record without the roadmap row
+  `test/doc-sync.sh` requires, so `main` was red on that gate before this branch
+  existed. This branch touches `VERSION`/`README`/`ROADMAP` and therefore pays the
+  gate, which is how it surfaced. Fixed in its own commit, deliberately separate
+  from the removals.
+- The **CI parse failure** in §8.2, which was found by asking whether a CI
+  registration means anything.
+
