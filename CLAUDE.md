@@ -413,6 +413,18 @@ VERSION              # engine version — bump on any engine/bin/install change
   contend for the same file, and holding chief's lock across a rebase and a ten-minute
   verify is not an option. Generally: **any git command whose no-op case exits 0 needs
   its precondition checked, not its own exit status** (`test/merge-checkout.sh`).
+- **A backtick cannot START a YAML plain scalar, and `.github/workflows/ci.yml` is
+  full of prose.** `` ` `` is a RESERVED indicator in YAML, so `- name: ` followed by
+  `` `chief status` agrees with the scheduler `` makes the whole workflow unparseable
+  — and GitHub does not report that as a failing job. It reports a run of THE FILE
+  (name `.github/workflows/ci.yml` rather than the workflow `ci`) with **zero jobs**,
+  which reads exactly like an ordinary red CI. It stood that way from 2026-08-25 to
+  2026-09-03 (run `33047688561`, `jobs = []`). Quote any step name that begins with a
+  backtick, and check the file after ANY edit with
+  `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` —
+  ci.yml is the third of the three gate lists and is the only one that **nothing
+  local checks**. `bash -n` sees nothing here, exactly as it sees nothing in the
+  heredoc case below.
 - **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
   after one inside a `jq -n '…'` program parses as an expression and silently replaces the
   field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in

@@ -39,6 +39,7 @@ The map. Structured per the ecosystem
 *understanding-oriented — why it is this way*
 
 - [Drivers, scheduling, and the safety model](explanation/drivers-and-safety.md)
+- [Dead-code audit — the inventory, and the searches behind it](explanation/dead-code-audit.md)
 - [The research phase — buying the map once](research-phase.md)
 - [Plan review — the checkpoint between criteria and code](plan-review.md)
 

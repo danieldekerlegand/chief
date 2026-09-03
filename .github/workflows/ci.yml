@@ -95,6 +95,9 @@ jobs:
       - name: Abandoned monitor view (an orphaned watcher self-exits; reap sees it as a VIEW, not as work)
         run: bash test/monitor-orphan.sh
 
+      - name: chief ps --all (ready/blocked/parked rendered with reasons; completed omitted)
+        run: bash test/ps-all.sh
+
       - name: Teardown — an interrupt reaps the tree before releasing the records
         run: bash test/teardown.sh
 
@@ -179,23 +182,26 @@ jobs:
       - name: Under-tagged touches audit (co-scheduled tasklists that edited the same file are reported)
         run: bash test/touches-audit.sh
 
-      - name: `chief status` agrees with the scheduler (runnable == what the driver would launch)
+      - name: "`chief status` agrees with the scheduler (runnable == what the driver would launch)"
         run: bash test/status-deps.sh
 
-      - name: `chief status` portfolio scope (repo ROOTS, registry reconciled by resolved path, no double-count)
+      - name: "`chief status` portfolio scope (repo ROOTS, registry reconciled by resolved path, no double-count)"
         run: bash test/status-scope.sh
 
-      - name: `chief status` categories are opaque (no vocabulary in chief; only --enforce-order can fail)
+      - name: "`chief status` categories are opaque (no vocabulary in chief; only --enforce-order can fail)"
         run: bash test/status-categories.sh
 
-      - name: `chief status --json` is one document on stdout, and --blocked ranks what to merge
+      - name: "`chief status --json` is one document on stdout, and --blocked ranks what to merge"
         run: bash test/status-json.sh
 
-      - name: `chief status` over a 1,000-record portfolio (jq per DIRECTORY, not per record)
+      - name: "`chief status` over a 1,000-record portfolio (jq per DIRECTORY, not per record)"
         run: bash test/status-perf.sh
 
       - name: A park carries a REASON (opaque string, the project's vocabulary or none, `chief run` stops on one)
         run: bash test/park-reasons.sh
+
+      - name: Parked decisions (lint requires a reason; --decision filters HUMAN_DECISION parks)
+        run: bash test/parked-decisions.sh
 
       - name: Code-quality ratchet (slop BLOCKED, refactor ALLOWED, unmeasurable languages skipped not zeroed)
         run: bash test/quality-ratchet.sh
@@ -226,6 +232,12 @@ jobs:
 
       - name: Doc sync (README + ROADMAP version strings, README's command table, ROADMAP's coverage of completed/)
         run: bash test/doc-sync.sh
+
+      - name: Update across a re-rooted origin (chief update + an install.sh re-run cross a force-push)
+        run: bash test/update-reroot.sh
+
+      - name: Tasklist category coverage (every active tasklist declares a category)
+        run: node scripts/check-tasklist-categories.mjs
 
       - name: Dry-run schedule of the bundled example
         working-directory: examples/minimal

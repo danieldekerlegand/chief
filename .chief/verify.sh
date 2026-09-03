@@ -102,7 +102,7 @@ if touches '^(bin/chief|engine/.+\.sh|install\.sh|templates/.+\.sh|test/.+\.sh)$
   # here is paid for twice, and a failing test is named and its output streamed.
   if [ "${CHIEF_VERIFY_TESTS:-1}" = "1" ]; then
     say "behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)"
-    CHIEF_BYSTANDER_TESTS="smoke provider-conformance ratelimit provider-unavailable provider-backoff worktree-pending limitstate limitresume limitmonitor pause plan-review research liveliness teardown reapscope reapenv sweep noworkguard evidence-gate criteria-scope measured-bars terminal-false repeat-stop retire-negative unverified-resume boundary-demotion bookkeeping-progress five-cases stall-flag headless events container account-env stale-resume conflict-forensics rebase-refusal dirty-checkout submodule-gitlink submodule-resume status-deps status-scope status-categories status-json park-reasons decision decision-agent decision-e2e touches-audit quality-ratchet overlap-zones merge-batch merge-checkout verify-cache cigate crossrepo doc-claims gen" \
+    CHIEF_BYSTANDER_TESTS="smoke provider-conformance ratelimit provider-unavailable provider-backoff worktree-pending limitstate limitresume limitmonitor pause plan-review research liveliness teardown reapscope reapenv sweep noworkguard evidence-gate criteria-scope measured-bars terminal-false repeat-stop retire-negative unverified-resume boundary-demotion bookkeeping-progress five-cases stall-flag headless events container account-env stale-resume conflict-forensics rebase-refusal dirty-checkout submodule-gitlink submodule-resume status-deps status-scope status-categories status-json park-reasons parked-decisions decision decision-agent decision-e2e touches-audit quality-ratchet overlap-zones merge-batch merge-checkout verify-cache cigate crossrepo doc-claims gen update-reroot" \
       bash test/bystander.sh || block "behavioral tests failed (see above)"
   else
     say "behavioral tests skipped (CHIEF_VERIFY_TESTS=0)"
@@ -130,6 +130,18 @@ if touches '^tasks/chief/.+\.json$'; then
     [ -f "$f" ] || continue
     jq -e . "$f" >/dev/null 2>&1 || block "invalid JSON: $f"
   done < <(grep -E '^tasks/chief/.+\.json$' <<<"$changed")
+
+  # CATEGORY COVERAGE, and only coverage. Chief itself holds no category
+  # vocabulary (engine/status.sh: an opaque string it reports and never judges),
+  # so the rule that every ACTIVE tasklist here declares one is this repo's, and
+  # it needs this repo's guard to be a rule at all. The script existed and was
+  # wired into nothing — a guard that guards nothing reads as coverage — which is
+  # how 900's audit found it. The ordering half it also prints stays advisory: it
+  # exits 0 over a gated feature backlog, exactly as `chief status` does.
+  if [ -f scripts/check-tasklist-categories.mjs ] && command -v node >/dev/null 2>&1; then
+    say "tasklists — category coverage (scripts/check-tasklist-categories.mjs)"
+    node scripts/check-tasklist-categories.mjs || block "a tasklist carries no category, or one outside the vocabulary"
+  fi
 fi
 
 say "OK (allowing merge)"

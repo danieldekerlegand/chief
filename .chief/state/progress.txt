@@ -765,3 +765,197 @@ merge-bar witness.
 
 - A long, stateful integration fixture must run as one invocation: do not retry it while
   a previous invocation still owns its temporary child processes.
+
+---
+## 900-dead-code-paydown — US-1: An inventory, measured before anything is removed (2026-09-03)
+
+Wrote `docs/explanation/dead-code-audit.md` — the checked-in candidate inventory, with
+the exact search behind every finding, and linked it from `docs/README.md` (whose own
+rule is "a document not linked here does not exist"). No code changed.
+
+WHAT THE SEARCHES ACTUALLY FOUND (numbers, so US-2 does not re-derive them):
+  • 560 production shell functions (bin/chief + engine/*.sh + install.sh) checked for
+    references across every TRACKED file, word-boundary, definition line excluded.
+    Exactly ONE has zero references: `crossrepo_completed()` (engine/crossrepo.sh:33).
+    98 have exactly one — that is the quality ratchet's `single_use_functions` metric,
+    NOT a liveness finding, and several are one-call-site by stated design.
+  • 12 function names defined in two production files. ALL TWELVE are degradation
+    stubs behind `if [ -f "$DIR/<module>.sh" ] … else <stub> fi`, each with the reason
+    written at the site. Deleting them would leave every test green and remove chief's
+    entire older-engine-tree compatibility story. This is the single most important
+    line in the audit.
+  • 142 CHIEF_* identifiers split into reads/writes. Three are write-only:
+    CHIEF_SWEEP_REFUSED (but its own comment declares it an output, so Class B) and
+    CHIEF_SWEEP_STARTUP_BYTES/_COUNT (nothing declares those — Class A).
+  • 3 test files registered in ZERO of the three gate lists: parked-decisions, ps-all,
+    update-reroot. parked-decisions is cited as run in three of 106's story notes, so
+    it LOST its registration. Likely a re-registration, not a deletion.
+  • scripts/check-tasklist-categories.mjs (109 lines) is invoked by nothing —
+    verify.sh runs check-doc-links.mjs and not this one.
+  • ZERO commented-out code blocks, ZERO unreferenced docs/templates/fixtures.
+
+## Learnings for future iterations
+
+- **`mapfile` does not exist on this host** (bash 3.2, macOS) and **the Bash tool's
+  shell is zsh**, which does NOT word-split unquoted `$VAR`. Two scans silently
+  returned "everything is dead" and "nothing is dead" before that was noticed. Any
+  multi-file scan goes in a `/tmp/*.sh` run as `bash /tmp/x.sh`, and uses `git grep`
+  (tracked files, no file-list array needed) rather than expanding a path list.
+- **Substring matching makes a dead-code scan useless.** `grep -F "$fn"` over short
+  names (`status`, `field`, `render`) reports every function as live. The scan must be
+  `git grep -nE "(^|[^A-Za-z0-9_])${fn}([^A-Za-z0-9_]|$)"` with the DEFINING line
+  filtered out by `file:line:` prefix.
+- **In this engine, a second definition of a name is a compatibility STUB, not
+  duplication.** engine/agent.sh, engine/monitor.sh each carry a block of them. Check
+  for the enclosing `if [ -f "$_AGENT_DIR/x.sh" ]` / `if [ -f "$_MON_DIR/x.sh" ]`
+  before calling anything a duplicate.
+- **`shellcheck` is not installed locally** (it is in CI at `-S error`, which reports
+  neither SC2034 nor SC2317). A dead-variable scan here is hand-rolled and strictly
+  weaker than shellcheck's — say so rather than implying coverage.
+- The two structural false-positive generators for a shell dead-variable scan are
+  `awk -v NAME=…` bindings and `eval "_pfx_$key=…"` indirect expansion
+  (engine/live.sh's `_lv_*`). Both are read; neither is greppable.
+
+---
+## 900-dead-code-paydown — US-2: Removal, with the tree still green and the reason recorded (2026-09-03)
+
+Three reviewable commits, plus one separate pre-existing fix. The disposition of every
+US-1 finding is now `docs/explanation/dead-code-audit.md` §8 — §§2–5 were left AS
+MEASURED so the searches still re-run against the state that produced them.
+
+THE RULE THIS SWEEP APPLIED (§8, stated once so US-3 and 901 inherit it):
+**unreferenced code is deleted; working code that no gate invokes is registered.**
+Both are "dead" by this tasklist's definition and they fail differently — nothing can
+notice `crossrepo_completed` going, while a test in zero gate lists is WORSE than an
+absent one because it reads as coverage. Four of the six findings were the second kind.
+
+- step 1/3 `2c5ee09` — the two Class A findings and nothing else. `crossrepo_completed()`
+  (engine/crossrepo.sh, the only zero-reference function of 560) and
+  `CHIEF_SWEEP_STARTUP_BYTES`/`_COUNT` (engine/sweep.sh, assigned as the last statement
+  before `return 0`). Both searches re-run immediately before the deletion and pasted
+  into the commit. VERSION 0.9.13 -> 0.9.14 + README/ROADMAP bold.
+- `10e3753` — ROADMAP row for `118`, PRE-EXISTING: its retire commit filed the
+  completed/ record without the row `test/doc-sync.sh` requires, so main is red on that
+  gate today. Separate commit, because it is not a removal.
+- step 2/3 `e9738e5` — Class D, all four REGISTERED rather than removed:
+  parked-decisions + update-reroot into all three lists, ps-all into BASH_SUITE + CI
+  only (a real watcher, excluded for monitor.sh's reason, stated in its own header),
+  check-tasklist-categories.mjs into .chief/verify.sh + CI.
+- step 3/3 — this note, the §8 disposition, the story flags.
+
+MEASURED, per artifact: parked-decisions PASS (0.36s) · update-reroot PASS (5.6s) ·
+ps-all was RED 3/3 and is PASS 3/3 after the fix · categories guard `OK — 4 tasklists
+categorized` · both new merge-gate entries PASS under test/bystander.sh (2/2, bystander
+alive) · doc-links 0 dead vs 0 on main · doc-sync PASS (42 merged tasklists) ·
+version-bump PASS (0.9.14) · crossrepo XREPO PASS · sweep 55 passed 0 failed.
+
+### Learnings for future iterations
+
+- **CI HAS NOT PARSED SINCE 2026-08-25, and no local gate can see that.** Five step
+  names in `.github/workflows/ci.yml` begin with a backtick — a RESERVED INDICATOR in
+  YAML, so `- name: `chief status` …` is not a legal plain scalar. GitHub then reports a
+  run of THE FILE (name `.github/workflows/ci.yml`, not the workflow `ci`) with ZERO
+  jobs: `gh api repos/:owner/:repo/actions/runs/33047688561` → conclusion failure,
+  `jobs = []`. Quoted them; `python3 -c "import yaml; yaml.safe_load(open(...))"` now
+  parses the file (72 steps). Validate this file that way after ANY edit to it — it is
+  the third of the three gate lists and the only one nothing local checks.
+  (Every run in the API's last 20 is still a failure; that is `115`'s subject.)
+- **A test that no gate runs rots silently, and ps-all is the proof.** Of the three
+  unregistered files, exactly one was red — and it was red on a WALL-CLOCK assumption
+  (`sleep 0.2` before reading a watcher's output; first render measured ~400ms here),
+  not on a behaviour change. Registration therefore has to run the file first: the
+  finding "3 tests in zero lists" is not the same size as the work.
+- **Re-run the search immediately before the deletion, and paste it into the commit.**
+  US-1's inventory was one day old and still correct, but the commit is where a reviewer
+  looks, and `git grep -n "<name>" -- .` in the message is checkable in seconds.
+- **Fix a doc a removal STRANDS in the removal commit; fix rot it merely EXPOSES in its
+  own.** The ROADMAP/118 gap has nothing to do with dead code — it was surfaced only
+  because this branch bumped VERSION and so paid the doc-sync gate.
+- macOS/zsh notes that cost time again: the Bash tool's shell is **zsh** (no `timeout`,
+  no word-splitting on unquoted `$VAR`), and `echo ===` is a zsh syntax error. Multi-step
+  scans and edits go in a `/tmp/*.py` or `/tmp/*.sh` run explicitly with `python3`/`bash`.
+
+GATE (US-2, final tree): `chief verify` **exit 0, GREEN**, ~20 min — quality ratchet OK,
+`bash -n` clean, version-bump PASS (0.9.14), bystander block **57 test(s)** (55 before
+this branch; +2 are the new merge-gate registrations) with the decoy alive and a genuine
+orphan still reaped, doc-sync PASS (v0.9.14, 42 merged tasklists), tasklist jq parse +
+category coverage OK. Verdict RECORDED for tree fb83c89c. The CI-parse invariant is now
+in CLAUDE.md, beside the heredoc-backtick one it rhymes with.
+
+---
+## 900-dead-code-paydown — US-3: What the sweep could not decide (2026-09-03)
+
+Docs only, no code touched, nothing removed. `docs/explanation/dead-code-audit.md`
+gains **§9** (the undecidable list) and **§10** (the limits of the method, in full);
+§6 — which had promised "US-3 states them in full" — now points forward at both, and
+the header status line records them.
+
+WHY IT IS TWO SECTIONS. §9 is a list of *candidates*; §10 is a list of *properties of
+the instrument*. They are not the same claim, and collapsing them is how "we could not
+tell" turns into "we did not look". Each §9 class names the search that produced it and
+the number it produced, so an undecidable finding is re-runnable exactly like a
+decidable one.
+
+THE EIGHT CLASSES, with what each actually measured on this tree:
+
+- **9.1 constructed names** — 10 executable `eval` sites + 1 `${!VAR}`. Three of them
+  evaluate OPERATOR-SUPPLIED SHELL (`CHIEF_ITER_HOOK`, driver warm-ups, the per-tasklist
+  `verify` array): the boundary at which chief runs text this repo does not contain.
+  `gitenv.sh`'s `GIT_CONFIG_KEY_$n` is doubly undecidable — its consumer is **git**.
+  `LIVE_FIELDS` is a closed literal list of 16; the quality tolerance family is closed
+  today (11 KNOWN metrics, 11 defaults) and would silently open on a twelfth.
+- **9.2 dispatch through a variable** — `"$livefn" "$wt"` (sweep.sh:327,425). Decidable
+  ONLY because both callers pass the literal `chief_reap_wt_live`.
+- **9.3 `command -v <fn>` capability probes** — 13 functions. **None is probe-only**
+  (probe refs 1–2 against other refs 3–102). A measured negative, and the audit's
+  clearest false-NEGATIVE generator: the probe string outlives the last real caller.
+- **9.4 consumers outside the repo** — 4 dispatch aliases (`generate` `watch` `tail`
+  `subscribe`) invoked by nothing, in no README row, no doc, no usage block, and
+  STRUCTURALLY invisible to `test/doc-sync.sh:95`, which checks `${arm%%|*}` only.
+- **9.5 operator input** — 13 `CHIEF_*` read by the engine and assigned nowhere in the
+  tree; 4 (`CHIEF_QUALITY_CONFIG`, `CHIEF_SWEEP_DEPTH`, `CHIEF_SWEEP_MAX`,
+  `CHIEF_SWEEP_STARTUP_DRY_RUN`) occur ONLY at the read.
+- **9.6 the event stream** — 33 types, 21 asserted by no test, 4 with no in-tree
+  consumer of any kind.
+- **9.7 scaffolded code** — `templates/tasklist.example.json`, 0 test references
+  (verify.sh 53 · config 21 · agent-context.md 3 · quality.conf 2 · zones.conf 2).
+- **9.8 prompt text** — excluded from scope rather than sampled.
+
+§10's nine limits are the instrument: no shellcheck, no runtime trace, constructed
+names, mention-counted-as-reference (measured: 0 functions kept alive by prose alone),
+deletion changing the question, tracked-files-and-the-worktree-is-the-boundary,
+version skew, published-API-has-no-local-caller, and time. It closes with what would
+LIFT each, in cost order.
+
+### Learnings for future iterations
+
+- **"Undecidable" is a result, not a deferral — and it has to be measured like one.**
+  Every class here names its command and its count. Three of the eight came back as
+  measured NEGATIVES (no probe-only function, no prose-only function, the tolerance
+  family closed) and those are the most valuable rows in the section: they are what
+  stops 901 or a future sweep re-running the same scan.
+- **The `command -v <fn>` probe is a reference a grep cannot discount.** 13 names in
+  this engine carry one. If a future sweep counts references rather than reading them,
+  every one of those functions is permanently un-deletable and permanently un-auditable.
+- **An audit run inside a worktree cannot see a cross-repo consumer, by contract.**
+  Chief's agent rules forbid reaching out of the worktree, which is exactly the scope a
+  cross-repo liveness question needs. That is not a gap to be quietly fixed by reaching
+  anyway — it is stated as §10's limit 6, with "a `git grep` run from ABOVE the repos"
+  named as what would lift it.
+- **A gate can be structurally blind and still be right.** `test/doc-sync.sh` reduces
+  each dispatch arm to its primary name before checking README coverage, so four aliases
+  can never fail it. That is a defensible choice for a documentation-drift gate; it just
+  means the aliases have no reader in this repo, and a liveness audit has to know which
+  gate would have caught what.
+- macOS/zsh again: the multi-file scans went in `/tmp/*.sh` run as `bash`, `git grep`
+  throughout, word-boundary `-E` patterns with the defining `file:line:` prefix filtered
+  out. `grep -c .` rather than `wc -l` when the input may be a single empty line — `wc`
+  counts one where there is nothing.
+
+GATE (US-3): `chief verify` **exit 0, GREEN** — bystander block **57 test(s)** with the
+decoy run alive (orphan 23896 reaped, bystander 8730 left alone) · verify-cache OK (PARTS
+B–E) · CIGATE PASS · XREPO PASS · CLAIMS PASS · GEN OK · DOC-SYNC PASS (v0.9.14, 42 merged
+tasklists) · tasklists jq parse OK · doc-links **0 dead references**. Verdict RECORDED for
+tree `e5288a63`, then re-recorded once this note and the story notes were written in.
+Docs + tasklist only, so no `VERSION` bump is owed (`test/version-bump.sh` reads
+`engine/`/`bin/`/`scripts/`/`install.sh`, none of which this story touches).

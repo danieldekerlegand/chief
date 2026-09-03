@@ -2,6 +2,13 @@
 # `chief ps --all` is the aggregate repo view: every live state is visible and
 # completed records are not. The fixture has no driver, so a second implementation
 # cannot accidentally make the test pass by reusing only registry rows.
+#
+# In test/all.sh + CI but NOT the merge gate, for monitor.sh's reason: the second
+# half starts a real `chief monitor --all` watcher and reads what it rendered, which
+# is a wall-clock assertion under whatever else the host is running. It WAITS for the
+# render rather than sleeping a fixed interval — a fixed 0.2s was the original and it
+# stopped holding (first render measured at ~400ms on a loaded host), which is how
+# this file came to fail in every one of the zero gates that ran it.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
@@ -34,9 +41,14 @@ case "$out" in *"parked"*"waiting for product"*) ;; *) echo "$out"; echo "missin
 printf '%s\n' "$out" | grep -Eq '^   done[[:space:]]' && { echo "$out"; echo "completed tasklist leaked into --all" >&2; exit 1; } || :
 
 monitor_out="$WORK/monitor.out"
+: > "$monitor_out"
 "$ROOT/bin/chief" monitor --all 0 >"$monitor_out" 2>&1 & monitor_pid=$!
-sleep 0.2
+rendered=0
+for _ in $(seq 1 100); do                       # up to 10s, and it stops at the render
+  grep -q 'waiting for product' "$monitor_out" && { rendered=1; break; }
+  sleep 0.1
+done
 kill "$monitor_pid" 2>/dev/null || :
 wait "$monitor_pid" 2>/dev/null || :
-grep -q 'waiting for product' "$monitor_out"
+[ "$rendered" = 1 ] || { cat "$monitor_out"; echo "monitor --all never rendered the parked reason" >&2; exit 1; }
 echo "PS-ALL PASS — ready, blocked, parked rendered with reasons; done omitted"
