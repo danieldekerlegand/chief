@@ -202,14 +202,37 @@ verify_cache_dir() {
   printf '%s/verify-cache/%s' "$STATE" "$(printf '%s' "$root" | cksum | awk '{print $1}')"
 }
 
+# verify_cache_subs CWD — the SUBMODULE CHECKOUT the gate will see, digested.
+#
+# The fourth component of the key, and it is in there because CHIEF ITSELF moves it.
+# A project worktree never initializes its submodules, so the agent boundary runs the
+# hook with `dep/` an EMPTY DIRECTORY; the merge phase runs `submodules_sync` first
+# (93) and runs the same hook, over the same tree, against a submodule checked out to
+# match the gitlink. Same tree sha, same base, same hook, DIFFERENT FILESYSTEM — and
+# a hook that looks inside a submodule answers differently in the two places.
+# test/submodule-gitlink.sh is exactly that gate, and with a three-part key it read
+# the boundary's legitimate red ("submodule working tree is STALE") back at the merge
+# and never re-ran the check `93` exists to guarantee.
+#
+# `-` vs ` ` in `git submodule status` is the whole distinction (uninitialized vs
+# checked out), but the sha is digested with it so a gitlink that moved without the
+# tree moving misses too. A repo with no submodules digests to a constant and the key
+# behaves exactly as it did before.
+verify_cache_subs() {
+  local st
+  st="$(git -C "$1" submodule status --recursive 2>/dev/null || true)"
+  [ -n "$st" ] || { printf 'nosub'; return 0; }
+  printf '%s' "$st" | cksum | awk '{print $1}'
+}
+
 # verify_cache_try CWD NAME BASE — is this exact gate run already answered?
 #
-# THE KEY IS THE WHOLE ARGUMENT. `tree.base.hook` names the three inputs the gate is
-# a function of: HEAD's tree, the base commit it is measured against, and the blob of
-# the hook doing the measuring. If none of the three has moved, a second run is not a
-# second sample — it is the SAME COMPUTATION, and its answer cannot have changed.
-# That reasoning says nothing about the verdict's VALUE, so a RED record is reused on
-# exactly the same terms a green one is.
+# THE KEY IS THE WHOLE ARGUMENT. `tree.base.hook.subs` names the four inputs the gate
+# is a function of: HEAD's tree, the base commit it is measured against, the blob of
+# the hook doing the measuring, and the submodule checkout it will see. If none of
+# them has moved, a second run is not a second sample — it is the SAME COMPUTATION,
+# and its answer cannot have changed. That reasoning says nothing about the verdict's
+# VALUE, so a RED record is reused on exactly the same terms a green one is.
 #
 # It did not used to be. Until 120 only `status=0` was honoured and every other
 # status fell through to a full re-run, so an agent that could not fix a gate paid
@@ -240,7 +263,7 @@ verify_cache_try() {
   [ -z "$(jq -r '(.verify // [])[]' "$TASKS_DIR/$name.json" 2>/dev/null || true)" ] || return 1
   dir="$(verify_cache_dir "$cwd")"
   tree="$(git -C "$cwd" rev-parse HEAD^{tree} 2>/dev/null || echo)"
-  key="$tree.$(git -C "$cwd" rev-parse "$base" 2>/dev/null || echo).$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook)"
+  key="$tree.$(git -C "$cwd" rev-parse "$base" 2>/dev/null || echo).$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook).$(verify_cache_subs "$cwd")"
   rec="$dir/$key"; [ -f "$rec" ] || return 1
   st="$(sed -n 's/^status=//p' "$rec" | head -1)"
   case "$st" in ''|*[!0-9]*) return 1 ;; esac          # unreadable record = no record
@@ -282,14 +305,15 @@ verify_cache_output() {
 # these accumulate per tree and a gate's own report of what broke is at the end of
 # its output, not the start.
 verify_cache_record() {
-  local cwd="$1" base="$2" status="$3" out="${4:-}" dir key rec tmp tree hook base_sha cap lines
+  local cwd="$1" base="$2" status="$3" out="${4:-}" dir key rec tmp tree hook base_sha subs cap lines
   [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
   dir="$(verify_cache_dir "$cwd")"; mkdir -p "$dir" || return 0
   tree="$(git -C "$cwd" rev-parse HEAD^{tree} 2>/dev/null || echo)"
   base_sha="$(git -C "$cwd" rev-parse "$base" 2>/dev/null || echo)"
   hook="$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook)"
-  key="$tree.$base_sha.$hook"; rec="$dir/$key"; tmp="$rec.tmp.$$"
-  { echo "status=$status"; echo "tree=$tree"; echo "base=$base_sha"; echo "hook=$hook"; } > "$tmp" && mv "$tmp" "$rec"
+  subs="$(verify_cache_subs "$cwd")"
+  key="$tree.$base_sha.$hook.$subs"; rec="$dir/$key"; tmp="$rec.tmp.$$"
+  { echo "status=$status"; echo "tree=$tree"; echo "base=$base_sha"; echo "hook=$hook"; echo "subs=$subs"; } > "$tmp" && mv "$tmp" "$rec"
   rm -f "$rec.out"          # a green re-record must not leave the old red's report behind
   if [ "$status" != 0 ] && [ -n "$out" ]; then
     # OUTPUT_FILE of `-` reads the output from STDIN, so a caller that already has it
