@@ -1,0 +1,48 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/900-dead-code-paydown",
+  "dependsOn": [],
+  "touches": [
+    "."
+  ],
+  "iters": 8,
+  "description": "Find and remove dead, stale and duplicated CODE, so the tree is what it claims to be.\n\nRUN THIS LAST, DELIBERATELY. It carries a high number because a cleanup that runs before the work is finished deletes scaffolding that was about to be used, and then the next tasklist re-adds it. The roadmap should be substantially complete before this executes.\n\nWHAT COUNTS AS DEAD. Unreferenced modules, functions and files; duplicated implementations of one behaviour; code behind flags that can no longer be set; scripts nothing runs; dependencies nothing imports; commented-out blocks kept 'just in case'. What does NOT count: code a test exercises, code an external consumer calls, and code that is deliberately unexercised and says so.\n\nTHE STANDARD OF PROOF, AND IT IS THE WHOLE TASKLIST. This portfolio has repeatedly found things that LOOKED dead and were not — a Prolog corpus reached by a path nobody found, `content_qa` declared callerless when it had a caller, `docs/studioos` cited by 93 files. Deletion is irreversible in effect even when git remembers, because nobody re-reads a deleted file. Every removal names the search that found nothing.\n\nPAIRED WITH THE DOCS SWEEP, WHICH RUNS AFTER. Removing code changes what the docs should say, so the docs tasklist depends on this one. Do not fix docs here beyond what a removal strands.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "An inventory, measured before anything is removed",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "Produce a checked-in inventory of candidates with, for each, the SEARCH that found it unreferenced — the command and its scope. A candidate list without its method is unreviewable, and this is the artifact a human approves before deletion.",
+        "Separate genuinely-dead from deliberately-unexercised. The second class exists here on purpose (refusal paths, guards, unreached tiers that say so) and deleting it removes a stated contract.",
+        "Include duplicated implementations as first-class findings, not just unused ones — two implementations of one behaviour is the failure mode that costs most later, because they drift.",
+        "GATES: the repo's own verify green."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "Removal, with the tree still green and the reason recorded",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "Remove what US-1 established, in reviewable steps rather than one sweep. A single commit deleting hundreds of lines across unrelated subsystems cannot be reviewed and cannot be partially reverted.",
+        "The full gate passes after each step. A removal that needs a test deleted to stay green is a removal of something live — say so and stop rather than adjusting the test.",
+        "Anything NOT removed that looked dead is recorded with why it survived. That record is worth more than the deletions: it is what stops the next sweep re-litigating the same files.",
+        "GATES: the repo's own verify green."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "What the sweep could not decide",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "Report candidates the sweep could not resolve — reachable only through dynamic dispatch, reflection, generated code, or a consumer outside this repo — and leave them in place. An honest 'undecidable' list is a legitimate result.",
+        "State the limits of the method: what a static search over this tree cannot see. Cross-repo consumers are the obvious one, and this portfolio has already been bitten by exactly that.",
+        "GATES: the repo's own verify green."
+      ]
+    }
+  ]
+}

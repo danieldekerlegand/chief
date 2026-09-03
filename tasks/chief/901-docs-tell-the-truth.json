@@ -1,0 +1,55 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/901-docs-tell-the-truth",
+  "dependsOn": [
+    "900-dead-code-paydown"
+  ],
+  "touches": [
+    "docs",
+    "README.md",
+    "CLAUDE.md"
+  ],
+  "iters": 8,
+  "description": "Make the docs describe the repo as it IS. Stale, dead and duplicated documentation is archived or corrected — never silently deleted.\n\nMEASURED IN THIS REPO ON 2026-09-03: **1 dead internal `.md` link(s)** measured on 2026-09-03; **5 of 24 docs carry no `Status · Updated · Owner` banner**.\n\nDEPENDS ON THE CODE SWEEP, DELIBERATELY. Removing dead code changes what the docs should say, so documenting first means documenting twice.\n\nTHE STANDARD IS ALREADY WRITTEN AND IS NOT THIS TASKLIST'S TO INVENT: five root files, seven directories under `docs/` (`tutorials` `guides` `reference` `explanation` `decisions` `runbooks` `archive`), `docs/README.md` links every document, every file opens with a `Status · Updated · Owner` banner, and **nothing is deleted — it is archived** with a note saying what replaced it. Spec: `rosetta/docs/reference/documentation-standard.md`.\n\nROADMAPS ARE OUT OF SCOPE. `ROADMAP.md` and the roadmap plans under `docs/*/roadmap/` were reconciled portfolio-wide on 2026-09-02/03 and state their own evidence standard. Do not re-mark them here.\n\nARCHIVE, DO NOT DELETE. The standard says so and this portfolio has paid for the alternative: five consolidated strategy documents were unrecoverable except through one paragraph of prose. An archived doc with a note saying what replaced it costs nothing and answers the question a reader will actually have.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Every document is reachable, banner-stamped, and in the right place",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "Dead internal links are repaired or the target is archived with a pointer. A link to a document that no longer exists is worse than no link: it asserts the document is current.",
+        "Every `docs/` file carries a `Status · Updated · Owner` banner. Where a doc is stale rather than current, the banner is where that gets SAID — `Status: Superseded` with what replaced it beats a silent edit.",
+        "`docs/README.md` links every document. Unlinked is unreachable, and unreachable documentation still greps as current — which is how a reader finds it and believes it.",
+        "Directories outside the standard's seven are either justified in writing as declared exceptions or their contents are moved. Do not move a directory other files cite without repointing them.",
+        "GATES: the repo's own verify green."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "Content that describes a tree that moved",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "Read the docs against the tree and correct what has drifted — paths, commands, module names, counts, and any claim the code no longer supports. This is the half a link-checker cannot do and the half that actually misleads.",
+        "Anything the code sweep removed is reflected here. A doc describing deleted code is the most confidently wrong kind.",
+        "Duplicated documentation — the same fact stated in two places that can disagree — is reduced to one home with the other pointing at it. Two copies of one fact is the same defect as two implementations of one behaviour.",
+        "Corrections are DATED and say what was wrong, in the house style used by this portfolio's corrections of record. A silently fixed doc teaches nobody why it drifted.",
+        "GATES: the repo's own verify green."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "Archived, not deleted — and the record says why",
+      "passes": false,
+      "notes": null,
+      "acceptanceCriteria": [
+        "Superseded documents move to `docs/archive/` with a note naming what replaced them and when. Nothing is deleted outright.",
+        "Report what was left alone and why — a doc that looks stale but is the record of a decision is not stale, it is history, and this portfolio keeps those deliberately.",
+        "State honestly what this sweep did NOT verify. Documentation correctness is not machine-checkable in general, and a claim that the docs are now true is stronger than the method supports.",
+        "GATES: the repo's own verify green."
+      ]
+    }
+  ]
+}
