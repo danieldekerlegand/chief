@@ -30,7 +30,17 @@
         "The verdict is still recorded through `verify_cache_record` exactly as now, and a failure still sets `COMPLETE_OK=0`. This story changes when bytes appear, not what the gate decides.",
         "A test asserts output appears BEFORE the hook exits — drive a hook that prints, sleeps, then prints, and assert the first line is observable while it still runs. Asserting only on the final log contents cannot tell streaming from buffering.",
         "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the VERSION bump the engine-change gate requires."
-      ]
+      ],
+      "diffSize": {
+        "files": 8,
+        "lines": 352,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -42,7 +52,17 @@
         "The heartbeat keeps ticking across the verify, and `_beat_start` does NOT clobber `verifying` with `writing` when output moves. Streaming output would otherwise re-label a verify as writing on its first line, which trades one wrong phase for another.",
         "`chief ps` on a running final verify reads as verifying with a live tick — not as a stalled agent turn. State what it renders; a phase nobody can see in the monitor has not been published where it matters.",
         "GATES: as US-1."
-      ]
+      ],
+      "diffSize": {
+        "files": 9,
+        "lines": 345,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -54,7 +74,31 @@
         "A test distinguishes the two cases the incident conflated: a long verify that is emitting (not stale) and a dead verify that is not (stale). Both assertions, or the change has moved the problem rather than fixed it.",
         "`docs/guides/monitoring.md`'s phase table records that `verifying` now has two publishers and what a reader should conclude from it, since that table is what an operator consults at 1am.",
         "GATES: as US-1."
-      ]
+      ],
+      "diffSize": {
+        "files": 5,
+        "lines": 306,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "e394a7f",
+  "gates": {
+    "local": {
+      "state": "passed",
+      "detail": "the project verify hook (verify.sh) ran and exited 0"
+    },
+    "ci": [
+      {
+        "workflow": "ci",
+        "state": "unknown",
+        "detail": "a push of main can start it; whether it RAN for e394a7f is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+      }
+    ]
+  }
 }
