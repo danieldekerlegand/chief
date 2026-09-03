@@ -3,7 +3,13 @@
   "category": "fix",
   "branchName": "chief/119-a-long-verify-is-not-a-hang",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/monitor.sh", "test", "docs", "VERSION"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/monitor.sh",
+    "test",
+    "docs",
+    "VERSION"
+  ],
   "iters": 6,
   "warmup": [
     "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
@@ -17,8 +23,8 @@
     {
       "id": "US-1",
       "title": "The final verify streams, so the record keeps moving",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "engine/agent.sh streams the gate instead of capturing it; no pipeline, so $? is still the hook's. test/verify-stream.sh: PART A/B/C green — \"VERIFY-STREAM OK\", 7.5s wall (a handshake, not a sleep: the first draft with a fixed 8s window took 28s). bash -n clean over bin/chief, engine/*.sh, test/*.sh, install.sh. test/doc-sync.sh: PASS — README and ROADMAP state v0.9.14, all 42 merged tasklists named. shellcheck not installed on this host (CI enforces it).",
       "acceptanceCriteria": [
         "`_agent_verify_final` streams the verify hook's output to the log as it is produced rather than capturing it in a command substitution. The exit status must still be the hook's — a pipeline that returns the wrong status here would let a red verify accept a completion, which is worse than the bug being fixed.",
         "The verdict is still recorded through `verify_cache_record` exactly as now, and a failure still sets `COMPLETE_OK=0`. This story changes when bytes appear, not what the gate decides.",

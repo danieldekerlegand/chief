@@ -959,3 +959,50 @@ tasklists) · tasklists jq parse OK · doc-links **0 dead references**. Verdict 
 tree `e5288a63`, then re-recorded once this note and the story notes were written in.
 Docs + tasklist only, so no `VERSION` bump is owed (`test/version-bump.sh` reads
 `engine/`/`bin/`/`scripts/`/`install.sh`, none of which this story touches).
+## US-1 — The final verify streams, so the record keeps moving
+Thu Sep  3 2026
+
+`_agent_verify_final` (engine/agent.sh) ran the gate inside a command substitution:
+
+    output="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1)" || rc=$?
+    printf '%s\n' "$output"
+
+Nothing reached the log until the hook RETURNED. That is the whole invisibility half
+of the incident: talos:83 ran 7h41m, read `stalled in agent-turn — no activity for
+1h06m`, and its log ENDED at the completion token — 192 of 192 lines — over a branch
+with 7 commits and 4/4 stories passing.
+
+Files:
+- `engine/agent.sh` — the capture is now a plain `run_verify … 2>&1 || rc=$?`. NO
+  pipeline: `| tee` would hand us tee's status, and a red gate reported green accepts
+  a completion it must refuse. `local output` dropped with it.
+- `test/verify-stream.sh` — new. PART A the first line is in the log while the hook is
+  still running · PART B the status is still the hook's (red refuses the completion,
+  both verdicts recorded, red streams too) · PART C REPRODUCTION against a copy of the
+  engine with the command substitution restored.
+- `.chief/verify.sh`, `test/all.sh`, `.github/workflows/ci.yml` — the three lists.
+- `VERSION` 0.9.13 → 0.9.14; README + ROADMAP bold version to match.
+- `ROADMAP.md` — a row for `118`, which merged onto main without one and was failing
+  `test/doc-sync.sh` on arrival (pre-existing, inherited from the base).
+
+### Learnings for future iterations
+
+- **A "did it stream?" test must be a HANDSHAKE, not a sleep.** The obvious shape —
+  hook prints, sleeps N, prints again, poller races the window — is exactly the
+  load-sensitive assertion CLAUDE.md warns about, and this file goes in the merge gate
+  where `-p N` workers run beside it. First draft did that and took 28s. Instead the
+  hook prints its marker and BLOCKS on a go-file that the prober touches the moment it
+  reads the marker out of the log. Streaming then costs no wall clock and cannot be
+  starved (the hook waits as long as the machine needs); buffering cannot be rescued by
+  the same generosity, because a captured line is physically unable to appear before the
+  hook exits — it just times out. 7.5s, and the verdict is not a race.
+- A done-file the hook touches as its LAST act is what turns "before it exited" into a
+  fact. Check it FIRST in the poll loop, so an already-exited hook can never be credited
+  with a live read — the conservative direction.
+- **A red gate does not end the agent loop** (that is what a red gate is for), so a
+  fixture provider that commits every turn keeps a red probe alive to the hard cap of 20
+  — 20 × the hook. `test/verify-cache.sh`'s `FAKE_COMMIT` flag exists for this; copy it.
+  Bounding the hook's own wait to the first invocation of a probe is the other half.
+- `test/doc-sync.sh` fails on the BASE's debt as soon as your branch touches any file in
+  its trigger set (`VERSION`, `README.md`, `ROADMAP.md`, `tasks/chief/completed/`). 118
+  merged without its roadmap row; the first branch to bump VERSION inherits that.

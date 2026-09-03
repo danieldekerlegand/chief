@@ -1,47 +1,59 @@
 {
   "project": "chief",
   "category": "fix",
-  "branchName": "chief/900-dead-code-paydown",
+  "branchName": "chief/119-a-long-verify-is-not-a-hang",
   "dependsOn": [],
   "touches": [
-    "."
+    "engine/agent.sh",
+    "engine/monitor.sh",
+    "test",
+    "docs",
+    "VERSION"
   ],
-  "iters": 8,
-  "description": "Find and remove dead, stale and duplicated CODE, so the tree is what it claims to be.\n\nRUN THIS LAST, DELIBERATELY. It carries a high number because a cleanup that runs before the work is finished deletes scaffolding that was about to be used, and then the next tasklist re-adds it. The roadmap should be substantially complete before this executes.\n\nWHAT COUNTS AS DEAD. Unreferenced modules, functions and files; duplicated implementations of one behaviour; code behind flags that can no longer be set; scripts nothing runs; dependencies nothing imports; commented-out blocks kept 'just in case'. What does NOT count: code a test exercises, code an external consumer calls, and code that is deliberately unexercised and says so.\n\nTHE STANDARD OF PROOF, AND IT IS THE WHOLE TASKLIST. This portfolio has repeatedly found things that LOOKED dead and were not — a Prolog corpus reached by a path nobody found, `content_qa` declared callerless when it had a caller, `docs/studioos` cited by 93 files. Deletion is irreversible in effect even when git remembers, because nobody re-reads a deleted file. Every removal names the search that found nothing.\n\nPAIRED WITH THE DOCS SWEEP, WHICH RUNS AFTER. Removing code changes what the docs should say, so the docs tasklist depends on this one. Do not fix docs here beyond what a removal strands.",
+  "iters": 6,
+  "warmup": [
+    "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
+    "sed -n '/^_beat_start()/,/^}/p' engine/agent.sh",
+    "sed -n '155,170p' engine/monitor.sh",
+    "grep -n 'phase=verifying' engine/driver.sh",
+    "sed -n '/provider-waiting     the DEFAULT/,/produced 0 bytes/p' engine/monitor.sh"
+  ],
+  "description": "`_agent_verify_final` runs the project's verify hook inside a COMMAND SUBSTITUTION and under the wrong phase, so a legitimately long final verify is indistinguishable from a hang. Measured on talos, 2026-09-03.\n\nWHAT WAS OBSERVED. `talos:83-slice-lane-execution` ran 7h41m and read `⚠ stalled in agent-turn — no activity for 1h06m, past its 15m limit`. The branch was HEALTHY: 7 commits, 58 files, 2,752 insertions, 4/4 stories passing, `stall: 0`. The agent emitted `<promise>COMPLETE</promise>` at log line 192 and the log ENDS THERE — 192 of 192 lines. It did not hang working; it hung finishing, invisibly.\n\nWHY IT WAS INVISIBLE — the first half:\n\n    output=\"$(run_verify \"$CHIEF_PROJECT\" \"$CHIEF_TASKLIST\" 2>&1)\" || rc=$?\n    printf '%s\\n' \"$output\"\n\nCommand substitution. Nothing reaches the log until the verify RETURNS. And `_beat_start` flips the phase to `writing` only when `_head` moves — so with the output captured, nothing moves, the record stops advancing, and the monitor has no signal but silence.\n\nWHY IT FLAGGED AT 15 MINUTES — the second half, and this one is nearly free. `monitor.sh`'s `STALE_PHASE_SECONDS` already gives `verifying` **3060s** against `provider-waiting`'s 900s, precisely because a verify legitimately takes tens of minutes. But `grep -n 'phase=verifying' engine/` returns exactly ONE call site — `driver.sh:2928`. `_agent_verify_final` never publishes it, so its verify is timed as an agent turn. The right threshold exists and this code path does not use it.\n\nWHAT MADE IT LONG RATHER THAN WEDGED. `83`'s diff touched 17 files under `talos/slices/` and `vendor/insimul/`, which arms the gate whose own comment states the cost: 'one Godot launch and one editor'. `test_godot_slice_driver.py` launches a real Godot process three times through `BridgeLauncher`; `test_unity_slice_driver.py` drives a `UnityEditor`. That is minutes at best and can block. The verify was probably doing its job — nobody could tell.\n\nRELATED AND NOT SUFFICIENT. `117` stopped `_agent_verify_final` re-running a verify whose verdict is already recorded. It did nothing about the case where the verify legitimately runs, which is this one. `117` also was not INSTALLED on the machine that produced this — `~/.chief/src` was 0.9.8 against a repo at 0.9.10 — so the run paid the duplication too. That is an operator gap, not a code gap, and this tasklist does not try to fix it.\n\nTHE MONITOR'S OWN RULE IS THE SPEC. `live.sh`: 'a wait must never render as work or as a hang.' `monitor.sh` on the provider-waiting threshold: '15m of silence in this phase is ~60 missed beats: the turn is not long, the ticker is DEAD.' Both are right, and both were defeated by a code path that goes quiet on purpose.",
   "userStories": [
     {
       "id": "US-1",
-      "title": "An inventory, measured before anything is removed",
+      "title": "The final verify streams, so the record keeps moving",
       "passes": true,
-      "notes": "Inventory shipped as docs/explanation/dead-code-audit.md, linked from docs/README.md. Every candidate names its search command and scope. Measured: 560 production shell functions scanned, exactly 1 with zero references (crossrepo_completed, engine/crossrepo.sh:33); 98 single-call-site (excluded as a decomposition metric, not liveness); 142 CHIEF_* identifiers scanned, 3 write-only; 12 duplicate definitions found and ALL 12 classified as deliberate degradation stubs (Class B, do not remove); 3 test files in zero gate lists; 1 script invoked by nothing; 0 commented-out blocks; 0 unreferenced docs/templates/fixtures. Genuinely-dead (Class A) and deliberately-unexercised (Class B) are separate sections, and Section 5 records 11 candidates that looked dead and are live, with why. Gate: chief verify exit 0, GREEN — path-scoped to the changed paths (docs + tasklists): doc-links 0 dead vs 0 on main, tasklists jq parse OK; verdict RECORDED for tree 45c5aafe. chief lint: 4 tasklists clean. quality ratchet: no code diff vs main.",
+      "notes": "engine/agent.sh streams the gate instead of capturing it; no pipeline, so $? is still the hook's. test/verify-stream.sh: PART A/B/C green — \"VERIFY-STREAM OK\", 7.5s wall (a handshake, not a sleep: the first draft with a fixed 8s window took 28s). bash -n clean over bin/chief, engine/*.sh, test/*.sh, install.sh. test/doc-sync.sh: PASS — README and ROADMAP state v0.9.14, all 42 merged tasklists named. shellcheck not installed on this host (CI enforces it).",
       "acceptanceCriteria": [
-        "Produce a checked-in inventory of candidates with, for each, the SEARCH that found it unreferenced — the command and its scope. A candidate list without its method is unreviewable, and this is the artifact a human approves before deletion.",
-        "Separate genuinely-dead from deliberately-unexercised. The second class exists here on purpose (refusal paths, guards, unreached tiers that say so) and deleting it removes a stated contract.",
-        "Include duplicated implementations as first-class findings, not just unused ones — two implementations of one behaviour is the failure mode that costs most later, because they drift.",
-        "GATES: the repo's own verify green."
+        "`_agent_verify_final` streams the verify hook's output to the log as it is produced rather than capturing it in a command substitution. The exit status must still be the hook's — a pipeline that returns the wrong status here would let a red verify accept a completion, which is worse than the bug being fixed.",
+        "The verdict is still recorded through `verify_cache_record` exactly as now, and a failure still sets `COMPLETE_OK=0`. This story changes when bytes appear, not what the gate decides.",
+        "A test asserts output appears BEFORE the hook exits — drive a hook that prints, sleeps, then prints, and assert the first line is observable while it still runs. Asserting only on the final log contents cannot tell streaming from buffering.",
+        "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the VERSION bump the engine-change gate requires."
       ]
     },
     {
       "id": "US-2",
-      "title": "Removal, with the tree still green and the reason recorded",
-      "passes": true,
-      "notes": "Three reviewable commits + one separate pre-existing fix; disposition of every US-1 finding in docs/explanation/dead-code-audit.md §8, with §§2-5 left AS MEASURED. RULE APPLIED: unreferenced code is deleted, working code that no gate invokes is REGISTERED — a test in zero gate lists is worse than an absent one because it reads as coverage. REMOVED (2 of 6 findings, step 1/3 2c5ee09): crossrepo_completed() (engine/crossrepo.sh — the only zero-reference function of 560; header amended so the SET/PRINT pair rule does not read as a claim of symmetry) and CHIEF_SWEEP_STARTUP_BYTES/_COUNT (engine/sweep.sh — 1 tree-wide hit each, and it is the write); both searches re-run immediately before deletion and pasted into the commit. REGISTERED (4, step 2/3 e9738e5): parked-decisions + update-reroot into all three gate lists, ps-all into BASH_SUITE + CI only (real watcher, monitor.sh's exclusion, stated in its header), check-tasklist-categories.mjs into .chief/verify.sh + CI. NOT REMOVED, recorded with why (§8.3): all 12 duplicate definitions (degradation stubs — deleting them leaves every test green and removes the compatibility story), CHIEF_SWEEP_REFUSED (declared an output at sweep.sh:187), the 98 single-call-site functions, every row of §5, engine/reap.sh:14. MEASURED: parked-decisions PASS 0.36s; update-reroot PASS 5.6s; ps-all was RED 3/3 (fixed 0.2s sleep vs a ~400ms first render) and is PASS 3/3 after waiting for the render; categories guard 'OK — 4 tasklists categorized'; both new merge-gate entries PASS under test/bystander.sh (2/2, bystander alive); doc-links 0 dead vs 0 on main; doc-sync PASS 42 merged tasklists; version-bump PASS 0.9.14; crossrepo XREPO PASS; sweep 55 passed 0 failed. Also fixed, separately: ROADMAP had never named 118 (main is red on doc-sync today), and CI HAD NOT PARSED SINCE 2026-08-25 — five step names beginning with a backtick, a reserved YAML indicator; run 33047688561 is a run of the FILE with jobs=[]. Quoted; the file now parses, 72 steps. GATE: chief verify exit 0, GREEN, ~20 min: quality ratchet OK; bash -n clean; version-bump PASS (0.9.14); bystander block 57 test(s) (55 before this branch, +2 for the new registrations) with the decoy run alive and a genuine orphan still reaped; doc-sync PASS (v0.9.14, 42 merged tasklists); tasklists jq parse + category coverage OK; verdict RECORDED for tree fb83c89c",
+      "title": "It publishes the phase whose threshold already fits it",
+      "passes": false,
+      "notes": null,
       "acceptanceCriteria": [
-        "Remove what US-1 established, in reviewable steps rather than one sweep. A single commit deleting hundreds of lines across unrelated subsystems cannot be reviewed and cannot be partially reverted.",
-        "The full gate passes after each step. A removal that needs a test deleted to stay green is a removal of something live — say so and stop rather than adjusting the test.",
-        "Anything NOT removed that looked dead is recorded with why it survived. That record is worth more than the deletions: it is what stops the next sweep re-litigating the same files.",
-        "GATES: the repo's own verify green."
+        "`_agent_verify_final` publishes `phase=verifying` for the duration of the hook and restores the prior phase afterwards. The threshold it needs already exists in `STALE_PHASE_SECONDS` at 3060s and had exactly one publisher; this adds the second.",
+        "The heartbeat keeps ticking across the verify, and `_beat_start` does NOT clobber `verifying` with `writing` when output moves. Streaming output would otherwise re-label a verify as writing on its first line, which trades one wrong phase for another.",
+        "`chief ps` on a running final verify reads as verifying with a live tick — not as a stalled agent turn. State what it renders; a phase nobody can see in the monitor has not been published where it matters.",
+        "GATES: as US-1."
       ]
     },
     {
       "id": "US-3",
-      "title": "What the sweep could not decide",
-      "passes": true,
-      "notes": "Shipped as docs/explanation/dead-code-audit.md §9 (the undecidable list, 8 classes, nothing removed) and §10 (limits of the method, in full, 9 numbered limits + what would lift each). §6 rewritten to point forward at both; header status line records them. MEASURED, every class re-run on this tree: §9.1 10 executable eval sites + 1 ${!VAR} (3 of them evaluate operator-supplied shell — CHIEF_ITER_HOOK, warm-ups, the per-tasklist verify array — text this repo does not contain; gitenv.sh's GIT_CONFIG_KEY_$n is consumed by git itself; LIVE_FIELDS is a closed list of 16; quality's tolerance family is closed today at 11 KNOWN metrics = 11 defaults). §9.2 the injected liveness predicate (\"$livefn\" at sweep.sh:327,425) is decidable only because both callers pass a LITERAL. §9.3 13 functions guarded by `command -v <fn>`; NONE is probe-only (probe refs 1-2 vs other refs 3-102) — a measured negative, and the audit's clearest false-NEGATIVE generator. §9.4 4 dispatch aliases (generate/watch/tail/subscribe) invoked by nothing, in no README row, no doc, no usage block, and structurally invisible to test/doc-sync.sh:95 (primary=\"${arm%|*}\"). §9.5 13 CHIEF_* read in the engine and assigned nowhere in the tree; 4 of them (CHIEF_QUALITY_CONFIG, CHIEF_SWEEP_DEPTH, CHIEF_SWEEP_MAX, CHIEF_SWEEP_STARTUP_DRY_RUN) occur ONLY at the read — undecidable as dead, decidable as undiscoverable. §9.6 33 event types, 21 asserted by no test, 4 with no in-tree consumer at all. §9.7 templates/tasklist.example.json referenced by 0 tests (verify.sh 53, config 21, agent-context.md 3, quality.conf 2, zones.conf 2) — copied is not read. §9.8 prompt text excluded from scope rather than sampled. §10 limit 4 is itself measured: re-running the §1.1 scan restricted to executable paths leaves 0 functions unreferenced, so prose kept nothing alive today. Limit 6 states the boundary this audit actually ran inside — a git worktree, so no sibling repo was or could be scanned. Nothing removed, nothing deferred. GATE: chief verify exit 0, GREEN — chief verify exit 0, GREEN: bystander block 57 test(s) with the decoy run alive and a genuine orphan (23896) still reaped while the bystander (8730) was left alone; verify-cache OK (PARTS B-E); CIGATE PASS; XREPO PASS; CLAIMS PASS; GEN OK; DOC-SYNC PASS (v0.9.14, 42 merged tasklists, README covers every dispatch arm); tasklists jq parse OK; doc-links 0 dead references (0 distinct targets); verdict RECORDED for tree e5288a63 (re-recorded after this note was written in)",
+      "title": "The stall flag still fires on a real hang",
+      "passes": false,
+      "notes": null,
       "acceptanceCriteria": [
-        "Report candidates the sweep could not resolve — reachable only through dynamic dispatch, reflection, generated code, or a consumer outside this repo — and leave them in place. An honest 'undecidable' list is a legitimate result.",
-        "State the limits of the method: what a static search over this tree cannot see. Cross-repo consumers are the obvious one, and this portfolio has already been bitten by exactly that.",
-        "GATES: the repo's own verify green."
+        "A NEGATIVE CONTROL: a hook that produces no output and never exits must STILL be reported stale once `verifying`'s threshold passes. The fix must not buy quiet by exempting the phase — `monitor.sh` refuses that trade explicitly for provider-waiting ('It wants a LONGER threshold, not silence'), and the same reasoning binds here.",
+        "A test distinguishes the two cases the incident conflated: a long verify that is emitting (not stale) and a dead verify that is not (stale). Both assertions, or the change has moved the problem rather than fixed it.",
+        "`docs/guides/monitoring.md`'s phase table records that `verifying` now has two publishers and what a reader should conclude from it, since that table is what an operator consults at 1am.",
+        "GATES: as US-1."
       ]
     }
   ]

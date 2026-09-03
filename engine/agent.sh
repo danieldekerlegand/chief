@@ -999,7 +999,7 @@ _emit_story_events() {
 # an in-turn run counts is for it to write through the cache (`chief verify`, US-2)
 # and for this boundary to read it.
 _agent_verify_final() {
-  local output rc=0
+  local rc=0
   [ -n "${CHIEF_VERIFY_CACHE_STATE:-}" ] || return 0
   [ -n "${CHIEF_TASKLIST:-}" ] || return 0
   [ -n "${VERIFY_HOOK:-}" ] && [ -x "$VERIFY_HOOK" ] || return 0
@@ -1011,8 +1011,18 @@ _agent_verify_final() {
     echo ">> agent verification passed (recorded verdict reused; the gate was not re-run)"
     return 0
   fi
-  output="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1)" || rc=$?
-  printf '%s\n' "$output"
+  # STREAMED, not captured. This used to be `output="$(run_verify …)"` followed by a
+  # single `printf` — which meant NOTHING reached the log until the gate returned, and
+  # `_beat_start` (which only flips the phase when `_head` moves) had nothing to report
+  # either. A legitimately long verify was then indistinguishable from a wedged one:
+  # talos:83 ran 7h41m and read `stalled in agent-turn — no activity for 1h06m` over a
+  # healthy branch whose log ENDED at the completion token. The bytes now appear as the
+  # hook produces them, so "long" and "hung" stop looking the same.
+  #
+  # NO PIPELINE HERE, deliberately. `run_verify … | tee` would hand us tee's status,
+  # and a red gate reported as green accepts a completion it must refuse — strictly
+  # worse than the invisibility being fixed. Plain redirection keeps `$?` the hook's.
+  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 || rc=$?
   verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"
   if [ "$rc" != 0 ]; then
     echo "!! agent verification failed (exit $rc); completion will not be accepted"
