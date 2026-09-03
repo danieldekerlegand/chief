@@ -282,6 +282,15 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   log line. Its hook lives OUTSIDE the repo (via $CHIEF_VERIFY_HOOK)
                      #   so the `tree.base.hook` key's three halves can be moved one at a
                      #   time. REPRODUCES first, like monitor-orphan.sh
+                     #   doc-claims.sh — engine/claims.sh against the incident it exists
+                     #   for: koine's document claiming an agora path is ABSENT, an agora
+                     #   tree where it EXISTS, and the assertion that the report names the
+                     #   DOCUMENT and the PATH. Half the file is NEGATIVE CONTROL, because
+                     #   this checker runs against repos that legitimately drift — a claim
+                     #   that still holds prints nothing AND the count sentence proves it
+                     #   was read, an unresolvable repo stays a `?`, and "no registry costs
+                     #   nothing" is measured as jq INVOCATIONS under a shimmed jq (the
+                     #   with-registry probe runs first, or the counter could be dead)
 docs/                # tasklist schema · roadmap-input contract (chief gen) · chief status (scope + ignore list) ·
                      # verify-hook contract · parallel-safety
                      # model · containers.md (running chief in a container/Riju workspace) ·

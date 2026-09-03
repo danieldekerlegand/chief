@@ -601,3 +601,69 @@ carries it.
   SPACE (the backtick opens before the `⚑`), so it read as a dead link too. A quoted
   report line needs the path elided as well. `tasks/chief/*.json` is scanned;
   `.chief/state/*` is not.
+
+## US-3 — Proof it catches the case that motivated it, and does not cry wolf
+Thu Sep  3 2026
+
+US-1 built the check and US-2 rendered it; nothing had ever driven either against the
+incident. New `test/doc-claims.sh` reconstructs it and pins the three ways a checker
+of this shape goes wrong.
+
+Files:
+- `test/doc-claims.sh` (new) — two scaffolded repos under a temp dir, hermetic in
+  `$CHIEF_RUNS`/`$CHIEF_REPOS`, no agent (this is `chief lint` plus the module's own
+  reader). Five sections: (1) THE INCIDENT — koine's document claims an agora path is
+  `absent`, agora has it, and the report must name the DOCUMENT, the PATH, the claim
+  (`is ABSENT`), what the tree shows (`it EXISTS`) and the resolved location, with
+  `chief lint` still exiting 0; (2) the sign REVERSED, the KGP shape, so the `present`
+  predicate cannot rot unnoticed; (3) NEGATIVE CONTROL — both predicates holding
+  produce no ⚑, no heading and no correction note, asserted **together with**
+  `2 document-claim declaration(s) checked` so the silence cannot come from having
+  read nothing; (4) unresolvable ≠ violated (a repo not checked out, and a document
+  that no longer exists), and one unresolvable record must not cost the finding beside
+  it; (5) NO REGISTRY COSTS NOTHING, measured as jq INVOCATIONS under a shimmed `jq`.
+- `test/crossrepo.sh` — two assertions repaired. US-2 widened lint's "what the gate
+  SAW" sentence to carry both links, which split the fragment
+  `1 "downstreamCounterpart" declaration(s) checked` in two; the branch was carrying a
+  red gate US-2 never ran. Now asserted as the whole sentence.
+- `.chief/verify.sh` (`CHIEF_BYSTANDER_TESTS`), `test/all.sh` (`BASH_SUITE`) and
+  `.github/workflows/ci.yml` — the three lists that make a test a gate.
+- `CLAUDE.md` — the layout entry for the new test.
+
+**Observed for US-3.** `test/doc-claims.sh` **CLAIMS PASS**; `test/crossrepo.sh`
+**XREPO PASS** (it FAILED before the repair, on the split sentence). The behavioural
+block under the bystander guard — smoke · ratelimit · noworkguard · crossrepo ·
+doc-claims — **BYSTANDER PASS, 5 tests, bystander alive, orphan reaped, no fixture
+leaked**. `bash -n` clean over `bin/chief` + `engine/*.sh` + `install.sh` +
+`templates/*.sh` + `test/*.sh` + `.chief/verify.sh`; quality ratchet **OK — no tracked
+metric regressed**; doc-links **0 dead vs 0 on main**; `test/doc-sync.sh` **PASS**;
+`test/version-bump.sh` **PASS**. No VERSION bump: this story touches `test/`,
+`.github/`, `.chief/` and `CLAUDE.md` only, and the bump gate's scope is
+`engine/ bin/ scripts/ install.sh` — bumping anyway would be a version nobody can
+distinguish by behaviour. shellcheck is not installed on this host; CI carries
+`shellcheck -S error`.
+
+### Learnings for future iterations
+
+- **MUTATE THE ENGINE TO PROVE THE TEST.** A new test that passes on its first run has
+  proved nothing yet. Two mutations, each in a `cp -R bin engine templates test` copy
+  of the tree (the test derives `$ROOT` from its own location, so a copy is enough —
+  no `git show`, which CI's shallow clone cannot serve): neuter the `violated` emission
+  → section 1 fails with "the stale claim was not reported at all"; make it emit
+  regardless of the predicate → section 3 fails with "a claim that still holds was
+  reported as a finding". Both arms of a report/silence pair need their own mutation,
+  or one of them is decorative.
+- **A silence assertion needs a WITNESS in the same breath.** "No output" is what a
+  correct checker and a checker that read nothing both produce. Section 3 asserts the
+  count sentence (`2 … declaration(s) checked`) beside the silence, and section 5's
+  jq probe runs the WITH-registry case FIRST and requires ≥1 — otherwise "0 jq calls"
+  would also pass with a dead counter.
+- **Widening a shared summary line breaks the tests that assert a fragment of it.**
+  US-2 inserted `+ N document-claim` into lint's count sentence; two `test/crossrepo.sh`
+  assertions matched across the insertion point and went red on a branch that never ran
+  that test. Adding a clause to a line another test greps means grepping for that line
+  across `test/` in the same edit.
+- **A backtick in a double-quoted string inside a test RUNS, and `bash -n` is clean on
+  it.** `fail "a `present` claim was not reported"` is command substitution. Same trap
+  as the engine's heredocs, one register down; check with
+  `grep -n '[^\\]`' test/<file>.sh` before committing.

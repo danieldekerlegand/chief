@@ -122,7 +122,11 @@ tasklist "$UP"   up-work                         # a live tasklist to point at
 counterpart "$DOWN" down-work '["upstream:up-work"]'
 out="$(lint)"
 has "clean" "$out"          || fail "a resolvable counterpart was reported as a finding:\n$out"
-has '1 "downstreamCounterpart" declaration(s) checked' "$out" \
+# The "what the gate SAW" sentence carries BOTH declared links now (engine/claims.sh
+# added the document-claim half), and this repo declares no claims — so the counterpart
+# count is asserted where it actually appears rather than as a fragment that a second
+# declaration silently splits in two.
+has '1 "downstreamCounterpart" + 0 document-claim declaration(s) checked' "$out" \
                             || fail "lint did not report what it saw:\n$out"
 
 counterpart "$DOWN" down-work '["ghostrepo:up-work"]'
@@ -144,7 +148,7 @@ counterpart "$DOWN" down-work null
 tmp="$DOWN/tasks/chief/down-work.json"
 jq '.description="DOWNSTREAM COUNTERPART: upstream:up-work"' "$tmp" > "$tmp.t" && mv "$tmp.t" "$tmp"
 out="$(lint)"
-has '0 "downstreamCounterpart" declaration(s) checked' "$out" \
+has '0 "downstreamCounterpart" + 0 document-claim declaration(s) checked' "$out" \
     || fail "a prose-only counterpart must not be counted as a declaration:\n$out"
 has "only in prose is invisible" "$out" \
     || fail "lint must state that prose counterparts are not detected:\n$out"

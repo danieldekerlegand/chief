@@ -47,7 +47,7 @@ BASH_SUITE=(
   stale-resume conflict-forensics rebase-refusal dirty-checkout submodule-gitlink submodule-resume touches-audit
   quality-ratchet overlap-zones merge-batch verify-cache cigate
   gen doc-sync
-  crossrepo submodule nested-submodule nested-submodule-pointer retry-on-failure per-tasklist-verify retire-dirty-tasklist
+  crossrepo doc-claims submodule nested-submodule nested-submodule-pointer retry-on-failure per-tasklist-verify retire-dirty-tasklist
   version-bump
 )
 for t in "${BASH_SUITE[@]}"; do run_sh "$t"; done
