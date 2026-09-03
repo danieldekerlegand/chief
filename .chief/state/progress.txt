@@ -479,3 +479,63 @@ Run separately, because the gate did not reach it (see below):
   correctly buys nothing it has not actually paid for at merge.
 - The full gate takes **~11 minutes** here — past a 10-minute foreground tool timeout.
   Run it backgrounded to a log and poll for a sentinel line rather than blocking on it.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chief Progress — 118-a-document-can-claim-something-downstream
+# ─────────────────────────────────────────────────────────────────────────────
+
+## US-1 — A document declares a checkable claim about another repo
+Thu Sep  3 2026
+
+`downstreamCounterpart` links a TASKLIST to the tasklist that completes it. Nothing
+linked a DOCUMENT to the downstream tree it asserts something about, and the
+obligation runs downstream-to-upstream so it cannot close itself. New module
+`engine/claims.sh`, deliberately counterpart.sh's shape one register up.
+
+Files:
+- `engine/claims.sh` (new) — `.chief/claims.json` (`$CHIEF_CLAIMS_FILE` relocates it)
+  holds `{document, claim, repo, path}` records. `claims_records` (US-separated, one
+  jq) · `claims_count` (what the gate SAW) · `claims_scan` (TAB records:
+  `violated` / `unresolvable`, silent when the predicate holds). The repo half goes
+  through crossrepo.sh's `resolve_repo` — the same lookup `dependsOn` and
+  `downstreamCounterpart` use.
+- `docs/reference/cross-repo-dependencies.md` — new "Document claims" section: the
+  schema, the field table, the vocabulary rule, the prose-is-not-the-mechanism rule.
+- `CLAUDE.md` — layout entry for `engine/claims.sh`.
+- `VERSION` 0.9.10 → 0.9.11 + README + ROADMAP bold version.
+- `ROADMAP.md` — a ✅ row for `117-the-agent-verify-records-but-never-tries`, which
+  merged and retired on main without one. Not scope creep: `doc-sync` is a merge
+  blocker for any branch touching `VERSION`/`engine/`/`bin/`, so this branch inherits
+  a red gate it did not cause and cannot merge without fixing.
+
+**Observed for US-1.** Against the real trees: koine's
+`docs/reference/kcs-encoding-gate-verification.md` claiming agora's
+`console/src/kcs/scenarios/resume-checkpoint.ts` is `absent` →
+`violated … it EXISTS: …/agora/console/src/kcs/scenarios/resume-checkpoint.ts`.
+Six declarations read, four records emitted — the two claims that still hold
+(`present` on `console/src/kcs/scenarios`, `absent` on `no-such-thing.ts`) were
+silent, and the three could-not-check cases (unknown repo, missing document, verb
+outside the vocabulary) each got their own `unresolvable` sentence. `bash -n` clean
+over `bin/chief` + `engine/*.sh` + `install.sh` + `test/*.sh`; `check-doc-links.mjs`
+**0 dead vs 0 on main**; `test/doc-sync.sh` **PASS** (README + ROADMAP **v0.9.11** ==
+VERSION 0.9.11, 41 merged tasklists named). shellcheck is not installed on this host;
+CI carries `shellcheck -S error`.
+
+### Learnings for future iterations
+
+- **A literal `docs/….md` inside a JSON example in a doc or a shell comment is a DEAD
+  LINK to `scripts/check-doc-links.mjs`.** Its `BARE_DOC` regex has a negative
+  lookbehind for `` ` ``, `/`, `.`, `-` and word chars — so backticked prose
+  (`` `docs/x.md` ``) is invisible to it, but `"document": "docs/x.md"` is preceded by
+  a quote and is checked against THIS repo. A cross-repo document path in an example
+  therefore has to be a placeholder with a non-matching character in it
+  (`docs/reference/<the-doc>.md`) or an existing local file. The `.json` walk that
+  exempts `{repo: …, path: "docs/…"}` objects only runs for files that ARE `.json`;
+  a fenced JSON block inside a `.md` gets no such exemption.
+- **`docs/.linkignore` ignores by CITING FILE, not by target** (`rel.startsWith(g)`),
+  so it cannot excuse one foreign path in an otherwise-checked document — it would
+  switch the whole file off.
+- **Write jq's US separator as the escape `\u001f`, never as a literal 0x1f byte.**
+  Both work at runtime, but a literal control byte is invisible in a diff, survives
+  no copy-paste, and cannot be written through tooling that rejects control
+  characters in its input.

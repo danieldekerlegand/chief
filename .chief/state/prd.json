@@ -1,58 +1,59 @@
 {
   "project": "chief",
-  "category": "fix",
-  "branchName": "chief/117-the-agent-verify-records-but-never-tries",
+  "category": "feature",
+  "branchName": "chief/118-a-document-can-claim-something-downstream",
   "dependsOn": [],
   "touches": [
-    "engine/agent.sh",
-    "engine/lib.sh",
+    "engine/counterpart.sh",
+    "engine/crossrepo.sh",
+    "bin/chief",
     "test",
     "docs",
     "VERSION"
   ],
-  "iters": 6,
+  "iters": 7,
   "warmup": [
-    "sed -n '/^_agent_verify_final()/,/^}/p' engine/agent.sh",
-    "sed -n '/^verify_cache_try()/,/^}/p' engine/lib.sh",
-    "sed -n '/^verify_cache_record()/,/^}/p' engine/lib.sh",
-    "grep -rn 'verify_cache_try\\|verify_cache_record' engine/ bin/chief",
-    "sed -n '2925,2940p' engine/driver.sh"
+    "sed -n '1,40p' engine/counterpart.sh",
+    "sed -n '/^counterpart_scan()/,/^}/p' engine/counterpart.sh",
+    "sed -n '/^resolve_repo()/,/^}/p' engine/crossrepo.sh",
+    "sed -n '440,460p' bin/chief",
+    "grep -rn 'counterpart' docs/reference/*.md | head"
   ],
-  "description": "The verify verdict cache has ONE reader and TWO writers, and the missing read costs a full suite run on every completing tasklist.\n\nMEASURED on cuneiform 2026-09-02. A tasklist ran the workspace suite TWICE for one merge: once when the agent invoked `.chief/verify.sh` itself inside its turn (~20 minutes, producing /private/tmp/verify-381.log, ending 'all selected gates green — allowing merge'), and again in `_agent_verify_final` on the COMPLETE turn (~21 minutes and still going when this was written). The run showed `iter 2 · no progress last iter (1/2)`: iteration 1 was spent running a verify chief was about to run anyway.\n\nWHAT IS ALREADY RIGHT — DO NOT REBUILD IT. `verify_cache_try` / `verify_cache_record` in `engine/lib.sh` are correct, and their key is the right one: `tree.base.hook`, because 'a rebase can rewrite commit ids without changing the tree, so the tree is the correctness key'. `driver.sh:2929` already tries the cache before the merge gate, which is why the MERGE-gate duplicate does not happen. That half of the design works.\n\nTHE GAP. `grep -rn 'verify_cache_try' engine/` returns exactly one call site — driver.sh. `_agent_verify_final` (agent.sh:988) calls `run_verify` unconditionally and then `verify_cache_record`. It RECORDS but never TRIES. So a GREEN verdict already on disk for the identical tree, base and hook cannot save it, and no amount of the agent being careful can help: the agent's own invocation is a plain shell command chief never sees.\n\nWHY THIS IS NOT A DOCUMENTATION PROBLEM. `cuneiform/CLAUDE.md` already says 'Never run the full workspace suite inside a chief iteration — commit instead.' It is prose, agents ignore it, and it has now cost a full suite run three times in one day in one repository. The mechanism is the fix.",
+  "description": "`downstreamCounterpart` connects a TASKLIST to the tasklist that completes it. Nothing connects a DOCUMENT to the downstream tree it makes a claim about, and that gap has now cost a week three times.\n\nTHE MEASURED CASE. koine's `docs/reference/kcs-encoding-gate-verification.md` recorded that three KCS pressure tests had no encoding and that 'three encodings now wait on nobody'. agora closed all three in `378fd3c` — 'encode koine's three unencoded pressure tests, the console count gate is closed' — at 2026-08-26 12:30:18, **49 minutes after** koine's doc was last written at 11:41:14. koine did not learn for a week, its promotability ladder repeated the claim, and two tasklists were authored on 2026-09-02 carrying it into a run before the tree was read.\n\nIT IS NOT ONE INCIDENT. The KGP gate is the same shape with the sign reversed: koine believed a downstream deliverable HAD landed when it had not, found only by reading the merge commit (`kgp-projection-gate-verification.md`). And `agora/77` shipped three stories with `passes: true`, two of them flipped by a retire commit with `notes: null`. In every case the obligation runs DOWNSTREAM-TO-UPSTREAM and nothing carries it: agora has no reason to know koine wrote a gate against it.\n\nEXTEND, DO NOT DUPLICATE. `counterpart.sh`'s existing design is right and its header states the principle this work inherits: 'PROSE IS NOT THE MECHANISM, and that is the point of putting it in a field.' The same rule applies here — a document that names a downstream fact only in its text is invisible, and must stay invisible, because the alternative is grepping prose for claims.\n\nAND KEEP ITS DISCIPLINE. The counterpart check is print-only on purpose: 'The check REPORTS and never fails anything… retiring a marker is a judgement.' Correcting a stale document is equally a judgement. This must not fail a lint or refuse a run on the strength of somebody else's merge.",
   "userStories": [
     {
       "id": "US-1",
-      "title": "The final verify consults the cache it already writes",
+      "title": "A document declares a checkable claim about another repo",
       "passes": true,
-      "notes": "verify_cache_try now runs before run_verify in _agent_verify_final, on the same (CHIEF_PROJECT, CHIEF_TASKLIST, BASE_BRANCH) triple verify_cache_record writes with; a cache hit returns 0 so COMPLETE_OK is unchanged. Observed: bash -n clean on engine/agent.sh; test/doc-sync.sh PASS (README+ROADMAP v0.9.9 == VERSION 0.9.9); test/version-bump.sh PASS; behavioural smoke/ratelimit/noworkguard/merge-batch all green (SMOKE PASS, RATELIMIT PASS, NOWORK PASS, MERGE-BATCH OK). shellcheck is not installed on this host; CI carries shellcheck -S error.",
+      "notes": "claims_scan against the REAL case: koine docs/reference/kcs-encoding-gate-verification.md claiming agora console/src/kcs/scenarios/resume-checkpoint.ts is `absent` reported `violated ... it EXISTS: /Users/.../agora/console/src/kcs/scenarios/resume-checkpoint.ts`, while two claims that still hold (present scenarios/, absent no-such-thing.ts) stayed silent — 6 declarations read, 4 records emitted. bash -n clean over bin/chief + engine/*.sh + install.sh + test/*.sh; doc-links 0 dead vs 0 on main; doc-sync PASS (README + ROADMAP v0.9.11 == VERSION 0.9.11, 41 merged tasklists named). shellcheck absent on this host; CI carries it.",
       "acceptanceCriteria": [
-        "`_agent_verify_final` calls `verify_cache_try` before `run_verify`, using the same `(cwd, name, base)` triple `verify_cache_record` writes with, so a GREEN verdict for the identical tree/base/hook skips the re-run. Reuse the existing helpers unchanged — this story adds a call, it does not add a cache.",
-        "The skip is visible in the log and distinguishable from a fresh pass, which `verify_cache_try` already does ('verify SKIPPED: tree … GREEN verdict from …'). A silent skip would make a stale-cache bug undiagnosable.",
-        "A skipped verify is still a PASSED verify for completion purposes — `COMPLETE_OK` is unchanged when the cache hits. Read the `[ \"$rc\" != 0 ]` branch and make sure a hit takes the same path a fresh green does.",
-        "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the version bump the engine-change gate requires."
+        "A repo can declare, in a machine-readable place, that a named document asserts something about another repo's tree. Reuse `crossrepo.sh`'s `resolve_repo` for the repo half — a second resolver would drift from the first, which is the bug class this whole tasklist is about.",
+        "The claim vocabulary is deliberately SMALL and every member is mechanically checkable — at minimum 'this path exists downstream' and 'this path does not exist downstream'. A claim that cannot be reduced to a predicate does not belong in the registry; it stays prose, and stays invisible, exactly as an undeclared `downstreamCounterpart` does.",
+        "koine's real case is the acceptance test: a claim that `agora console/src/kcs/scenarios/resume-checkpoint.ts` is ABSENT must report as violated against today's agora, where it exists.",
+        "GATES: `bash -n`, `shellcheck -S error`, the behavioral tests, doc-sync, and the VERSION bump the engine-change gate requires."
       ]
     },
     {
       "id": "US-2",
-      "title": "A recording path the agent can actually use",
-      "passes": true,
-      "notes": "chief verify (bin/chief cmd_verify) runs the project verify hook and records the verdict through verify_cache_record; it refuses to record for anything but a clean HEAD tree (dirty tracked/untracked, or a HEAD that moved during the run) and never reads the cache. Documented in engine/instructions.md step 5 (the turn prompt), docs/reference/verify-hook.md, the README command table, usage() and CLAUDE.md. Observed: scratch-repo matrix 6/6 — clean+green RECORDED (status=0 record written, hook ran 1x), dirty tree NOT recorded (record count 1 -> 1), untracked file NOT recorded, red hook exit 1 recorded as status=1, --no-record wrote nothing, bad flag exit 2. Gates: bash -n clean on bin/chief + engine/quality.sh; test/doc-sync.sh PASS (README+ROADMAP v0.9.10 == VERSION 0.9.10, 40 merged tasklists named); test/version-bump.sh PASS; check-doc-links 0 dead; quality ratchet OK (single_use_functions +1, tol 2); behavioural smoke SMOKE PASS, ratelimit RATELIMIT PASS, noworkguard NOWORK PASS, merge-batch MERGE-BATCH OK. shellcheck is not installed on this host; CI carries shellcheck -S error.",
+      "title": "The report reads like counterpart's, and fails nothing",
+      "passes": false,
+      "notes": null,
       "acceptanceCriteria": [
-        "An agent-invocable way to run the verify hook that RECORDS its verdict, so an in-turn run populates the cache US-1 now reads. Whether that is a `chief` subcommand or an env-marked wrapper is the implementer's call; what matters is that it is reachable from an agent's shell and writes through `verify_cache_record`.",
-        "It is documented where an agent will encounter it — the turn prompt or the verify-hook reference — since the entire point is that the current prose instruction does not work.",
-        "It refuses to record a verdict for a tree that is not HEAD's. Recording someone else's tree as green is the one failure mode of this whole mechanism that would let a red tree merge, and it must be impossible rather than unlikely.",
+        "Violations render one line each, naming the document, the claim and what the downstream tree actually shows — the shape `counterpart_shipped_report` already uses, because 'the next action is [correcting] that [document] and it should not need a second investigation to start'.",
+        "The check is PRINT-ONLY. It must not fail `chief lint`, must not refuse a run, and must not block authoring — the existing counterpart check's reasoning applies unchanged: a judgement call on somebody else's merge should not stop work that is otherwise fine.",
+        "An unresolvable repo reports as unresolvable rather than as a violation, distinguishing 'that repo is not checked out here' from 'the claim is false'. `crossrepo_locate` already draws that line; do not redraw it.",
         "GATES: as US-1."
       ]
     },
     {
       "id": "US-3",
-      "title": "Proof it bites, in both directions",
-      "passes": true,
-      "notes": "test/verify-cache.sh drives engine/agent.sh directly against a scratch repo (no driver, ~1s) and counts HOOK INVOCATIONS, not log lines; the hook lives outside the repo via $CHIEF_VERIFY_HOOK so tree and hook-blob can be moved independently. Observed 5/5 parts: PART A hook ran 1x for two boundary verifies over one unmoved tree (skip, and \"verify SKIPPED\" in the log); PART B moved tree -> 2x; PART C edited hook blob at unmoved tree -> 3x; PART D red hook -> 4x, recorded status=1, agent exit non-zero, and a re-run at that same recorded red -> 5x (never skipped); PART E the same PART A sequence against a copy of the engine with the verify_cache_try call neutered -> 2x, so the file cannot pass by restating old behaviour. Reproduced against the real engine too: neutering engine/agent.sh made PART A fail with \"THE SKIP DID NOT HAPPEN — the hook ran 2x\". Registered in all three gate lists (.chief/verify.sh CHIEF_BYSTANDER_TESTS, test/all.sh BASH_SUITE, .github/workflows/ci.yml). Gates: bash -n clean on test/verify-cache.sh + .chief/verify.sh + test/all.sh; check-doc-links 0 dead; quality ratchet OK (single_use_functions +1, tol 2); doc-sync PASS (README + ROADMAP v0.9.10 == VERSION 0.9.10, 40 merged tasklists); behavioural smoke SMOKE PASS, ratelimit RATELIMIT PASS, noworkguard NOWORK PASS, merge-batch MERGE-BATCH OK, quality-ratchet PASS, cigate PASS, verify-cache VERIFY-CACHE OK. No engine/bin change, so no VERSION bump (test/version-bump.sh gates bin/, engine/, scripts/, install.sh only). shellcheck is not installed on this host; CI carries shellcheck -S error.",
+      "title": "Proof it catches the case that motivated it, and does not cry wolf",
+      "passes": false,
+      "notes": null,
       "acceptanceCriteria": [
-        "A test proves the skip happens: record a GREEN verdict for a tree, run the final verify at that same tree, assert the hook did NOT execute a second time (count invocations rather than reading the log).",
-        "A NEGATIVE CONTROL proves it does not over-skip: change the tree, and assert the hook DOES run. Then change only the verify hook's own content at an unchanged tree, and assert it runs again — the hook blob is part of the key precisely so an edited gate is not skipped by a verdict taken under the old one.",
-        "A RED recorded verdict must never skip. `verify_cache_try` already returns non-zero unless `status=0`; assert it, because that is the difference between a cache and a way to merge a failing tree.",
+        "A test reconstructs the koine/agora incident: a document claiming a downstream path is absent, a downstream tree where it is present, and an assertion that the check names the document and the path. This is the 49-minute case, and if the test cannot express it the mechanism does not cover it.",
+        "A NEGATIVE CONTROL proves it does not over-report: a claim that still holds must produce NO output. A checker that flags everything is as useless as one that flags nothing, and this one runs against repos that legitimately drift.",
+        "A document with no declared claims produces no output and costs nothing. Most documents will never declare one, and the mechanism must not make them pay for it.",
         "GATES: as US-1."
       ]
     }

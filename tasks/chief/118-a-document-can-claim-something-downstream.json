@@ -3,7 +3,14 @@
   "category": "feature",
   "branchName": "chief/118-a-document-can-claim-something-downstream",
   "dependsOn": [],
-  "touches": ["engine/counterpart.sh", "engine/crossrepo.sh", "bin/chief", "test", "docs", "VERSION"],
+  "touches": [
+    "engine/counterpart.sh",
+    "engine/crossrepo.sh",
+    "bin/chief",
+    "test",
+    "docs",
+    "VERSION"
+  ],
   "iters": 7,
   "warmup": [
     "sed -n '1,40p' engine/counterpart.sh",
@@ -17,8 +24,8 @@
     {
       "id": "US-1",
       "title": "A document declares a checkable claim about another repo",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "claims_scan against the REAL case: koine docs/reference/kcs-encoding-gate-verification.md claiming agora console/src/kcs/scenarios/resume-checkpoint.ts is `absent` reported `violated ... it EXISTS: /Users/.../agora/console/src/kcs/scenarios/resume-checkpoint.ts`, while two claims that still hold (present scenarios/, absent no-such-thing.ts) stayed silent — 6 declarations read, 4 records emitted. bash -n clean over bin/chief + engine/*.sh + install.sh + test/*.sh; doc-links 0 dead vs 0 on main; doc-sync PASS (README + ROADMAP v0.9.11 == VERSION 0.9.11, 41 merged tasklists named). shellcheck absent on this host; CI carries it.",
       "acceptanceCriteria": [
         "A repo can declare, in a machine-readable place, that a named document asserts something about another repo's tree. Reuse `crossrepo.sh`'s `resolve_repo` for the repo half — a second resolver would drift from the first, which is the bug class this whole tasklist is about.",
         "The claim vocabulary is deliberately SMALL and every member is mechanically checkable — at minimum 'this path exists downstream' and 'this path does not exist downstream'. A claim that cannot be reduced to a predicate does not belong in the registry; it stays prose, and stays invisible, exactly as an undeclared `downstreamCounterpart` does.",

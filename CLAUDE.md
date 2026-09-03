@@ -131,6 +131,20 @@ engine/
                      #   breath (repoint dependents FIRST, then stamp supersededBy and file),
                      #   because a filed marker carries no mergedToMain and blocks its dependents
                      #   forever on a record that can never be stamped
+  claims.sh          #   the DOCUMENT CLAIM: counterpart.sh one register up. A TASKLIST can name
+                     #   the tasklist that completes it; nothing let a DOCUMENT name the
+                     #   downstream tree it asserts something about, and the obligation runs
+                     #   the wrong way to fix itself — agora has no reason to know koine wrote
+                     #   a gate against agora's tree. Measured: koine's kcs-encoding-gate doc
+                     #   said three tests had no encoding; agora encoded all three 49 MINUTES
+                     #   later, and koine carried the claim into two authored tasklists a week
+                     #   on. So `.chief/claims.json` declares {document, claim, repo, path} and
+                     #   the repo half goes through crossrepo.sh's `resolve_repo` — the same
+                     #   lookup dependsOn and downstreamCounterpart use, because a second
+                     #   resolver drifting from the first IS the bug class. The vocabulary is
+                     #   TWO predicates over a path (`present` · `absent`) and stays that small
+                     #   on purpose: a claim that cannot be reduced to a predicate stays prose
+                     #   and stays INVISIBLE, exactly as an undeclared counterpart does
   criteria.sh        #   the SCOPE rule on acceptance criteria: a criterion naming ANOTHER repo
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
