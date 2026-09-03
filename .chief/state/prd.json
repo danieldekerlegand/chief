@@ -47,8 +47,8 @@
     {
       "id": "US-3",
       "title": "The stall flag still fires on a real hang",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "test/verify-stream.sh PART F (the negative control) + docs/guides/monitoring.md. PART F1: a hook that emits nothing and never returns, record aged to 70m (past verifying's own 3060s/51m) — chief ps renders \"⚠ vs running 0/1 chief/vs ↳ verifying for 1h10m · iter 1 · ⚠ stalled in verifying — no activity for 1h10m, past its 51m limit\", and the heartbeat is byte-identical to the value it was aged to (nothing ticks a silent gate). PART F2: the SAME record, same phase, same phase_since — one line of output and the flag is gone, \"verifying for 1h10m\" kept. Full file green: PART A/B/C/D/E/F, \"VERIFY-STREAM OK\", 19.0s wall. MUTATION-CHECKED both ways: verifying:3060 -> 999999 fails F1 alone (A-E still ok); adding _beat_start/_beat_stop around the gate (the tempting timer fix) fails F on \"something bumped the record while the gate produced nothing\". test/stall-flag.sh OK, test/liveliness.sh PASS, test/doc-sync.sh PASS (v0.9.15, 42 merged tasklists), test/version-bump.sh PASS (no engine change in this story). bash -n clean over bin/chief, engine/*.sh, test/*.sh, install.sh; check-doc-links 0 dead references; quality ratchet OK (no metric regressed). shellcheck not installed on this host (CI enforces it).",
       "acceptanceCriteria": [
         "A NEGATIVE CONTROL: a hook that produces no output and never exits must STILL be reported stale once `verifying`'s threshold passes. The fix must not buy quiet by exempting the phase — `monitor.sh` refuses that trade explicitly for provider-waiting ('It wants a LONGER threshold, not silence'), and the same reasoning binds here.",
         "A test distinguishes the two cases the incident conflated: a long verify that is emitting (not stale) and a dead verify that is not (stale). Both assertions, or the change has moved the problem rather than fixed it.",

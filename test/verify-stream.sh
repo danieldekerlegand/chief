@@ -44,6 +44,11 @@
 #           3060s this phase has earned since it was measured).
 #   PART E  REPRODUCTION for D — drop ONLY the phase publish and the same working gate
 #           reads `stalled in agent-turn` again, which is the line talos:83 printed.
+#   PART F  the NEGATIVE CONTROL, and the reason D is a fix rather than a trade: a gate
+#           that produces nothing and never returns is STILL reported stale once
+#           `verifying`'s own 3060s passes. One silent hook, one record, read twice —
+#           at 70m quiet it flags, and after a single line of output, at the same age
+#           in the same phase, it does not.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -289,46 +294,39 @@ backdate() { # backdate FILE AGE
 # shellcheck source=engine/live.sh
 . "$ROOT/engine/live.sh"
 
-# phase_probe LABEL ENGINE_DIR — one iteration whose gate is the three-marker hook,
-# observed from outside while it runs. Sets $PHASE_AT_VERIFY, $HB_TICKED (1 = the
-# output moved the record after it was backdated) and $PS_ROW.
-phase_probe() {
-  local label="$1" engine="$2" repo st par live apid hb_before hb_after
-  repo="$WORK/repo-$label"; scratch_repo "$repo"
-  st="$WORK/state-$label"; par="$st/parallel"; live="$par/vs.live.json"
-  mkdir -p "$par"
-  LAST_OUT="$WORK/$label.out"; : > "$LAST_OUT"
-  rm -f "$DONE" "$GO" "$GO2"
-  ( cd "$repo" && env \
+# spawn_iteration LABEL REPO ENGINE LIVE CACHE HOOK — ONE agent iteration in the
+# background, logging to $LAST_OUT, with $HOOK as the project's gate. Sets $APID.
+# Shared by the phase probe and by PART F's silent one so the two differ ONLY in the
+# hook they are handed: a launcher copied per part is a launcher that drifts, and a
+# control whose environment is not its subject's is not a control.
+spawn_iteration() {
+  LAST_OUT="$WORK/$1.out"; : > "$LAST_OUT"
+  ( cd "$2" && env \
       -u CHIEF_PRESET -u CHIEF_TOOL -u CHIEF_VERBOSE -u CHIEF_MODEL -u CHIEF_AGENT_CONTEXT \
       -u CHIEF_PAUSE_FILE -u CHIEF_EVENTS_FILE -u CHIEF_ITER_HOOK \
       -u CHIEF_PRD_SNAPSHOT -u CHIEF_UNVERIFIED_FILE -u CHIEF_RESEARCH -u CHIEF_RESEARCH_FILE \
       -u CHIEF_REVIEW -u CHIEF_TASKS_DIR -u NO_VERIFY -u STRICT_VERIFY \
-      FAKE_COMMIT=1 FAKE_COMMIT_TOKEN="$label" LIVE_BEAT_SECONDS=1 \
-      CHIEF_PROVIDER=claude CHIEF_PROJECT="$repo" CHIEF_HOME="$engine" \
-      CHIEF_STATE_DIR=.chief/state CHIEF_TASKLIST=vs CHIEF_LIVE_FILE="$live" \
-      CHIEF_VERIFY_CACHE_STATE="$WORK/cache-$label" CHIEF_VERIFY_HOOK="$WORK/phook.sh" \
-      CHIEF_VERIFY_TASKS_DIR="$repo/tasks/chief" CHIEF_VERIFY_BASE=main \
-      CHIEF_VERIFY_REPO="$repo" STALL_LIMIT=1 \
-      PATH="$WORK/fakebin:$PATH" bash "$engine/agent.sh" 1 ) >"$LAST_OUT" 2>&1 &
-  apid=$!
+      FAKE_COMMIT=1 FAKE_COMMIT_TOKEN="$1" LIVE_BEAT_SECONDS=1 \
+      CHIEF_PROVIDER=claude CHIEF_PROJECT="$2" CHIEF_HOME="$3" \
+      CHIEF_STATE_DIR=.chief/state CHIEF_TASKLIST=vs CHIEF_LIVE_FILE="$4" \
+      CHIEF_VERIFY_CACHE_STATE="$5" CHIEF_VERIFY_HOOK="$6" \
+      CHIEF_VERIFY_TASKS_DIR="$2/tasks/chief" CHIEF_VERIFY_BASE=main \
+      CHIEF_VERIFY_REPO="$2" STALL_LIMIT=1 \
+      PATH="$WORK/fakebin:$PATH" bash "$3/agent.sh" 1 ) >"$LAST_OUT" 2>&1 &
+  APID=$!
+}
 
-  PHASE_AT_VERIFY=""; HB_TICKED=0; PS_ROW=""
-  if await "$MARK_FIRST" "$LAST_OUT" "$apid"; then
-    PHASE_AT_VERIFY="$(live_get "$live" phase)"
-    backdate "$live" 4000                       # the ticker's only way to prove itself
-    hb_before="$(live_get "$live" heartbeat)"
-  fi
-  : > "$GO"
-  if await "$MARK_SECOND" "$LAST_OUT" "$apid"; then
-    hb_after="$(live_get "$live" heartbeat)"
-    [ -n "${hb_before:-}" ] && [ "${hb_after:-0}" -gt "$(( hb_before + 100 ))" ] && HB_TICKED=1
-    # …and now what `chief ps` says about it at 40m of quiet.
-    backdate "$live" "$STALE_AGE"
-    echo running > "$par/vs.state"
-    mkdir -p "$WORK/runs-$label" "$repo/tasks/chief"
-    cat > "$WORK/runs-$label/$apid.run" <<EOF
-pid=$apid
+# ps_row LABEL PID REPO STATE — what `chief ps` renders for tasklist `vs` RIGHT NOW,
+# as one joined string. This file drives engine/agent.sh directly (test/verify-cache.sh's
+# discipline — no driver, one second), so the run registry the view reads has to be
+# synthesized here. Callable repeatedly on purpose: PART F asks the same question of the
+# same record twice, with nothing changing between the two renders but the gate's output.
+ps_row() {
+  local pid="$2" repo="$3" st="$4" rundir="$WORK/runs-$1"
+  mkdir -p "$rundir" "$st/parallel" "$repo/tasks/chief"
+  echo running > "$st/parallel/vs.state"
+  cat > "$rundir/$pid.run" <<EOF
+pid=$pid
 repo=$repo
 base=main
 parallel=1
@@ -342,8 +340,35 @@ tasks=$repo/tasks/chief
 wt=$WORK/wt
 names=vs
 EOF
-    PS_ROW="$(CHIEF_RUNS="$WORK/runs-$label" bash "$ROOT/engine/monitor.sh" once 2>/dev/null \
-                | grep -A1 'vs ' | tr -d '\n')"
+  CHIEF_RUNS="$rundir" bash "$ROOT/engine/monitor.sh" once 2>/dev/null \
+    | grep -A1 'vs ' | tr -d '\n'
+}
+
+# phase_probe LABEL ENGINE_DIR — one iteration whose gate is the three-marker hook,
+# observed from outside while it runs. Sets $PHASE_AT_VERIFY, $HB_TICKED (1 = the
+# output moved the record after it was backdated) and $PS_ROW.
+phase_probe() {
+  local label="$1" engine="$2" repo st live apid hb_before hb_after
+  repo="$WORK/repo-$label"; scratch_repo "$repo"
+  st="$WORK/state-$label"; live="$st/parallel/vs.live.json"
+  mkdir -p "$st/parallel"
+  rm -f "$DONE" "$GO" "$GO2"
+  spawn_iteration "$label" "$repo" "$engine" "$live" "$WORK/cache-$label" "$WORK/phook.sh"
+  apid=$APID
+
+  PHASE_AT_VERIFY=""; HB_TICKED=0; PS_ROW=""
+  if await "$MARK_FIRST" "$LAST_OUT" "$apid"; then
+    PHASE_AT_VERIFY="$(live_get "$live" phase)"
+    backdate "$live" 4000                       # the ticker's only way to prove itself
+    hb_before="$(live_get "$live" heartbeat)"
+  fi
+  : > "$GO"
+  if await "$MARK_SECOND" "$LAST_OUT" "$apid"; then
+    hb_after="$(live_get "$live" heartbeat)"
+    [ -n "${hb_before:-}" ] && [ "${hb_after:-0}" -gt "$(( hb_before + 100 ))" ] && HB_TICKED=1
+    # …and now what `chief ps` says about it at 40m of quiet.
+    backdate "$live" "$STALE_AGE"
+    PS_ROW="$(ps_row "$label" "$apid" "$repo" "$st")"
   fi
   : > "$GO2"
   AGENT_RC=0; wait "$apid" || AGENT_RC=$?
@@ -387,5 +412,104 @@ case "$PS_ROW" in
   *) fail "PART E: without the publish a 40m gate was NOT flagged ('$PS_ROW'); the control has to reproduce the incident, or PART D's silence means nothing" ;;
 esac
 note "PART E ok — with the publish removed the same 40m gate reads '$(printf '%s' "$PS_ROW" | sed 's/.*\(stalled in [a-z-]*\).*/\1/')', which is the line the incident printed"
+
+# ═══ PART F — THE NEGATIVE CONTROL: a gate that says nothing STILL flags ════
+# The fix must not buy quiet by making `verifying` unflaggable. `monitor.sh` refuses
+# that trade in writing for provider-waiting — "It wants a LONGER threshold, not
+# silence" — and the same sentence binds here: PART D moved a healthy gate out of the
+# flag's way, and if it moved a WEDGED one out with it, the incident has been traded
+# for a blind spot rather than fixed.
+#
+# THE TWO CASES THE INCIDENT CONFLATED, held apart by ONE record. A single silent hook
+# is driven through both readings, and between the two renders NOTHING changes but
+# whether the gate emitted:
+#
+#   F1  the hook is inside the gate and has produced no bytes at all. The record is
+#       aged to 70m — PAST the 3060s (51m) `verifying` itself earns, so the phase's
+#       longer threshold has EXPIRED rather than exempted it — and nothing rescues it:
+#       the heartbeat is still exactly where it was aged to, because the only ticker on
+#       this path is the output, and there is none. `chief ps` must say so.
+#   F2  the SAME record, the SAME phase, the SAME age IN the phase (`live_set`
+#       preserves `phase_since` across a write that does not change the phase, so
+#       `verifying for 1h10m` survives) — and one line of output arrives. The flag
+#       must go, and only the flag.
+#
+# Same age, opposite verdicts, and the difference is the emission. That is the
+# distinction `chief ps` failed to draw on talos:83, stated as an assertion.
+STALE_VERIFY=4200        # 70m — past verifying's own 3060s, not merely past 900s
+
+# The silent hook: not one byte on stdout, and it does not return. It signals its own
+# start by APPENDING TO A FILE, which is the only channel a gate that produces no
+# output has — and the point of the control is that the monitor has no such channel.
+cat > "$WORK/shook.sh" <<EOF
+#!/usr/bin/env bash
+printf 'ran\n' >> "$COUNT"
+_w=0; while [ ! -f "$GO" ] && [ "\$_w" -lt $TICKS_STREAM ]; do sleep 0.2; _w=\$(( _w + 1 )); done
+echo "$MARK_FIRST"
+_w=0; while [ ! -f "$GO2" ] && [ "\$_w" -lt $TICKS_STREAM ]; do sleep 0.2; _w=\$(( _w + 1 )); done
+exit 0
+EOF
+chmod +x "$WORK/shook.sh"
+
+: > "$COUNT"
+rm -f "$DONE" "$GO" "$GO2"
+FREPO="$WORK/repo-f1"; scratch_repo "$FREPO"
+FST="$WORK/state-f1"; FLIVE="$FST/parallel/vs.live.json"; mkdir -p "$FST/parallel"
+spawn_iteration f1 "$FREPO" "$ROOT/engine" "$FLIVE" "$WORK/cache-f1" "$WORK/shook.sh"
+FPID=$APID
+
+# Wait for the gate to be INSIDE the wedged hook — phase published and the hook entered.
+# `verify_branch` prints nothing of its own before it execs the hook, so once the hook
+# has recorded its start there is no in-flight byte left to tick the record.
+fdeadline=$(( $(date +%s) + 180 ))
+while kill -0 "$FPID" 2>/dev/null; do
+  [ "$(live_get "$FLIVE" phase)" = verifying ] && [ "$(hook_runs)" -ge 1 ] && break
+  [ "$(date +%s)" -ge "$fdeadline" ] && break
+  sleep 0.2
+done
+[ "$(live_get "$FLIVE" phase)" = verifying ] && [ "$(hook_runs)" -ge 1 ] \
+  || fail "PART F: the silent gate never entered — phase '$(live_get "$FLIVE" phase)', $(hook_runs) hook run(s)"
+
+backdate "$FLIVE" "$STALE_VERIFY"
+HB0="$(live_get "$FLIVE" heartbeat)"; PSINCE0="$(live_get "$FLIVE" phase_since)"
+sleep 2.5     # several LIVE_BEAT_SECONDS: a TIMER-driven ticker would show itself here
+STALE_ROW="$(ps_row f1 "$FPID" "$FREPO" "$FST")"
+[ "$(live_get "$FLIVE" heartbeat)" = "$HB0" ] \
+  || fail "PART F: something bumped the record while the gate produced nothing — a heartbeat that beats on a timer makes 'verifying' unflaggable, which is the bug in the other direction"
+case "$STALE_ROW" in
+  *'stalled in verifying'*) ;;
+  *) fail "PART F: a wedged, silent gate at 70m was NOT reported stale — the phase has been exempted rather than given a longer threshold: $STALE_ROW" ;;
+esac
+case "$STALE_ROW" in
+  *'past its 51m limit'*) ;;
+  *) fail "PART F: the flag did not name verifying's own 3060s limit, so it is being timed against some other phase's: $STALE_ROW" ;;
+esac
+note "PART F1 ok — a gate that emits nothing still reads '$(printf '%s' "$STALE_ROW" | sed 's/.*\(stalled in verifying[^·]*\).*/\1/' | sed 's/ *$//')'"
+
+# ── F2: the same record, the same age in phase, one line of output ───────────
+: > "$GO"
+await "$MARK_FIRST" "$LAST_OUT" "$FPID" || fail "PART F: the released gate never emitted"
+# The marker reaching the LOG is not the tick: `_verify_tick` prints the line and THEN
+# writes the record, so the heartbeat is what has to be waited on.
+fdeadline=$(( $(date +%s) + 60 ))
+while [ "$(live_get "$FLIVE" heartbeat)" -le "$HB0" ] && [ "$(date +%s)" -lt "$fdeadline" ]; do sleep 0.2; done
+[ "$(live_get "$FLIVE" heartbeat)" -gt "$HB0" ] \
+  || fail "PART F: the gate emitted and the record did not move — the output-driven ticker is dead, and every long verify goes back to reading as a hang"
+[ "$(live_get "$FLIVE" phase_since)" = "$PSINCE0" ] \
+  || fail "PART F: the tick moved phase_since as well — F1 and F2 must differ in the heartbeat ALONE, or they are not the same reading twice"
+LIVE_ROW="$(ps_row f1 "$FPID" "$FREPO" "$FST")"
+case "$LIVE_ROW" in
+  *stalled*) fail "PART F: the gate resumed emitting and the row stayed flagged: $LIVE_ROW" ;;
+  *'⚠'*)     fail "PART F: the gate resumed emitting and the row kept the ⚠ glyph: $LIVE_ROW" ;;
+esac
+case "$LIVE_ROW" in
+  *'verifying for 1h'*) ;;
+  *) fail "PART F: the row lost the phase clock — an emitting gate is still a gate that has been running over an hour, and the operator needs both numbers: $LIVE_ROW" ;;
+esac
+: > "$GO2"
+AGENT_RC=0; wait "$FPID" || AGENT_RC=$?
+[ "$AGENT_RC" = 0 ] || fail "PART F: the iteration exited $AGENT_RC (the silent hook exits green, so the completion must be accepted)"
+[ "$(hook_runs)" = 1 ] || fail "PART F: the boundary verify ran $(hook_runs)x, expected 1"
+note "PART F2 ok — one line of output on the SAME 70m-old record clears the flag and keeps the phase clock; long and hung are now two different rows"
 
 echo "VERIFY-STREAM OK"

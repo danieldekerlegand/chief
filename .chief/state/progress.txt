@@ -1070,3 +1070,66 @@ Files:
   is what makes "the output bumps the record" an assertion rather than a hope.
 - The quality ratchet's `single_use_functions` went 17 → 18 (tol 2) on `_verify_tick`.
   US-3 has one left before it has to dedupe.
+
+## US-3 — The stall flag still fires on a real hang
+Thu Sep  3 2026
+
+The negative control for US-2, and the reason US-2 is a fix rather than a trade. Moving
+a healthy gate out of the flag's way is only half a fix; if it moved a WEDGED one out
+with it, `verifying` would have become unflaggable and the incident would have been
+swapped for a blind spot. `monitor.sh` already refuses that trade in writing for
+provider-waiting — "It wants a LONGER threshold, not silence" — and the same sentence
+binds here.
+
+No engine change was needed: `_beat_stop` runs before `_agent_verify_final`, so no
+timer ticker is alive across the boundary gate, and `_verify_tick` only writes when
+output moves. The story is the ASSERTION that this is true, plus the doc an operator
+reads at 1am.
+
+Files:
+- `test/verify-stream.sh` — PART F, the two cases the incident conflated, held apart by
+  ONE record so the only variable is the emission. F1: a hook that produces no stdout
+  and does not return, record aged to 70m (past `verifying`'s own 3060s, so the longer
+  threshold has EXPIRED rather than exempted it) — the row reads
+  `⚠ stalled in verifying — no activity for 1h10m, past its 51m limit`, and the
+  heartbeat is byte-identical to the value it was aged to. F2: the same record, the same
+  `phase_since`, one line of output — the flag goes and `verifying for 1h10m` stays.
+- `test/verify-stream.sh` — `spawn_iteration` (the launcher, shared by the phase probe
+  and F so the control's environment IS its subject's) and `ps_row` (the synthesized run
+  registry + one `monitor.sh once` render, callable repeatedly, which is what lets F ask
+  the same question of the same record twice).
+- `docs/guides/monitoring.md` — a `verifying has two publishers` subsection under the
+  threshold table: which half of the engine wrote the row, what ticks each, how to read
+  `verifying for 41m` against `12s ago` as two separate facts, why the ticker is
+  output-driven and not a timer, and that a `stalled in agent-turn` over a log ending at
+  the completion token is a pre-0.9.15 engine.
+
+### Learnings for future iterations
+
+- **A fix to a stall flag is not finished until the flag has been shown to still
+  fire.** The whole class of change here — a longer threshold, a new phase, a ticker —
+  buys quiet, and quiet is indistinguishable from a blind spot unless something asserts
+  the alarm still works. Write the negative control in the same file, against the same
+  machinery, or the next person has no way to tell which one they inherited.
+- **The sharpest form of that control is ONE record read TWICE.** Two probes at two ages
+  invite "well, of course, 40m < 51m". Same record, same phase, same `phase_since`, one
+  line of output between the renders: the verdict flips and the only thing that changed
+  is the emission. `live_set` preserving `phase_since` across a non-phase write is what
+  makes it possible.
+- **Wait on the HEARTBEAT, not on the log line.** `_verify_tick` prints the line and
+  THEN writes the record, so a marker in the log is not yet a tick. Polling the log and
+  reading the record immediately is a race that fails under load; poll `live_get …
+  heartbeat` past its previous value instead.
+- **A gate with no stdout still needs a start signal, and a FILE is the honest one.**
+  The silent hook appends to a counter file to say it has been entered. That is exactly
+  the channel the monitor does not have, which is the point of the control — and it
+  keeps the "produces no output" claim literal.
+- **Mutation-check a negative control in BOTH directions it can rot.** Setting
+  `verifying:3060` to `999999` fails F1 alone (A–E stay green — the exemption is
+  invisible to every other part). Wrapping the gate in `_beat_start`/`_beat_stop` — the
+  tempting "just keep it beating" fix — fails F on the heartbeat assertion. Both had to
+  be run to know F is testing the policy and the ticker rather than restating them.
+- A mutation that trips an EARLIER part hides the one you are checking. `_beat_start`
+  around the gate fails PART E first; re-run with that part's `fail` sed-swapped to
+  `note` in a copy under `test/` — under `test/`, because the file derives `$ROOT` from
+  `${BASH_SOURCE[0]}` and a copy in `/tmp` looks for the engine at `/engine`.

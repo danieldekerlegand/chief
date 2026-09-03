@@ -1,6 +1,6 @@
 # Monitoring active runs
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-03 · **Owner:** chief
 
 Every `chief run` registers itself in a **host-wide run registry** so you can see
 what's happening across *all* your repos from anywhere — not just the terminal a
@@ -167,11 +167,46 @@ re-tuned takes the default, unchanged:
 |---|---|---|
 | *(anything not listed)* | `CHIEF_STALE_SECONDS`, default **900** (15m) | an agent turn ticks the record every ~15s, so 15m of silence is ~60 missed beats |
 | `provider-waiting` | **900** — the default, *deliberately* | quiet for most of a healthy turn, but a provider that never returns is a real hang; a longer window would hide a run that produced 0 bytes and never reached iteration 1 |
-| `verifying` · `warmup` | **3060** (51m) | a non-tty `cargo test` block-buffers its output — one observed gate ran 36m quiet while genuinely working — plus one default window |
+| `verifying` · `warmup` | **3060** (51m) | a non-tty `cargo test` block-buffers its output — one observed gate ran 36m quiet while genuinely working — plus one default window. **Two publishers** — see below |
 | `rate-limited-waiting` and the other holds | `CHIEF_STALE_QUIET_SECONDS`, default **23400** (6h30m) | quiet *is* the behaviour; the figure is the engine's own 6h cap on a single limit sleep plus one window, so the exemption **expires** rather than making the state unflaggable |
 
 A quiet-by-design phase past that ceiling still flags — a usage window that never
 reopens is exactly what you need told.
+
+#### `verifying` has two publishers
+
+It is the one phase written by both halves of the engine, and the row means slightly
+different things depending on which wrote it:
+
+| Publisher | When | What ticks the record |
+|---|---|---|
+| `engine/driver.sh` — the **merge verify** | after the rebase, before the `--no-ff` | nothing. The gate is opaque from out here, so the whole run of it is silence and 51m is the budget |
+| `engine/agent.sh` — the **boundary verify** (`_agent_verify_final`) | when the agent emits the completion token, before that completion is accepted | the gate's **own output**. The hook is streamed to the log and every line bumps the heartbeat |
+
+Both rows read `verifying for 41m`; only the second one is also telling you it is
+still alive. So read the two numbers on the `↳` line as separate facts:
+
+- **`verifying for 41m`** is how long the gate has been *running*. It is not a
+  problem. Gates run for tens of minutes — that is the whole reason this phase has
+  3060s instead of 900s.
+- **`12s ago`** (the heartbeat) is how long since the run last did anything. On a
+  boundary verify that means how long since the hook last *emitted*.
+
+A long gate that is talking is healthy however long it talks. A gate that has said
+nothing for 51m has stopped, and `⚠ stalled in verifying — no activity for 58m, past
+its 51m limit` is the row you act on: attach to the hook, or `chief reap`.
+
+The ticker is deliberately driven by output rather than by a timer. A timer would keep
+beating for a hook that wedged half-way through and make this phase impossible to flag
+at all — the same trade `provider-waiting` refuses above ("a longer window, not
+silence"). `test/verify-stream.sh` PART F holds both halves of that against a real
+running gate: a silent one at 70m still flags, and one line of output on the same
+record clears it.
+
+Before v0.9.15 the boundary verify published no phase at all, so a legitimately long
+final gate was timed as an *agent turn* against 900s and reported
+`⚠ stalled in agent-turn` over a branch that was finishing normally. A `stalled in
+agent-turn` on a run whose log ends at the completion token is that older engine.
 
 ## Two pauses, one glyph — which one is holding the run?
 
