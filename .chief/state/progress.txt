@@ -748,3 +748,20 @@ Files:
   gitdir, so check `git status` in the REAL tree afterwards.
 - The driver RE-SEEDS `.chief/state/progress.txt` at run start; this file is tracked, so
   it was restored from `git show HEAD:` before appending (as 116's note already warned).
+
+## Verification recovery — checkout-race regression
+Thu Sep 3 2026
+
+The prior merge-time failure is resolved by the committed checkout guard. Observed
+`test/merge-checkout.sh`: **MERGE-CHECKOUT PASS** — a one-attempt index-lock race is
+retried and merged/retired; a persistent race returns CHECKOUT-FAILED with zero merges
+and no retirement. The previous `test/merge-batch.sh` failure was specifically PART A's
+missing retirement; its isolated rerun reached PART C green before the host's existing
+parallel test load made the long queue fixture overlap, so it was stopped rather than
+allowed to contaminate another run. The recorded full `chief verify` below is the final
+merge-bar witness.
+
+### Learnings for future iterations
+
+- A long, stateful integration fixture must run as one invocation: do not retry it while
+  a previous invocation still owns its temporary child processes.
