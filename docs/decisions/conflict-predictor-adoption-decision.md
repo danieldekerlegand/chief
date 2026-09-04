@@ -2,7 +2,17 @@
 
 > **Status:** Current · **Updated:** 2026-08-17 · **Owner:** chief
 
-**Status:** decided (DECLINE to adopt, for now) · **Scope:** `chief/91-enforceable-overlap-zones`
+> **Corrected 2026-09-04** (tasklist `901-docs-tell-the-truth`). The decision's own
+> work state was written as a second `**Status:**` line directly under the document
+> banner, so one field name carried two unrelated meanings — the document's lifecycle
+> and whether the question was settled. That is the exact collision the documentation
+> standard names (`rosetta/docs/reference/documentation-standard.md`, R2), and it is
+> how a reader ends up treating a decided question as a stale document. Relabelled to
+> `**Phase:**`, the standard's field for work state. **The body is untouched:** an ADR
+> records what was decided and what was believed at the time, and this is a field
+> label, not a revision of either.
+
+**Phase:** decided (DECLINE to adopt, for now) · **Scope:** `chief/91-enforceable-overlap-zones`
 US-0 · **Assessed:** 2026-08-17
 
 ## The question
