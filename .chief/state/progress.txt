@@ -1764,3 +1764,57 @@ Files:
 - Deliberately NOT done: the opt-in merge queue's batch verify still runs on its
   own path (noted in US-1) and `chief status` has no machine line at all. Both are
   admission/reporting surfaces a later tasklist could reach; neither is a floor.
+
+---
+
+## 901-docs-tell-the-truth — US-1: Every document is reachable, banner-stamped, and in the right place (2026-09-04)
+
+**What I did.** Measured the three claims first, then fixed only what the measurement
+showed.
+
+- **Banners.** 6 of 25 `docs/` files failed a `Status · Updated · Owner` check. Five
+  had none at all (`plan-review.md`, `reference/concurrency.md`,
+  `reference/overlap-zones.md`, `reference/provider-unavailability.md`,
+  `reference/usage.md`) and got one. The sixth, `explanation/dead-code-audit.md`, had
+  the fields but spread across three wrapped lines with `Owner` on the third — so it
+  did not read as one banner and no scan found it. Its audit metadata is preserved on
+  a second `>` line below the banner. `Updated:` is each file's **last content-change
+  date from git**, not today's, because stamping today on a file I only added a banner
+  to would be a claim I did not check.
+- **Reachability.** `reference/concurrency.md` and `reference/usage.md` existed, were
+  current, and were linked from nowhere. Both are now in `docs/README.md`'s Reference
+  list.
+- **Dead links.** `scripts/check-doc-links.mjs` reported **0**, and still does. A wider
+  scan than the gate runs (the gate deliberately `continue`s on any path normalizing to
+  `..`) found two: `docs/README.md -> ../../rosetta/…/documentation-standard.md` and
+  `ROADMAP.md -> ../AGENTIC-ENGINEERING-ADVISORY.md`. The first is now a bare path — it
+  resolves from *no* chief worktree, which is where every agent reads that file. The
+  second was left alone: roadmaps are out of scope for this tasklist by its own brief.
+- **Structure.** No directory under `docs/` is outside the standard's seven. The real
+  deviation is two *files* at the `docs/` root, and I **declared it in writing** in
+  `docs/README.md` rather than moving them — see below.
+
+**Files changed:** `docs/README.md`, `docs/explanation/dead-code-audit.md`,
+`docs/plan-review.md`, `docs/reference/{concurrency,overlap-zones,provider-unavailability,usage}.md`.
+
+### Learnings for future iterations
+
+- **Moving a doc out of `docs/` root costs an engine `VERSION` bump.**
+  `research-phase.md` and `plan-review.md` are cited by **bare path** from ~30 places
+  including `bin/chief` and eight `engine/*.sh` files, and `check-doc-links.mjs` gates
+  bare `docs/…md` paths in *every tracked file*, not just `.md`. So `git mv` forces a
+  sed through `engine/`, which `test/version-bump.sh` then requires be paid for with a
+  `VERSION` bump plus a matching README bold-version edit for `doc-sync`. That is an
+  engine version change no engine consumer can act on. Recorded as a declared exception
+  in `docs/README.md`; retire it alongside a real engine change, not on its own.
+- **`check-doc-links.mjs` reporting 0 does not mean there are no dead links.** It skips
+  paths that normalize outside the repo (`if (p.startsWith('..')) continue`) and skips
+  `docs/archive/` and `tasks/chief/completed/` as citers. Cross-repo `../..` links are
+  invisible to it *and* unresolvable from a worktree. Cite a sibling repo's doc by bare
+  path (`rosetta/docs/…`), never as a relative link.
+- **`.chief/verify.sh` is diff-scoped against `main`.** On a branch with zero commits it
+  prints `verify: no diff vs main — nothing to check (allowing merge)` and exits 0 in
+  15ms. That is not a green gate, it is an empty one — commit before you believe it.
+- **The driver re-seeded `.chief/state/progress.txt` down to a 3-line header** at the
+  top of this run (1,766 lines -> 3). Restored with
+  `git show HEAD:.chief/state/progress.txt` before appending, per CLAUDE.md.

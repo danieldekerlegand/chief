@@ -1,11 +1,12 @@
 # chief documentation
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-04 · **Owner:** chief
 
 **chief** is the autonomous tasklist runner every repo in this ecosystem is built with: you write `tasks/chief/*.json` and it drives an agent implement → verify → commit → merge, one story at a time, with worktree isolation.
 
-The map. Structured per the ecosystem
-[documentation standard](../../rosetta/docs/reference/documentation-standard.md) —
+The map. Structured per the ecosystem documentation standard —
+`rosetta/docs/reference/documentation-standard.md`, cited by path because it lives in
+a sibling repository and no relative link to it resolves from a chief worktree —
 **a document not linked here does not exist**.
 
 ## Guides
@@ -23,6 +24,7 @@ The map. Structured per the ecosystem
 *information-oriented — what it is*
 
 - [Account credentials — running under a designated provider account](reference/account-credentials.md)
+- [Host-wide concurrency](reference/concurrency.md)
 - [Cross-repo dependencies](reference/cross-repo-dependencies.md)
 - [Decision tasklists](reference/decision-tasklists.md)
 - [The per-story diff-size budget](reference/diff-budget.md)
@@ -33,6 +35,7 @@ The map. Structured per the ecosystem
 - [`chief status` — what is left, and what can start now](reference/status.md)
 - [Tasklist schema](reference/tasklist-schema.md)
 - [The verify hook (`.chief/verify.sh`)](reference/verify-hook.md)
+- [`chief usage` — cost and rate-limit reporting from the event logs](reference/usage.md)
 
 ## Explanation
 
@@ -49,3 +52,23 @@ The map. Structured per the ecosystem
 
 - [Decision: chief stays CLI-only — the desktop GUI is chief-cloud's](decisions/desktop-gui-decision.md)
 - [Decision: chief builds the overlap-zone registry; it does not bind a conflict predictor](decisions/conflict-predictor-adoption-decision.md)
+
+## Structure — what is here, and the one declared exception
+
+`docs/` uses four of the standard's seven directories — `guides/`, `reference/`,
+`explanation/`, `decisions/`. `tutorials/`, `runbooks/` and `archive/` are absent
+because they are empty, not because they are disallowed; the standard names the
+vocabulary, and an empty directory is not a document. There is no directory here
+outside that vocabulary.
+
+**The exception, declared:** `research-phase.md` and `plan-review.md` sit at the
+`docs/` root rather than under `reference/`. They are cited by **bare path** from
+roughly thirty places in `bin/chief`, `engine/*.sh`, `test/*.sh` and
+`templates/agent-context.md`, and `scripts/check-doc-links.mjs` gates every one of
+those citations — so relocating the two files is an edit to `bin/` and `engine/`,
+which `test/version-bump.sh` then requires be paid for with an engine `VERSION`
+bump. Bumping the engine version to move a doc puts a change in the version signal
+that no consumer of the engine can act on. The two files are linked above and
+banner-stamped like every other document; the deviation is their path, and it is
+recorded here rather than left for a reader to find and wonder about. Anyone
+retiring this exception should do it in the same commit as a real engine change.

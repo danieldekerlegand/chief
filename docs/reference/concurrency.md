@@ -1,5 +1,7 @@
 # Host-wide concurrency
 
+> **Status:** Current · **Updated:** 2026-09-04 · **Owner:** chief
+
 `-p N` limits tasklists within one `chief run`; it is not a machine-wide CPU
 budget. Every run reads the existing `~/.chief/runs/` registry before launching
 an agent turn. Live agent phases across all repositories count against

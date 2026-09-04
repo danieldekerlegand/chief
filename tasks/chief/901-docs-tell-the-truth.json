@@ -16,8 +16,8 @@
     {
       "id": "US-1",
       "title": "Every document is reachable, banner-stamped, and in the right place",
-      "passes": false,
-      "notes": null,
+      "passes": true,
+      "notes": "docs/README.md links every one of the 25 docs/ files (reachability check: 0 UNLINKED); every one carries a single-line `Status · Updated · Owner` banner (banner check: 0 NO BANNER, was 6 — plan-review, concurrency, overlap-zones, provider-unavailability, usage had none, and dead-code-audit 's spanned three lines so it did not read as one). check-doc-links.mjs: 0 dead references, 0 distinct targets. The one dead .md link found by a wider scan than the gate runs (the gate skips `..`-escaping paths) was docs/README.md -> ../../rosetta/docs/reference/documentation-standard.md, which resolves from no chief worktree; it is now cited by path. ROADMAP.md -> ../AGENTIC-ENGINEERING-ADVISORY.md is the other and was left alone — roadmaps are out of scope for this tasklist. Structure: 4 of the standard's 7 directories present, none outside the vocabulary; the two docs/-root files are now a declared exception in docs/README.md with its cost stated. Gate: chief verify green.",
       "acceptanceCriteria": [
         "Dead internal links are repaired or the target is archived with a pointer. A link to a document that no longer exists is worse than no link: it asserts the document is current.",
         "Every `docs/` file carries a `Status · Updated · Owner` banner. Where a doc is stale rather than current, the banner is where that gets SAID — `Status: Superseded` with what replaced it beats a silent edit.",

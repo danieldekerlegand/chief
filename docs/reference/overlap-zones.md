@@ -1,5 +1,7 @@
 # Overlap zones — where a green gate is not enough authority to merge
 
+> **Status:** Current · **Updated:** 2026-08-17 · **Owner:** chief
+
 Chief's correctness guarantee is the **merge floor**: before anything reaches the base
 branch it is rebased onto the latest base, re-verified, and merged `--no-ff`. Textual
 interference between parallel branches surfaces as a rebase conflict; staleness
