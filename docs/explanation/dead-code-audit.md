@@ -1,8 +1,9 @@
 # Dead-code audit — the inventory, and the searches behind it
 
-> **Status:** Current · **Audited:** 2026-09-03 against `VERSION` 0.9.13 ·
-> **Disposition:** §8, 2026-09-03 against `VERSION` 0.9.14 ·
-> **Undecidable + limits:** §§9–10, same day · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-03 · **Owner:** chief
+>
+> **Audited:** 2026-09-03 against `VERSION` 0.9.13 · **Disposition:** §8, 2026-09-03
+> against `VERSION` 0.9.14 · **Undecidable + limits:** §§9–10, same day
 
 This is the artifact a human approves **before** anything is deleted. Every candidate
 below names the search that found it, and the scope that search ran over, so the

@@ -1,5 +1,7 @@
 # Provider unavailability — an iteration that never reached the model
 
+> **Status:** Current · **Updated:** 2026-08-24 · **Owner:** chief
+
 **A request the API refused is not an attempt the agent made.**
 
 Chief's stall counter answers one question: *is the agent getting anywhere?* It is

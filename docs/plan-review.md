@@ -1,5 +1,7 @@
 # Plan review — the checkpoint between criteria and code
 
+> **Status:** Current · **Updated:** 2026-08-21 · **Owner:** chief
+
 Chief's default loop goes straight from a story's acceptance criteria to a commit.
 That is the right shape for most tasklists, and it is why the default here is **off**.
 But it means the first human-readable artifact of a large or architectural story is

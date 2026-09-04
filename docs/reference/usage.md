@@ -1,5 +1,7 @@
 # `chief usage`
 
+> **Status:** Current · **Updated:** 2026-08-21 · **Owner:** chief
+
 `chief usage` reads existing event logs and reports one row per run. It never calls a
 provider or writes state.
 

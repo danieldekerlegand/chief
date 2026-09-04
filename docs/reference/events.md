@@ -1,6 +1,20 @@
 # The event stream — chief's machine-readable status contract
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-04 · **Owner:** chief
+
+> **Corrected 2026-09-04** (tasklist `901-docs-tell-the-truth`). The catalogue below
+> was last written on 2026-08-14 and had fallen **eight events behind the engine**:
+> `tasklist.queued`, `tasklist.unsatisfiable`, `tasklist.terminal-negative`,
+> `tasklist.decision`, `tasklist.awaiting-decision`, `tasklist.decision-declined`,
+> `tasklist.awaiting-approval` and `story.unverified` were all being emitted and
+> named nowhere here. Measured by diffing every `event_emit` literal in `bin/` and
+> `engine/` — plus the two tables that emit through a variable (`worker_park`'s `$ev`
+> in `engine/driver.sh`, and `engine/mergequeue.sh`) — against the events named in
+> this file: **41 emitted, 33 documented**. This matters more here than in a guide:
+> the sentence above says *this document is the contract*, so an event chief emits
+> and this file omits is a transition a conforming consumer is entitled to ignore.
+> The **Where it lives** section was wrong in the same direction — see the correction
+> in it.
 
 `chief ps` / `chief monitor` / `chief logs` are the **human** views of a run
 ([`monitoring.md`](../guides/monitoring.md)); `--headless` gives a host a run-id and a final
@@ -33,6 +47,24 @@ $CHIEF_RUNS/<run-id>.events.jsonl        # default: ~/.chief/runs/<run-id>.event
 
 One file per **run** — not per pid, not per tasklist. A `-p 4` run with four workers
 writes all four workers' events to the same log; `name` tells them apart.
+
+**Corrected 2026-09-04:** that is no longer the whole picture. Two transitions are
+produced by an **operator command**, outside any run, and each has a fixed log of its
+own beside the per-run ones:
+
+```
+$CHIEF_RUNS/decisions.events.jsonl       # chief decide — one tasklist.decision per verdict recorded
+$CHIEF_RUNS/retirements.events.jsonl     # chief retire --negative — one tasklist.terminal-negative
+```
+
+They are the same NDJSON, same schema, same fields; what they lack is a `runId` that
+names a run in the registry, because there was no run — a human typed a command. Both
+were added after this section was written (`bin/chief`'s `cmd_decide`,
+`engine/retire.sh`) and neither was recorded here. **Consequence a consumer must
+handle:** `chief events -l` globs `$CHIEF_RUNS/*.events.jsonl`, so it lists
+`decisions` and `retirements` in the run-id column exactly as if they were run ids.
+Resolve a log by *path* when you mean one of these two, and treat a `runId` that
+matches no registry entry as "not a run", never as a stale one.
 
 Three ways to learn the path, in order of convenience:
 
@@ -125,10 +157,13 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `event` | `state` | Emitted when |
 |---|---|---|
 | `tasklist.launched` | `running` | a worker takes the tasklist (deps + conflict domains satisfied) |
+| `tasklist.queued` | `running` | the **opt-in merge queue** took it: its stories are done, its worktree is released and it is waiting to be stacked into a batch instead of merging on its own (`detail` carries the batch ceiling). Off by default — no `--merge-batch` / `CHIEF_MERGE_BATCH` means this event never appears, and a tasklist goes straight from its last story to `tasklist.merged` (see [drivers-and-safety.md](../explanation/drivers-and-safety.md)) |
 | `tasklist.blocked` | `blocked` | it cannot run — an unmet dependency |
 | `tasklist.bad-repo` | `failed` | a `repo:<sub>` tasklist names something that is not a git repo |
+| `tasklist.unsatisfiable` | `failed` | a **pre-flight** refusal: one or more acceptance criteria name a path in another repo, which no agent in this worktree can satisfy. `detail` counts the stories; the run log names them. **No agent turn was spent** — this is the cheapest failure chief produces, and a consumer should read it as "the tasklist is mis-written", not "the work went wrong" (see [cross-repo-dependencies.md](cross-repo-dependencies.md)) |
 | `tasklist.merged` | `done` | the branch merged `--no-ff` into the base (`detail` carries the sha) |
 | `tasklist.complete-unmerged` | `done` | stories finished with auto-merge off (`--no-merge`) |
+| `tasklist.terminal-negative` | `running` · `retired` | one or more stories were **declared terminal and settled false** — the tasklist's answer is "no", with the measurement behind it, and that is a delivered result rather than a failure. `state=running` is the in-run report the driver prints when it reads the finished PRD; `state=retired` is `chief retire --negative` recording the same thing afterwards, and that one lands in `retirements.events.jsonl` rather than a run log (see [Where it lives](#where-it-lives) and [tasklist-schema.md](tasklist-schema.md)) |
 | `tasklist.verify-failed` | `failed` | the verify hook exited non-zero post-rebase; the branch is kept for re-engagement |
 | `tasklist.rebase-conflict` | `failed` | rebase onto the base conflicted (`detail` points at the forensics report) |
 | `tasklist.rebase-refused` | `failed` | the rebase was refused by a safety check |
@@ -147,6 +182,10 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `tasklist.paused` | `paused` | an operator pause (`chief pause`) drained it; branch + worktree kept |
 | `tasklist.plan-invalid` | `failed` | plan review is on and the PLAN turn wrote no well-formed plan artifact; branch + worktree kept (see [plan-review.md](../plan-review.md)) |
 | `tasklist.awaiting-review` | `awaiting-review` | plan review is on and the story's plan has **no human approval**, with none obtainable here (no reviewer, non-interactive host, the window elapsed, or the annotate → re-plan budget is spent). A **park, not a failure**: branch, worktree, plan and annotations kept, and the next run reads the verdict off disk rather than re-asking. Also emitted with a **null `story`** when the tasklist's up-front **research map** is what nobody approved — same park, one rung further up the leverage hierarchy, and nothing was implemented at all |
+| `tasklist.awaiting-approval` | `awaiting-approval` | the branch touched an **overlap zone** this repo declared in `.chief/zones.conf`, where a green gate is not sufficient authority to merge, and no `chief approve` is on record. The only park that fires **inside the merge phase**, after the gate came back green — so unlike its siblings the worktree is already gone and what is kept is the **branch**, rebased onto the latest base and verified (see [overlap-zones.md](overlap-zones.md)) |
+| `tasklist.awaiting-decision` | `awaiting-decision` | a **DECISION** tasklist prepared its brief and no human verdict is recorded for it. The agent may write the brief; it may not approve its own choice. Branch and worktree kept; the next run reads the verdict off disk (see [decision-tasklists.md](decision-tasklists.md)) |
+| `tasklist.decision` | `proceed` · `decline` · `retire` · `unpark` | a human **verdict was recorded**, and it is the authority for whatever transition follows — not the transition itself. `state` is the action taken; `detail` carries the choice, who recorded it and the note. Emitted twice for one verdict, deliberately and at different times: `chief decide` writes one into `decisions.events.jsonl` at the moment a person decides, and the driver emits one into the run's own log when it **reads** that record. Correlate on `name` + the choice in `detail`, never by counting |
+| `tasklist.decision-declined` | `decision-declined` | the operator read the brief and said **no**. Neither a failure nor a park: the tasklist did exactly what it was for, nothing is waiting, and no later run changes the answer. Branch and worktree are **kept** — declining work is not discarding it |
 | `tasklist.re-dispatch` | `pending` | the usage-limit window elapsed and it is queued again — carries `limit` |
 | `tasklist.re-engaged` | `running` | the run picked up a branch that already claims to be finished and sent the agent back in — its verify failed post-rebase, its pass-flags were a misfire with no commits behind them, or it will not rebase (`detail` says which). Not a terminal event: the tasklist goes on to its own outcome |
 
@@ -159,6 +198,7 @@ Cross-check liveness against `chief ps` / the run file's pid.
 | `story.plan-invalid` | `failed` | the story's PLAN turn produced no schema-valid artifact — the loop stops here rather than implementing an unreviewable plan (the tasklist-scope `tasklist.plan-invalid` follows) |
 | `story.cannot-complete` | `failed` | this story is the one being re-answered: it recorded the same outcome at `REPEAT_LIMIT` consecutive iteration boundaries and the loop stopped rather than spend the rest of the budget on it (the tasklist-scope `tasklist.cannot-complete` follows) |
 | `story.awaiting-review` | `awaiting-review` | the story has a schema-valid plan that no human approved, and the loop stopped rather than implement it (the tasklist-scope `tasklist.awaiting-review` follows) |
+| `story.unverified` | `failed` | the **evidence gate** demoted this story: its criteria claim a checkable bar and its `notes` record no observed value, at `DEMOTE_REPEATS` consecutive iteration boundaries. `detail` carries the count. Story scope here and tasklist scope in `tasklist.unverified` — the same split `story.plan-invalid` uses, so a consumer counting tasklist outcomes never double-counts |
 
 `story.passed` fires once per story per run; a RESUME does not re-announce stories
 that passed in an earlier run. That makes **complete-vs-incomplete work** live: count

@@ -1,6 +1,6 @@
 # `chief status` — what is left, and what can start now
 
-> **Status:** Current · **Updated:** 2026-08-20 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-21 · **Owner:** chief
 
 `chief list` prints a column-aligned table per live tasklist with its state, story progress,
 category and any park/block reason, and summarizes completed tasklists. Use `chief list --all`

@@ -1,6 +1,6 @@
 # The verify hook (`.chief/verify.sh`)
 
-> **Status:** Current · **Updated:** 2026-08-18 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-04 · **Owner:** chief
 
 Chief calls this to decide whether a completed, rebased branch may merge. It's the
 one place your project's real quality bar lives.

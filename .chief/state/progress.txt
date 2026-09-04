@@ -1764,3 +1764,236 @@ Files:
 - Deliberately NOT done: the opt-in merge queue's batch verify still runs on its
   own path (noted in US-1) and `chief status` has no machine line at all. Both are
   admission/reporting surfaces a later tasklist could reach; neither is a floor.
+
+---
+
+## 901-docs-tell-the-truth — US-1: Every document is reachable, banner-stamped, and in the right place (2026-09-04)
+
+**What I did.** Measured the three claims first, then fixed only what the measurement
+showed.
+
+- **Banners.** 6 of 25 `docs/` files failed a `Status · Updated · Owner` check. Five
+  had none at all (`plan-review.md`, `reference/concurrency.md`,
+  `reference/overlap-zones.md`, `reference/provider-unavailability.md`,
+  `reference/usage.md`) and got one. The sixth, `explanation/dead-code-audit.md`, had
+  the fields but spread across three wrapped lines with `Owner` on the third — so it
+  did not read as one banner and no scan found it. Its audit metadata is preserved on
+  a second `>` line below the banner. `Updated:` is each file's **last content-change
+  date from git**, not today's, because stamping today on a file I only added a banner
+  to would be a claim I did not check.
+- **Reachability.** `reference/concurrency.md` and `reference/usage.md` existed, were
+  current, and were linked from nowhere. Both are now in `docs/README.md`'s Reference
+  list.
+- **Dead links.** `scripts/check-doc-links.mjs` reported **0**, and still does. A wider
+  scan than the gate runs (the gate deliberately `continue`s on any path normalizing to
+  `..`) found two: `docs/README.md -> ../../rosetta/…/documentation-standard.md` and
+  `ROADMAP.md -> ../AGENTIC-ENGINEERING-ADVISORY.md`. The first is now a bare path — it
+  resolves from *no* chief worktree, which is where every agent reads that file. The
+  second was left alone: roadmaps are out of scope for this tasklist by its own brief.
+- **Structure.** No directory under `docs/` is outside the standard's seven. The real
+  deviation is two *files* at the `docs/` root, and I **declared it in writing** in
+  `docs/README.md` rather than moving them — see below.
+
+**Files changed:** `docs/README.md`, `docs/explanation/dead-code-audit.md`,
+`docs/plan-review.md`, `docs/reference/{concurrency,overlap-zones,provider-unavailability,usage}.md`.
+
+### Learnings for future iterations
+
+- **Moving a doc out of `docs/` root costs an engine `VERSION` bump.**
+  `research-phase.md` and `plan-review.md` are cited by **bare path** from ~30 places
+  including `bin/chief` and eight `engine/*.sh` files, and `check-doc-links.mjs` gates
+  bare `docs/…md` paths in *every tracked file*, not just `.md`. So `git mv` forces a
+  sed through `engine/`, which `test/version-bump.sh` then requires be paid for with a
+  `VERSION` bump plus a matching README bold-version edit for `doc-sync`. That is an
+  engine version change no engine consumer can act on. Recorded as a declared exception
+  in `docs/README.md`; retire it alongside a real engine change, not on its own.
+- **`check-doc-links.mjs` reporting 0 does not mean there are no dead links.** It skips
+  paths that normalize outside the repo (`if (p.startsWith('..')) continue`) and skips
+  `docs/archive/` and `tasks/chief/completed/` as citers. Cross-repo `../..` links are
+  invisible to it *and* unresolvable from a worktree. Cite a sibling repo's doc by bare
+  path (`rosetta/docs/…`), never as a relative link.
+- **`.chief/verify.sh` is diff-scoped against `main`.** On a branch with zero commits it
+  prints `verify: no diff vs main — nothing to check (allowing merge)` and exits 0 in
+  15ms. That is not a green gate, it is an empty one — commit before you believe it.
+- **The driver re-seeded `.chief/state/progress.txt` down to a 3-line header** at the
+  top of this run (1,766 lines -> 3). Restored with
+  `git show HEAD:.chief/state/progress.txt` before appending, per CLAUDE.md.
+
+---
+
+## 901-docs-tell-the-truth — US-2: Content that describes a tree that moved (2026-09-04)
+
+**Method.** Mechanical first, prose second. Every path, function name, `chief`
+subcommand and `CHIEF_*` identifier in `docs/` was extracted and resolved against the
+tree; that came back almost clean (96 cited paths, 1 unresolved — and it is
+`crossrepo_completed` inside the dead-code audit, which is history). So the drift was
+all in **claims**, which is what the story says: the half a link-checker cannot do.
+
+**What was actually wrong.**
+
+- **`docs/reference/events.md` was 8 events behind the engine.** 41 emitted, 33
+  documented. Found by diffing every `event_emit` literal in `bin/` + `engine/`
+  against the doc — *plus the two tables that emit through a variable*
+  (`worker_park`'s `$ev` in `driver.sh`, and `mergequeue.sh`), which is where 6 of the
+  8 were hiding. Missing: `story.unverified`, `tasklist.queued`,
+  `tasklist.unsatisfiable`, `tasklist.terminal-negative`, `tasklist.decision`,
+  `tasklist.awaiting-decision`, `tasklist.decision-declined`,
+  `tasklist.awaiting-approval`. Now 41/41. The same file's "one file per **run**" is
+  no longer the whole picture — `chief decide` and `chief retire --negative` write
+  `decisions.events.jsonl` / `retirements.events.jsonl`, and `chief events -l` globs
+  `*.events.jsonl` so it lists both in the **run-id column**.
+- **`docs/reference/tasklist-schema.md` never mentioned `category`.** 46 of this
+  repo's 47 tasklists carry it, `chief list` renders it, `chief status` breaks both
+  totals down by it, and `scripts/check-tasklist-categories.mjs` **blocks a merge**
+  without it. Documented, keeping the distinction the omission hid: the *field* is
+  chief-wide and opaque, the *vocabulary* (`fix | unblock | replace | feature`) is
+  this repo's own gate and no engine gate requires it.
+- **Duplication that had already disagreed.** (a) The same schema file stated the
+  DECISION/research note twice, back to back, in two wordings (`Set` / `Use`
+  `review:"decision"`). (b) The verdict-cache key is **four** components
+  (`tree · base · hook · subs`) and both `README.md` and `CLAUDE.md` still said
+  three. Corrected, with `verify-hook.md` named as the single home for that table.
+- **`docs/guides/providers.md` counted four providers.** `codex` was promoted
+  2026-08-19 and the roster *table* was updated then while the prose around it was
+  not — so the document whose whole job is to stop roster surfaces drifting had
+  drifted against its own table. Its `README.md` link also read `../README.md`, which
+  resolves — to `docs/README.md`, not the repo README the sentence describes.
+- **`CLAUDE.md`'s layout map was missing 13 of 33 `engine/` files** (`budget`,
+  `cigate`, `concurrency`, `gen`, `preset`, `quality`, `repeat`, `retire`, `review`,
+  `terminal`, `zones`, `instructions.md`, `plan-instructions.md`) **and 7 of 23
+  `bin/chief` subcommands** (`events`, `usage`, `quality`, `cigate`, `retire`,
+  `approve`, `decide`). Also `templates/` (+`quality.conf`, +`zones.conf`), `.chief/`
+  (+`quality.conf`), and a `docs/` block that predated the Diataxis restructure.
+- **Six `Updated:` stamps were older than the last change to what the document
+  says**, by up to three weeks. Restamped from git.
+
+**Where the corrections are recorded.** In-place under each `docs/` banner as
+`> **Corrected 2026-09-04**`, and indexed in a new **Corrections of record** section
+in `docs/README.md` — index, not a second home for the reasoning. The two root files
+carry no banner, so theirs live only in that index.
+
+**Files changed:** `docs/README.md`, `docs/reference/{events,tasklist-schema}.md`,
+`docs/guides/providers.md`, `README.md`, `CLAUDE.md`, `ROADMAP.md`, plus banner
+restamps in `docs/explanation/drivers-and-safety.md`,
+`docs/guides/headless-invocation.md`,
+`docs/reference/{roadmap-input,status,cross-repo-dependencies,verify-hook}.md`.
+
+### Learnings for future iterations
+
+- **`grep 'event_emit <name>'` undercounts the event contract by 20%.** Six of the
+  41 event types are emitted as `event_emit "$ev"` from a `case` table
+  (`worker_park` in `driver.sh`, and `mergequeue.sh`). Any audit of "what does chief
+  emit" has to union the literals with `grep -o 'ev=tasklist\.[a-z-]*'`, or it will
+  confidently report a complete catalogue that is missing every park and every
+  decision transition. The same shape will bite the next person who counts *states*.
+- **A link that resolves to the WRONG document is invisible to the link checker, by
+  construction.** `scripts/check-doc-links.mjs` answers "does the target exist"; it
+  cannot answer "is this the document the sentence means". `providers.md`'s
+  `[README.md](../README.md)` had pointed at `docs/README.md` since the Diataxis
+  restructure and passed every gate. Depth-changing moves need the *text* of each
+  link re-read, not just its resolution — and a `../README.md` or `../ROADMAP.md`
+  inside `docs/*/` is always worth a second look.
+- **`Updated:` needs a stated rule or the next sweep will pick a different one.**
+  Git's last-touch date is not it: 2026-08-15's `a999b57` repointed relative links in
+  four files without changing a single claim. The rule now written into
+  `docs/README.md` is *the last change to what the document **says***, which is why
+  four banners still read 2026-08-14 against an 08-15 git date. Stating the rule is
+  the point — the reason the previous sweep and this one disagreed is that neither
+  had one.
+- **The doc gate can be red on `main` and nobody sees it, because `.chief/verify.sh`
+  is diff-scoped.** `main` had no ROADMAP row for `121` — its retire commit never
+  wrote one — and `test/doc-sync.sh` therefore failed the moment this branch touched
+  `README.md`. On `main` itself the hook exits 0 in milliseconds with "no diff vs
+  main". Any branch touching a gated path inherits every pre-existing failure in that
+  path's scope; budget for it rather than being surprised by it.
+- **Deliberately NOT done, and recorded in `docs/README.md`:** the three-component
+  cache key is also in `engine/instructions.md` (injected into *every* agent prompt),
+  `bin/chief`'s `chief verify` hint and `engine/lib.sh`'s two `verify SKIPPED` lines.
+  All four are right about behaviour and understate the key. `test/version-bump.sh`
+  path-scopes on `engine/`/`bin/`/`scripts/`/`install.sh`, so correcting a *comment*
+  there obliges a `VERSION` bump no engine consumer can act on — the same argument
+  that already keeps `research-phase.md` at the `docs/` root. Fold it into the next
+  real engine change.
+
+---
+
+## 901-docs-tell-the-truth — US-3: Archived, not deleted — and the record says why (2026-09-04)
+
+**One document was superseded, and it was the one nothing pointed at.**
+`CHANGELOG.md` — created 2026-08-20 by `107-list-and-ps-show-what-is-live`, three
+entries under one `## Unreleased` heading, never written to again. The measurement
+that settles it, taken on this tree:
+
+| | |
+|---|---|
+| commits touching it since 2026-08-21 | **0** |
+| tasklists merged in that span that wrote no entry | **15 of 15** |
+| `VERSION` then / now | **0.8.82** / **0.9.22** |
+| gates that read it | **none** |
+
+Over exactly the same fifteen merges `ROADMAP.md` stayed correct — because
+`test/doc-sync.sh` fails CI when it does not name a merged stem. That is the whole
+finding: not neglect, but a second, ungated record of a fact this repo already keeps
+in a gated one. The three entries were never *wrong*, only mis-filed — all three
+shipped in **v0.8.82** (merge `522ee4c`) and `chief list --all`, `chief list --plain`
+and `chief ps --all` all still exist in `bin/chief`.
+
+**Archived, not deleted:** `docs/archive/changelog-2026-08-21.md` (new directory —
+`docs/` now uses five of the standard's seven) carries the content verbatim, the
+measurement, what replaced it, and what reinstating a hand-maintained changelog would
+cost. The root `CHANGELOG.md` still exists and is now a pointer: the standard names it
+a Tier 1 root file *where a repo ships*, and chief ships (`install.sh`,
+`chief update`). A missing changelog reads as an oversight; one filing shipped work
+under `Unreleased` reads as current.
+
+**One standard violation fixed rather than reported.** Both ADRs carried their *work*
+state as a second `**Status:**` line directly under the document banner — one field
+name, two unrelated meanings, which is the exact collision `rosetta`'s standard R2
+calls out and the reason 14 files elsewhere were relabelled on 2026-08-14. Now
+`**Phase:**`. Bodies untouched, and each says so in a dated `> **Corrected**` note: an
+ADR is superseded, not edited, and a field label is neither the decision nor the
+belief.
+
+**Left alone, and why** (recorded in `docs/README.md`, not just here):
+`explanation/dead-code-audit.md` reads as past tense because `900` acted on it, but it
+is an approved measurement record *and* live guidance (§3 do-not-remove, §5
+proved-absent, §§9–10 undecidable); both ADRs; `tasks/chief/completed/`; `ROADMAP.md`
+and the roadmap plans, out of scope by the brief, including its dead
+`../AGENTIC-ENGINEERING-ADVISORY.md`; and the four `engine/`/`bin/` copies of the
+three-component cache key.
+
+**What this sweep did NOT verify**, in `docs/README.md` because silence there reads as
+a claim the docs are now true: no guide's procedure was executed (commands and flags
+were checked to *exist*); ~6,900 lines of prose with no symbol in it was read, not
+proved; dated measurements were not re-measured; nine URL occurrences (six distinct)
+unchecked, the link gate being local-only by design; prose outside `docs/` not audited;
+no `.chief/claims.json` here, so no cross-repo claim to resolve.
+
+**Files changed:** `docs/archive/changelog-2026-08-21.md` (new), `CHANGELOG.md`,
+`docs/README.md`, `docs/decisions/{desktop-gui,conflict-predictor-adoption}-decision.md`.
+
+### Learnings for future iterations
+
+- **The document that rots is the one no gate reads.** `CHANGELOG.md` and `ROADMAP.md`
+  hold the same fact in this repo; one is gated by `test/doc-sync.sh` and one is not,
+  and after fifteen merges only the ungated one was wrong. Before adding any hand-
+  maintained register, ask what fails when nobody updates it — if the answer is
+  nothing, it is already the next archive entry.
+- **Archiving the CONTENT is not the same as removing the FILE.** The standard's Tier 1
+  requires `CHANGELOG.md` at the root where a repo ships, so "archive it" here meant
+  move the content verbatim into `docs/archive/` and leave an honest pointer behind.
+  Deleting the root file would have traded a stale document for a structural violation.
+- **`docs/archive/` is exempt from the link gate as a CITER only.**
+  `scripts/check-doc-links.mjs` skips any path containing `docs/archive/` when scanning
+  (its links described the tree as it was), but links *into* the archive from a live
+  document are still checked — so the pointer in `CHANGELOG.md` and the entry in
+  `docs/README.md` must resolve. Both do; `check-doc-links.mjs` reports 0 dead.
+- **`Status:` twice in one document is a real defect, not a formatting quibble.** The
+  standard says so and this repo had it in both ADRs: the banner's `Status: Current`
+  describes the *document*, the ADR's `Status: decided` describes the *question*. A
+  scanner reading the first non-heading `Status:` it finds gets the wrong one. Work
+  state is `**Phase:**`.
+- **A "what I did not verify" section is cheap to write and is the only honest ending
+  for a docs sweep.** Every mechanical check here answers "does this symbol resolve",
+  and no mechanical check answers "does this sentence describe what the code does". Say
+  which one was run, or the reader takes the stronger claim.
