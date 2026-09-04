@@ -116,7 +116,7 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
 #                      wedged one from out here, so: a longer threshold, not silence.
-STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting provider-unavailable '
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting gate-budget-waiting provider-unavailable '
 
 # The CEILING on that exemption — quiet by design is not quiet forever. A usage window
 # that never reopens is exactly what an operator has to be told about, so the exemption
@@ -228,6 +228,10 @@ if [ -f "$_MON_DIR/concurrency.sh" ]; then
 else
   chief_machine_activity() { :; }
   chief_machine_activity_line() { printf 'machine activity unavailable'; }
+  chief_machine_load_sample() { :; }
+  chief_machine_headroom_line() { printf 'headroom unavailable'; }
+  # No concurrency reader is no admission control, so nothing is being held.
+  chief_machine_admits() { CHIEF_MACHINE_HOLD_REASON=""; return 0; }
 fi
 
 dur() {       # $1 = seconds -> "45s" / "12m" / "3h04m"
@@ -594,9 +598,20 @@ op_since()  {  # $1 stateroot -> epoch | ''  (the stamp, when it is one)
 # reader needs instead is that nothing was lost (branch AND worktree kept) and the
 # exact command that picks it back up. It closes with the phase/heartbeat ages, so a
 # park that happened days ago still dates itself.
-machine_budget_note() { # $1 name $2 stateroot -> one line
-  printf 'waiting: machine budget is full (%s/%s agent turns live) — resumes when a slot opens' \
-    "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_BUDGET"
+# THE HOLD, in the words the SCHEDULER used. `chief_machine_admits` is the same
+# predicate the launch loop and the gate boundary call, and it names the resource
+# that actually refused — which the old fixed string could not: it reported the
+# agent-turn budget as full whatever had said no, and there are now three things
+# that can (agent turns, gates, the load ceiling).
+machine_budget_note() { # $1 launch|gate -> one line
+  if chief_machine_admits "${1:-launch}"; then
+    # Held records are refreshed on a poll, not on an event, so a slot that opened
+    # between the worker's last poll and this render is a normal reading — and it
+    # is a different thing to tell an operator than "still full".
+    printf 'waiting: a slot has opened — resumes at its next poll'
+    return 0
+  fi
+  printf 'waiting: %s — resumes when a slot opens' "$CHIEF_MACHINE_HOLD_REASON"
 }
 
 op_note() {   # $1 name  $2 stateroot -> one line
@@ -764,6 +779,15 @@ foreign_note() {   # $1 = count
     "$DIM" "$1" "$RUNS" "$RST"
 }
 
+# The two host-wide lines, wherever the header ends up. ACTIVITY is what is
+# running; HEADROOM is what admission would do about one more of it — the pair the
+# incident display was missing, since `5 agent turn(s) · 0 gate(s)` beside a
+# saturated load average read as eight idle slots on a machine that had none.
+machine_render() {
+  printf '%sMachine activity: %s%s\n' "$DIM" "$(chief_machine_activity_line)" "$RST"
+  printf '%s  %s%s\n' "$DIM" "$(chief_machine_headroom_line)" "$RST"
+}
+
 render() {
   local now runfiles="" f pid n_active=0 n_foreign=0 n_files=0
   now="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -771,6 +795,11 @@ render() {
   [ -e "$1" ] && runfiles="$*"
 
   chief_machine_activity "$RUNS"
+  # Sampled ONCE per render, by the function that owns the reading. Every line
+  # below reads it through a `$( )`, and a subshell's write to the global is lost —
+  # so without this the note that explains a hold would be deciding on an EMPTY
+  # load average while the line beside it printed a freshly sampled one.
+  chief_machine_load_sample
 
   # Header (count active first so a run whose pid just died isn't counted).
   #
@@ -795,20 +824,20 @@ render() {
     if [ -z "$runfiles" ]; then
       printf '%sCHIEF%s · no active runs · %s%s%s\n' "$BOLD" "$RST" "$DIM" "$now" "$RST"
       printf '%sStart one with:  chief run -p N%s\n' "$DIM" "$RST"
-      printf '%sMachine activity: %s%s\n' "$DIM" "$(chief_machine_activity_line)" "$RST"
+      machine_render
     else
       printf '%sCHIEF%s · %s0 active run(s)%s · %s%s%s\n' "$BOLD" "$RST" "$CYN" "$RST" "$DIM" "$now" "$RST"
       # Only claim they exited if any of them were ours to check.
       [ "$n_foreign" -lt "$n_files" ] && printf '%sAll registered runs have exited.%s\n' "$DIM" "$RST"
       foreign_note "$n_foreign"
-      printf '%sMachine activity: %s%s\n' "$DIM" "$(chief_machine_activity_line)" "$RST"
+      machine_render
     fi
     [ "$ALL" -eq 1 ] && render_all_inflight
     return 0
   fi
   printf '%sCHIEF%s · %s%d active run(s)%s%s · %s%s%s\n' "$BOLD" "$RST" "$CYN" "$n_active" "$RST" \
     "$([ "$UNREG_N" -gt 0 ] && printf ' · %s⚠ %d unregistered%s' "$RED" "$UNREG_N" "$RST")" "$DIM" "$now" "$RST"
-  printf '%sMachine activity: %s%s\n' "$DIM" "$(chief_machine_activity_line)" "$RST"
+  machine_render
   foreign_note "$n_foreign"
   if [ "$n_active" -eq 0 ]; then
     # Only a registry that HAD entries can have "all exited" — with no run files at
@@ -853,7 +882,7 @@ render() {
     printf '%s  %s%s\n' "$DIM" "$repo" "$RST"
     holds_render "$state" "$names"
 
-    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph pw pwc
+    local n st glyph gl lbl br prog act live age stale dead rn bo lf lph pw pwc hold_kind
     for n in $names; do
       st="$(cat "$state/parallel/$n.state" 2>/dev/null || echo)"
       lf="$(live_file "$n" "$state")"
@@ -874,9 +903,16 @@ render() {
       dead=0                       # …and ABSENT is not the same finding as quiet
       [ "$st" = running ] && worker_gone "$n" "$state" && dead=1
       glyph="$(glyph_for "$st")"; gl="${glyph%%|*}"; lbl="${glyph##*|}"
-      budget_hold=0
-      [ "$st" = pending ] && [ "$lph" = machine-budget-waiting ] && budget_hold=1
-      [ "$budget_hold" = 1 ] && { gl="${CYN}⏸${RST}"; lbl=budget-hold; }
+      # TWO machine holds, and they are not the same finding. `budget-hold` is work
+      # that has not STARTED (the launch loop refused it an agent turn); `gate-hold`
+      # is a live worker stopped at the gate boundary, which is neither pending nor
+      # dependency-blocked and used to render as an ordinary `running` row with
+      # nothing said about it — indistinguishable from a slow verify.
+      hold_kind=""
+      [ "$st" = pending ] && [ "$lph" = machine-budget-waiting ] && hold_kind=launch
+      [ "$lph" = gate-budget-waiting ] && hold_kind=gate
+      [ "$hold_kind" = launch ] && { gl="${CYN}⏸${RST}"; lbl=budget-hold; }
+      [ "$hold_kind" = gate ]   && { gl="${CYN}⏸${RST}"; lbl=gate-hold; }
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
       [ "$stale" = 1 ] && gl="${RED}⚠${RST}"
@@ -891,8 +927,8 @@ render() {
       rn="$(retry_note "$n" "$state" "$retrymax")"
       printf '   %b %-22s %-9s %-7s %s%s%s%s\n' "$gl" "$n" "$lbl" "$prog" "$DIM" "$br" \
         "$([ -n "$rn" ] && printf ' · %s' "$rn")" "$RST"
-      if [ "$budget_hold" = 1 ]; then
-        printf '       %s↳ %s%s\n' "$CYN" "$(machine_budget_note "$n" "$state")" "$RST"
+      if [ -n "$hold_kind" ]; then
+        printf '       %s↳ %s%s\n' "$CYN" "$(machine_budget_note "$hold_kind")" "$RST"
       elif [ "$st" = rate-limited ]; then
         printf '       %s↳ %s%s\n' "$CYN" "$(limit_note "$n" "$state" "$limitmax")" "$RST"
       elif [ "$st" = paused ]; then

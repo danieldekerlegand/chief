@@ -19,9 +19,14 @@ names=second
 EOF
 printf '{"phase":"agent-turn"}\n' > "$WORK/one/parallel/first.live.json"
 printf '{"phase":"pending"}\n' > "$WORK/two/parallel/second.live.json"
+# BEFORE the source, not after. concurrency.sh captures the operator's request into
+# CHIEF_MACHINE_BUDGET_REQUESTED at file level (a later assignment to
+# CHIEF_MACHINE_BUDGET is just the value `chief_machine_budget_init` overwrites), so
+# setting it afterwards left the budget at the CORE COUNT and this file asserted
+# nothing on any host with more than one core.
+export CHIEF_MACHINE_BUDGET=1
 . "$ROOT/engine/reap.sh"
 . "$ROOT/engine/concurrency.sh"
-CHIEF_MACHINE_BUDGET=1
 chief_machine_budget_init
 chief_machine_activity "$RUNS"
 [ "$CHIEF_MACHINE_AGENT_TURNS" = 1 ] || { echo "expected one live agent turn" >&2; exit 1; }

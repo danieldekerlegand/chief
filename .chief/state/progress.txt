@@ -1580,3 +1580,187 @@ now green INSIDE a full run and not merely standalone), quality ratchet OK
 single_use_functions 66 -> 66), VERSION-BUMP PASS (0.9.19 covers every
 engine/bin change), DOC-SYNC PASS (README + ROADMAP v0.9.19 == VERSION),
 check-doc-links 0 dead references, tasklist-categories OK (2 categorized).
+
+## 121 US-1 — Gates are budgeted as their own resource
+Fri Sep  4 2026
+
+The machine budget limited AGENT TURNS (provider latency) against a ceiling derived
+from PHYSICAL CORES (the compute), so a 14-core host sat at load 14.32 with five
+turns live and nine slots nominally free. Added the second budget — the one that
+governs the resource the core count actually describes.
+
+Files:
+- `engine/concurrency.sh` — `CHIEF_MACHINE_GATE_BUDGET` (+ `_REQUESTED`/`_DISABLED`,
+  resolved inside the existing `chief_machine_budget_init` so `_ensure` can never
+  leave half the state at its file default). `chief_machine_gate_budget_allows`
+  (predicate, with the ZERO-GATES-ALWAYS-ADMITTED floor) · `chief_machine_gate_note`
+  (one line to the worker log + the run's `machine-budget.log`) ·
+  `chief_machine_gate_admit NAME [LIVE] [LOG]` (the blocking admission, bounded by
+  `CHIEF_MACHINE_GATE_HOLD_MAX`, publishing phase `gate-budget-waiting`).
+  `concurrency_phase_kind` narrowed: `merge-wait` and `merge-conflict` are no longer
+  gates.
+- `engine/driver.sh` — admit right AFTER the run's merge lock is acquired and before
+  any git/verify work; exports `CHIEF_MACHINE_BUDGET_LOG` to the worker.
+- `engine/agent.sh` — sources `concurrency.sh` (no-op fallback) and admits at
+  `_agent_verify_final`, on a cache MISS only.
+- `engine/monitor.sh` — `gate-budget-waiting` added to `STALE_QUIET_PHASES`.
+- `test/gate-budget.sh` (new, in all three gate lists) · `test/machine-budget.sh`
+  fixed · `docs/reference/concurrency.md` gains "The gate budget" · VERSION 0.9.19 →
+  0.9.20 + README/ROADMAP.
+
+### Learnings for future iterations
+
+- **`test/machine-budget.sh` had been asserting NOTHING on any host with >1 core.**
+  `concurrency.sh` captures the operator's request into `CHIEF_MACHINE_BUDGET_REQUESTED`
+  **at file level**, so a test that sets `CHIEF_MACHINE_BUDGET=1` *after* sourcing is
+  setting the very variable `chief_machine_budget_init` is about to overwrite with the
+  core count. Set an env-captured knob BEFORE the `.` — and note this test is in
+  `test/all.sh` only, which is why it rotted silently: it was in neither the merge gate
+  nor CI. Both lists now carry it (with `concurrency` and `gate-budget`).
+- **A phase list that is only DISPLAYED becomes load-bearing the moment something
+  budgets on it.** `concurrency_phase_kind` counted `merge-wait` (a worker asleep on a
+  lock) and `merge-conflict` (a parked terminal state) as gates. Harmless as a number
+  on `chief ps`; as an admission input it would let one run's merge queue read as N
+  gates and starve every other repo on the host. Before reading an existing counter,
+  check what it counts, not just what it is called.
+- **Read the phase you intend to RESTORE before publishing a new one.**
+  `_agent_verify_final` reads `prev_phase` to put back after the gate; the admission
+  hold publishes `gate-budget-waiting`, so ordering the two the obvious way would have
+  restored the hold's own phase and left it outliving the thing it described.
+- **An admission control needs two independent no-deadlock floors, not one.** The
+  predicate admits whenever nothing of chief's is gating (so a cleared host always
+  moves), and the wait itself is time-bounded (so a live record chief cannot clear —
+  a wedged gate, a stuck pid — releases anyway). Either alone is a single point of
+  permanent portfolio halt.
+- **`[ x ] && cmd` at the end of a `set -e` function is a returning-1 trap.** The new
+  predicates use `if … then return 0; fi` instead, which is also what makes them safe
+  to call from `driver.sh` and `agent.sh` (both `set -e`).
+- Still open for a later story: the opt-in **merge queue** (`engine/mergequeue.sh`)
+  runs its batch verify on its own path and is not yet admitted through the gate
+  budget. It is off by default, so the floor is covered.
+
+## 121 US-2 — Load average is an input, not decoration
+Fri Sep  4 2026
+
+`CHIEF_MACHINE_LOAD_AVERAGE` was written at one line and read at the line above it,
+both inside `chief_machine_load_line`, and the whole of its effect was the word
+OVERSUBSCRIBED. It is the ONLY signal chief has that sees work chief did not start —
+an operator's build, a browser, a VM — and both budgets are blind to it. It is now an
+admission input at both admission points.
+
+Files:
+- `engine/concurrency.sh` — `CHIEF_MACHINE_LOAD_LIMIT` (+ `_REQUESTED`/`_DISABLED`,
+  resolved inside `chief_machine_budget_init` beside the other two knobs; default =
+  physical core count, the same line the OVERSUBSCRIBED display already drew;
+  `0|off|false|none` disables). `chief_machine_load_sample` — THE one sampler, the
+  only writer of `CHIEF_MACHINE_LOAD_AVERAGE`. `chief_machine_load_allows` — the
+  predicate, reading globals and sampling nothing. `chief_machine_admits launch|gate`
+  — the whole decision for one call site and the only place the two budgets meet the
+  load line, setting `CHIEF_MACHINE_HOLD_REASON` to the resource that is short.
+  `chief_machine_gate_admit` re-samples every poll and no longer early-returns on the
+  gate budget alone.
+- `engine/driver.sh` — the launch loop samples and calls `chief_machine_admits launch`;
+  its hold line and `machine-budget.log` entry now carry the reason.
+- `bin/chief` — exports `CHIEF_MACHINE_GATE_BUDGET` and `CHIEF_MACHINE_LOAD_LIMIT`
+  beside `CHIEF_MACHINE_BUDGET`, so all three are settable from `.chief/config`
+  (the gate budget shipped in US-1 without an export and was shell-only).
+- `.chief/config` + `docs/reference/concurrency.md` ("The load ceiling").
+- `test/load-admission.sh` (new, in all three gate lists) · VERSION 0.9.20 → 0.9.21
+  + README/ROADMAP.
+
+### Learnings for future iterations
+
+- **A capacity signal chief did not cause needs a floor keyed to chief's own
+  contribution, not to time alone.** Load average counts what chief cannot finish and
+  cannot see, so "wait for it to fall" can wait forever while chief is idle. The bound
+  that works is: defer to the load line only while a gate of chief's is in flight.
+  That is the SAME zero-gates floor the gate budget already stands on, so the two
+  controls share one no-deadlock argument instead of each carrying its own.
+- **An early return written for one knob silently disables the next one added below
+  it.** `chief_machine_gate_admit` began `if GATE_BUDGET_DISABLED; then return 0; fi`
+  — correct when the gate budget was the only control, and the moment the load rule
+  joined it, `CHIEF_MACHINE_GATE_BUDGET=0` turned off a knob the operator never
+  touched. A short-circuit at the top of an admission function is a claim that nothing
+  else will ever be asked. Mutation 3 in `test/load-admission.sh` pins it — and it did
+  NOT fail on the first draft of that test, because the draft asserted on the
+  PREDICATE while the bug was in the WRAPPER. **Mutate the layer you shipped, not the
+  layer you find convenient to call.**
+- **`chief_machine_admits KIND` instead of two near-identical predicates.** Two
+  `_allows` functions differing only in which budget they consult is exactly what the
+  `duplicate_blocks` ratchet counts, and it is also two places for the load check to
+  later be added to one of.
+- **Re-sample inside the wait loop.** A hold taken at a spike that reads the value
+  once outlives the spike; `chief_machine_activity` was already refreshed per pass and
+  the load was not, which would have made the freshest input the stalest one.
+- **`python3 -c 'json.dump(...)'` on `.chief/state/prd.json` escapes every non-ASCII
+  character** unless you pass `ensure_ascii=False`. Valid JSON, unreadable diff — the
+  descriptions in this repo are full of em-dashes and middots.
+- shellcheck is still not installed on this host; ran 0.11.0 via `npx --yes
+  shellcheck@latest -S error` on the four changed shell files, clean.
+
+## 121 US-3 — The display stops overstating headroom
+Fri Sep  4 2026
+
+US-1 and US-2 made the gate budget and the load ceiling into decisions. The display
+was still the one from before them: `5 live run(s) · 5 agent turn(s) · 0 gate(s) ·
+load average: 14.32 / 14 physical core(s) · OVERSUBSCRIBED`. Every number true, two
+of the three controls invisible, and read together it said nine free slots on a box
+that had none. This is the reading half.
+
+Files:
+- `engine/concurrency.sh` — `chief_machine_load_over` (the FACT, ceiling comparison
+  with the bound NOT applied; `chief_machine_load_allows` now delegates to it, so
+  one comparison serves the display and the decision). `chief_machine_cap` (a
+  budget's number, or `off`) · `chief_machine_ratio` (`live/budget`) ·
+  `chief_machine_slack` (one budget's remaining slots, floored) ·
+  `chief_machine_headroom_line` (the ADMISSION answer, reason from
+  `chief_machine_admits`' own string). `chief_machine_activity_line` prints
+  `2/14 agent turn(s) · 1/2 gate(s)`; `chief_machine_budget_line` names all three
+  knobs; `chief_machine_load_line` reserves `OVERSUBSCRIBED` for a ceiling that
+  actually refused and otherwise says `over ceiling — admitting, no chief gate in
+  flight`.
+- `engine/monitor.sh` — `machine_render` (the two header lines, 3 call sites) ·
+  one `chief_machine_load_sample` per render · `hold_kind` ∈ launch|gate, so a
+  worker stopped at the gate boundary renders `⏸ gate-hold` instead of an ordinary
+  `running` row · `machine_budget_note KIND` asks `chief_machine_admits` instead of
+  printing a fixed string. Fallback stubs for the no-concurrency.sh branch.
+- `engine/driver.sh` — the launch banner samples the load and prints the headroom
+  line beside the budget line.
+- `test/concurrency-monitor.sh` — rewritten, 4 parts, and now in ALL THREE gate
+  lists (it was in `test/all.sh` only). `docs/reference/concurrency.md` gains
+  "The model, in one place". VERSION 0.9.21 → 0.9.22 + README/ROADMAP.
+
+### Learnings for future iterations
+
+- **`test/concurrency-monitor.sh` passed only on the 14-core host it was written
+  on.** It set `CHIEF_MACHINE_CORES=14` and then called `render`, which reaches
+  `chief_machine_budget_ensure` → `chief_machine_budget_init` → the REAL core
+  count, and asserted `62 / 14 physical core(s)`. On CI's 2-core runner it would
+  have failed — which is presumably part of why it was never added to CI. Pin the
+  whole machine model (cores, both budgets, the ceiling, and
+  `CHIEF_MACHINE_BUDGET_READY=1`) or `ensure` will resolve it out from under you.
+- **A global written inside `$( )` is lost, and every display line here is a
+  `$( )`.** `chief_machine_load_line` samples lazily when
+  `CHIEF_MACHINE_LOAD_AVERAGE` is empty — in a subshell, so the parent's global
+  stayed empty and the next `$( )` sampled again. Harmless while the value was
+  only printed; the moment a note DECIDES on it (`machine_budget_note` →
+  `chief_machine_admits` → `chief_machine_load_allows`) the decision would have
+  been made on an empty reading beside a freshly sampled display. `render` and the
+  driver's banner now sample once, in the parent, before anything reads.
+- **`live_get` anchors its sed at the start of a line.** A fixture that writes its
+  live record as one-line JSON resolves EVERY field to empty: the rows render
+  `unknown`, `chief_machine_activity` counts nothing, and the test fails in a way
+  that looks like a counting bug. One key per line.
+- **Mutate the string, not just the function.** Four mutations, each caught by its
+  intended part: OVERSUBSCRIBED back to unconditional (A), headroom back to plain
+  subtraction (B), the `gate-budget-waiting` arm removed (C), the note back to its
+  fixed agent-turn string (C's note assertion). The last two are separate defects
+  in the same feature and needed separate assertions.
+- **Headroom is the admission answer, not the subtraction.** `14 - 0 = 14` agent
+  turns is arithmetic that is true and useless when the load ceiling is refusing
+  every launch. A control that is currently refusing reports 0 for BOTH budgets
+  and names itself; that is the whole content of the fix, and PART B is the
+  assertion that says so.
+- Deliberately NOT done: the opt-in merge queue's batch verify still runs on its
+  own path (noted in US-1) and `chief status` has no machine line at all. Both are
+  admission/reporting surfaces a later tasklist could reach; neither is a floor.

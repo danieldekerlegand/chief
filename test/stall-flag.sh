@@ -83,7 +83,12 @@ echo "stall-flag: part 1 — the exempt/flagged table"
 # the one QUIET phase that is TERMINAL rather than waiting: an operator answered no, the
 # branch is kept and nothing is ever going to tick that record again. Flagging it would
 # turn every declined decision into a hang report an hour later.
+# `gate-budget-waiting` joins them for the same reason as `machine-budget-waiting`:
+# the worker is deliberately asleep waiting for a HOST-WIDE gate slot, chief printed
+# the count that explains it, and the wait is bounded by CHIEF_MACHINE_GATE_HOLD_MAX
+# rather than open-ended.
 QUIET_PHASES='rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting
+  gate-budget-waiting
   provider-unavailable'
 # FLAGGED — every other phase the engine publishes, each against ITS OWN threshold.
 # `provider-waiting` heads the list on purpose: it is the whole duration of an agent

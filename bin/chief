@@ -321,7 +321,12 @@ load_project() {
   # in every operator's shell. All optional; unset means the documented defaults
   # (400 lines / 20 files per story, reported and NOT blocking).
   export CHIEF_DIFF_BUDGET CHIEF_DIFF_BUDGET_LINES CHIEF_DIFF_BUDGET_FILES
-  export CHIEF_MACHINE_BUDGET
+  # HOST-WIDE CAPACITY (engine/concurrency.sh · docs/reference/concurrency.md). All
+  # three are the same kind of setting and belong in .chief/config rather than in
+  # every operator's shell, so all three are exported: the agent-turn budget, the
+  # gate budget, and the load ceiling that is the only one seeing work chief did
+  # not start. Unset means the documented default in each case.
+  export CHIEF_MACHINE_BUDGET CHIEF_MACHINE_GATE_BUDGET CHIEF_MACHINE_LOAD_LIMIT
   # The OPT-IN BATCH MERGE QUEUE (engine/mergequeue.sh). Exported so a repo can set
   # its own policy in .chief/config rather than in every operator's shell. UNSET is
   # the default and the default is OFF: absent these, the merge phase is the

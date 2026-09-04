@@ -6,7 +6,7 @@
 > tasklist of user stories + acceptance criteria into merged, verified work with no silent bad
 > merges — across any repo, any agent provider.*
 
-**Status:** Shipping & self-hosting (**v0.9.19** — [`VERSION`](VERSION) is the source of truth; this
+**Status:** Shipping & self-hosting (**v0.9.22** — [`VERSION`](VERSION) is the source of truth; this
 line is checked against it by `test/doc-sync.sh`) — the built program is **37/37 tasklists merged**
 (`77`–`113`, every record in [`tasks/chief/completed/`](tasks/chief/completed/) stamped with a real
 `mergedToMain`); the live head is iteration-outcome honesty and the gates around it ·
