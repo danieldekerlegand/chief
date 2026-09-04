@@ -1400,3 +1400,61 @@ Files:
   passed standalone immediately, all four parts, then passed inside the green run.
   That is the third test in this tasklist to do it (ratelimit and merge-batch in
   US-1) — the pattern is real and the tell is the load line in `chief ps`.
+
+## 120/US-3 — The saving is demonstrated, not asserted
+Fri Sep  4 2026
+
+US-1 and US-2 built the mechanism and its hatch; both are asserted against the
+cache's own internals and against counts that only mean something read down the
+file. What was still missing is the CLAIM: that the incident this tasklist was
+opened for now costs one gate run instead of five. That is a number, and it is
+measured here rather than argued.
+
+Files:
+- `test/verify-cache.sh` — new **PART G**, the incident end to end against a cache
+  that has never held anything: its own repo (`$WORK/repo-loop`, so
+  `verify_cache_dir` keys it to its own directory) with its own extra commit (so
+  its tree sha differs from the scratch tree PARTS A–E recorded verdicts for, and
+  the record it asserts on cannot be inherited), a RED hook, and a reset counter.
+  Three iterations — nothing changes, nothing changes, then the tree moves — and
+  the assertions are 1, 1, 2 hook invocations with every completion refused.
+- `docs/reference/verify-hook.md` — new `### What a verdict is keyed on`: the four
+  components in a table, one row per component saying WHY that component is in the
+  key (not what it is), where records live, the 32-record prune, and the
+  status-agnostic reuse rule with the cuneiform measurement behind it. The two
+  places that still said `tree · base · hook` now name the four-part key and point
+  at that section; `### Forcing a re-run` no longer re-states the reuse rule, it
+  now opens on the determinism assumption the hatch exists for.
+- `ROADMAP.md` — the `117` row said the boundary "tries the cache" and stopped
+  there, which left green-only reuse reading as deliberate. It now says the
+  `status=0` limit was the first implementation's and names `120` and the doc.
+
+### Learnings for future iterations
+
+- **The saving starts INSIDE one iteration, not between two.** A red boundary
+  verify refuses the completion, so `run_agent` takes another turn, and that
+  turn's own boundary verify is over the same unmoved tree — served from the
+  record the first turn just wrote. Measured by mutation: restoring
+  `[ "$st" = 0 ] || return 1` in `verify_cache_try` makes PART G fail at
+  ITERATION 1 (`paid the gate 2x, expected 1`), before the two-iteration
+  assertion is ever reached. Worth knowing when reading any hook count in this
+  file: one `run_agent` is one gate run only because of the fix.
+- **The fixture commits ON the base branch, so "the tree moved" also moves the
+  base.** `scratch_repo` inits `main` and `CHIEF_VERIFY_BASE=main`, so an
+  invalidation assertion after a commit proves the KEY moved, not which half of
+  it did — a mutation that drops `tree` from the key entirely still passes PART
+  G's iteration 3, because `base` alone changed. PART C is the real component
+  isolation (it moves the hook blob with the tree standing still, which is the
+  only one of the four movable from outside the repo). Said so in the comment
+  rather than letting the assertion overclaim.
+- **A `.out` replay assertion is not a "did it run" assertion.** PART G greps
+  iteration 2's log for the fixture hook's own line, which is present whether the
+  hook ran or was replayed; only the counter tells those apart. Both are asserted,
+  in that order — the counter for the fact, the grep for what the operator sees.
+- **Mutation-checking a part that sits below other parts needs the file split.**
+  PARTS A–F fail first under any mutation of this mechanism, so PART G's own
+  sensitivity cannot be observed by mutating and running the file. Built a
+  standalone harness instead — everything above `# ═══ PART A` plus the PART G
+  block, into a temp dir beside a copied `engine/` (`ROOT` is derived from
+  `BASH_SOURCE`, so the copy is what gets driven). Cheap, and reusable for any
+  late part in a cumulative test file.

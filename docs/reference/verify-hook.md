@@ -71,8 +71,9 @@ If you know your gate is not deterministic, say so rather than paying for the se
 Chief runs this hook **twice** on the way to a merge: once at the end of the agent
 turn that reports the tasklist complete, and once more in the merge phase after the
 rebase. Both of those reads are served from a **verdict cache** keyed on
-`tree · base · hook`, so when nothing moved between them the gate is paid once and
-the second read is a skip:
+`tree · base · hook · subs` (the four inputs the gate reads — see
+[what a verdict is keyed on](#what-a-verdict-is-keyed-on)), so when nothing moved
+between them the gate is paid once and the second read is a skip:
 
 ```
 >> verify SKIPPED: tree 52e9018… (GREEN verdict from …/verify-cache/…; same base and verify hook)
@@ -113,21 +114,55 @@ So the order in an agent turn is **commit, then `chief verify`**, and `--amend` 
 comes back red. Refusing to record is never refusing to check: the hook still runs and
 the exit status is still yours.
 
-`chief verify` deliberately never *reads* the cache. `tree · base · hook` says nothing
-about uncommitted work, and the one caller whose working tree is expected to be moving
+`chief verify` deliberately never *reads* the cache. Every component of the key is a
+*committed* input, so it says nothing about uncommitted work, and the one caller whose
+working tree is expected to be moving
 is this one — answering "green" about an edit made since the record would be worse than
 running the suite again.
 
 Cheap, scoped checks — a typecheck, one test file, a linter over the two files you
 touched — need none of this. This is for the full gate.
 
+### What a verdict is keyed on
+
+A record is one sentence: *this hook, run over this tree, on this base, with these
+submodules checked out, exited N*. Every part of that sentence is in the key, and
+nothing that is not in the key may be allowed to change a gate's answer.
+
+| Component | Taken as | Why it is in the key |
+| --- | --- | --- |
+| **tree** | `git rev-parse HEAD^{tree}` | The gate tests source, so a different tree is a different question. It is the *committed* tree — which is why a dirty working tree is checked but never recorded (above): the one failure mode of this mechanism that could merge a red tree is a verdict recorded for a tree nothing ever ran. |
+| **base** | `git rev-parse <base branch>` | A path-scoped hook decides *what to run* from `git diff <base>`, and every verdict chief acts on is a statement about a branch **against that base**. A base that moved under an unchanged tree is a different computation, and the merge it is about is a different merge. |
+| **hook** | `git hash-object` of the hook file | The gate **is** the question. Identity by content and not by path, because a hook is edited — one more test, one stricter flag — far more often than it is replaced, and every verdict taken under the old one says nothing about the new one. |
+| **subs** | `cksum` of `git submodule status --recursive`, or `nosub` where there are none | The input **chief itself moves** between the two reads. A project worktree never initializes its submodules, so the agent boundary runs the hook against an *empty* submodule directory while the merge phase runs `submodules_sync` first and runs the same hook over the same tree against a synced one: same tree sha, different filesystem, different answer. The general rule this component exists to state — **anything chief mutates between a record and its reuse belongs in the key**, and a tree sha is not a proxy for the filesystem the hook actually tests. |
+
+Records live under the run's state directory, one per key, a red one beside an `.out`
+holding the tail of the gate's own report:
+
+```
+<state>/verify-cache/<hash of repo root>/<tree>.<base>.<hook>.<subs>
+<state>/verify-cache/<hash of repo root>/<tree>.<base>.<hook>.<subs>.out
+```
+
+The 32 most recent are kept; a record and its report are pruned together.
+
+**A record is reused whatever its status.** Identical tree, base, hook and submodule
+checkout is the same computation, so a **red** verdict short-circuits to the recorded
+failure — with the retained report replayed, so the agent is told *which* test failed
+and not merely that it may not finish — exactly as a green one short-circuits to
+success. Nothing about the key becomes false when the answer is a failure; and if the
+agent changes something in response, the key moves and the gate runs. The measurement
+that settled this: `cuneiform:388` ran six hours and merged nothing, its log holding
+**five full ~11.6-minute gate runs and six identical failures over a byte-identical
+tree** — four of the five re-deriving a verdict already on disk
+(`test/verify-cache.sh` PART G drives that shape and asserts the cost).
+
 ### Forcing a re-run: `CHIEF_VERIFY_CACHE=0`
 
-A recorded verdict is reused **whatever its status**. The key names every input the
-gate reads, so for an unmoved tree, base, hook and submodule checkout a second run is
-not a second sample — it is the same computation, and a red verdict short-circuits to
-the recorded failure (with the gate's own report replayed) exactly as a green one
-short-circuits to success:
+Reusing a verdict of **any** status, as above, rests on the hook being a
+deterministic function of the four inputs the key names — for an unmoved tree, base,
+hook and submodule checkout a second run is not a second sample, it is the same
+computation:
 
 ```
 >> verify SKIPPED: tree 52e9018… (RED verdict, exit 1, from …/verify-cache/…; same base
@@ -135,10 +170,9 @@ short-circuits to success:
 ```
 
 That is what stops an agent who cannot fix a gate paying the whole gate again every
-iteration to be told the same thing. It rests on the hook being a **deterministic
-function of those inputs**. If yours is not — a real clock, a real network, a race, an
-order-dependent suite — chief cannot tell from the outside; both runs are just a
-status. So you say so:
+iteration to be told the same thing. If your hook is **not** deterministic — a real
+clock, a real network, a race, an order-dependent suite — chief cannot tell from the
+outside; both runs are just a status. So you say so:
 
 ```bash
 CHIEF_VERIFY_CACHE=0 chief run        # every lookup declines: the gate runs

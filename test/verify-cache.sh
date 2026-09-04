@@ -29,6 +29,10 @@
 #   PART D  a RED verdict is REUSED too, and still refuses completion (120)
 #   PART F  CHIEF_VERIFY_CACHE=0 re-runs the gate over that same red record,
 #           and overwrites it; unset, the same run skips                    (120)
+#   PART G  THE SAVING, in the shape that produced it: a red gate and three
+#           iterations against a cache that has never held anything — two that
+#           change nothing pay the gate ONCE between them and both refuse
+#           completion; the one that MOVES THE TREE pays it again        (120)
 #   PART E  REPRODUCTION — the same PART A sequence against an engine whose
 #           `verify_cache_try` call is neutered must NOT skip, or this file is
 #           restating behaviour that always worked.
@@ -260,6 +264,76 @@ grep -q '^sentinel=stale-f' "$F_REC2" \
   && fail "PART F: the hatch bypassed the record without REPLACING it — the stale verdict is still on disk for the next run to reuse"
 grep -q '^status=1' "$F_REC2" || fail "PART F: the re-run did not record its own verdict"
 note "PART F ok — CHIEF_VERIFY_CACHE=0 re-runs the gate ($before -> $(hook_runs)) and overwrites the record; unset, it does not"
+
+# ═══ PART G — THE SAVING, in the shape that produced it ══════════════════════
+# PART D proves the MECHANISM, but it proves it over a repo whose cache already
+# holds the green records PARTS A-C put there, with counts that only mean anything
+# read against the parts above them. This part is the INCIDENT itself, end to end,
+# against a cache that has never held a thing — and what it asserts is the COST,
+# because the cost is the whole claim of this tasklist.
+#
+# The shape, from cuneiform:388-the-panel-emission-contract (2026-09-03, 01:55 ->
+# 07:52, merged nothing): a gate the agent could not fix, an agent that reported in
+# its own words 'nothing left to implement this iteration', and therefore a tree
+# that was BYTE-IDENTICAL across FIVE full gate runs. One of those runs is 11.6
+# minutes of test execution in that repo; four of the five were re-derivations of a
+# verdict already on disk — ~46 minutes of a six-hour run spent proving a known red
+# verdict four more times.
+#
+# So: three iterations. Red gate, nothing changes, nothing changes, then something
+# does. Iterations 1 and 2 must cost ONE gate run between them, and iteration 3 must
+# cost another — the saving and its limit in the same sequence, so the fix cannot be
+# over-applied into a cache that never invalidates.
+REPO3="$WORK/repo-loop"; scratch_repo "$REPO3"
+# Its own repo root, so `verify_cache_dir` keys it to its own directory; and its own
+# CONTENT, so its tree sha differs from the scratch tree PARTS A-E recorded verdicts
+# for and the record asserted on below cannot be one of theirs.
+printf '%s\n' 'the loop shape that produced 120' >> "$REPO3/product.txt"
+git -C "$REPO3" commit -aqm 'fixture: the incident repo'
+G_TREE="$(git -C "$REPO3" rev-parse 'HEAD^{tree}')"
+[ -z "$(grep -l "^tree=$G_TREE" "$WORK/state/verify-cache/"*/* 2>/dev/null || true)" ] \
+  || fail "PART G: a verdict for this tree already exists — the saving below would be inherited from another part rather than made here"
+write_hook RED
+: > "$COUNT"
+
+# Iteration 1 — the gate is red, and it is red the expensive way: it runs.
+g_rc=0; run_agent g1 "$REPO3" "$ROOT/engine" 0 || g_rc=$?
+[ "$g_rc" != 0 ] || fail "PART G: iteration 1 accepted a completion over a red gate"
+[ "$(hook_runs)" = 1 ] \
+  || fail "PART G: iteration 1 paid the gate $(hook_runs)x, expected 1. A red boundary verify sends the loop round for another turn, whose own verify is over the SAME unmoved tree and must be served from the record this iteration just wrote — the saving starts INSIDE one iteration, and the two-iteration one below is measured against this."
+G_REC="$(grep -l "^tree=$G_TREE" "$WORK/state/verify-cache/"*/* 2>/dev/null | head -1)"
+[ -n "$G_REC" ] || fail "PART G: iteration 1 recorded no verdict for its own tree, so iteration 2 has nothing to be served from"
+grep -q '^status=1' "$G_REC" || fail "PART G: the recorded verdict for this tree is not the RED one the hook just returned"
+
+# Iteration 2 — the agent could not fix it and changed nothing. This is the line in
+# cuneiform's log that repeated six times. It now costs zero.
+g_rc=0; run_agent g2 "$REPO3" "$ROOT/engine" 0 || g_rc=$?
+[ "$g_rc" != 0 ] \
+  || fail "PART G: iteration 2 accepted a completion — a reused red must refuse it exactly as the fresh red in iteration 1 did"
+[ "$(hook_runs)" = 1 ] \
+  || fail "PART G: THE SAVING WAS NOT MADE — two iterations over one unmoved tree paid the gate $(hook_runs)x, expected 1. This is the ~46 minutes of cuneiform:388's six hours that this tasklist exists to stop spending."
+grep -q 'RED verdict' "$LAST_OUT" \
+  || fail "PART G: iteration 2 was refused without saying the verdict came from a record"
+grep -q 'fixture verify hook (RED) ran' "$LAST_OUT" \
+  || fail "PART G: iteration 2 was refused with NO REASON — the recorded gate output was not replayed, which leaves the agent exactly where 119 left it"
+note "PART G ok — two iterations that changed nothing, ONE gate run between them, both completions refused"
+
+# Iteration 3 — the agent finally changes the tree. The key moves, the cache misses,
+# and the gate is paid again. Without this the fix is a cache that never invalidates,
+# and an agent that FIXED the gate would be served its own stale failure forever.
+# (Precisely: the fixture commits ON the base branch, so BOTH the tree and the base
+# component of the key move here — this part asserts that the key moved, not which
+# half of it did. PART C is the component isolation: it changes the hook blob alone
+# while the tree stands still, which is the only one of the four that can be moved
+# on its own from outside the repo.)
+# (No `skipped` assertion here: a red boundary verify sends the loop round for another
+# turn, whose own verify legitimately hits the cache for the tree turn 1 committed —
+# the saving inside one iteration. The COUNT is the observation; the log line is not.)
+g_rc=0; run_agent g3 "$REPO3" "$ROOT/engine" 1 || g_rc=$?
+[ "$g_rc" != 0 ] || fail "PART G: the gate is still RED, so iteration 3 must refuse completion too"
+[ "$(hook_runs)" = 2 ] \
+  || fail "PART G: OVER-APPLIED — iteration 3 moved the tree and the gate ran $(hook_runs)x, expected 2. A verdict is a statement about a tree; a new tree has no verdict."
+note "PART G ok — and the iteration that MOVED the tree paid the gate again (1 -> 2): three iterations, two gate runs"
 
 # ═══ PART E — REPRODUCTION ═══════════════════════════════════════════════════
 # Neuter the one call US-1 added, in a COPY of the engine (not `git show HEAD~N`: CI
