@@ -1341,3 +1341,14 @@ there are none) closes both.
   MERGED @29dc2e0` and was then TERMed, with load average 5.65 and two other repos'
   chief runs live on the machine. Re-run it standalone before believing a bystander
   ratelimit failure.
+- **Two tests anchor `sed` patches on lines in `_agent_verify_final`, and this story
+  moved one of them.** `test/verify-stream.sh` PART C restores the pre-119
+  command-substitution form; its anchor was the `run_verify … | _verify_tick` line,
+  now `… | tee "$vlog" | _verify_tick`. It failed with "its anchor moved. Fix this
+  patch, do not delete the reproduction" — which is the right failure, and the right
+  response is to re-anchor it. `test/verify-cache.sh` PART E patches
+  `if verify_cache_try ` in the same function and still applies. Grep both before
+  touching that function.
+- **`chief verify` IS the escape hatch until US-2 ships one.** It never reads the
+  cache and always records, so a red verdict cached over a flaky gate can be cleared
+  by re-running it. That is exactly what US-2 needs to make reachable from a RUN.
