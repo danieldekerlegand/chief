@@ -1570,3 +1570,13 @@ for a doc-sync one). Full `chief verify` result recorded below.
   earlier note. CLAUDE.md warns about this and I did it anyway while staging an
   unrelated fix. Restore with `git show <last-good>:.chief/state/progress.txt`
   first, then append — and prefer staging files by name over `add -A` here.
+
+FINAL FULL GATE: `chief verify` exit 0, "verify: OK (allowing merge)", first
+attempt, no red runs and no flakes — zero occurrences of `BYSTANDER FAIL`,
+`verify: BLOCK` or `FAIL:` in the whole log. BYSTANDER PASS (60/60, including
+test/dirty-checkout.sh at [37/60] — the test that failed the PRIOR VERIFICATION,
+now green INSIDE a full run and not merely standalone), quality ratchet OK
+(duplicate_blocks 15 -> 9, function_length_max 596 -> 602 tol 15,
+single_use_functions 66 -> 66), VERSION-BUMP PASS (0.9.19 covers every
+engine/bin change), DOC-SYNC PASS (README + ROADMAP v0.9.19 == VERSION),
+check-doc-links 0 dead references, tasklist-categories OK (2 categorized).
