@@ -46,8 +46,17 @@ CHIEF_MACHINE_CORES=14   # pin the DISPLAY's comparison; the ceiling under test 
 chief_machine_load_sample
 [ "$CHIEF_MACHINE_LOAD_AVERAGE" = 62 ] || fail "A: the sampler did not set the global ($CHIEF_MACHINE_LOAD_AVERAGE)"
 case "$(chief_machine_load_line)" in
-  *"load average: 62 "*OVERSUBSCRIBED*) ;;
+  # The CEILING, not the core count: the display and the decision now have to quote
+  # the same line, and here they differ (ceiling 4, cores 14) precisely so a line
+  # that fell back to the cores figure cannot pass this.
+  *"load average: 62 "*"ceiling 4"*) ;;
   *) fail "A: the display line does not report the sampled reading: $(chief_machine_load_line)" ;;
+esac
+# …and NOT the alarm word, with no gate of chief's in flight. The bound is admitting
+# work onto this host, so `OVERSUBSCRIBED` here would be an alarm about a decision
+# that was never taken (test/concurrency-monitor.sh asserts the display side).
+case "$(chief_machine_load_line)" in
+  *OVERSUBSCRIBED*) fail "A: alarmed while admitting: $(chief_machine_load_line)" ;;
 esac
 
 # ── B. a loaded host does not admit more work ─────────────────────────────────

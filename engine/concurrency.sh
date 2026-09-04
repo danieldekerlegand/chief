@@ -178,10 +178,23 @@ chief_machine_load_allows() {
   chief_machine_budget_ensure
   if [ "$CHIEF_MACHINE_LOAD_DISABLED" = 1 ]; then return 0; fi
   if [ "${CHIEF_MACHINE_GATES:-0}" -le 0 ]; then return 0; fi
+  if chief_machine_load_over; then return 1; fi
+  return 0
+}
+
+# IS THE MACHINE PAST THE CEILING -- the FACT, with the bound above not applied.
+# Two readers need different halves of it: the predicate needs "held", and the
+# display needs to tell "held" apart from "over the ceiling and admitting anyway",
+# which is the one case the old line could not say and the case the incident host
+# was actually in. One comparison, so the number an operator reads and the number
+# the scheduler decided on can never be computed two different ways.
+chief_machine_load_over() {
+  chief_machine_budget_ensure
+  if [ "$CHIEF_MACHINE_LOAD_DISABLED" = 1 ]; then return 1; fi
   local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}"
-  # An unreadable load average is not a high one: `?` admits, as an absent one does.
-  case "$load" in ''|'?') return 0 ;; esac
-  awk -v l="$load" -v c="$CHIEF_MACHINE_LOAD_LIMIT" 'BEGIN { exit (l + 0 > c + 0) ? 1 : 0 }'
+  # An unreadable load average is not a high one: `?` reads as under, as absent does.
+  case "$load" in ''|'?') return 1 ;; esac
+  awk -v l="$load" -v c="$CHIEF_MACHINE_LOAD_LIMIT" 'BEGIN { exit (l + 0 > c + 0) ? 0 : 1 }'
 }
 
 # chief_machine_admits launch|gate
@@ -276,22 +289,91 @@ chief_machine_load_average() {
   esac
 }
 
+# THE LOAD LINE, and the word it is allowed to print.
+#
+# `OVERSUBSCRIBED` used to mean "load > cores" and nothing else happened as a
+# result of it -- a string beside a number. Now that the number is an admission
+# input, the word is reserved for the case where it CHANGED something: the ceiling
+# is refusing a gate right now. Over the ceiling with no gate of chief's in flight
+# is the BOUND doing its job (`chief_machine_load_allows` above), and the line says
+# so instead -- an alarm word on a machine chief is admitting work onto teaches an
+# operator to ignore the alarm.
 chief_machine_load_line() {
   chief_machine_budget_ensure
-  local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}" oversubscribed
+  local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}"
   [ -n "$load" ] || { chief_machine_load_sample; load="$CHIEF_MACHINE_LOAD_AVERAGE"; }
   printf 'load average: %s / %s physical core(s)' "$load" "$CHIEF_MACHINE_CORES"
-  oversubscribed="$(awk -v load="$load" -v cores="$CHIEF_MACHINE_CORES" 'BEGIN { print (load != "?" && load > cores) ? 1 : 0 }' 2>/dev/null || echo 0)"
-  [ "$oversubscribed" = 1 ] && printf ' · OVERSUBSCRIBED'
+  if [ "$CHIEF_MACHINE_LOAD_DISABLED" = 1 ]; then
+    printf ' · ceiling off'
+    return 0
+  fi
+  # Named only when it is NOT the cores figure already printed, so an operator who
+  # moved the ceiling sees the line the decision was actually made against.
+  [ "$CHIEF_MACHINE_LOAD_LIMIT" = "$CHIEF_MACHINE_CORES" ] || \
+    printf ' · ceiling %s' "$CHIEF_MACHINE_LOAD_LIMIT"
+  if chief_machine_load_over; then
+    if chief_machine_load_allows; then
+      printf ' · over ceiling — admitting, no chief gate in flight'
+    else
+      printf ' · OVERSUBSCRIBED — new gates held'
+    fi
+  fi
+  return 0
 }
 
+# A budget's own number, or the word for one an operator switched off. Three knobs
+# and one phrasing for "off", so a disabled budget cannot read as a budget of 0.
+chief_machine_cap() { # $1 value  $2 disabled
+  if [ "${2:-0}" = 1 ]; then printf 'off'; else printf '%s' "${1:-0}"; fi
+}
+
+# "live/budget". The bare counts WERE the incident display: `5 agent turn(s) ·
+# 0 gate(s)` is a pair of true numbers that says nothing about whether five is a
+# lot, and beside a saturated load average it read as an idle machine.
+chief_machine_ratio() { # $1 live  $2 budget  $3 disabled
+  printf '%s/%s' "${1:-0}" "$(chief_machine_cap "${2:-0}" "${3:-0}")"
+}
+
+# ALL THREE KNOBS, in the order they are consulted. The old line named one budget
+# and the core count its default derives from; the other two were settable,
+# documented, and invisible in the one place a run states what it will enforce.
 chief_machine_budget_line() {
   chief_machine_budget_ensure
-  if [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ]; then
-    printf 'machine budget: disabled (CHIEF_MACHINE_BUDGET=0)'
-  else
-    printf 'machine budget: %s agent turn(s) across %s physical core(s)' "$CHIEF_MACHINE_BUDGET" "$CHIEF_MACHINE_CORES"
-  fi
+  printf 'machine budget: %s agent turn(s) · %s gate(s) · load ceiling %s · on %s physical core(s)' \
+    "$(chief_machine_cap "$CHIEF_MACHINE_BUDGET" "$CHIEF_MACHINE_BUDGET_DISABLED")" \
+    "$(chief_machine_cap "$CHIEF_MACHINE_GATE_BUDGET" "$CHIEF_MACHINE_GATE_BUDGET_DISABLED")" \
+    "$(chief_machine_cap "$CHIEF_MACHINE_LOAD_LIMIT" "$CHIEF_MACHINE_LOAD_DISABLED")" \
+    "$CHIEF_MACHINE_CORES"
+}
+
+# Slack in ONE budget: its own subtraction, floored at zero. Pure arithmetic --
+# whether a control is currently REFUSING is the caller's question, because the
+# answer to that one belongs to `chief_machine_admits` and nowhere else.
+chief_machine_slack() { # $1 live  $2 budget  $3 disabled
+  if [ "${3:-0}" = 1 ]; then printf 'unlimited'; return 0; fi
+  local left=$(( ${2:-0} - ${1:-0} ))
+  [ "$left" -ge 0 ] || left=0
+  printf '%s' "$left"
+}
+
+# WHAT ADMISSION WOULD DO RIGHT NOW, in the two numbers an operator is deciding on.
+#
+# Headroom is the ADMISSION answer, not the subtraction. The incident line reported
+# `5 agent turn(s) · 0 gate(s)` against a budget of 14 on a box already at load
+# 14.32, and read as nine free slots; a control that is currently refusing therefore
+# reports ZERO however much of its own budget is unspent, and names itself. The
+# reason is `chief_machine_admits`' own string -- the same one the launch loop and
+# the gate boundary write to `machine-budget.log` -- so a display can never describe
+# a hold in different words than the scheduler used to take it.
+chief_machine_headroom_line() {
+  chief_machine_budget_ensure
+  local turns gates reason=""
+  turns="$(chief_machine_slack "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_BUDGET" "$CHIEF_MACHINE_BUDGET_DISABLED")"
+  gates="$(chief_machine_slack "$CHIEF_MACHINE_GATES" "$CHIEF_MACHINE_GATE_BUDGET" "$CHIEF_MACHINE_GATE_BUDGET_DISABLED")"
+  if ! chief_machine_admits launch; then turns=0; reason="$CHIEF_MACHINE_HOLD_REASON"; fi
+  if ! chief_machine_admits gate;   then gates=0; reason="$CHIEF_MACHINE_HOLD_REASON"; fi
+  printf 'headroom: %s agent turn(s) · %s gate(s)' "$turns" "$gates"
+  [ -z "$reason" ] || printf ' · holding on %s' "$reason"
 }
 
 concurrency_field() {
@@ -365,8 +447,14 @@ chief_machine_activity() {
 }
 
 chief_machine_activity_line() {
+  chief_machine_budget_ensure
   printf '%s live run(s) · %s agent turn(s) · %s gate(s) · %s' \
-    "$CHIEF_MACHINE_RUNS" "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_GATES" "$(chief_machine_load_line)"
-  [ "$CHIEF_MACHINE_STALE" -gt 0 ] && \
+    "$CHIEF_MACHINE_RUNS" \
+    "$(chief_machine_ratio "$CHIEF_MACHINE_AGENT_TURNS" "$CHIEF_MACHINE_BUDGET" "$CHIEF_MACHINE_BUDGET_DISABLED")" \
+    "$(chief_machine_ratio "$CHIEF_MACHINE_GATES" "$CHIEF_MACHINE_GATE_BUDGET" "$CHIEF_MACHINE_GATE_BUDGET_DISABLED")" \
+    "$(chief_machine_load_line)"
+  if [ "${CHIEF_MACHINE_STALE:-0}" -gt 0 ]; then
     printf ' · %s stale record(s) ignored' "$CHIEF_MACHINE_STALE"
+  fi
+  return 0
 }

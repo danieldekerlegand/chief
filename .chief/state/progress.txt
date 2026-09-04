@@ -1697,3 +1697,70 @@ Files:
   descriptions in this repo are full of em-dashes and middots.
 - shellcheck is still not installed on this host; ran 0.11.0 via `npx --yes
   shellcheck@latest -S error` on the four changed shell files, clean.
+
+## 121 US-3 — The display stops overstating headroom
+Fri Sep  4 2026
+
+US-1 and US-2 made the gate budget and the load ceiling into decisions. The display
+was still the one from before them: `5 live run(s) · 5 agent turn(s) · 0 gate(s) ·
+load average: 14.32 / 14 physical core(s) · OVERSUBSCRIBED`. Every number true, two
+of the three controls invisible, and read together it said nine free slots on a box
+that had none. This is the reading half.
+
+Files:
+- `engine/concurrency.sh` — `chief_machine_load_over` (the FACT, ceiling comparison
+  with the bound NOT applied; `chief_machine_load_allows` now delegates to it, so
+  one comparison serves the display and the decision). `chief_machine_cap` (a
+  budget's number, or `off`) · `chief_machine_ratio` (`live/budget`) ·
+  `chief_machine_slack` (one budget's remaining slots, floored) ·
+  `chief_machine_headroom_line` (the ADMISSION answer, reason from
+  `chief_machine_admits`' own string). `chief_machine_activity_line` prints
+  `2/14 agent turn(s) · 1/2 gate(s)`; `chief_machine_budget_line` names all three
+  knobs; `chief_machine_load_line` reserves `OVERSUBSCRIBED` for a ceiling that
+  actually refused and otherwise says `over ceiling — admitting, no chief gate in
+  flight`.
+- `engine/monitor.sh` — `machine_render` (the two header lines, 3 call sites) ·
+  one `chief_machine_load_sample` per render · `hold_kind` ∈ launch|gate, so a
+  worker stopped at the gate boundary renders `⏸ gate-hold` instead of an ordinary
+  `running` row · `machine_budget_note KIND` asks `chief_machine_admits` instead of
+  printing a fixed string. Fallback stubs for the no-concurrency.sh branch.
+- `engine/driver.sh` — the launch banner samples the load and prints the headroom
+  line beside the budget line.
+- `test/concurrency-monitor.sh` — rewritten, 4 parts, and now in ALL THREE gate
+  lists (it was in `test/all.sh` only). `docs/reference/concurrency.md` gains
+  "The model, in one place". VERSION 0.9.21 → 0.9.22 + README/ROADMAP.
+
+### Learnings for future iterations
+
+- **`test/concurrency-monitor.sh` passed only on the 14-core host it was written
+  on.** It set `CHIEF_MACHINE_CORES=14` and then called `render`, which reaches
+  `chief_machine_budget_ensure` → `chief_machine_budget_init` → the REAL core
+  count, and asserted `62 / 14 physical core(s)`. On CI's 2-core runner it would
+  have failed — which is presumably part of why it was never added to CI. Pin the
+  whole machine model (cores, both budgets, the ceiling, and
+  `CHIEF_MACHINE_BUDGET_READY=1`) or `ensure` will resolve it out from under you.
+- **A global written inside `$( )` is lost, and every display line here is a
+  `$( )`.** `chief_machine_load_line` samples lazily when
+  `CHIEF_MACHINE_LOAD_AVERAGE` is empty — in a subshell, so the parent's global
+  stayed empty and the next `$( )` sampled again. Harmless while the value was
+  only printed; the moment a note DECIDES on it (`machine_budget_note` →
+  `chief_machine_admits` → `chief_machine_load_allows`) the decision would have
+  been made on an empty reading beside a freshly sampled display. `render` and the
+  driver's banner now sample once, in the parent, before anything reads.
+- **`live_get` anchors its sed at the start of a line.** A fixture that writes its
+  live record as one-line JSON resolves EVERY field to empty: the rows render
+  `unknown`, `chief_machine_activity` counts nothing, and the test fails in a way
+  that looks like a counting bug. One key per line.
+- **Mutate the string, not just the function.** Four mutations, each caught by its
+  intended part: OVERSUBSCRIBED back to unconditional (A), headroom back to plain
+  subtraction (B), the `gate-budget-waiting` arm removed (C), the note back to its
+  fixed agent-turn string (C's note assertion). The last two are separate defects
+  in the same feature and needed separate assertions.
+- **Headroom is the admission answer, not the subtraction.** `14 - 0 = 14` agent
+  turns is arithmetic that is true and useless when the load ceiling is refusing
+  every launch. A control that is currently refusing reports 0 for BOTH budgets
+  and names itself; that is the whole content of the fix, and PART B is the
+  assertion that says so.
+- Deliberately NOT done: the opt-in merge queue's batch verify still runs on its
+  own path (noted in US-1) and `chief status` has no machine line at all. Both are
+  admission/reporting surfaces a later tasklist could reach; neither is a floor.

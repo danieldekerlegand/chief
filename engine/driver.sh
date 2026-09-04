@@ -2249,7 +2249,11 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "names=$NAMES"
 } > "$RUN_FILE" 2>/dev/null || true
 chief_machine_activity "$CHIEF_RUNS"
+# Sampled by the one function that owns the reading, so the launch banner, the
+# hold reasons below and `chief ps` all quote the same number.
+chief_machine_load_sample
 echo "  machine activity before launch: $(chief_machine_activity_line)"
+echo "  $(chief_machine_headroom_line)"
 echo "  $(chief_machine_budget_line)"
 printf '%s\n' "$(date +%s) $(chief_machine_budget_line)" > "$STATE/machine-budget.log" 2>/dev/null || true
 # The run file now exists, so the id a headless host reads here is immediately

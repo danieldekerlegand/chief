@@ -239,12 +239,13 @@ jobs:
       - name: Update across a re-rooted origin (chief update + an install.sh re-run cross a force-push)
         run: bash test/update-reroot.sh
 
-      - name: Host machine budgets (gate counted apart from turns; load bounds admission; zero headroom, a stuck gate and foreign load all still admit)
+      - name: Host machine budgets (gate counted apart from turns; load bounds admission; zero headroom, a stuck gate and foreign load all still admit; the view reports headroom and both holds)
         run: |
           bash test/concurrency.sh
           bash test/machine-budget.sh
           bash test/gate-budget.sh
           bash test/load-admission.sh
+          bash test/concurrency-monitor.sh
 
       - name: Tasklist category coverage (every active tasklist declares a category)
         run: node scripts/check-tasklist-categories.mjs
