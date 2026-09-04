@@ -121,6 +121,45 @@ running the suite again.
 Cheap, scoped checks — a typecheck, one test file, a linter over the two files you
 touched — need none of this. This is for the full gate.
 
+### Forcing a re-run: `CHIEF_VERIFY_CACHE=0`
+
+A recorded verdict is reused **whatever its status**. The key names every input the
+gate reads, so for an unmoved tree, base, hook and submodule checkout a second run is
+not a second sample — it is the same computation, and a red verdict short-circuits to
+the recorded failure (with the gate's own report replayed) exactly as a green one
+short-circuits to success:
+
+```
+>> verify SKIPPED: tree 52e9018… (RED verdict, exit 1, from …/verify-cache/…; same base
+   and verify hook) — the gate was NOT re-run; its recorded output follows
+```
+
+That is what stops an agent who cannot fix a gate paying the whole gate again every
+iteration to be told the same thing. It rests on the hook being a **deterministic
+function of those inputs**. If yours is not — a real clock, a real network, a race, an
+order-dependent suite — chief cannot tell from the outside; both runs are just a
+status. So you say so:
+
+```bash
+CHIEF_VERIFY_CACHE=0 chief run        # every lookup declines: the gate runs
+CHIEF_VERIFY_CACHE=0 chief run 120-…  # …and its fresh verdict REPLACES the record
+```
+
+It reads like the engine's other opt-outs (`CHIEF_VERIFY_TESTS=0`, `CHIEF_SWEEP=0`,
+`CHIEF_MERGE_BATCH_BISECT=0`), it is inherited by the agent boundary and the merge
+phase alike so one variable clears both reads of a run, and the forced run says so
+rather than looking like an ordinary miss:
+
+```
+>> verify cache DISABLED (CHIEF_VERIFY_CACHE=0): a matching verdict exists (…) and is
+   being IGNORED — the gate runs, and its result replaces that record
+```
+
+Overwriting matters as much as bypassing: a hatch that only skipped the lookup would
+leave the disbelieved verdict on disk for the next un-hatched run to serve. There is
+no cache to disable in `chief verify` — it never reads one — so that command remains
+the way to re-earn a single verdict without changing how a whole run behaves.
+
 ## Who checks what: chief, this hook, and you
 
 **Chief's own comment says it plainly — `verify.sh` is the real merge bar, not the

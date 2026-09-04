@@ -246,8 +246,22 @@ verify_cache_subs() {
 # red may be noise. That argument is about re-running after SOMETHING CHANGED — a
 # different tree, a moved base, an edited hook — and in every one of those cases the
 # key has already moved and this function has already missed. Here nothing changed.
-# A gate that really is non-deterministic needs an escape hatch, not a default
-# that re-derives every known answer; that hatch is the next story's.
+#
+# WHY THE DEFAULT IS SAFE, AND WHERE THE HATCH IS. The default rests on one claim:
+# for a FIXED tree, base, hook and submodule checkout the gate is a deterministic
+# function of its inputs, so a second run is not a second sample — it is the same
+# computation, and re-running it can only reproduce the answer already on disk. A
+# gate for which that claim is false (a real clock, a real network, a race, an
+# order-dependent suite) is a gate whose verdict was never a property of the tree in
+# the first place, and chief cannot detect that from the outside: both runs are just
+# a status. So it is the OPERATOR who says so — `CHIEF_VERIFY_CACHE=0` makes every
+# lookup here decline, the gate runs, and its fresh verdict OVERWRITES the record
+# (every caller of this function records after running, so nothing extra is needed
+# to make the stale answer go away). It is the same shape as the engine's other
+# opt-outs — CHIEF_VERIFY_TESTS=0, CHIEF_SWEEP=0, CHIEF_MERGE_BATCH_BISECT=0 — and
+# it is exported through the driver to the agent boundary and the merge phase alike,
+# so one variable clears both reads of a run. Documented in
+# docs/reference/verify-hook.md beside `chief verify`.
 #
 # RETURNS THE RECORDED EXIT STATUS on a hit, and 1 on a miss — deliberately in that
 # direction, because the two are not distinguishable from the return alone and one of
@@ -265,6 +279,13 @@ verify_cache_try() {
   tree="$(git -C "$cwd" rev-parse HEAD^{tree} 2>/dev/null || echo)"
   key="$tree.$(git -C "$cwd" rev-parse "$base" 2>/dev/null || echo).$(git hash-object "$VERIFY_HOOK" 2>/dev/null || echo no-hook).$(verify_cache_subs "$cwd")"
   rec="$dir/$key"; [ -f "$rec" ] || return 1
+  # THE ESCAPE HATCH, checked here rather than at the top so it can name the record it
+  # is deliberately ignoring: "the gate ran" and "the gate ran because you asked it to"
+  # are different log lines, and an operator chasing a flaky gate needs the second.
+  if [ "${CHIEF_VERIFY_CACHE:-1}" = 0 ]; then
+    echo ">> verify cache DISABLED (CHIEF_VERIFY_CACHE=0): a matching verdict exists ($rec) and is being IGNORED — the gate runs, and its result replaces that record"
+    return 1
+  fi
   st="$(sed -n 's/^status=//p' "$rec" | head -1)"
   case "$st" in ''|*[!0-9]*) return 1 ;; esac          # unreadable record = no record
   [ "$(sed -n 's/^tree=//p' "$rec" | head -1)" = "$tree" ] || return 1

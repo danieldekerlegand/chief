@@ -27,6 +27,8 @@
 #   PART B  the tree moves -> the hook RUNS                        (negative control)
 #   PART C  the hook blob changes, tree unmoved -> it RUNS         (negative control)
 #   PART D  a RED verdict is REUSED too, and still refuses completion (120)
+#   PART F  CHIEF_VERIFY_CACHE=0 re-runs the gate over that same red record,
+#           and overwrites it; unset, the same run skips                    (120)
 #   PART E  REPRODUCTION — the same PART A sequence against an engine whose
 #           `verify_cache_try` call is neutered must NOT skip, or this file is
 #           restating behaviour that always worked.
@@ -112,12 +114,20 @@ JSON
 # point the run at the real repository's gate — a 20-minute one, against the wrong tree.
 run_agent() { # run_agent LABEL REPO ENGINE_DIR COMMIT ; sets $LAST_OUT, returns agent rc
   local label="$1" repo="$2" engine="$3" commit="$4" rc=0
+  # $VC_HATCH is PART F's knob, and when it is unset the variable is UNSET in the run
+  # rather than set to its default — every other part must exercise the default the
+  # operator actually gets, or a hatch that defaulted to "cache off" would pass this
+  # file. It sits at the end of the -u list because `env` stops reading options at the
+  # first NAME=VALUE, so it is the last position that is legal in both forms.
+  local -a hatch=(-u CHIEF_VERIFY_CACHE)
+  [ -n "${VC_HATCH:-}" ] && hatch=(CHIEF_VERIFY_CACHE="$VC_HATCH")
   LAST_OUT="$WORK/$label.out"
   ( cd "$repo" && env \
       -u CHIEF_PRESET -u CHIEF_TOOL -u CHIEF_VERBOSE -u CHIEF_MODEL -u CHIEF_AGENT_CONTEXT \
       -u CHIEF_PAUSE_FILE -u CHIEF_LIVE_FILE -u CHIEF_EVENTS_FILE -u CHIEF_ITER_HOOK \
       -u CHIEF_PRD_SNAPSHOT -u CHIEF_UNVERIFIED_FILE -u CHIEF_RESEARCH -u CHIEF_RESEARCH_FILE \
       -u CHIEF_REVIEW -u CHIEF_TASKS_DIR -u NO_VERIFY -u STRICT_VERIFY \
+      "${hatch[@]}" \
       FAKE_COMMIT="$commit" FAKE_COMMIT_TOKEN="$label" \
       CHIEF_PROVIDER=claude CHIEF_PROJECT="$repo" CHIEF_HOME="$engine" \
       CHIEF_STATE_DIR=.chief/state CHIEF_TASKLIST=vc \
@@ -210,6 +220,46 @@ red_rc=0; run_agent d3 "$REPO" "$ROOT/engine" 1 || red_rc=$?
 [ "$(hook_runs)" = 5 ] \
   || fail "PART D: OVER-SKIP — the agent committed (the tree moved) and the hook ran $(hook_runs)x, expected 5. A red record must invalidate exactly as a green one does, or an agent that FIXED the gate would be served its own stale failure forever."
 note "PART D ok — and a moved tree re-runs the red gate rather than replaying it"
+
+# ═══ PART F — the operator's escape hatch (CHIEF_VERIFY_CACHE=0) ═════════════
+# The reuse above rests on the gate being a deterministic function of its four keyed
+# inputs. For a gate where that is false — a real clock, a real network, a race —
+# chief cannot tell from the outside (both runs are just a status), so the OPERATOR
+# says so. Both directions are asserted against the SAME red record over the SAME
+# unmoved tree, because "the hook ran" only means something beside a run in which it
+# demonstrably did not.
+TREE="$(git -C "$REPO" rev-parse 'HEAD^{tree}')"
+F_REC="$(ls "$WORK/state/verify-cache/"*/"$TREE".* 2>/dev/null | grep -v '\.out$' | grep -v '\.tmp\.' | head -1)"
+[ -n "$F_REC" ] || fail "PART F: no verdict is recorded for the current tree — the hatch has nothing to override"
+grep -q '^status=1' "$F_REC" || fail "PART F: the record for the current tree is not the RED one PART D left"
+
+# Unset (the default): the record stands and the hook does not run.
+before="$(hook_runs)"
+red_rc=0; run_agent f1 "$REPO" "$ROOT/engine" 0 || red_rc=$?
+[ "$red_rc" != 0 ] || fail "PART F: the control run accepted a completion over a red record"
+[ "$(hook_runs)" = "$before" ] \
+  || fail "PART F: the CONTROL ran the hook ($before -> $(hook_runs)) with the hatch unset — the hatch test below would prove nothing"
+skipped || fail "PART F: the control did not report the skip it was supposed to be a control for"
+
+# A sentinel in the record, to prove the hatch OVERWRITES rather than merely bypasses:
+# a hatch that leaves the stale verdict on disk hands the next un-hatched run the very
+# answer the operator just spent the gate to disbelieve.
+printf 'sentinel=stale-f\n' >> "$F_REC"
+red_rc=0
+export VC_HATCH=0
+run_agent f2 "$REPO" "$ROOT/engine" 0 || red_rc=$?
+unset VC_HATCH
+[ "$(hook_runs)" = "$(( before + 1 ))" ] \
+  || fail "PART F: THE HATCH DID NOT RE-RUN THE GATE — the hook ran $(hook_runs)x with CHIEF_VERIFY_CACHE=0 set, expected $(( before + 1 )). A cached red would then be unreachable and a flaky gate unfixable."
+grep -q 'verify cache DISABLED' "$LAST_OUT" \
+  || fail "PART F: the hatch re-ran the gate and said nothing — an operator cannot tell a forced run from an ordinary miss"
+skipped && fail "PART F: the hatched run reported a SKIP"
+[ "$red_rc" != 0 ] || fail "PART F: the freshly-run red was accepted as a completion"
+F_REC2="$(ls "$WORK/state/verify-cache/"*/"$TREE".* 2>/dev/null | grep -v '\.out$' | grep -v '\.tmp\.' | head -1)"
+grep -q '^sentinel=stale-f' "$F_REC2" \
+  && fail "PART F: the hatch bypassed the record without REPLACING it — the stale verdict is still on disk for the next run to reuse"
+grep -q '^status=1' "$F_REC2" || fail "PART F: the re-run did not record its own verdict"
+note "PART F ok — CHIEF_VERIFY_CACHE=0 re-runs the gate ($before -> $(hook_runs)) and overwrites the record; unset, it does not"
 
 # ═══ PART E — REPRODUCTION ═══════════════════════════════════════════════════
 # Neuter the one call US-1 added, in a COPY of the engine (not `git show HEAD~N`: CI
