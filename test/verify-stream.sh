@@ -204,7 +204,7 @@ note "PART B ok — red still refuses the completion, both verdicts still record
 # this file is not testing the call it claims to test.
 cp -R "$ROOT/engine" "$WORK/engine-old"
 sed -i.bak \
-  -e 's#^  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 | _verify_tick#  _o="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>\&1)" || rc=$?; printf "%s\\n" "$_o"#' \
+  -e 's#^  run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1 | tee "$vlog" | _verify_tick#  _o="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>\&1)" || rc=$?; printf "%s\\n" "$_o" > "$vlog"; printf "%s\\n" "$_o"#' \
   -e 's#^  rc=\${PIPESTATUS\[0\]}#  :#' \
   "$WORK/engine-old/agent.sh" && rm -f "$WORK/engine-old/agent.sh.bak"
 grep -q '_o="\$(run_verify ' "$WORK/engine-old/agent.sh" \
