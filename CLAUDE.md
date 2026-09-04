@@ -368,7 +368,13 @@ VERSION              # engine version — bump on any engine/bin/install change
   first and runs the same hook over the same tree against a synced one. Same tree sha,
   different filesystem, different answer (`test/submodule-gitlink.sh`). Generally:
   **anything chief mutates between a record and its reuse belongs in the key**, and
-  the tree sha is not a proxy for the filesystem the hook actually tests.
+  the tree sha is not a proxy for the filesystem the hook actually tests. The reuse
+  rests on the hook being a DETERMINISTIC function of those four inputs, which chief
+  cannot check from the outside — both runs are just a status — so
+  **`CHIEF_VERIFY_CACHE=0`** is the operator's word for "this gate is flaky": every
+  lookup declines, the gate runs, and its fresh verdict REPLACES the record
+  (`docs/reference/verify-hook.md`). `chief verify` never reads the cache at all, so
+  it remains the way to re-earn ONE verdict without changing a whole run.
 - **The driver RE-SEEDS `.chief/state/progress.txt` at run start** — fresh header, plus a
   `⚠️ PRIOR VERIFICATION FAILED` block when the last merge attempt came back red. That
   file and `.chief/state/prd.json` are the two TRACKED exceptions to the gitignored

@@ -1352,3 +1352,51 @@ there are none) closes both.
 - **`chief verify` IS the escape hatch until US-2 ships one.** It never reads the
   cache and always records, so a red verdict cached over a flaky gate can be cleared
   by re-running it. That is exactly what US-2 needs to make reachable from a RUN.
+
+## 120/US-2 — The operator can force a re-run
+Thu Sep  3 2026
+
+US-1 made a RED verdict reusable. That is only safe if the operator can DISBELIEVE
+one: a gate whose answer is not a function of the tree (a real clock, a real network,
+a race, an order-dependent suite) records a verdict chief cannot distinguish from a
+sound one, and with reuse in place that verdict would stand for as long as the tree
+does. `CHIEF_VERIFY_CACHE=0` is that hatch.
+
+Files:
+- `engine/lib.sh` — `verify_cache_try` declines every lookup when
+  `CHIEF_VERIFY_CACHE=0`, checked AFTER the record is located so the forced run can
+  NAME the verdict it is ignoring. Overwriting is free: every caller records after
+  running, so the fresh verdict replaces the disbelieved one with no extra code.
+  The reasoning for why the default is safe is now written beside the code rather
+  than only in the tasklist.
+- `docs/reference/verify-hook.md` — "Forcing a re-run: `CHIEF_VERIFY_CACHE=0`", in
+  the cache section beside `chief verify`, with both log lines and the reuse-any-
+  status behaviour the hatch exists against.
+- `test/verify-cache.sh` — PART F, both directions over ONE red record and ONE
+  unmoved tree.
+- `VERSION` 0.9.17 → 0.9.18, README + ROADMAP bold version with it.
+
+### Learnings for future iterations
+
+- **A test harness that always SETS a toggle cannot fail when the toggle's DEFAULT
+  is wrong.** `run_agent` passed `CHIEF_VERIFY_CACHE="${VC_HATCH:-1}"`, so flipping
+  the engine's default to "cache off" (`${CHIEF_VERIFY_CACHE:-0}`) passed all seven
+  parts — the value the operator actually gets was never exercised. The harness now
+  `env -u`s the variable unless PART F sets it, and that mutation fails PART A. The
+  `-u` form has to sit at the END of the option list, because `env` stops reading
+  options at the first NAME=VALUE and the same slot has to be legal in both forms.
+- **A bypass is not an override.** The hatch had to REPLACE the record, not just
+  decline to read it, or the next un-hatched run serves the very verdict the
+  operator spent the gate to disbelieve. It costs nothing here (every caller of
+  `verify_cache_try` records after running) but it is the assertion worth writing:
+  PART F plants a sentinel line in the record and fails if it survives.
+- **Check an escape hatch AFTER locating what it overrides.** Putting the test at
+  the top of `verify_cache_try` is one line cheaper and produces a log a person
+  cannot act on — an ordinary miss and a forced re-run read identically. Locating
+  the record first lets the line name it.
+- **A red bystander block under load is worth one standalone re-run before it is
+  worth an iteration.** `test/teardown.sh` failed inside the first full gate at
+  load average 15.26 on 14 physical cores (two other repos' chief runs live), and
+  passed standalone immediately, all four parts, then passed inside the green run.
+  That is the third test in this tasklist to do it (ratelimit and merge-batch in
+  US-1) — the pattern is real and the tell is the load line in `chief ps`.
