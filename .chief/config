@@ -9,6 +9,10 @@ CHIEF_TOOL=claude                # AI CLI that drives the agent loop: claude | a
 # CHIEF_AGENT_CONTEXT=.chief/agent-context.md   # project-specific agent instructions
 # CHIEF_AUTO_MERGE=1             # 1 = verify+merge completed branches; 0 = leave for review
 # CHIEF_MACHINE_BUDGET=           # host-wide agent turns; defaults to physical core count, 0 disables
+# CHIEF_MACHINE_GATE_BUDGET=     # host-wide concurrent gates (the compute); defaults to 2, 0 disables
+# CHIEF_MACHINE_LOAD_LIMIT=      # load average above which no gate/run starts; defaults to the core
+#                                # count, 0|off disables. Bounded: with no gate of chief's live, work
+#                                # is admitted whatever the load, so foreign load can never stall it.
 # --- the per-story DIFF-SIZE BUDGET (docs/reference/diff-budget.md) ------------
 # Defaults apply unless set: 400 changed lines / 20 changed files per story, and
 # `warn` — chief reports an oversized story and merges anyway.

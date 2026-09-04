@@ -3425,11 +3425,15 @@ while :; do
   while ! op_paused && [ "$(pause_until)" -le "$(date +%s)" ] && [ "$(n_running)" -lt "$PARALLEL" ]; do
     launched=""
     chief_machine_activity "$CHIEF_RUNS"
-    if ! chief_machine_budget_allows; then
+    # The load line is an admission input here too, and it is the only one that sees
+    # work chief did not start. Sampled once per pass, by the one function that owns
+    # the reading, so the hold reason and `chief ps` quote the same number.
+    chief_machine_load_sample
+    if ! chief_machine_admits launch; then
       if [ -z "$machine_hold_said" ]; then
         machine_hold_said=1
-        echo "  ⏸ machine budget hold — waiting for an agent turn ($CHIEF_MACHINE_AGENT_TURNS/$CHIEF_MACHINE_BUDGET live across the machine)"
-        printf '%s\n' "$(date +%s) HOLD machine budget: $CHIEF_MACHINE_AGENT_TURNS/$CHIEF_MACHINE_BUDGET agent turns live" >> "$STATE/machine-budget.log" 2>/dev/null || true
+        echo "  ⏸ machine budget hold — $CHIEF_MACHINE_HOLD_REASON"
+        printf '%s\n' "$(date +%s) HOLD $CHIEF_MACHINE_HOLD_REASON" >> "$STATE/machine-budget.log" 2>/dev/null || true
       fi
       # Keep dependency-blocked work distinguishable from work that is ready but
       # waiting for a machine-wide slot. The live record is intentionally a hold

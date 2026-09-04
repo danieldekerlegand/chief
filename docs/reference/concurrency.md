@@ -35,3 +35,28 @@ one however small the budget, and any single hold is bounded by
 `CHIEF_MACHINE_GATE_HOLD_MAX` (default 1800s), after which the gate starts anyway
 and says so. `CHIEF_MACHINE_GATE_BUDGET=0` (or `off`) disables it; that is a
 separate switch from `CHIEF_MACHINE_BUDGET=0`, which still governs agent turns.
+
+## The load ceiling
+
+Both budgets above count chief's own registry records, so a host carrying an
+operator's build, a browser and a VM reads to them as idle. `CHIEF_MACHINE_LOAD_LIMIT`
+is the third input and the only one that sees work chief did not start: when the
+one-minute load average is above it, no run is launched and no gate is admitted.
+It defaults to the physical-core count — the same line `chief ps` already draws
+when it prints `OVERSUBSCRIBED` — and the number is now the decision rather than
+the decoration beside it. One function samples it (`chief_machine_load_sample`,
+writing `CHIEF_MACHINE_LOAD_AVERAGE`); the display line, the admission predicate
+and the hold reason all read that global, because a second sampling path is how a
+display and a decision come to disagree about the same machine.
+
+It is **bounded, not absolute**. Load chief did not cause is load chief cannot
+clear, so a rule that simply waits for the number to fall can wait forever while
+chief itself is idle. Chief therefore defers to the load line only while it is
+CONTRIBUTING to it: with no gate of chief's in flight, work is admitted whatever
+the load says. That is the same floor the gate budget stands on, so a cleared host
+always moves whichever control is consulted, and a gate hold remains bounded by
+`CHIEF_MACHINE_GATE_HOLD_MAX` on top of it. `CHIEF_MACHINE_LOAD_LIMIT=0` (or `off`)
+disables load-based admission entirely, for the operator who knows the load is
+foreign; it is a third switch, separate from `CHIEF_MACHINE_BUDGET=0` and from
+`CHIEF_MACHINE_GATE_BUDGET=0`, and turning any one of them off leaves the other
+two doing their jobs.

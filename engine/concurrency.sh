@@ -45,10 +45,36 @@ CHIEF_MACHINE_LOAD_AVERAGE=""
 # It is a SEPARATE knob from CHIEF_MACHINE_BUDGET, which keeps its own default (the
 # core count), its own env override and its own 0|off|false|none escape hatch. The
 # two govern different resources and collapsing them is the defect this fixes.
+
 CHIEF_MACHINE_GATE_BUDGET_REQUESTED="${CHIEF_MACHINE_GATE_BUDGET-}"
 CHIEF_MACHINE_GATE_BUDGET=2
 CHIEF_MACHINE_GATE_BUDGET_DISABLED=0
 CHIEF_MACHINE_GATE_WAITED=0
+
+# THE THIRD INPUT, and the only one that can see work chief did not start.
+# CHIEF_MACHINE_LOAD_AVERAGE was written and read inside one function and spent
+# entirely on printing the word OVERSUBSCRIBED beside a number; it is now an
+# ADMISSION input. The two budgets above count chief's own records, so a host
+# carrying an operator's build, a browser and a VM reads to them as idle.
+#
+# THE CEILING IS THE CORE COUNT, for the same reason the display already compares
+# against it: one runnable thread per physical core is saturation, and past that
+# every new gate is taking time from a gate already running rather than finding
+# idle silicon. CHIEF_MACHINE_LOAD_LIMIT overrides the number and 0|off|false|none
+# turns load-based admission off entirely -- the escape hatch an operator needs
+# when they KNOW the load is foreign and will not clear.
+#
+# IT IS BOUNDED, NOT ABSOLUTE. Load average includes what chief cannot finish and
+# cannot even see, so a rule that simply waits for it to fall can wait forever
+# while chief itself is idle. The bound is in `chief_machine_load_allows`: chief
+# defers to the load line only while chief is CONTRIBUTING to it -- with no gate
+# of its own in flight, work is admitted whatever the number says.
+CHIEF_MACHINE_LOAD_LIMIT_REQUESTED="${CHIEF_MACHINE_LOAD_LIMIT-}"
+CHIEF_MACHINE_LOAD_LIMIT=0
+CHIEF_MACHINE_LOAD_DISABLED=0
+# WHICH resource said no, set by `chief_machine_admits` on every refusal. A hold
+# that cannot name what it is waiting for reads as a hang.
+CHIEF_MACHINE_HOLD_REASON=""
 
 chief_machine_core_count() {
   local n
@@ -87,6 +113,16 @@ chief_machine_budget_init() {
     *) CHIEF_MACHINE_GATE_BUDGET="$gate" ;;
   esac
   [ "$CHIEF_MACHINE_CORES" -ge 2 ] || CHIEF_MACHINE_GATE_BUDGET=1
+  # The load ceiling resolves here too, by the same rule and in the same place --
+  # a knob resolved anywhere else is a knob half of `chief_machine_budget_ensure`'s
+  # callers read at its file-level default.
+  local loadlim="${CHIEF_MACHINE_LOAD_LIMIT_REQUESTED-}"
+  CHIEF_MACHINE_LOAD_DISABLED=0
+  case "$loadlim" in
+    0|off|false|none) CHIEF_MACHINE_LOAD_DISABLED=1; CHIEF_MACHINE_LOAD_LIMIT=0 ;;
+    ''|*[!0-9.]*|*.*.*) CHIEF_MACHINE_LOAD_LIMIT="$CHIEF_MACHINE_CORES" ;;
+    *) CHIEF_MACHINE_LOAD_LIMIT="$loadlim" ;;
+  esac
   CHIEF_MACHINE_BUDGET_READY=1
 }
 
@@ -116,6 +152,60 @@ chief_machine_gate_budget_allows() {
   [ "$CHIEF_MACHINE_GATES" -lt "$CHIEF_MACHINE_GATE_BUDGET" ]
 }
 
+# THE ONE SAMPLER. Every reader takes its number from CHIEF_MACHINE_LOAD_AVERAGE
+# and only this function writes it -- the display line, the admission predicate and
+# the hold reason are then reading the same reading. A second sampling path is how
+# `chief ps` and the scheduler come to disagree about the same machine, and the
+# disagreement is invisible because both numbers are individually true.
+chief_machine_load_sample() {
+  CHIEF_MACHINE_LOAD_AVERAGE="$(chief_machine_load_average)"
+}
+
+# The load line as an ADMISSION input, bounded so it can never stall the portfolio.
+#
+# Callers refresh CHIEF_MACHINE_GATES (chief_machine_activity) and
+# CHIEF_MACHINE_LOAD_AVERAGE (chief_machine_load_sample) first; this reads the
+# globals and samples nothing itself.
+#
+# THE BOUND: chief defers to the load line only while chief is CONTRIBUTING to it.
+# Load average counts an operator's own build, a browser, a VM -- work chief did
+# not start, cannot finish and cannot see. With no gate of chief's in flight there
+# is nothing for chief to wait for, so waiting would be an unbounded stall on
+# somebody else's compute; that case is admitted regardless of the number. It is
+# also the same floor the gate budget already stands on, so a cleared host always
+# moves whichever control is consulted.
+chief_machine_load_allows() {
+  chief_machine_budget_ensure
+  if [ "$CHIEF_MACHINE_LOAD_DISABLED" = 1 ]; then return 0; fi
+  if [ "${CHIEF_MACHINE_GATES:-0}" -le 0 ]; then return 0; fi
+  local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}"
+  # An unreadable load average is not a high one: `?` admits, as an absent one does.
+  case "$load" in ''|'?') return 0 ;; esac
+  awk -v l="$load" -v c="$CHIEF_MACHINE_LOAD_LIMIT" 'BEGIN { exit (l + 0 > c + 0) ? 1 : 0 }'
+}
+
+# chief_machine_admits launch|gate
+# The whole admission decision for one call site, and the ONLY place the two
+# budgets meet the load line. Sets CHIEF_MACHINE_HOLD_REASON to the resource that
+# is short so a hold can name it; both call sites refresh the counters first.
+chief_machine_admits() {
+  CHIEF_MACHINE_HOLD_REASON=""
+  case "${1:-gate}" in
+    launch)
+      chief_machine_budget_allows || {
+        CHIEF_MACHINE_HOLD_REASON="machine budget: $CHIEF_MACHINE_AGENT_TURNS/$CHIEF_MACHINE_BUDGET agent turn(s) live across the machine"
+        return 1; } ;;
+    *)
+      chief_machine_gate_budget_allows || {
+        CHIEF_MACHINE_HOLD_REASON="gate budget: $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s) live across the machine"
+        return 1; } ;;
+  esac
+  chief_machine_load_allows || {
+    CHIEF_MACHINE_HOLD_REASON="machine load: load average $CHIEF_MACHINE_LOAD_AVERAGE over $CHIEF_MACHINE_LOAD_LIMIT core(s), $CHIEF_MACHINE_GATES chief gate(s) live"
+    return 1; }
+  return 0
+}
+
 # One line, printed to the worker's log and appended to the run's machine-budget.log
 # so a hold reads the same way the agent-turn hold already does.
 chief_machine_gate_note() {
@@ -132,7 +222,8 @@ chief_machine_gate_note() {
 # the contention. The only lever is WHEN a worker is allowed to begin one.
 #
 # IT ALWAYS RETURNS 0 EVENTUALLY, on two independent floors. The predicate admits
-# whenever nothing of chief's is gating, and the wait itself is bounded by
+# whenever nothing of chief's is gating (both the gate budget and the load rule
+# stand on that same floor), and the wait itself is bounded by
 # CHIEF_MACHINE_GATE_HOLD_MAX (default 1800s), after which the gate starts anyway
 # and says so in the log. Neither floor depends on the other being correct.
 chief_machine_gate_admit() {
@@ -140,17 +231,24 @@ chief_machine_gate_admit() {
   local step="${CHIEF_MACHINE_GATE_POLL:-5}" max="${CHIEF_MACHINE_GATE_HOLD_MAX:-1800}"
   CHIEF_MACHINE_GATE_WAITED=0
   chief_machine_budget_ensure
-  if [ "$CHIEF_MACHINE_GATE_BUDGET_DISABLED" = 1 ]; then return 0; fi
+  # Only when BOTH controls are off is there nothing to ask. Disabling the gate
+  # budget is not disabling the load rule -- they are separate knobs, and a single
+  # early return here would have made the first silently switch off the second.
+  if [ "$CHIEF_MACHINE_GATE_BUDGET_DISABLED" = 1 ] && [ "$CHIEF_MACHINE_LOAD_DISABLED" = 1 ]; then
+    return 0
+  fi
   while :; do
     chief_machine_activity "${CHIEF_RUNS:-}"
-    if chief_machine_gate_budget_allows; then break; fi
+    # Re-sampled every pass, or a hold taken at a spike would never see it clear.
+    chief_machine_load_sample
+    if chief_machine_admits gate; then break; fi
     if [ "$waited" -ge "$max" ]; then
-      chief_machine_gate_note "$log" "RELEASE $name gate budget hold spent after ${waited}s (CHIEF_MACHINE_GATE_HOLD_MAX=$max) — starting anyway at $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s)"
+      chief_machine_gate_note "$log" "RELEASE $name hold spent after ${waited}s (CHIEF_MACHINE_GATE_HOLD_MAX=$max) — starting anyway against $CHIEF_MACHINE_HOLD_REASON"
       break
     fi
     if [ "$said" = 0 ]; then
       said=1
-      chief_machine_gate_note "$log" "⏸ HOLD $name gate budget: $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s) live across the machine"
+      chief_machine_gate_note "$log" "⏸ HOLD $name $CHIEF_MACHINE_HOLD_REASON"
     fi
     if [ -n "$live" ] && command -v live_set >/dev/null 2>&1; then
       live_set "$live" phase=gate-budget-waiting
@@ -159,7 +257,7 @@ chief_machine_gate_admit() {
     waited=$(( waited + step ))
   done
   CHIEF_MACHINE_GATE_WAITED="$waited"
-  [ "$said" = 0 ] || chief_machine_gate_note "$log" "RESUME $name admitted at $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s) after ${waited}s"
+  [ "$said" = 0 ] || chief_machine_gate_note "$log" "RESUME $name admitted at $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s), load $CHIEF_MACHINE_LOAD_AVERAGE, after ${waited}s"
   return 0
 }
 
@@ -181,8 +279,7 @@ chief_machine_load_average() {
 chief_machine_load_line() {
   chief_machine_budget_ensure
   local load="${CHIEF_MACHINE_LOAD_AVERAGE:-}" oversubscribed
-  [ -n "$load" ] || load="$(chief_machine_load_average)"
-  CHIEF_MACHINE_LOAD_AVERAGE="$load"
+  [ -n "$load" ] || { chief_machine_load_sample; load="$CHIEF_MACHINE_LOAD_AVERAGE"; }
   printf 'load average: %s / %s physical core(s)' "$load" "$CHIEF_MACHINE_CORES"
   oversubscribed="$(awk -v load="$load" -v cores="$CHIEF_MACHINE_CORES" 'BEGIN { print (load != "?" && load > cores) ? 1 : 0 }' 2>/dev/null || echo 0)"
   [ "$oversubscribed" = 1 ] && printf ' · OVERSUBSCRIBED'
