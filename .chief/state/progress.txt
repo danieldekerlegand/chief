@@ -1259,3 +1259,324 @@ THEN THE INHERITED DEBT. With the rebase done, `doc-sync` went red: 900 merged a
   `ROADMAP.md`, so every merge arms `doc-sync` for the *next* branch that touches
   `VERSION`/`README.md`/`ROADMAP.md`. 118 charged 900 for this; 900 charged 119.
   Adding your own row while the branch is still in flight is what stops the chain.
+
+## 120/US-1 — A recorded verdict is reused whatever its status
+Thu Sep  3 2026
+
+The verify cache reused a GREEN verdict and re-earned a RED one, so an agent that
+could not fix a gate paid the entire gate again on every iteration to be told the
+same thing (cuneiform 2026-09-03: `388-the-panel-emission-contract` ran 01:55→07:52,
+merged nothing, five full ~11.6-min gate runs, six identical failures, one
+byte-identical tree).
+
+Files:
+- `engine/lib.sh` — `verify_cache_try` honours ANY recorded status and RETURNS the
+  recorded exit status on a hit, 1 on a miss, with `$VERIFY_CACHE_HIT` /
+  `$VERIFY_CACHE_STATUS` / `$VERIFY_CACHE_RECORD` set on every call. New
+  `verify_cache_output` replays the retained report. `verify_cache_record` takes an
+  optional 4th arg (a file, or `-` for stdin) and retains the tail of a RED gate's
+  output as `<key>.out`, pruned together with its record.
+- `engine/agent.sh` — `_agent_verify_final` gained a third arm: a red hit replays the
+  report and returns 1, so `COMPLETE_OK=0` exactly as a fresh red does. The gate's
+  output is `tee`d into a scratch file on the way past so the record can carry it.
+- `engine/driver.sh` — the merge-phase verify is three arms for the same reason; a red
+  hit fills `$vout` from the replay, so `.verify-failed.log` still names what broke.
+- `bin/chief` — `cmd_verify` tees too, so a red recorded by `chief verify` is
+  replayable.
+- `test/verify-cache.sh` — PART D inverted to the new contract (reuse + replay + still
+  refuses completion), plus the red-path invalidation control.
+- `VERSION` 0.9.15 → 0.9.17, README + ROADMAP bold version with it.
+
+### The key grew a FOURTH component, and that is the real find here
+
+Reusing a red exposed a latent unsoundness in `tree.base.hook`. A project worktree
+never initializes its submodules, so the AGENT BOUNDARY runs the hook with `dep/` an
+empty directory; the MERGE PHASE runs `submodules_sync` first (93) and runs the same
+hook, over the same tree, against a submodule checked out to match the gitlink. Same
+tree sha, same base, same hook — a different filesystem, and CHIEF ITSELF is what
+moved it. `test/submodule-gitlink.sh` is exactly that gate: with three parts it read
+the boundary's legitimate red ("submodule working tree is STALE") back at the merge
+and never re-ran the check `93` exists to guarantee, ending a mergeable tasklist
+VERIFY-FAILED three attempts running.
+
+The same hole exists for GREEN and pre-dates this tasklist (it arrived with 117's
+boundary read) — a boundary green taken over a stale submodule tree could be reused at
+merge, which is the direction that MERGES something unchecked. Nothing had noticed
+because a green boundary verify over an empty `dep/` is rare; a red one is not.
+`verify_cache_subs` (a cksum of `git submodule status --recursive`, `nosub` where
+there are none) closes both.
+
+### Learnings for future iterations
+
+- **A HIT/MISS predicate that also carries a status must fail in the SAFE direction.**
+  `verify_cache_try` cannot signal both from its return alone (miss and red hit are
+  both non-zero), so the choice is which confusion a careless caller makes. Returning
+  the RECORDED STATUS means a caller that ignores `$VERIFY_CACHE_HIT` re-runs a red
+  hit — wasteful, never wrong. The inverse (0 = hit) would make the same oversight
+  skip the gate and accept a failing tree.
+- **`verify_cache_record` reads its output file TWICE** (line count, then tail), so a
+  process substitution silently records nothing on the second read. The `-` stdin mode
+  exists for callers that already hold the output in a variable.
+- **The FAKE PROVIDER in test/verify-cache.sh must commit at most ONCE per
+  `run_agent`.** A red gate refuses the completion, so the loop takes another turn; a
+  provider that commits every turn never stops making progress and runs to the hard
+  iteration ceiling (observed: 20 iterations, 24 hook runs). It now skips the commit
+  when its token is already in `product.txt`.
+- **A verdict cache key must name every input the gate READS, not every input the
+  COMMIT names.** The tree sha describes the repository's content; the hook runs
+  against a FILESYSTEM, and for a superproject those differ by exactly the submodule
+  checkout — which chief moves between its own two reads. Anything else chief mutates
+  between a record and its reuse belongs in the key on the same argument.
+- **`run_worker` (driver.sh) is the `function_length_max` ceiling.** It measured
+  596 → 616 raw lines; a 12-line addition put the ratchet at +14 against a tolerance
+  of 15. Condensing the arm to 11 lines and moving the scratch-file handling into
+  `verify_cache_record` brought it to +6. Any story touching that function should
+  check `bash engine/quality.sh ratchet` before it is happy.
+- **A follow-up commit touching `engine/` re-stales `VERSION`,** exactly as CLAUDE.md
+  says. The submodule-key fix landed as its own commit and `chief verify` blocked on
+  VERSION-BUMP before running a single test; 0.9.16 -> 0.9.17 plus both bold README /
+  ROADMAP versions cleared it.
+- **`test/ratelimit.sh` can fail inside the bystander block under host load** while
+  passing 3/3 standalone. Observed once here: its run reached `● rl finished →
+  MERGED @29dc2e0` and was then TERMed, with load average 5.65 and two other repos'
+  chief runs live on the machine. Re-run it standalone before believing a bystander
+  ratelimit failure.
+- **Two tests anchor `sed` patches on lines in `_agent_verify_final`, and this story
+  moved one of them.** `test/verify-stream.sh` PART C restores the pre-119
+  command-substitution form; its anchor was the `run_verify … | _verify_tick` line,
+  now `… | tee "$vlog" | _verify_tick`. It failed with "its anchor moved. Fix this
+  patch, do not delete the reproduction" — which is the right failure, and the right
+  response is to re-anchor it. `test/verify-cache.sh` PART E patches
+  `if verify_cache_try ` in the same function and still applies. Grep both before
+  touching that function.
+- **`chief verify` IS the escape hatch until US-2 ships one.** It never reads the
+  cache and always records, so a red verdict cached over a flaky gate can be cleared
+  by re-running it. That is exactly what US-2 needs to make reachable from a RUN.
+
+## 120/US-2 — The operator can force a re-run
+Thu Sep  3 2026
+
+US-1 made a RED verdict reusable. That is only safe if the operator can DISBELIEVE
+one: a gate whose answer is not a function of the tree (a real clock, a real network,
+a race, an order-dependent suite) records a verdict chief cannot distinguish from a
+sound one, and with reuse in place that verdict would stand for as long as the tree
+does. `CHIEF_VERIFY_CACHE=0` is that hatch.
+
+Files:
+- `engine/lib.sh` — `verify_cache_try` declines every lookup when
+  `CHIEF_VERIFY_CACHE=0`, checked AFTER the record is located so the forced run can
+  NAME the verdict it is ignoring. Overwriting is free: every caller records after
+  running, so the fresh verdict replaces the disbelieved one with no extra code.
+  The reasoning for why the default is safe is now written beside the code rather
+  than only in the tasklist.
+- `docs/reference/verify-hook.md` — "Forcing a re-run: `CHIEF_VERIFY_CACHE=0`", in
+  the cache section beside `chief verify`, with both log lines and the reuse-any-
+  status behaviour the hatch exists against.
+- `test/verify-cache.sh` — PART F, both directions over ONE red record and ONE
+  unmoved tree.
+- `VERSION` 0.9.17 → 0.9.18, README + ROADMAP bold version with it.
+
+### Learnings for future iterations
+
+- **A test harness that always SETS a toggle cannot fail when the toggle's DEFAULT
+  is wrong.** `run_agent` passed `CHIEF_VERIFY_CACHE="${VC_HATCH:-1}"`, so flipping
+  the engine's default to "cache off" (`${CHIEF_VERIFY_CACHE:-0}`) passed all seven
+  parts — the value the operator actually gets was never exercised. The harness now
+  `env -u`s the variable unless PART F sets it, and that mutation fails PART A. The
+  `-u` form has to sit at the END of the option list, because `env` stops reading
+  options at the first NAME=VALUE and the same slot has to be legal in both forms.
+- **A bypass is not an override.** The hatch had to REPLACE the record, not just
+  decline to read it, or the next un-hatched run serves the very verdict the
+  operator spent the gate to disbelieve. It costs nothing here (every caller of
+  `verify_cache_try` records after running) but it is the assertion worth writing:
+  PART F plants a sentinel line in the record and fails if it survives.
+- **Check an escape hatch AFTER locating what it overrides.** Putting the test at
+  the top of `verify_cache_try` is one line cheaper and produces a log a person
+  cannot act on — an ordinary miss and a forced re-run read identically. Locating
+  the record first lets the line name it.
+- **A red bystander block under load is worth one standalone re-run before it is
+  worth an iteration.** `test/teardown.sh` failed inside the first full gate at
+  load average 15.26 on 14 physical cores (two other repos' chief runs live), and
+  passed standalone immediately, all four parts, then passed inside the green run.
+  That is the third test in this tasklist to do it (ratelimit and merge-batch in
+  US-1) — the pattern is real and the tell is the load line in `chief ps`.
+
+## 120/US-3 — The saving is demonstrated, not asserted
+Fri Sep  4 2026
+
+US-1 and US-2 built the mechanism and its hatch; both are asserted against the
+cache's own internals and against counts that only mean something read down the
+file. What was still missing is the CLAIM: that the incident this tasklist was
+opened for now costs one gate run instead of five. That is a number, and it is
+measured here rather than argued.
+
+Files:
+- `test/verify-cache.sh` — new **PART G**, the incident end to end against a cache
+  that has never held anything: its own repo (`$WORK/repo-loop`, so
+  `verify_cache_dir` keys it to its own directory) with its own extra commit (so
+  its tree sha differs from the scratch tree PARTS A–E recorded verdicts for, and
+  the record it asserts on cannot be inherited), a RED hook, and a reset counter.
+  Three iterations — nothing changes, nothing changes, then the tree moves — and
+  the assertions are 1, 1, 2 hook invocations with every completion refused.
+- `docs/reference/verify-hook.md` — new `### What a verdict is keyed on`: the four
+  components in a table, one row per component saying WHY that component is in the
+  key (not what it is), where records live, the 32-record prune, and the
+  status-agnostic reuse rule with the cuneiform measurement behind it. The two
+  places that still said `tree · base · hook` now name the four-part key and point
+  at that section; `### Forcing a re-run` no longer re-states the reuse rule, it
+  now opens on the determinism assumption the hatch exists for.
+- `ROADMAP.md` — the `117` row said the boundary "tries the cache" and stopped
+  there, which left green-only reuse reading as deliberate. It now says the
+  `status=0` limit was the first implementation's and names `120` and the doc.
+
+### Learnings for future iterations
+
+- **The saving starts INSIDE one iteration, not between two.** A red boundary
+  verify refuses the completion, so `run_agent` takes another turn, and that
+  turn's own boundary verify is over the same unmoved tree — served from the
+  record the first turn just wrote. Measured by mutation: restoring
+  `[ "$st" = 0 ] || return 1` in `verify_cache_try` makes PART G fail at
+  ITERATION 1 (`paid the gate 2x, expected 1`), before the two-iteration
+  assertion is ever reached. Worth knowing when reading any hook count in this
+  file: one `run_agent` is one gate run only because of the fix.
+- **The fixture commits ON the base branch, so "the tree moved" also moves the
+  base.** `scratch_repo` inits `main` and `CHIEF_VERIFY_BASE=main`, so an
+  invalidation assertion after a commit proves the KEY moved, not which half of
+  it did — a mutation that drops `tree` from the key entirely still passes PART
+  G's iteration 3, because `base` alone changed. PART C is the real component
+  isolation (it moves the hook blob with the tree standing still, which is the
+  only one of the four movable from outside the repo). Said so in the comment
+  rather than letting the assertion overclaim.
+- **A `.out` replay assertion is not a "did it run" assertion.** PART G greps
+  iteration 2's log for the fixture hook's own line, which is present whether the
+  hook ran or was replayed; only the counter tells those apart. Both are asserted,
+  in that order — the counter for the fact, the grep for what the operator sees.
+- **Mutation-checking a part that sits below other parts needs the file split.**
+  PARTS A–F fail first under any mutation of this mechanism, so PART G's own
+  sensitivity cannot be observed by mutating and running the file. Built a
+  standalone harness instead — everything above `# ═══ PART A` plus the PART G
+  block, into a temp dir beside a copied `engine/` (`ROOT` is derived from
+  `BASH_SOURCE`, so the copy is what gets driven). Cheap, and reusable for any
+  late part in a cumulative test file.
+
+## Verification recovery — the stranded base repo names what defeated it (2026-09-04)
+
+The run resumed with all three stories `passes:true` and a
+`⚠️ PRIOR VERIFICATION FAILED` block naming ONE failure: `test/dirty-checkout.sh`,
+in section C (SIGKILL mid-merge). Not caused by this tasklist — nothing in the
+verify cache touches it — but a real engine defect, not a flake to wave through.
+
+WHAT THE LOG SHOWED, and why it was undiagnosable:
+
+    (auto-recover: base repo stranded on 'chief/dc-kill' from a crashed run — restoring 'main')
+    ERROR: could not restore 'main' from 'chief/dc-kill' — resolve by hand.
+
+Two lines, no cause. The test dumps 40 lines of run log and 60 of worker log and
+neither holds one, because EVERY command in that arm discards its error
+(`rebase --abort`/`merge --abort`/`add`/`commit` are all `|| true`, and the
+checkout was `>/dev/null 2>&1`).
+
+THE MECHANISM (established, not guessed). C waits for `stash=` to appear in the
+`.critical` marker and then SIGKILLs the process group. What runs immediately
+after that marker write is `sweep_worktree` → `remove_worktree` →
+`work_checkout_or_stop "$work_repo" "$branch"` → `merge-base` → `rebase` — i.e.
+a dense run of INDEX WRITERS in the base repo. A kill landing inside the
+checkout leaves `.git/index.lock` behind, and that lock is released by nobody.
+Verified directly: with a stale `index.lock`, `git checkout main` dies rc 128
+with "Unable to create '.git/index.lock': File exists … a git process may have
+crashed in this repository earlier: remove the file manually to continue" — the
+one message that says which file to remove, and the one the arm threw away.
+Load widens the window (16.58 on 14 cores in the failed run), which is why it
+reads as a load flake; it passed 5/5 standalone here.
+
+Probing notes, for whoever chases the next one of these: copy the test to /tmp,
+replace its `trap 'rm -rf "$WORK"'` and PIN `ROOT` to the real repo (it is
+derived from `BASH_SOURCE`, so a copy elsewhere fails at the awk-lift of
+`merge_stash_push`). Inserting a `sleep` before the kill does NOT reproduce this
+— it makes the merge phase get FURTHER, past the critical section, so the stash
+pops normally and a different assertion fails. That is a rigged failure, not the
+one in the log; the tell is `HEAD=main` in the probe instead of
+`HEAD=chief/dc-kill`.
+
+THE FIX (engine/driver.sh):
+- `work_checkout` retains the LAST failed attempt's output in `$WORK_CHECKOUT_OUT`
+  rather than sending it to `/dev/null`. The happy path is unchanged — a
+  successful checkout's chatter is still never shown.
+- `work_checkout_cause INDENT` prints it (two call sites, so it does not trip
+  `single_use_functions`), and always returns 0: both callers are on their way
+  to their own exit status and neither may be diverted by an empty answer.
+- The auto-recover checkout now GOES THROUGH `work_checkout`. It was the last
+  bare `git checkout` on a path that has a guarded form — the same asymmetry
+  `work_checkout_or_stop` was created to close at the merge site, and CLAUDE.md
+  already states the rule ("work_checkout, never a bare `git checkout`").
+  Retries also make the merely-transient case self-clearing.
+- `work_checkout_or_stop`'s "(retried)" message names the cause too — it had the
+  same silence at the merge site.
+
+WHAT I DELIBERATELY DID NOT DO: auto-delete the stale lock. The arm holds the
+driver lock, so no chief run is live in that repo — but a NON-chief git process
+(an operator's editor, a `git commit` in another terminal) can hold `index.lock`
+legitimately, and `index.lock` carries no pid, so staleness is not decidable from
+the file. Age is the only available discriminator and a large checkout can hold
+the lock for a long time legitimately. Deleting a live lock corrupts someone's
+in-flight git operation; telling them precisely what to remove costs one command
+in a rare crash path. If a future tasklist wants the automatic clear, that is the
+tradeoff to argue, and it should be argued deliberately rather than smuggled in
+here.
+
+THE TEST (test/dirty-checkout.sh, new section E). The race is not reproducible on
+demand, so E pins the STATE it produces instead: strand the base on a `chief/*`
+branch, plant the `index.lock` the kill leaves, assert the run REFUSES and that
+the refusal names `index.lock`; assert HEAD did not move (a recovery that cannot
+finish may not leave the operator worse off than the crash did); then clear the
+lock and assert the arm still recovers to `main` — so E is not merely asserting a
+failure. Placed AFTER D because D needs the dirty tree C hands it; E starts with
+`reset --hard` and is last.
+
+Gotcha it cost me: by section E every fixture tasklist has been retired to
+`completed/`, and chief stops at "No tasklists in tasks/chief/ yet" BEFORE it
+looks at the checkout — so E has to author a live tasklist first, or it asserts
+on a run that never reached the gate. `CHIEF_CHECKOUT_RETRIES=0` keeps it from
+paying 3×1s of retry sleep.
+
+MUTATION-CHECKED: restoring the bare `git checkout … >/dev/null 2>&1` in the
+auto-recover arm fails E with "the failed recovery did not name WHAT defeated
+it". The revert had to be COMMITTED to be seen — dirty-checkout installs chief
+from `git rev-parse HEAD`, so an uncommitted engine edit is invisible to it
+(CLAUDE.md says this; it is easy to forget when the edit is one line).
+
+OBSERVED: test/dirty-checkout.sh PASS, all five sections, standalone.
+bash -n clean on engine/driver.sh and test/dirty-checkout.sh; shellcheck 0.11.0
+-S error CLEAN on engine/driver.sh (via npx — not installed on this host, CI
+enforces it). VERSION 0.9.18 -> 0.9.19 with README and ROADMAP's bold version
+bumped in the same commit (bumping one alone just trades a version-bump block
+for a doc-sync one). Full `chief verify` result recorded below.
+
+### Learnings for future iterations
+
+- **A `⚠️ PRIOR VERIFICATION FAILED` block that reads like a load flake may still
+  be a real defect.** Passing standalone proves the failure is timing-sensitive,
+  NOT that it is noise. Here the timing decided only WHERE the kill landed; the
+  defect it exposed was deterministic and reproducible from the state, and the
+  state is what a regression test should pin. Establish the mechanism before
+  filing something under "flake".
+- **An error arm whose every command is `|| true` cannot report its own cause.**
+  When a whole recovery path is written defensively, the defensiveness is what
+  makes its failure undiagnosable. If an arm can exit fatally, at least one
+  command in it has to keep its stderr.
+- **`git add -A` in this repo will clobber `.chief/state/progress.txt`.** The
+  driver re-seeds it (466 lines, header + the failure block) and the tracked copy
+  is the full 1460-line log; an `add -A` commits the re-seed and DELETES every
+  earlier note. CLAUDE.md warns about this and I did it anyway while staging an
+  unrelated fix. Restore with `git show <last-good>:.chief/state/progress.txt`
+  first, then append — and prefer staging files by name over `add -A` here.
+
+FINAL FULL GATE: `chief verify` exit 0, "verify: OK (allowing merge)", first
+attempt, no red runs and no flakes — zero occurrences of `BYSTANDER FAIL`,
+`verify: BLOCK` or `FAIL:` in the whole log. BYSTANDER PASS (60/60, including
+test/dirty-checkout.sh at [37/60] — the test that failed the PRIOR VERIFICATION,
+now green INSIDE a full run and not merely standalone), quality ratchet OK
+(duplicate_blocks 15 -> 9, function_length_max 596 -> 602 tol 15,
+single_use_functions 66 -> 66), VERSION-BUMP PASS (0.9.19 covers every
+engine/bin change), DOC-SYNC PASS (README + ROADMAP v0.9.19 == VERSION),
+check-doc-links 0 dead references, tasklist-categories OK (2 categorized).
