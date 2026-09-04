@@ -24,7 +24,17 @@
         "`docs/README.md` links every document. Unlinked is unreachable, and unreachable documentation still greps as current — which is how a reader finds it and believes it.",
         "Directories outside the standard's seven are either justified in writing as declared exceptions or their contents are moved. Do not move a directory other files cite without repointing them.",
         "GATES: the repo's own verify green."
-      ]
+      ],
+      "diffSize": {
+        "files": 10,
+        "lines": 169,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-2",
@@ -37,7 +47,17 @@
         "Duplicated documentation — the same fact stated in two places that can disagree — is reduced to one home with the other pointing at it. Two copies of one fact is the same defect as two implementations of one behaviour.",
         "Corrections are DATED and say what was wrong, in the house style used by this portfolio's corrections of record. A silently fixed doc teaches nobody why it drifted.",
         "GATES: the repo's own verify green."
-      ]
+      ],
+      "diffSize": {
+        "files": 16,
+        "lines": 345,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -49,7 +69,31 @@
         "Report what was left alone and why — a doc that looks stale but is the record of a decision is not stale, it is history, and this portfolio keeps those deliberately.",
         "State honestly what this sweep did NOT verify. Documentation correctness is not machine-checkable in general, and a claim that the docs are now true is stronger than the method supports.",
         "GATES: the repo's own verify green."
-      ]
+      ],
+      "diffSize": {
+        "files": 8,
+        "lines": 312,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "61fc39b",
+  "gates": {
+    "local": {
+      "state": "passed",
+      "detail": "the project verify hook (verify.sh) ran and exited 0"
+    },
+    "ci": [
+      {
+        "workflow": "ci",
+        "state": "unknown",
+        "detail": "a push of main can start it; whether it RAN for 61fc39b is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+      }
+    ]
+  }
 }
