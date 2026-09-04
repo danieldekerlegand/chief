@@ -957,6 +957,17 @@ if [ -n "${CHIEF_VERIFY_CACHE_STATE:-}" ] && [ -f "$_AGENT_DIR/lib.sh" ]; then
   # shellcheck source=engine/lib.sh
   . "$_AGENT_DIR/lib.sh"
 fi
+# HOST-WIDE GATE ADMISSION (engine/concurrency.sh), on the same terms as the three
+# above. This boundary is where the gate USUALLY runs: the verdict cache means the
+# merge phase most often replays what was recorded here, so budgeting only the merge
+# phase would budget the half that is already free. A missing file degrades to a
+# no-op — a reader over the registry that is not there admits everything.
+if [ -f "$_AGENT_DIR/concurrency.sh" ]; then
+  # shellcheck source=engine/concurrency.sh
+  . "$_AGENT_DIR/concurrency.sh"
+else
+  chief_machine_gate_admit() { return 0; }
+fi
 # The HUMAN-APPROVAL half of the plan checkpoint (engine/review.sh), on the same
 # terms again — with one difference that matters: its absent-file fallback is not a
 # no-op. A plan-review tasklist running on an install that has no review.sh has no
@@ -1071,7 +1082,14 @@ _agent_verify_final() {
   # agent turn against 900s: talos:83 read `stalled in agent-turn — no activity for
   # 1h06m` while the gate it was waiting on was doing its job. The right threshold
   # already existed; this is the second publisher of the phase that earns it.
+  # Read the phase to restore BEFORE the admission hold, which publishes one of its
+  # own: reading it after would restore `gate-budget-waiting` on the way out and leave
+  # a phase that outlives the thing it describes.
   prev_phase="$(live_get "$LIVE" phase)"
+  # Wait for a host gate slot BEFORE the hook starts. Only a MISS reaches here — a
+  # cache hit costs nothing and was answered above — so the hold is paid exactly when
+  # a gate is about to spend cores.
+  chief_machine_gate_admit "$CHIEF_TASKLIST" "$LIVE" "${CHIEF_MACHINE_BUDGET_LOG:-}"
   live_set "$LIVE" phase=verifying
   vlog="$(mktemp "${TMPDIR:-/tmp}/chief-verify.XXXXXX")"
   # `tee` into $vlog on the way past: the bytes still stream (nothing is buffered

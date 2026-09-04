@@ -1580,3 +1580,61 @@ now green INSIDE a full run and not merely standalone), quality ratchet OK
 single_use_functions 66 -> 66), VERSION-BUMP PASS (0.9.19 covers every
 engine/bin change), DOC-SYNC PASS (README + ROADMAP v0.9.19 == VERSION),
 check-doc-links 0 dead references, tasklist-categories OK (2 categorized).
+
+## 121 US-1 — Gates are budgeted as their own resource
+Fri Sep  4 2026
+
+The machine budget limited AGENT TURNS (provider latency) against a ceiling derived
+from PHYSICAL CORES (the compute), so a 14-core host sat at load 14.32 with five
+turns live and nine slots nominally free. Added the second budget — the one that
+governs the resource the core count actually describes.
+
+Files:
+- `engine/concurrency.sh` — `CHIEF_MACHINE_GATE_BUDGET` (+ `_REQUESTED`/`_DISABLED`,
+  resolved inside the existing `chief_machine_budget_init` so `_ensure` can never
+  leave half the state at its file default). `chief_machine_gate_budget_allows`
+  (predicate, with the ZERO-GATES-ALWAYS-ADMITTED floor) · `chief_machine_gate_note`
+  (one line to the worker log + the run's `machine-budget.log`) ·
+  `chief_machine_gate_admit NAME [LIVE] [LOG]` (the blocking admission, bounded by
+  `CHIEF_MACHINE_GATE_HOLD_MAX`, publishing phase `gate-budget-waiting`).
+  `concurrency_phase_kind` narrowed: `merge-wait` and `merge-conflict` are no longer
+  gates.
+- `engine/driver.sh` — admit right AFTER the run's merge lock is acquired and before
+  any git/verify work; exports `CHIEF_MACHINE_BUDGET_LOG` to the worker.
+- `engine/agent.sh` — sources `concurrency.sh` (no-op fallback) and admits at
+  `_agent_verify_final`, on a cache MISS only.
+- `engine/monitor.sh` — `gate-budget-waiting` added to `STALE_QUIET_PHASES`.
+- `test/gate-budget.sh` (new, in all three gate lists) · `test/machine-budget.sh`
+  fixed · `docs/reference/concurrency.md` gains "The gate budget" · VERSION 0.9.19 →
+  0.9.20 + README/ROADMAP.
+
+### Learnings for future iterations
+
+- **`test/machine-budget.sh` had been asserting NOTHING on any host with >1 core.**
+  `concurrency.sh` captures the operator's request into `CHIEF_MACHINE_BUDGET_REQUESTED`
+  **at file level**, so a test that sets `CHIEF_MACHINE_BUDGET=1` *after* sourcing is
+  setting the very variable `chief_machine_budget_init` is about to overwrite with the
+  core count. Set an env-captured knob BEFORE the `.` — and note this test is in
+  `test/all.sh` only, which is why it rotted silently: it was in neither the merge gate
+  nor CI. Both lists now carry it (with `concurrency` and `gate-budget`).
+- **A phase list that is only DISPLAYED becomes load-bearing the moment something
+  budgets on it.** `concurrency_phase_kind` counted `merge-wait` (a worker asleep on a
+  lock) and `merge-conflict` (a parked terminal state) as gates. Harmless as a number
+  on `chief ps`; as an admission input it would let one run's merge queue read as N
+  gates and starve every other repo on the host. Before reading an existing counter,
+  check what it counts, not just what it is called.
+- **Read the phase you intend to RESTORE before publishing a new one.**
+  `_agent_verify_final` reads `prev_phase` to put back after the gate; the admission
+  hold publishes `gate-budget-waiting`, so ordering the two the obvious way would have
+  restored the hold's own phase and left it outliving the thing it described.
+- **An admission control needs two independent no-deadlock floors, not one.** The
+  predicate admits whenever nothing of chief's is gating (so a cleared host always
+  moves), and the wait itself is time-bounded (so a live record chief cannot clear —
+  a wedged gate, a stuck pid — releases anyway). Either alone is a single point of
+  permanent portfolio halt.
+- **`[ x ] && cmd` at the end of a `set -e` function is a returning-1 trap.** The new
+  predicates use `if … then return 0; fi` instead, which is also what makes them safe
+  to call from `driver.sh` and `agent.sh` (both `set -e`).
+- Still open for a later story: the opt-in **merge queue** (`engine/mergequeue.sh`)
+  runs its batch verify on its own path and is not yet admitted through the gate
+  budget. It is off by default, so the floor is covered.

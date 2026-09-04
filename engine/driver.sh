@@ -2486,6 +2486,9 @@ run_worker() {
   # is read-modify-write, so the two sides own disjoint fields without clobbering.
   local live; live="$(live_of "$name")"
   CHIEF_LIVE_FILE="$live"; export CHIEF_LIVE_FILE
+  # The run's machine-budget log, so the agent boundary's gate hold is appended to the
+  # same file the launch loop's agent-turn hold writes. One log, both budgets.
+  CHIEF_MACHINE_BUDGET_LOG="$STATE/machine-budget.log"; export CHIEF_MACHINE_BUDGET_LOG
   : > "$STATE/$name.status"
   rm -f "$STATE/$name.pending" 2>/dev/null || true   # stale: the tree it describes is about to go
   {
@@ -2899,6 +2902,14 @@ run_worker() {
     live_set "$live" phase=merge-wait
     while ! mkdir "$MERGE_LOCK" 2>/dev/null; do sleep 2; waited=$(( waited + 1 )); live_set "$live"; done
     echo ">> $name acquired merge lock after ${waited}x2s"
+    # HOST-WIDE GATE ADMISSION. $MERGE_LOCK serializes THIS run's merges; nothing
+    # serialized the machine's, so five repos at -p1 could each begin a full gate at
+    # once on a 14-core box while the agent-turn budget still reported nine free
+    # slots. Held here — after this run's own lock, before the first git or verify
+    # work — so at most one worker per run ever occupies a host gate slot, and each
+    # entrant to the merge phase is admitted on a freshly sampled count. Admission
+    # only: a gate already running is never touched (engine/concurrency.sh).
+    chief_machine_gate_admit "$name" "$live" "$STATE/machine-budget.log"
     (
       # Rebase/verify/merge happen in the WORK repo (the submodule for `repo:<sub>`,
       # else the project). On exit, restore its base branch. For a submodule the

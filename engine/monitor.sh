@@ -116,7 +116,7 @@ case "$STALE_AFTER" in ''|*[!0-9]*) STALE_AFTER=900 ;; esac
 #                      be 36m quiet and working (cuneiform:314, 2026-08-13 — the child
 #                      test binary changed between samples). Indistinguishable from a
 #                      wedged one from out here, so: a longer threshold, not silence.
-STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting provider-unavailable '
+STALE_QUIET_PHASES=' rate-limited-waiting rate-limited operator-paused awaiting-review awaiting-decision decision-declined awaiting-approval machine-budget-waiting gate-budget-waiting provider-unavailable '
 
 # The CEILING on that exemption — quiet by design is not quiet forever. A usage window
 # that never reopens is exactly what an operator has to be told about, so the exemption

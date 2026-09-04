@@ -24,6 +24,32 @@ CHIEF_MACHINE_BUDGET_DISABLED=0
 CHIEF_MACHINE_BUDGET_READY=0
 CHIEF_MACHINE_LOAD_AVERAGE=""
 
+# THE SECOND BUDGET, and the expensive one. An agent turn is dominated by
+# `provider-waiting` -- network latency, not compute; the phase table gives that
+# phase a 900s staleness threshold for exactly that reason. A GATE (rebase, build,
+# full test suite) IS the compute. Budgeting agent turns against the physical core
+# count therefore limits the CHEAP resource with a number derived from the EXPENSIVE
+# one, which is how a 14-core host reached load average 14.32 with five turns live
+# and nine slots still nominally free (2026-09-03).
+#
+# THE DEFAULT IS 2, AND IT IS A RATIO RATHER THAN A FEEL. cuneiform caps cargo at
+# `jobs = 7` with its reasoning written down: "7 is half the physical cores, chosen
+# so TWO concurrent gates exactly saturate the machine rather than oversubscribing
+# it 2x." A per-repo cap expressed as a FRACTION of the host saturates at
+# cores / (cores/2) = 2 gates at ANY core count, so this default deliberately does
+# NOT scale with cores -- it is the reciprocal of the share each gate already claims
+# for itself. Chief cannot read another repo's job cap, so 2 is the number that makes
+# cuneiform's stated assumption true host-wide instead of true only inside cuneiform.
+# A host too small to give one gate that share falls to the floor of 1.
+#
+# It is a SEPARATE knob from CHIEF_MACHINE_BUDGET, which keeps its own default (the
+# core count), its own env override and its own 0|off|false|none escape hatch. The
+# two govern different resources and collapsing them is the defect this fixes.
+CHIEF_MACHINE_GATE_BUDGET_REQUESTED="${CHIEF_MACHINE_GATE_BUDGET-}"
+CHIEF_MACHINE_GATE_BUDGET=2
+CHIEF_MACHINE_GATE_BUDGET_DISABLED=0
+CHIEF_MACHINE_GATE_WAITED=0
+
 chief_machine_core_count() {
   local n
   n="$(sysctl -n hw.physicalcpu 2>/dev/null || echo)"
@@ -49,6 +75,18 @@ chief_machine_budget_init() {
     ''|*[!0-9]*) CHIEF_MACHINE_BUDGET="$CHIEF_MACHINE_CORES" ;;
     *) CHIEF_MACHINE_BUDGET="$requested" ;;
   esac
+  # The gate budget resolves here too, from its own request and by its own rule --
+  # one init so `chief_machine_budget_ensure` cannot leave half the state at its
+  # file-level default, which is the drift that made `chief ps` print 1 core on a
+  # 14-core host.
+  local gate="${CHIEF_MACHINE_GATE_BUDGET_REQUESTED-}"
+  CHIEF_MACHINE_GATE_BUDGET_DISABLED=0
+  case "$gate" in
+    0|off|false|none) CHIEF_MACHINE_GATE_BUDGET_DISABLED=1; CHIEF_MACHINE_GATE_BUDGET=0 ;;
+    ''|*[!0-9]*) CHIEF_MACHINE_GATE_BUDGET=2 ;;
+    *) CHIEF_MACHINE_GATE_BUDGET="$gate" ;;
+  esac
+  [ "$CHIEF_MACHINE_CORES" -ge 2 ] || CHIEF_MACHINE_GATE_BUDGET=1
   CHIEF_MACHINE_BUDGET_READY=1
 }
 
@@ -64,6 +102,65 @@ chief_machine_budget_ensure() {
 chief_machine_budget_allows() {
   chief_machine_budget_ensure
   [ "$CHIEF_MACHINE_BUDGET_DISABLED" = 1 ] || [ "$CHIEF_MACHINE_AGENT_TURNS" -lt "$CHIEF_MACHINE_BUDGET" ]
+}
+
+# The gate budget's ONE hard invariant: it may hold a gate back, and it may never
+# refuse EVERY gate. Zero gates live is admitted unconditionally -- whatever the
+# budget, whatever the load -- so a scheduler that has stopped the world cannot also
+# have stopped itself. A capacity control that can refuse everything halts the
+# portfolio permanently, which is strictly worse than the contention it prevents.
+chief_machine_gate_budget_allows() {
+  chief_machine_budget_ensure
+  if [ "$CHIEF_MACHINE_GATE_BUDGET_DISABLED" = 1 ]; then return 0; fi
+  if [ "${CHIEF_MACHINE_GATES:-0}" -le 0 ]; then return 0; fi
+  [ "$CHIEF_MACHINE_GATES" -lt "$CHIEF_MACHINE_GATE_BUDGET" ]
+}
+
+# One line, printed to the worker's log and appended to the run's machine-budget.log
+# so a hold reads the same way the agent-turn hold already does.
+chief_machine_gate_note() {
+  printf '  %s\n' "${2:-}"
+  [ -n "${1:-}" ] || return 0
+  printf '%s\n' "$(date +%s) ${2:-}" >> "$1" 2>/dev/null || true
+}
+
+# chief_machine_gate_admit NAME [LIVE_FILE] [LOG_FILE]
+# BLOCKS until the host has room for one more gate, then returns 0.
+#
+# ADMISSION ONLY. It never kills, suspends or restarts a gate already running: an
+# interrupted gate is a corrupt verdict and a wasted rebuild, which costs more than
+# the contention. The only lever is WHEN a worker is allowed to begin one.
+#
+# IT ALWAYS RETURNS 0 EVENTUALLY, on two independent floors. The predicate admits
+# whenever nothing of chief's is gating, and the wait itself is bounded by
+# CHIEF_MACHINE_GATE_HOLD_MAX (default 1800s), after which the gate starts anyway
+# and says so in the log. Neither floor depends on the other being correct.
+chief_machine_gate_admit() {
+  local name="${1:-gate}" live="${2:-}" log="${3:-}" said=0 waited=0
+  local step="${CHIEF_MACHINE_GATE_POLL:-5}" max="${CHIEF_MACHINE_GATE_HOLD_MAX:-1800}"
+  CHIEF_MACHINE_GATE_WAITED=0
+  chief_machine_budget_ensure
+  if [ "$CHIEF_MACHINE_GATE_BUDGET_DISABLED" = 1 ]; then return 0; fi
+  while :; do
+    chief_machine_activity "${CHIEF_RUNS:-}"
+    if chief_machine_gate_budget_allows; then break; fi
+    if [ "$waited" -ge "$max" ]; then
+      chief_machine_gate_note "$log" "RELEASE $name gate budget hold spent after ${waited}s (CHIEF_MACHINE_GATE_HOLD_MAX=$max) — starting anyway at $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s)"
+      break
+    fi
+    if [ "$said" = 0 ]; then
+      said=1
+      chief_machine_gate_note "$log" "⏸ HOLD $name gate budget: $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s) live across the machine"
+    fi
+    if [ -n "$live" ] && command -v live_set >/dev/null 2>&1; then
+      live_set "$live" phase=gate-budget-waiting
+    fi
+    sleep "$step"
+    waited=$(( waited + step ))
+  done
+  CHIEF_MACHINE_GATE_WAITED="$waited"
+  [ "$said" = 0 ] || chief_machine_gate_note "$log" "RESUME $name admitted at $CHIEF_MACHINE_GATES/$CHIEF_MACHINE_GATE_BUDGET gate(s) after ${waited}s"
+  return 0
 }
 
 chief_machine_load_average() {
@@ -119,7 +216,12 @@ concurrency_phase_kind() {
   case "${1:-}" in
     agent-turn|provider-waiting|writing|integrating|re-dispatch|rate-limited-waiting)
       printf agent ;;
-    worktree|warmup|reconcile|merge-wait|rebasing|verifying|zone-check|merging|merge-conflict)
+    # WHAT A GATE COSTS, not what happens near one. `merge-wait` is a worker sleeping
+    # on its run's merge lock and `merge-conflict` is a parked terminal state; neither
+    # spends a core, and both used to count. That was harmless while the number was
+    # only printed — now that admission READS it, N workers queued behind one lock
+    # would read as N gates and starve every other repo on the host.
+    worktree|warmup|reconcile|rebasing|verifying|zone-check|merging)
       printf gate ;;
   esac
 }
