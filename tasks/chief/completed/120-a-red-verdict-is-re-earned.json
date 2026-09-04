@@ -31,7 +31,17 @@
         "The caller's behaviour on a reused RED is identical to a freshly-run red: `COMPLETE_OK` is set to 0 and completion is refused. A reused red must never read as a pass. Assert this over `_agent_verify_final` itself, not only over `verify_cache_try` in isolation — the bug this guards against is a status inverted on the way out.",
         "The announcement line distinguishes the two: the green path keeps its existing `verify SKIPPED: … (GREEN verdict from …)` wording, and the red path says so in its own words, naming the record it came from. An operator reading a log must never have to guess whether a gate ran.",
         "The recorded FAILURE OUTPUT is replayed, not just the status. A reused red that prints no reason leaves the agent with a blocked completion and no failing test named — which is the `119` invisibility bug reintroduced through a different door. If the current record does not retain enough output to do this, `verify_cache_record` is extended to retain it."
-      ]
+      ],
+      "diffSize": {
+        "files": 13,
+        "lines": 431,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
     },
     {
       "id": "US-2",
@@ -42,7 +52,17 @@
         "An explicit escape hatch re-runs the gate and overwrites the record even when a matching one exists — an env var in the same style as the rest of the engine's toggles, documented where the other toggles are documented.",
         "The hatch is asserted by a test: with a red record present and the hatch set, the hook RUNS (drive a hook that appends to a file and assert the file grew); with it unset, the hook does not run.",
         "A genuinely flaky gate therefore stays reachable, and the reasoning for why the default is safe — identical tree, identical base, identical hook is the same computation — is written down next to the code rather than only in this description."
-      ]
+      ],
+      "diffSize": {
+        "files": 10,
+        "lines": 184,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     },
     {
       "id": "US-3",
@@ -53,7 +73,31 @@
         "A test drives the real loop shape that produced this: a hook that fails, an agent iteration that changes nothing, and a second iteration. Assert the hook is invoked ONCE across both, and that both iterations refuse completion.",
         "A follow-up iteration that DOES change the tree re-runs the hook — the key moves, the cache misses. Assert this in the same test so the fix cannot be over-applied into a cache that never invalidates.",
         "`docs/` records the cache's contract in one place: what the key is made of, why each of its three components is in it, and that the verdict is reused for any status. The `117` entry is updated to point at this rather than left implying green-only is deliberate."
-      ]
+      ],
+      "diffSize": {
+        "files": 6,
+        "lines": 202,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
     }
-  ]
+  ],
+  "mergedToMain": "6be380f",
+  "gates": {
+    "local": {
+      "state": "passed",
+      "detail": "the project verify hook (verify.sh) ran and exited 0"
+    },
+    "ci": [
+      {
+        "workflow": "ci",
+        "state": "unknown",
+        "detail": "a push of main can start it; whether it RAN for 6be380f is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+      }
+    ]
+  }
 }
