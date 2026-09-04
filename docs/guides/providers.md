@@ -1,6 +1,17 @@
 # Providers — the onboarding recipe
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-04 · **Owner:** chief
+
+> **Corrected 2026-09-04** (tasklist `901-docs-tell-the-truth`). This file's prose
+> still counted **four** providers; `codex` was promoted on 2026-08-19 and the roster
+> table below was updated then while the sentences around it were not — so the doc
+> whose entire job is to stop roster surfaces drifting had drifted against its own
+> table. Corrected to five, in the three places that counted. Also corrected: the
+> limit-detection caveat named three unverified providers and `codex` had been added
+> to the roster since (now four), and the **Related** link to `README.md` pointed at
+> `../README.md` — which resolves, to `docs/README.md`, and not to the repo README
+> the sentence describes. A link that resolves to the wrong document is invisible to
+> `scripts/check-doc-links.mjs` by construction.
 
 Chief drives an agent CLI, it doesn't embed one. The whole seam is a single `case`
 in [`engine/agent.sh`](../../engine/agent.sh)'s `_run_provider()`: chief composes the
@@ -21,7 +32,8 @@ half-wired.
 > strings named only three providers, and it appeared in no template, README row,
 > `chief models` case, or test. Every one of those is a line on the checklist
 > below that nobody knew to tick. Tasklist `85` worked the checklist and
-> **promoted amp** — every item below is now ticked for all four providers.
+> **promoted amp** — every item below was ticked for all four providers then, and
+> for all **five** since `codex` was promoted on 2026-08-19.
 
 ## Invariants a provider case must satisfy
 
@@ -281,13 +293,15 @@ amp's CLI has no model selector (it chooses its own model), so chief **refuses**
 `--model` for amp instead of ignoring it.
 
 **Limit detection caveat:** `RATE_LIMIT_PATTERN` has not been verified against
-devin's, opencode's or amp's limit phrasings — see
+devin's, opencode's, amp's or codex's limit phrasings — the four non-default
+providers, i.e. every one but `claude`, whose phrasings the pattern was written
+from — see
 [usage-limit detection](#usage-limit-detection). Their limit stops may still read as
 stalls; that gap is documented rather than assumed away.
 
 ## Related
 
-- [`README.md`](../README.md) — provider selection in the quickstart + command table.
+- [`README.md`](../../README.md) — provider selection in the quickstart + command table.
 - [`ROADMAP.md`](../../ROADMAP.md) — provider breadth as a tracked capability.
 - [`docs/guides/local-inference-preset.md`](local-inference-preset.md) — presets: a named
   bundle that resolves to an existing provider·model, the right home for

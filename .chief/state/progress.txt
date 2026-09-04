@@ -1818,3 +1818,99 @@ showed.
 - **The driver re-seeded `.chief/state/progress.txt` down to a 3-line header** at the
   top of this run (1,766 lines -> 3). Restored with
   `git show HEAD:.chief/state/progress.txt` before appending, per CLAUDE.md.
+
+---
+
+## 901-docs-tell-the-truth — US-2: Content that describes a tree that moved (2026-09-04)
+
+**Method.** Mechanical first, prose second. Every path, function name, `chief`
+subcommand and `CHIEF_*` identifier in `docs/` was extracted and resolved against the
+tree; that came back almost clean (96 cited paths, 1 unresolved — and it is
+`crossrepo_completed` inside the dead-code audit, which is history). So the drift was
+all in **claims**, which is what the story says: the half a link-checker cannot do.
+
+**What was actually wrong.**
+
+- **`docs/reference/events.md` was 8 events behind the engine.** 41 emitted, 33
+  documented. Found by diffing every `event_emit` literal in `bin/` + `engine/`
+  against the doc — *plus the two tables that emit through a variable*
+  (`worker_park`'s `$ev` in `driver.sh`, and `mergequeue.sh`), which is where 6 of the
+  8 were hiding. Missing: `story.unverified`, `tasklist.queued`,
+  `tasklist.unsatisfiable`, `tasklist.terminal-negative`, `tasklist.decision`,
+  `tasklist.awaiting-decision`, `tasklist.decision-declined`,
+  `tasklist.awaiting-approval`. Now 41/41. The same file's "one file per **run**" is
+  no longer the whole picture — `chief decide` and `chief retire --negative` write
+  `decisions.events.jsonl` / `retirements.events.jsonl`, and `chief events -l` globs
+  `*.events.jsonl` so it lists both in the **run-id column**.
+- **`docs/reference/tasklist-schema.md` never mentioned `category`.** 46 of this
+  repo's 47 tasklists carry it, `chief list` renders it, `chief status` breaks both
+  totals down by it, and `scripts/check-tasklist-categories.mjs` **blocks a merge**
+  without it. Documented, keeping the distinction the omission hid: the *field* is
+  chief-wide and opaque, the *vocabulary* (`fix | unblock | replace | feature`) is
+  this repo's own gate and no engine gate requires it.
+- **Duplication that had already disagreed.** (a) The same schema file stated the
+  DECISION/research note twice, back to back, in two wordings (`Set` / `Use`
+  `review:"decision"`). (b) The verdict-cache key is **four** components
+  (`tree · base · hook · subs`) and both `README.md` and `CLAUDE.md` still said
+  three. Corrected, with `verify-hook.md` named as the single home for that table.
+- **`docs/guides/providers.md` counted four providers.** `codex` was promoted
+  2026-08-19 and the roster *table* was updated then while the prose around it was
+  not — so the document whose whole job is to stop roster surfaces drifting had
+  drifted against its own table. Its `README.md` link also read `../README.md`, which
+  resolves — to `docs/README.md`, not the repo README the sentence describes.
+- **`CLAUDE.md`'s layout map was missing 13 of 33 `engine/` files** (`budget`,
+  `cigate`, `concurrency`, `gen`, `preset`, `quality`, `repeat`, `retire`, `review`,
+  `terminal`, `zones`, `instructions.md`, `plan-instructions.md`) **and 7 of 23
+  `bin/chief` subcommands** (`events`, `usage`, `quality`, `cigate`, `retire`,
+  `approve`, `decide`). Also `templates/` (+`quality.conf`, +`zones.conf`), `.chief/`
+  (+`quality.conf`), and a `docs/` block that predated the Diataxis restructure.
+- **Six `Updated:` stamps were older than the last change to what the document
+  says**, by up to three weeks. Restamped from git.
+
+**Where the corrections are recorded.** In-place under each `docs/` banner as
+`> **Corrected 2026-09-04**`, and indexed in a new **Corrections of record** section
+in `docs/README.md` — index, not a second home for the reasoning. The two root files
+carry no banner, so theirs live only in that index.
+
+**Files changed:** `docs/README.md`, `docs/reference/{events,tasklist-schema}.md`,
+`docs/guides/providers.md`, `README.md`, `CLAUDE.md`, `ROADMAP.md`, plus banner
+restamps in `docs/explanation/drivers-and-safety.md`,
+`docs/guides/headless-invocation.md`,
+`docs/reference/{roadmap-input,status,cross-repo-dependencies,verify-hook}.md`.
+
+### Learnings for future iterations
+
+- **`grep 'event_emit <name>'` undercounts the event contract by 20%.** Six of the
+  41 event types are emitted as `event_emit "$ev"` from a `case` table
+  (`worker_park` in `driver.sh`, and `mergequeue.sh`). Any audit of "what does chief
+  emit" has to union the literals with `grep -o 'ev=tasklist\.[a-z-]*'`, or it will
+  confidently report a complete catalogue that is missing every park and every
+  decision transition. The same shape will bite the next person who counts *states*.
+- **A link that resolves to the WRONG document is invisible to the link checker, by
+  construction.** `scripts/check-doc-links.mjs` answers "does the target exist"; it
+  cannot answer "is this the document the sentence means". `providers.md`'s
+  `[README.md](../README.md)` had pointed at `docs/README.md` since the Diataxis
+  restructure and passed every gate. Depth-changing moves need the *text* of each
+  link re-read, not just its resolution — and a `../README.md` or `../ROADMAP.md`
+  inside `docs/*/` is always worth a second look.
+- **`Updated:` needs a stated rule or the next sweep will pick a different one.**
+  Git's last-touch date is not it: 2026-08-15's `a999b57` repointed relative links in
+  four files without changing a single claim. The rule now written into
+  `docs/README.md` is *the last change to what the document **says***, which is why
+  four banners still read 2026-08-14 against an 08-15 git date. Stating the rule is
+  the point — the reason the previous sweep and this one disagreed is that neither
+  had one.
+- **The doc gate can be red on `main` and nobody sees it, because `.chief/verify.sh`
+  is diff-scoped.** `main` had no ROADMAP row for `121` — its retire commit never
+  wrote one — and `test/doc-sync.sh` therefore failed the moment this branch touched
+  `README.md`. On `main` itself the hook exits 0 in milliseconds with "no diff vs
+  main". Any branch touching a gated path inherits every pre-existing failure in that
+  path's scope; budget for it rather than being surprised by it.
+- **Deliberately NOT done, and recorded in `docs/README.md`:** the three-component
+  cache key is also in `engine/instructions.md` (injected into *every* agent prompt),
+  `bin/chief`'s `chief verify` hint and `engine/lib.sh`'s two `verify SKIPPED` lines.
+  All four are right about behaviour and understate the key. `test/version-bump.sh`
+  path-scopes on `engine/`/`bin/`/`scripts/`/`install.sh`, so correcting a *comment*
+  there obliges a `VERSION` bump no engine consumer can act on — the same argument
+  that already keeps `research-phase.md` at the `docs/` root. Fold it into the next
+  real engine change.

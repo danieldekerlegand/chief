@@ -1,6 +1,6 @@
 # Embedding chief — headless / programmatic invocation
 
-> **Status:** Current · **Updated:** 2026-08-14 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-08-26 · **Owner:** chief
 
 `chief run` is built for a human terminal: a schedule you read, a summary you skim.
 A **host app** embedding chief — a Cuneiform Riju agent, chief-cloud, a CI job — needs

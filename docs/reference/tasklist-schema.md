@@ -1,6 +1,17 @@
 # Tasklist schema
 
-> **Status:** Current · **Updated:** 2026-08-20 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-04 · **Owner:** chief
+
+> **Corrected 2026-09-04** (tasklist `901-docs-tell-the-truth`). Two defects, both
+> found by reading this file against the tree rather than against itself.
+> **(1) `category` was missing entirely.** 46 of this repo's 47 tasklists carry it
+> (the one exception is a completed record that predates the check), `bin/chief`'s
+> `list` renders it, `engine/status.sh` breaks both totals down by it, and `scripts/check-tasklist-categories.mjs` **fails the merge** when a
+> tasklist has none — and the schema reference named it zero times. It is documented
+> below, with the distinction that omission hid: the field is chief-wide and opaque,
+> the *vocabulary* is per-repo. **(2) The DECISION/research note was stated twice**,
+> back to back, in two wordings that had already begun to disagree (`Set
+> review:"decision"` / `Use review:"decision"`). Reduced to one.
 
 A tasklist is one JSON file in `tasks/chief/<name>.json`. `<name>` is its id
 (used for the branch, deps, and the completed record). It's a coherent unit of
@@ -11,6 +22,25 @@ work run to completion by a chain of agent iterations.
   "project": "my-project",
   "branchName": "chief/my-feature",     // branch the tasklist runs on
   "description": "One paragraph: what this tasklist delivers and why.",
+  "category": "fix",                     // what KIND of work this is. Chief itself holds
+                                         //   NO vocabulary: it is an OPAQUE STRING that
+                                         //   `chief list` renders and `chief status`
+                                         //   breaks its live and parked totals down by,
+                                         //   with an absent one reading as
+                                         //   `(uncategorized)`. No chief source file
+                                         //   names a set of values, and no engine gate
+                                         //   requires the field.
+                                         //   THE VOCABULARY IS THE PROJECT'S, and so is
+                                         //   the decision to enforce it: a repo declares
+                                         //   its ordering with CHIEF_CATEGORIES in
+                                         //   .chief/config, and may gate on it in its own
+                                         //   verify hook. Chief's repo does exactly that —
+                                         //   scripts/check-tasklist-categories.mjs blocks a
+                                         //   merge on a tasklist with no category or one
+                                         //   outside `fix | unblock | replace | feature` —
+                                         //   which is why every chief tasklist has one and
+                                         //   why yours needs one only if you write that
+                                         //   check. See status.md.
 
   "type": "DECISION",                     // optional: the deliverable is a human
                                              // verdict, not a merged branch. `kind:
@@ -99,10 +129,6 @@ work run to completion by a chain of agent iterations.
   // A DECISION tasklist always pays for research. Its brief names the options and
   // what each forecloses. Passing stories only prepares the brief; it cannot merge
   // or approve the choice. Set review:"decision" to use the existing review gate.
-
-  // A DECISION tasklist always pays for research. Its brief names the options and
-  // what each forecloses. Passing stories only prepares the brief; it cannot merge
-  // or approve the choice. Use review:"decision" for the existing review gate.
 
   "userStories": [
     {

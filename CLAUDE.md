@@ -73,7 +73,11 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · models · reap · pause · resume · verify · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [--merge-batch[=N]] [--headless] [--parked] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · events · usage · models · reap · quality · verify · cigate · retire · approve · decide · pause · resume · version · update
+                     #   (2026-09-04: the seven arms this line had never grown — events · usage ·
+                     #   quality · cigate · retire · approve · decide. test/doc-sync.sh gates the
+                     #   README's command table against this dispatch and nothing gates THIS line,
+                     #   which is exactly why it was the one that rotted)
 engine/
   driver.sh          #   scheduler + per-tasklist worker: worktree → agent loop → rebase → verify → merge
   agent.sh           #   one agent iteration (implement a single story)
@@ -226,6 +230,66 @@ engine/
                      #   flaky gate, or a joint failure — abandons it: every branch is restored to
                      #   the sha its worker finished on and re-run serially. Bisect assumes the gate
                      #   is a deterministic function of the tree; CHIEF_MERGE_BATCH_BISECT=0 opts out
+  concurrency.sh     #   the HOST-WIDE machine view: a READER over the same run registry `chief ps`
+                     #   uses, owning no lock, daemon or second state store. A driver pid is the
+                     #   authority for whether a record is live; the tasklist live records then say
+                     #   whether that driver is spending an AGENT TURN or running a GATE — two
+                     #   budgets, because they cost different things. Sets globals rather than
+                     #   printing: every display line here is a `$( )`, and a global written inside
+                     #   one is lost, so `render` and the driver's banner sample the load ONCE in
+                     #   the parent before anything reads
+  budget.sh          #   the DIFF-SIZE BUDGET: how large one STORY's change was allowed to get,
+                     #   measured on the branch about to merge. The other half of zones.sh's
+                     #   finding — change size is the lever an orchestrator actually controls.
+                     #   WARNS by default and blocks only on request, because a rename sweep, a
+                     #   codemod and a real refactor are all legitimately big and a gate that
+                     #   stops them is a gate that gets turned off
+  zones.sh           #   the OVERLAP ZONE REGISTRY, a policy layer ABOVE the merge floor. The floor
+                     #   catches TEXTUAL interference (rebase conflict) and staleness (verify
+                     #   failure); it says nothing about two branches whose DESIGNS disagree — both
+                     #   rebase clean, both verify green, the result is still wrong. No automated
+                     #   gate detects that, so a declared domain holds the branch for `chief approve`
+  review.sh          #   the HUMAN half of the plan checkpoint (docs/plan-review.md): a person reads
+                     #   the plan artifact and only an APPROVED plan reaches implementation. The
+                     #   review SURFACE is adopted, not built (plannotator's one-shot approval gate),
+                     #   and an approval is bound by checksum to the plan it approved
+  terminal.sh        #   A STORY WHOSE CORRECT ANSWER IS `false`. Chief had one notion of done —
+                     #   every story passes:true — so a story whose honest measured result is
+                     #   NEGATIVE made its tasklist permanently uncompletable. `terminalFalse` is
+                     #   the hand-authored declaration that a negative finding IS the deliverable
+  repeat.sh          #   the SAFETY NET for terminal.sh's declaration, because the tasklist that
+                     #   needs it is exactly the one nobody thought to write it on: a story
+                     #   recording the SAME outcome at REPEAT_LIMIT consecutive iteration
+                     #   boundaries stops as CANNOT-COMPLETE. Invisible to the stall counter,
+                     #   which is the whole reason it is its own module — commits landed on every
+                     #   one of those iterations
+  retire.sh          #   RETIRING A TASKLIST WHOSE ANSWER WAS NO (`chief retire --negative`), the
+                     #   command the 59-iteration incident had nowhere to land: delivered stories
+                     #   passed, the remaining one terminated false and carries its measurement.
+                     #   REFUSES a tasklist that is merely unfinished, and one live tasklists still
+                     #   depend on — a record with no mergedToMain satisfies no dependency edge
+  quality.sh         #   DETERMINISTIC code-quality metrics and the RATCHET over them (`chief
+                     #   quality`), the merge gate's second axis: verify.sh answers only "did the
+                     #   gates exit 0", and the maintainability damage shows up in weeks. Every
+                     #   number is awk over text — NO model judgment, and no hidden zeroes
+  cigate.sh          #   A GATE THAT DID NOT RUN IS NOT A GATE THAT PASSED (`chief cigate`).
+                     #   Measured across this portfolio 2026-08-25: every private repo's CI was
+                     #   dead and all three failures were byte-identical billing refusals, not code.
+                     #   Three states — RAN AND PASSED · RAN AND FAILED · DID NOT RUN — and the
+                     #   third is the one a green-or-red vocabulary cannot say
+  preset.sh          #   named run PRESETS: one switch resolving to a full provider · model ·
+                     #   endpoint bundle over the EXISTING provider seam, so the dry-run line, ps,
+                     #   monitor and the events keep reporting the plain resolved provider·model.
+                     #   A preset is NOT a provider, which is why endpoint/credential wiring lives
+                     #   here and never in a new dispatch case
+  gen.sh             #   ROADMAP → TASKLISTS (`chief gen`): one schema-valid tasks/chief/NN-slug.json
+                     #   per roadmap item. The operation an EMBEDDING HOST calls to author tasklists
+                     #   programmatically, so its INPUT SHAPE IS A PUBLISHED CONTRACT
+                     #   (docs/reference/roadmap-input.md), not an internal detail
+  instructions.md    #   the generic agent loop injected into every story turn; plan-instructions.md
+                     #   is the same for a PLAN turn. Prose, not code — but templates/agent-context.md
+                     #   QUOTES these headings verbatim while explaining them, so a behavioural test
+                     #   must never assert on a heading that appears in both
   live.sh            #   per-tasklist liveliness record (iteration · story · phase · last activity), read by ps/monitor
   events.sh          #   append-only NDJSON event stream ($CHIEF_RUNS/<run-id>.events.jsonl) — a projection
                      #   of the transitions above, for chief-cloud + embedding hosts to subscribe to
@@ -260,7 +324,7 @@ engine/
                      #   across containers is never read as "that pid is dead". `chief reap` runs the
                      #   DISK pass too (--no-disk / --disk-only / --disk-age), under the same
                      #   foreign-registry refusal — misreading a live run there deletes a build
-templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json)
+templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json · quality.conf · zones.conf)
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
 test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git + jq)
@@ -280,7 +344,7 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   DIRECTLY against a scratch repo — no driver, one second, and the
                      #   assertion is the number of times the HOOK ITSELF executed, never a
                      #   log line. Its hook lives OUTSIDE the repo (via $CHIEF_VERIFY_HOOK)
-                     #   so the `tree.base.hook` key's three halves can be moved one at a
+                     #   so the `tree.base.hook.subs` key's components can be moved one at a
                      #   time. REPRODUCES first, like monitor-orphan.sh
                      #   doc-claims.sh — engine/claims.sh against the incident it exists
                      #   for: koine's document claiming an agora path is ABSENT, an agora
@@ -299,11 +363,20 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   no merge commit, no completed/ record and NO retire commit
                      #   stranded on the branch. MUTATION-CHECKED both ways — on the
                      #   unfixed engine both parts report `MERGED @<branch tip>`
-docs/                # tasklist schema · roadmap-input contract (chief gen) · chief status (scope + ignore list) ·
-                     # verify-hook contract · parallel-safety
-                     # model · containers.md (running chief in a container/Riju workspace) ·
-                     # research-phase.md + plan-review.md (the two opt-in review checkpoints)
-.chief/              # created by `chief init`: config · verify.sh · agent-context.md · state/ (gitignored)
+docs/                # Diataxis, per the ecosystem documentation standard, and docs/README.md is
+                     # the map: A DOCUMENT NOT LINKED THERE DOES NOT EXIST. guides/ (containers ·
+                     # headless-invocation · local-inference-preset · monitoring · providers) ·
+                     # reference/ (tasklist-schema · roadmap-input · status · verify-hook · events ·
+                     # concurrency · cross-repo-dependencies · decision-tasklists · diff-budget ·
+                     # overlap-zones · provider-unavailability · account-credentials · usage) ·
+                     # explanation/ (drivers-and-safety = the parallel-safety model · dead-code-audit) ·
+                     # decisions/ (immutable; superseded by a successor, never edited in place).
+                     # research-phase.md and plan-review.md (the two opt-in review checkpoints) sit at
+                     # the docs/ ROOT as a declared exception — they are cited by bare path from ~30
+                     # places in bin/ and engine/, so moving them is an engine change that would owe a
+                     # VERSION bump no engine consumer could act on. The reasoning is written down in
+                     # docs/README.md rather than left for a reader to wonder about
+.chief/              # created by `chief init`: config · verify.sh · agent-context.md · quality.conf · state/ (gitignored)
 VERSION              # engine version — bump on any engine/bin/install change
 ```
 
