@@ -1091,16 +1091,37 @@ submodules_sync() {
 # git processes chief does not own — an operator's editor, a `git status` in the same
 # checkout — contend for that file too, and holding chief's lock across a rebase and a
 # ten-minute verify is not an option. So: bounded attempts, then an honest non-zero.
+#
+# And an honest non-zero has to carry a REASON. The retries cover the race they were
+# written for; what they cannot cover is a lock left behind by a process that CRASHED
+# holding it — a stale `.git/index.lock` never clears itself, so every attempt dies
+# identically and the caller reports a bare failure. git's own message is the one thing
+# that separates the two cases, and for the second it says exactly what to do ("a git
+# process may have crashed in this repository earlier: remove the file manually to
+# continue"). Every call site discarded it. $WORK_CHECKOUT_OUT retains the LAST
+# attempt's output so the failure arms can print it; the happy path is unchanged, since
+# a successful checkout's chatter is still never shown.
 work_checkout() {
   local repo="$1" ref="$2" label="${3:-chief}" rc=0 try=0
+  WORK_CHECKOUT_OUT=""
   while :; do
-    rc=0; git -C "$repo" checkout "$ref" >/dev/null 2>&1 || rc=$?
+    rc=0; WORK_CHECKOUT_OUT="$(git -C "$repo" checkout "$ref" 2>&1)" || rc=$?
     [ "$rc" = 0 ] && break
     [ "$try" -ge "${CHIEF_CHECKOUT_RETRIES:-3}" ] && break
     try=$(( try + 1 )); sleep 1
   done
   [ "$rc" = 0 ] && submodules_sync "$repo" "$label"
   return "$rc"
+}
+
+# work_checkout_cause INDENT — git's own diagnosis of the last FAILED work_checkout,
+# indented for the arm that is reporting it, or nothing at all when git said nothing.
+# Always returns 0: both callers are on their way to their own exit status and neither
+# may be diverted by an empty answer.
+work_checkout_cause() {
+  [ -n "${WORK_CHECKOUT_OUT:-}" ] || return 0
+  printf '%s\n' "$WORK_CHECKOUT_OUT" | sed "s/^/$1/"
+  return 0
 }
 
 # work_checkout_or_stop REPO REF NAME LIVE — the GUARDED form, at BOTH ends of the merge
@@ -1123,6 +1144,7 @@ work_checkout_or_stop() {
   event_emit tasklist.checkout-failed name="$name" state=failed detail="git checkout $ref failed in $repo"
   echo "CHECKOUT-FAILED" > "$STATE/$name.status"
   echo "!! $name: git could not check out $ref in $repo (retried) — nothing merged, $ref untouched, branch kept for the next run"
+  work_checkout_cause "   "
   return 1
 }
 
@@ -2303,7 +2325,19 @@ if [ "$FORCE" != "1" ]; then
           git -C "$REPO" add -A 2>/dev/null || true
           git -C "$REPO" commit -q -m "wip(chief): recovered from an interrupted run on $cur" 2>/dev/null || true
         fi
-        git -C "$REPO" checkout "$BASE_BRANCH" >/dev/null 2>&1 || { echo "ERROR: could not restore '$BASE_BRANCH' from '$cur' — resolve by hand." >&2; exit "$(hl_rc "$HL_RC_CONFIG" 1)"; }
+        # work_checkout, never a bare `git checkout` (the same rule the merge phase
+        # follows). This arm recovers from a run that CRASHED, and the residue a crash
+        # most characteristically leaves in this repo is a lock on the index — held by
+        # the very `git checkout` the kill landed inside. So the one checkout that most
+        # needs the retries, and most needs to say what defeated it, was the one place
+        # still calling git bare and sending its diagnosis to /dev/null. Every command
+        # in this arm swallows its own error, which is why a failure here reported
+        # "resolve by hand" without naming anything to resolve.
+        if ! work_checkout "$REPO" "$BASE_BRANCH" auto-recover; then
+          echo "ERROR: could not restore '$BASE_BRANCH' from '$cur' — resolve by hand." >&2
+          work_checkout_cause "       " >&2
+          exit "$(hl_rc "$HL_RC_CONFIG" 1)"
+        fi
         cur="$BASE_BRANCH" ;;
       *) echo "ERROR: not on '$BASE_BRANCH' (on '$cur') — every worktree in this run forks from '$BASE_BRANCH' and every merge lands there, so a run started from here builds against a base you are not looking at." >&2
          echo "       git checkout $BASE_BRANCH   (or FORCE=1 to run anyway)" >&2

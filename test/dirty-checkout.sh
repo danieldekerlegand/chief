@@ -328,4 +328,59 @@ has "$MARK" "$(cat "$REPO/docs.txt")" \
   || fail "the operator's uncommitted work did not survive a FORCE=1 run"
 [ -z "$(stash_list)" ] || fail "the FORCE=1 run left work in the stash: $(stash_list)"
 
-echo "DIRTY-CHECKOUT PASS — a work repo that goes dirty mid-run still merges, the merge-time gate never sees the operator's edit, the edit comes back in both its staged and unstaged states, a conflicting replay drops nothing and names the stash, a SIGKILL mid-merge leaves the work in git's stash for the next run to hand back, and the startup gate blocks for the AGENT's fork point (saying so) while FORCE=1 still runs and still merges"
+# ── E. THE STRANDED BASE — a recovery that fails must name what defeated it ───
+# C's kill is a RACE, and where it lands decides what it leaves behind. When it
+# lands INSIDE the base repo's own `git checkout` — which is the very next thing
+# the merge phase does after parking the stash, so it is a wide window — it
+# leaves a `.git/index.lock` nobody will ever release. That lock does not clear
+# itself, so the NEXT run's auto-recover arm (whose entire job is recovering a
+# repo a crashed run stranded) failed every attempt and reported "resolve by
+# hand" with git's own diagnosis sent to /dev/null — the one message that names
+# the file to remove. Seen as an intermittent failure of C under load
+# (2026-09-04, load 16.58 on 14 cores): the auto-recover line announced the
+# restore and the next line was the bare ERROR, with nothing to act on.
+#
+# The race cannot be reproduced on demand, so this pins the STATE it produces:
+# strand the repo the way the kill does, and plant the residue the kill leaves.
+git -C "$REPO" reset -q --hard >/dev/null 2>&1 || true
+# B-D retired every fixture tasklist, and chief stops at "no tasklists" before it
+# ever looks at the checkout — so this needs live work to be stopped from starting.
+jq -n --arg b "chief/dc-stranded" \
+   '{project:"dc",branchName:$b,description:"dirty-checkout fixture",iters:2,
+     dependsOn:[],touches:[],warmup:[],
+     userStories:[{id:"US-1",title:"story",description:"",
+                   acceptanceCriteria:["out/<name>-US-1.txt"],passes:false,notes:""}]}' \
+   > "$REPO/tasks/chief/dc-stranded.json"
+git -C "$REPO" add -A >/dev/null 2>&1 && git -C "$REPO" commit -q -m "fixture: a tasklist for E" >/dev/null 2>&1
+git -C "$REPO" checkout -q -B chief/dc-stranded >/dev/null 2>&1 \
+  || fail "fixture: could not strand the base repo on a chief/* branch"
+: > "$REPO/.git/index.lock"
+
+CUR=dc-stranded
+( cd "$REPO" && PATH="$WORK/fakebin:$PATH" WT_ROOT="$WORK/wt" \
+    CHIEF_TEST_BASE_REPO="$REPO" CHIEF_TEST_MARK="$MARK" CHIEF_CHECKOUT_RETRIES=0 \
+    "$CHIEF" run dc-stranded ) >"$WORK/dc-stranded.log" 2>&1 && src=0 || src=$?
+slog="$(run_log dc-stranded)"
+[ "$src" != 0 ] || fail "a base repo that could NOT be restored still started a run: $slog"
+has "auto-recover" "$slog" \
+  || fail "a repo stranded on a chief/* branch did not reach the auto-recover arm: $slog"
+has "could not restore" "$slog" \
+  || fail "the failed recovery did not report that it could not restore the base: $slog"
+has "index.lock" "$slog" \
+  || fail "the failed recovery did not name WHAT defeated it — git's diagnosis is the only thing that says which file to remove, and discarding it is what made this failure undiagnosable in the field: $slog"
+
+# The stranding must also be non-destructive: a recovery that cannot finish may
+# not leave the operator worse off than the crash did.
+[ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = chief/dc-stranded ] \
+  || fail "the failed recovery moved HEAD anyway — it must leave the repo where it found it"
+
+# And with the crash residue cleared it recovers on its own, as it always claimed
+# to — so the arm is still doing its job, and E is not just asserting a failure.
+rm -f "$REPO/.git/index.lock"
+( cd "$REPO" && PATH="$WORK/fakebin:$PATH" WT_ROOT="$WORK/wt" \
+    CHIEF_TEST_BASE_REPO="$REPO" CHIEF_TEST_MARK="$MARK" \
+    "$CHIEF" run dc-stranded ) >"$WORK/dc-stranded.log" 2>&1 || true
+[ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = main ] \
+  || fail "auto-recover did not restore 'main' once the stale lock was gone — got '$(git -C "$REPO" rev-parse --abbrev-ref HEAD)': $(run_log dc-stranded)"
+
+echo "DIRTY-CHECKOUT PASS — a work repo that goes dirty mid-run still merges, the merge-time gate never sees the operator's edit, the edit comes back in both its staged and unstaged states, a conflicting replay drops nothing and names the stash, a SIGKILL mid-merge leaves the work in git's stash for the next run to hand back, the startup gate blocks for the AGENT's fork point (saying so) while FORCE=1 still runs and still merges, and a base stranded by a crash that left a lock behind is recovered once the lock is gone and NAMES that lock when it cannot be"

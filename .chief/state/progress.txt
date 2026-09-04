@@ -1,1460 +1,466 @@
-# Chief Progress — 116-a-decision-tasklist-cannot-finish
-Started: Wed Aug 26 19:38:22 CDT 2026
+# Chief Progress — 120-a-red-verdict-is-re-earned
+Started: Fri Sep  4 08:10:51 CDT 2026
 ---
 
-## US-1 — A recorded verdict is read, and the tasklist proceeds
-Wed Aug 26 2026
-
-`chief decide` wrote `.verdict` and nothing ever read it; the driver's decision halt
-parked unconditionally on every subsequent run. Closed the loop.
-
-Files:
-- `engine/decision.sh` — the shape, defined once beside `is_decision_tasklist`:
-  `decision_verdict_file` (where the durable record lives), `decision_verdict_json`
-  (THE object, written to both places by one caller), `decision_stories_id` (the
-  checksum binding), `decision_verdict_set` (the reader → DECISION_STATE ∈
-  none|stale|recorded + CHOICE/NOTE/ACTION/DETAIL globals).
-- `bin/chief` `cmd_decide` — records the bound verdict into the tasklist AND into
-  `.chief/state/decisions/<name>.json`; usage text updated.
-- `engine/driver.sh` — the halt now calls `decision_verdict_set` and only parks when
-  the state is not `recorded`; a recorded verdict logs `>> NAME DECIDED — …` and falls
-  through to the ordinary verify+merge path.
-- `test/decision-e2e.sh` (new, in all three gate lists) — the sequence that had never
-  executed. `test/decision.sh` fixed: it copied `tasks/chief/106-…json`, which stopped
-  existing when 106 retired, so every assertion in it ran against a non-DECISION
-  tasklist. `VERSION` 0.9.5 → 0.9.6 + README/ROADMAP.
-
-### Learnings for future iterations
-
-- **Where a verdict may NOT live: the tasklist JSON.** Two independent failures. (1)
-  `run_worker`'s isolation guard runs `git checkout -- "$TASKS_REL/$name.json"` in the
-  PROJECT checkout on every iteration — an uncommitted field there is silently
-  discarded before the decision arm ever reads it. (2) Committing it on the base is
-  worse: the branch waiting on the decision has almost always committed its own edit to
-  that same file (the pass-flags), so the verdict commit collides at rebase and ends the
-  decided tasklist in REBASE-CONFLICT. Gitignored state under `$STATE_ROOT` is invisible
-  to both — the same rule CLAUDE.md already states for pause/research/snapshot files.
-- **The driver reads `$SRC`/state, never the worktree copy, for anything an operator
-  authored.** The worktree's `tasks/…` and `.chief/state/prd.json` are both writable by
-  the agent; `test/decision-agent.sh` exists precisely because an agent will write a
-  `.verdict` if you let it count.
-- **Bind an approval by a PROJECTION, not by bytes.** `passes`/`notes` differ between
-  the copy an operator decided from and the copy about to merge, so a raw-bytes checksum
-  never matches once. `{id,title,acceptanceCriteria}` is what a human said yes to.
-  (`decision_stories_id`, mirroring `review_plan_id`.)
-- **`worker_park`'s `!!` line goes to `$STATE/parallel/<name>.log`, not to the run's
-  stdout** — the scheduler summary carries only the status line. A test asserting on a
-  park's REASON has to read the per-tasklist log.
-- **A test fixture built from a live `tasks/chief/*.json` rots the day that tasklist
-  retires**, and rots SILENTLY: `jq` on a missing file writes an empty target, and the
-  assertions then pass/fail for reasons unrelated to what they claim to test. Build
-  fixtures with `jq -n`.
-- shellcheck could not be installed on this host (homebrew permission failure), so only
-  `bash -n` was run locally; CI enforces `shellcheck -S error`.
-
-Addendum (same story, after the quality ratchet):
-- The inline decision arm in `run_worker` tripped `function_length_max` (598 -> 617,
-  tol 15). Moved it to `decision_stop` in `engine/decision.sh` — worker_park by dynamic
-  scope, the `unmeasured_stop`/`criteria_scope_stop` convention — and driver.sh is back
-  to 598. **`run_worker` has no room left for an inline arm: any new stop belongs in a
-  module and is called in one line.**
-- That put `single_use_functions` at +3 (tol 2). The offset was not a deletion: `cmd_decide`
-  now READS ITS OWN WRITE BACK through `decision_verdict_set` and warns if the record does
-  not read as `recorded`. Genuinely useful — a writer/reader disagreement about the shape
-  surfaces one line after deciding rather than as a tasklist that halts again next run,
-  which is exactly how 106 went unnoticed — and it gives the reader a second call site.
-  **When the ratchet asks for a call site, look for the assertion you should have written.**
-
-## US-2 — The action set covers a decision that carries code
-Wed Aug 26 2026
-
-`--retire` and `--unpark` both assume the deliverable IS the verdict. A decision that
-carries code (lugh/460: 2,209 insertions gated on a licence call) fits neither, and
-nothing could say NO at all. Added the two AUTHORITY actions and made the flow survive
-the very next `chief run`.
-
-Files:
-- `engine/decision.sh` — `decision_authority ACTION -> merge|refuse|none`, the ONE place
-  the flag→authority mapping lives (the verdict WORD is the operator's vocabulary and is
-  never parsed). `decision_verdict_set` now sets `DECISION_AUTHORITY` + `DECISION_WHO`;
-  `decision_verdict_json` stamps `who` (git identity, else login). `decision_stop` has
-  three arms — merge / DECISION-DECLINED / halt-naming-the-flag — and emits
-  `tasklist.decision` into the RUN's event stream when it reads a verdict.
-- `bin/chief` `cmd_decide` — `--proceed`, `--decline`, `--no-commit`; the dependents scan
-  now serves both end-of-life actions (retire REFUSES, decline REPORTS); reads its own
-  write back through `decision_authority` as well as `decision_verdict_set`.
-- `engine/driver.sh` — `decision-declined` as a first-class terminal state across all five
-  surfaces (worker_park · reap · tasklist_outcome ×2 · summary · headless `hl_ok`), and
-  it IS cascaded by `dep_broken` — the one non-failure in that list, deliberately.
-- `engine/lib.sh` `finalize_merged` — stamps the verdict onto the completed/ record.
-- `engine/monitor.sh` — `⊘|declined` glyph + STALE_QUIET_PHASES.
-- `test/decision-e2e.sh` extended (unpark-authorises-nothing · --proceed · event stream ·
-  retire refusal · decline never merges), `test/decision.sh` updated for the new
-  placement rule. `VERSION` 0.9.6 → 0.9.7 + README/ROADMAP.
-
-### Learnings for future iterations
-
-- **`chief decide` leaving the tasklist DIRTY meant the next run never started.** The run's
-  startup guard ("uncommitted tracked changes on 'main' — commit or stash them") fires
-  before anything is scheduled, so US-1's flow only worked in its test because the stale
-  step happened to `git commit -am` in between. Any operator command that edits a tasklist
-  must commit it (`chief retire` already did — same shape, `--no-commit` escape) or write
-  nothing at all.
-- **Where a verdict may live, refined: a tasklist file may carry it only if that file will
-  never be REBASED again.** `--retire`/`--decline` end the tasklist on the spot, so their
-  JSON is safe and is the human-readable copy. `--proceed`/`--unpark` leave it live and its
-  branch is about to replay onto this base, editing that same file — so they write NOTHING
-  to it (an `--unpark` of an unparked tasklist writes no bytes at all, deliberately, because
-  a dirty tree is the failure above), and `finalize_merged` stamps the verdict onto the
-  `completed/` record instead. That record is written once, after the last rebase.
-- **AUTHORITY belongs to the flag, never to the verdict word.** "postgres", "approved",
-  "the MIT row" are the operator's vocabulary; chief has no dictionary that could tell a
-  yes from a no in it. One mapping (`decision_authority`), two call sites — the writer
-  asserts against it, the reader derives from it.
-- **A new terminal state is FIVE driver edits plus two viewers**, and missing one is how an
-  outcome gets mis-classified (this whole tasklist's family): `worker_park` arm, `reap`
-  status→state, `tasklist_outcome` (BOTH halves — the status arm and the get_state
-  fallback), the summary `case`, the headless `hl_*` bucket, then `monitor.sh`'s glyph and
-  `STALE_QUIET_PHASES`. `dep_broken` is a sixth, and a real decision: `decision-declined`
-  is in it because the work its dependents wait on is never arriving.
-- The ratchet's `single_use_functions` is AT tolerance (+2 of 2) on this branch. US-3 has
-  no room for a new single-call helper without deleting one.
-
-## US-3 — AWAITING-DECISION stops being reported as a failure
-Wed Aug 26 2026
-
-The feature worked and only its REPORT was wrong. `reap()`'s status→state `case` had
-no `AWAITING-DECISION*` arm, so the status line said `AWAITING-DECISION 2/2` and the
-`*)` fallthrough wrote `failed` — the summary contradicted itself in one line, `chief
-ps` drew `✗ failed`, a headless run exited 6, and `dep_broken` cascaded five
-dependents of a green tasklist as broken.
-
-Files:
-- `engine/driver.sh` — the missing reap arm (one line, and it is the whole bug); the
-  header's SCHEDULER STATES list + a non-terminal bullet for it; `awaiting-decision`
-  split out of the `inreview` collector into its OWN summary block (brief path + the
-  two authority flags), because the review block names a plan artifact that a decision
-  tasklist does not have; `hl_held` in the headless contract; the scheduler's
-  decision-hold arm (says the hold on each held dependent, once per run, marker at
-  `$STATE/<n>.decision-hold` which doubles as the summary's collector); and a
-  `decision-declined)` arm in the blocked-`.why` writer.
-- `engine/monitor.sh` — `hold_note` gains the decision arm (brief + held-for +
-  `chief decide`), wired into the row dispatch beside awaiting-review/approval.
-- `bin/chief` — `--decline` writes `parkedReason: "decision: declined"`.
-- `docs/reference/decision-tasklists.md` — a "How a decision is reported" section
-  carrying the POLICY as a table. `test/decision-e2e.sh` §8, `test/stall-flag.sh`
-  classification. `VERSION` 0.9.7 → 0.9.8 + README/ROADMAP.
-
-### Learnings for future iterations
-
-- **The POLICY, written down so a later story does not re-derive it:** a dependent of
-  `AWAITING-DECISION` is HELD (stays `pending`, and the run NAMES the decision it waits
-  on); a dependent of `DECISION-DECLINED` is CASCADED to `blocked`. The split is whether
-  the work can still arrive — an unanswered question may be answered yes, a declined one
-  never will. Both halves now carry a `.why` line; before this story the declined half
-  had none at all, while `dep_broken`'s own comment claimed "the reason travels with the
-  state".
-- **A hold that stays silent is the other half of the misreport.** Fixing the reap arm
-  alone would have moved five dependents from "your dependency FAILED" to no line at all.
-  A non-cascading dep state needs a REPORT arm at the same time, or the run looks like a
-  no-op instead of a queue waiting on a person.
-- **`reap()`'s status→state `case` is a SIXTH surface** on top of CLAUDE.md's "five driver
-  edits plus two viewers" list, and it is the one that fails OPEN: its `*)` arm writes
-  `failed`, so a new terminal state that misses it is not merely unrendered — it is
-  actively reported as a failure and cascaded. Check it FIRST when adding a state.
-- **`test/stall-flag.sh` is a THIRD list to update when adding a live phase**, alongside
-  `monitor.sh`'s glyph `case` and `STALE_QUIET_PHASES`. It sources `$ROOT/engine/monitor.sh`
-  from the WORKTREE (not the installed shim), enumerates every phase the engine publishes,
-  and fails on one no list classifies. US-2 added `decision-declined` and left it red; this
-  story found it only because the gate was re-run from scratch. Run `test/stall-flag.sh`
-  after touching any phase literal.
-- **Reproduce before claiming a fix.** `test/decision-e2e.sh` §8 was checked by deleting
-  the reap arm and re-running: `the scheduler state is not awaiting-decision (it is
-  'failed')`. Without that step the section would have passed against the fixed engine
-  and proved nothing.
-- The behavioural tests install from `git rev-parse HEAD`, so `test/smoke.sh` fails with
-  "version wrong via installed shim" on an UNCOMMITTED `VERSION` bump. Commit, then run.
-- shellcheck is still not installable on this host; CI carries `shellcheck -S error`.
-
-## Post-story fix — the merge gate's flake in test/merge-batch.sh PART C
-Wed Aug 26 2026
-
-Every story on this branch was already `passes:true`, but the merge-time
-`.chief/verify.sh` had come back RED and left a `⚠️ PRIOR VERIFICATION FAILED` block at
-the top of this log. The single failure was NOT in this tasklist's code:
-
-    merge-batch| MERGE-BATCH FAIL: PART C: expected 2 verifications
-                 (1 batch tip for 2 + 1 floor for charlie), got 1
-    BYSTANDER FAIL: test/merge-batch.sh failed
-
-It is a pre-existing FLAKE in the test, not a regression from 116 — `test/merge-batch.sh`
-passes on this branch unmodified about half the time, and every other file the branch
-touches is unrelated to the merge queue.
-
-Root cause, reproduced 2/2 in an isolated PART C harness. `charlie` is the branch in a
-`review` overlap zone, so it is excluded from batching and takes the serialized floor.
-Its floor gate is served from the verify CACHE whenever it reaches the merge lock before
-its peers land — its own log says so:
-
-    >> charlie: chief/charlie is strictly ahead of main — rebase is a no-op, skipping it
-    >> verifying chief/charlie (rebased)
-    >> verify SKIPPED: tree 52e9018… (GREEN verdict from …/verify-cache/…; same base and verify hook)
-
-That is US-4's designed behaviour ("the agent verify and merge gate are not duplicated"):
-the agent boundary already ran the gate on that exact tree/base and recorded it, so a
-merge input that did not move reuses the verdict. The gate WAS paid — inside the
-worktree — but the fixture's counter is keyed by `basename "$PWD"`, so an agent-boundary
-run lands in `charlie.verifies` and only merge-phase runs land in `zoned.verifies`.
-Whether charlie or its peers reach the lock first is a race, so the count was 2 or 1.
-
-PART A already anticipates exactly this and accepts `2|3` with a comment; PART C was
-missed when US-4 landed.
-
-Files:
-- `test/merge-batch.sh` — PART C now asserts BOTH readings instead of one: charlie's own
-  log must show `>> verifying chief/charlie` (it took the floor's gate step — the claim
-  the part exists for), and then the counter is pinned to the reading that log reports —
-  1 when `verify SKIPPED` is present, 2 when it is not. Also documents that the counter's
-  cwd-basename key is load-bearing, not incidental: it is what keeps every other part's
-  number counting merge-phase gate runs only.
-
-No engine change, so no `VERSION` bump (test/version-bump.sh gates `bin/`/`engine/`/
-`scripts/`/`install.sh` only) and README/ROADMAP stay at v0.9.8.
-
-### Learnings for future iterations
-
-- **A verify-count assertion in a parallel test is racy the moment the verify CACHE can
-  serve it.** `verify_cache_try` (engine/lib.sh) hits when tree + base + hook are all
-  unchanged, which for the FIRST branch to reach the merge lock is the normal case —
-  its rebase is a no-op. Any test asserting "N gate runs for N tasklists" has to say
-  which reading it got, and the branch's own log is the witness (`verify SKIPPED …` vs a
-  fresh hook run). Prefer pinning the count to the log over widening it to a range: a
-  bare range also passes when the floor was never reached at all.
-- **The gate is paid in two different CWDs.** Merge-phase verify runs at the repo root
-  (`run_verify "$work_repo"`); the agent boundary runs the SAME hook with cwd = the
-  worktree (`_agent_verify_final` → `run_verify "$CHIEF_PROJECT"`). A fixture hook that
-  keys anything off `$PWD` therefore partitions the two, which is useful — but it means
-  "the gate did not run" and "the gate ran somewhere this counter cannot see" look
-  identical. Say which one you mean.
-- **A red merge gate is not always this branch's fault.** Check whether the failing test
-  passes on the branch unmodified before changing engine code: here it did, ~50% of the
-  time, and the fix belonged in the test rather than in anything 116 shipped.
-- **The driver RE-SEEDS `.chief/state/progress.txt` at run start**, replacing it with a
-  fresh header plus the `⚠️ PRIOR VERIFICATION FAILED` block. Since this repo TRACKS that
-  file, committing it as-found deletes every earlier note from the tree. Restore
-  `git show HEAD:.chief/state/progress.txt` first, then append — the log is append-only
-  by contract, and the driver's re-seed does not know that.
-
-**Observed after the fix.** `test/merge-batch.sh` full six-part run: MERGE-BATCH OK
-(PART A/B/C/D/E/F all ok), exit 0. Isolated PART C harness: 4/4 PASS across BOTH
-interleavings — `verifies=2 skipped=0` (fresh floor gate) and `verifies=1 skipped=1`
-(floor gate served from the agent-boundary cache), the second being the one that used
-to fail. Full merge gate `bash .chief/verify.sh`: **exit 0, "verify: OK (allowing
-merge)"** — 54/54 behavioural tests green under the bystander guard, quality ratchet OK
-(no tracked metric regressed), version-bump PASS, doc-sync PASS (README + ROADMAP
-v0.9.8 == VERSION), doc-links 0 dead. `bash -n` clean on `test/merge-batch.sh`;
-shellcheck is still not installed on this host, so CI carries `shellcheck -S error`.
-The `⚠️ PRIOR VERIFICATION FAILED` block that opened this run is resolved.
-
-================================================================================
-# Chief Progress — 117-the-agent-verify-records-but-never-tries
-Started: Wed Sep  2 15:31:49 CDT 2026
----
-
-## US-1 — The final verify consults the cache it already writes
-Wed Sep  2 2026
-
-The verdict cache had ONE reader (`driver.sh:2929`, the merge gate) and TWO writers.
-`_agent_verify_final` recorded and never tried, so a GREEN verdict already on disk for
-the identical tree/base/hook could not save the very run that produced it — measured on
-cuneiform as two full workspace-suite runs (~20 min + ~21 min) for one merge over a tree
-neither run had moved.
-
-Files:
-- `engine/agent.sh` — `_agent_verify_final` calls `verify_cache_try "$CHIEF_PROJECT"
-  "$CHIEF_TASKLIST" "$BASE_BRANCH"` before `run_verify`. Same triple the existing
-  `verify_cache_record "$CHIEF_PROJECT" "$BASE_BRANCH" "$rc"` writes with, so the two
-  halves cannot key differently. No cache was added; this is one call.
-- `VERSION` 0.9.8 → 0.9.9, README + ROADMAP bold `**v0.9.9**` in the same commit.
-
-### Learnings for future iterations
-
-- **agent.sh already has every global `verify_cache_try` needs**, set at
-  `engine/agent.sh:923-928` under the `CHIEF_VERIFY_CACHE_STATE` guard: `STATE`,
-  `TASKS_DIR`, `VERIFY_HOOK`, `BASE_BRANCH`. That is why this is a one-call fix rather
-  than a plumbing job — `lib.sh` is sourced there for exactly this reason.
-- **A cache hit must return through the SAME door as a fresh green.** `COMPLETE_OK` is
-  set from `_agent_verify_final`'s exit status alone (`agent.sh:2078`), so returning 0
-  early on a hit is the whole of "a skipped verify is still a passed verify". A RED
-  record cannot leak through: `verify_cache_try` returns non-zero for anything that is
-  not a recorded `status=0`, so it falls through to the re-run.
-- **The skip message comes from `verify_cache_try` itself** (`>> verify SKIPPED: tree
-  … GREEN verdict from …`), printed on its stdout. Callers must not swallow it — a
-  silent skip makes a stale-cache bug undiagnosable, which is why the driver's call
-  site does not capture it either.
-
-**Observed for US-1.** `bash -n engine/agent.sh` clean. `test/doc-sync.sh` PASS (README +
-ROADMAP `**v0.9.9**` == VERSION 0.9.9, 40 merged tasklists named). `test/version-bump.sh`
-PASS. Behavioural: `smoke` SMOKE PASS, `ratelimit` RATELIMIT PASS, `noworkguard` NOWORK
-PASS, `merge-batch` MERGE-BATCH OK (PART A–F). shellcheck is not installed on this host;
-CI carries `shellcheck -S error`.
-
-## US-2 — A recording path the agent can actually use
-Wed Sep  2 2026
-
-US-1 taught `_agent_verify_final` to READ the verdict cache. Nothing an agent could
-run WROTE to it: `.chief/verify.sh` invoked from inside a turn is a plain shell
-command chief never sees, so the ~20-minute suite run bought nothing and both later
-gates were still paid in full. `chief verify` is the mechanism that replaces the prose
-instruction ("never run the full workspace suite inside a chief iteration") that had
-already failed three times in one day in one repo.
-
-Files:
-- `bin/chief` — `cmd_verify` (+ dispatch arm + `usage()` entry). Runs the SAME hook the
-  same way (`run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST"`, so a tasklist's own
-  `"verify"` array is honoured), exits with the hook's status, then
-  `verify_cache_record`s it. Inside a turn it needs no arguments — the driver has
-  already exported the worktree, the run's `$STATE`, the tasklist and the work base,
-  and those are PREFERRED over `.chief/config` (a `repo:<sub>` tasklist's base is not
-  the one the config names). `--no-record` runs the gate and writes nothing.
-- `engine/instructions.md` — step 5 of the turn prompt. This is the surface that
-  matters: the whole story exists because prose in a project CLAUDE.md did not reach
-  the agent at the moment it decided to run the suite.
-- `docs/reference/verify-hook.md` — "Running this gate yourself: `chief verify`".
-- `README.md` command table (doc-sync gates it), `CLAUDE.md` (CLI list + a line in the
-  quality-gates section), `VERSION` 0.9.9 → 0.9.10 with both bold version claims.
-- Drive-by: two UNESCAPED backticks inside unquoted heredocs — `bin/chief`'s
-  `usage()` (`` `chief run` ``) and `engine/quality.sh`'s `qq_usage` (`` `ratchet
-  --help` ``). Both were live command substitutions; `chief help` literally STARTED A
-  RUN. CLAUDE.md documents this exact hazard and the file had regressed into it twice.
-
-### Learnings for future iterations
-
-- **The refusal is the design, not a safety net bolted on.** The cache key is HEAD's
-  TREE; the hook tests the WORKING tree. Recording while those differ is the one
-  failure mode of this whole mechanism that could merge a red tree, so a dirty tree
-  (tracked OR untracked) records nothing, and neither does a run HEAD moved under.
-  Both still RUN the gate and still return its status — refusing to RECORD is never
-  refusing to CHECK. The agent-facing consequence is an ORDER: commit, then
-  `chief verify`, then `--amend` if it comes back red.
-- **`chief verify` deliberately never READS the cache.** `verify_cache_try` keys on
-  HEAD's tree alone and says nothing about uncommitted work, so a green record plus an
-  edit made since would answer "green" about code nothing had run. The agent boundary
-  and the merge gate can read it precisely because their trees are committed and
-  still; this caller's tree is the one that is expected to be moving.
-- **A `chief` subcommand run from inside an agent turn INHERITS the run's environment**,
-  and that is load-bearing, not incidental: `CHIEF_VERIFY_CACHE_STATE`,
-  `CHIEF_PROJECT`, `CHIEF_TASKLIST`, `CHIEF_VERIFY_{HOOK,BASE,TASKS_DIR,REPO}` are all
-  exported by driver.sh at `driver.sh:2599`. It also means any SCRATCH-REPO test of
-  such a command must `env -u` all of them: the first two attempts at this story's
-  fixture silently ran chief's own 20-minute gate against the WORKTREE instead of the
-  temp repo, because `load_project`'s answer was being overridden by the outer run's.
-- **`awk '/^name\(\)/,/^EOF$/' file | grep -n '[^\\]`'` is the check CLAUDE.md asks
-  for, and it finds real bugs** — run it over `bin/chief` and every `engine/*.sh` after
-  touching any usage text. `bash -n` is clean on a live command substitution and no
-  test renders `--help`, so nothing else catches it.
-
-**Observed for US-2.** Scratch-repo matrix, 6/6: clean tree + green hook → RECORDED
-(`status=0`, one record, hook ran once); dirty tracked file → NOT recorded (record
-count 1 → 1); untracked file → NOT recorded; red hook → exit 1 recorded as `status=1`;
-`--no-record` → wrote nothing; unknown flag → exit 2. `bash -n` clean on `bin/chief`
-and `engine/quality.sh`; `chief help` and `chief quality --help` both render the
-previously-substituted lines literally. `test/doc-sync.sh` PASS (README + ROADMAP
-**v0.9.10** == VERSION 0.9.10, 40 merged tasklists named), `test/version-bump.sh` PASS,
-`scripts/check-doc-links.mjs` 0 dead references, quality ratchet OK
-(`single_use_functions` +1, tol 2 — US-3 has one slot left). Behavioural: `smoke`
-SMOKE PASS, `ratelimit` RATELIMIT PASS, `noworkguard` NOWORK PASS, `merge-batch`
-MERGE-BATCH OK (PART A–F). shellcheck is not installed on this host; CI carries
-`shellcheck -S error`.
-
-## US-3 — Proof it bites, in both directions
-Wed Sep  2 2026
-
-US-1 is ONE LINE. A rebase, a "simplification" or a differently-keyed refactor could
-take it back out and nothing would go red — the only symptom is a suite that runs
-twice, which is the thing the tasklist was opened for. `test/verify-cache.sh` pins the
-skip and every way it must NOT happen.
-
-Files:
-- `test/verify-cache.sh` (new) — five parts, ~1 second total:
-  A the skip (green verdict, unmoved tree -> hook runs 1x for TWO boundary verifies,
-  and `verify SKIPPED` is in the log); B tree moved -> it runs; C the verify hook's own
-  content changed at an unmoved tree -> it runs; D a RED verdict never skips (recorded
-  `status=1` asserted on disk first, then a re-run at that same tree still pays the
-  gate); E REPRODUCTION against a copy of the engine with the `verify_cache_try` call
-  neutered.
-- `.chief/verify.sh` (`CHIEF_BYSTANDER_TESTS`), `test/all.sh` (`BASH_SUITE`),
-  `.github/workflows/ci.yml` — the three lists that make a test a gate.
-- `CLAUDE.md` — the layout's `test/` block names the new file and its two design
-  choices (count the hook, keep the hook outside the repo).
-
-### Learnings for future iterations
-
-- **`engine/agent.sh` can be driven DIRECTLY, and it is the cheap way to test an
-  iteration-boundary behaviour.** `test/provider-conformance.sh` established the shape:
-  a scratch git repo with `.chief/state/prd.json`, a fake `claude` on `PATH` that marks
-  the story and prints the token, and `bash engine/agent.sh 1`. No install, no driver,
-  no worktree — this file's five parts and eight agent turns run in about a second,
-  against the WORKING TREE's engine rather than `git rev-parse HEAD` (so an uncommitted
-  edit is visible, unlike the install-from-HEAD suite). Set `STALL_LIMIT=1` so a turn
-  whose verify FAILS ends the loop immediately instead of burning the stall budget.
-- **`env -u` is mandatory when a test runs the engine from inside a chief worktree.**
-  The driver exports `CHIEF_VERIFY_HOOK`, `CHIEF_VERIFY_CACHE_STATE`,
-  `CHIEF_VERIFY_{BASE,REPO,TASKS_DIR}`, `CHIEF_PAUSE_FILE`, `CHIEF_LIVE_FILE`,
-  `CHIEF_ITER_HOOK` and more; inheriting even one points the fixture at the REAL
-  repository's gate. US-2's scratch fixture hit this twice. Set the ones you mean and
-  unset the rest, explicitly.
-- **Put the fixture verify hook OUTSIDE the repo** (`$CHIEF_VERIFY_HOOK=$WORK/hook.sh`).
-  The cache key is `tree.base.hook`; a hook committed in the repo cannot be edited
-  without also moving the tree, so the negative control for "an edited gate is not
-  skipped" would be indistinguishable from "a moved tree is not skipped".
-- **Uncommitted files do NOT move the cache key.** `verify_cache_try`/`_record` read
-  `git rev-parse HEAD^{tree}`, so everything agent.sh writes into `.chief/state/` during
-  a turn is invisible to it. That is what makes "run the loop twice, once without a
-  commit" a clean same-tree fixture.
-- **Assert on the hook's own invocation COUNT, never on the log.** A log line is
-  chief's claim about what it did; a counter file the hook appends to is the
-  observation. This is the same lesson `test/merge-batch.sh` PART C learned the
-  expensive way — with the difference that here there is no parallelism, so the count
-  is exact rather than a reading that has to be pinned to a log.
-- **A one-line fix needs a REPRODUCTION in the test, not just in the author's shell.**
-  PART E copies `engine/` and rewrites `if verify_cache_try …` to `if false …`, asserts
-  the patch actually applied (both directions — the neuter is present AND no live call
-  survived), then re-runs PART A's sequence and requires the hook to run TWICE. Without
-  it the file could pass forever against an engine that never had the call.
-
-**Observed for US-3.** `bash test/verify-cache.sh` → VERIFY-CACHE OK, all five parts,
-hook counts 1 · 2 · 3 · 4 · 5 exactly as designed. Reproduced against the real engine:
-with `verify_cache_try` neutered in `engine/agent.sh`, PART A fails with `THE SKIP DID
-NOT HAPPEN — the hook ran 2x for two boundary verifies over one unmoved tree` (engine
-restored, `git diff --stat engine/agent.sh` empty). `bash -n` clean on
-`test/verify-cache.sh`, `.chief/verify.sh`, `test/all.sh`. `scripts/check-doc-links.mjs`
-0 dead references. Quality ratchet OK (`single_use_functions` 49 → 50, +1 of tol 2; no
-tracked metric regressed). `test/doc-sync.sh` PASS (README + ROADMAP **v0.9.10** ==
-VERSION 0.9.10, 40 merged tasklists named). Behavioural: `smoke` SMOKE PASS,
-`ratelimit` RATELIMIT PASS, `noworkguard` NOWORK PASS, `merge-batch` MERGE-BATCH OK
-(PART A–F), `quality-ratchet` PASS, `cigate` PASS. No `bin/`/`engine/`/`scripts/`/
-`install.sh` change on this story, so `VERSION` stays 0.9.10 and `test/version-bump.sh`
-PASSes. shellcheck is not installed on this host; CI carries `shellcheck -S error`.
-
-## Final verification — the full gate, run through the mechanism this tasklist shipped
-Wed Sep  2 2026
-
-All three stories were already `passes:true` with a clean tree and no `⚠️ PRIOR
-VERIFICATION FAILED` block. The remaining work was to run the FULL gate as
-`chief verify` (per CLAUDE.md) so the end-of-turn and merge-time reads are served from
-the recorded verdict — which is US-1 + US-2 exercising themselves on their own branch.
-
-**Observed.** `bin/chief verify` → `verify: OK (allowing merge)`, **exit 0**, and
-`>> chief verify: exit 0 RECORDED for tree 6dba5fcb2ca4eee839746f720313a75c5755b155`.
-doc-links 0 dead vs 0 on main; quality ratchet OK over the 6 changed source files
-(duplicate_blocks 0→0, duplicate_line_pct 0→0, max_nesting_depth 6→6,
-function_length_max 281→281, function_length_mean 29.45→29.85, single_use_functions
-50→51 delta +1 tol 2 — no tracked metric regressed); `bash -n` clean; VERSION-BUMP PASS
-(VERSION 0.9.10 covers every engine/bin change on HEAD); BYSTANDER PASS (54 tests, decoy
-run from another install survived, genuine orphan reaped, no fixture leaked); DOC-SYNC
-PASS (README + ROADMAP **v0.9.10** == VERSION, 40 merged tasklists named); tasklists jq
-parse OK. shellcheck is not installed on this host; CI carries `shellcheck -S error`.
-
-Run separately, because the gate did not reach it (see below):
-`bash test/verify-cache.sh` → **VERIFY-CACHE OK**, PART A–E all ok.
-
-### Learnings for future iterations
-
-- **A `chief verify` inside a turn runs the PROJECT CHECKOUT's hook, not the
-  worktree's.** The log says so in its first line — `chief verify:
-  /Users/…/Development/chief/.chief/verify.sh (cwd=<worktree>, base=main)`. So this
-  branch's own new gate entry did not execute: `CHIEF_BYSTANDER_TESTS` in the WORKTREE's
-  `.chief/verify.sh` lists 55 tests, the run reported `[54/54]` and stepped straight from
-  `[51/54] merge-batch` to `[52/54] cigate` — `test/verify-cache.sh`, the file US-3 added,
-  was skipped because main's copy of the hook does not name it yet. **A story that adds
-  itself to `CHIEF_BYSTANDER_TESTS` must run its own test directly as well**; the
-  in-worktree gate cannot see the list entry it just wrote, and a silently-absent test
-  reads exactly like a passing one.
-- **That divergence is also why the recorded verdict is SAFE.** The cache key is
-  `tree.base.hook`, and at merge time the work repo has this BRANCH checked out — so the
-  hook blob at that same path is the branch's 55-test copy, not main's 54-test one. The
-  key therefore misses and the merge gate re-runs in full, with `verify-cache` included.
-  The recording is a genuine saving for the end-of-turn read (same hook, same tree) and
-  correctly buys nothing it has not actually paid for at merge.
-- The full gate takes **~11 minutes** here — past a 10-minute foreground tool timeout.
-  Run it backgrounded to a log and poll for a sentinel line rather than blocking on it.
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Chief Progress — 118-a-document-can-claim-something-downstream
-# ─────────────────────────────────────────────────────────────────────────────
-
-## US-1 — A document declares a checkable claim about another repo
-Thu Sep  3 2026
-
-`downstreamCounterpart` links a TASKLIST to the tasklist that completes it. Nothing
-linked a DOCUMENT to the downstream tree it asserts something about, and the
-obligation runs downstream-to-upstream so it cannot close itself. New module
-`engine/claims.sh`, deliberately counterpart.sh's shape one register up.
-
-Files:
-- `engine/claims.sh` (new) — `.chief/claims.json` (`$CHIEF_CLAIMS_FILE` relocates it)
-  holds `{document, claim, repo, path}` records. `claims_records` (US-separated, one
-  jq) · `claims_count` (what the gate SAW) · `claims_scan` (TAB records:
-  `violated` / `unresolvable`, silent when the predicate holds). The repo half goes
-  through crossrepo.sh's `resolve_repo` — the same lookup `dependsOn` and
-  `downstreamCounterpart` use.
-- `docs/reference/cross-repo-dependencies.md` — new "Document claims" section: the
-  schema, the field table, the vocabulary rule, the prose-is-not-the-mechanism rule.
-- `CLAUDE.md` — layout entry for `engine/claims.sh`.
-- `VERSION` 0.9.10 → 0.9.11 + README + ROADMAP bold version.
-- `ROADMAP.md` — a ✅ row for `117-the-agent-verify-records-but-never-tries`, which
-  merged and retired on main without one. Not scope creep: `doc-sync` is a merge
-  blocker for any branch touching `VERSION`/`engine/`/`bin/`, so this branch inherits
-  a red gate it did not cause and cannot merge without fixing.
-
-**Observed for US-1.** Against the real trees: koine's
-`docs/reference/kcs-encoding-gate-verification.md` claiming agora's
-`console/src/kcs/scenarios/resume-checkpoint.ts` is `absent` →
-`violated … it EXISTS: …/agora/console/src/kcs/scenarios/resume-checkpoint.ts`.
-Six declarations read, four records emitted — the two claims that still hold
-(`present` on `console/src/kcs/scenarios`, `absent` on `no-such-thing.ts`) were
-silent, and the three could-not-check cases (unknown repo, missing document, verb
-outside the vocabulary) each got their own `unresolvable` sentence. `bash -n` clean
-over `bin/chief` + `engine/*.sh` + `install.sh` + `test/*.sh`; `check-doc-links.mjs`
-**0 dead vs 0 on main**; `test/doc-sync.sh` **PASS** (README + ROADMAP **v0.9.11** ==
-VERSION 0.9.11, 41 merged tasklists named). shellcheck is not installed on this host;
-CI carries `shellcheck -S error`.
-
-### Learnings for future iterations
-
-- **A literal `docs/….md` inside a JSON example in a doc or a shell comment is a DEAD
-  LINK to `scripts/check-doc-links.mjs`.** Its `BARE_DOC` regex has a negative
-  lookbehind for `` ` ``, `/`, `.`, `-` and word chars — so backticked prose
-  (`` `docs/x.md` ``) is invisible to it, but `"document": "docs/x.md"` is preceded by
-  a quote and is checked against THIS repo. A cross-repo document path in an example
-  therefore has to be a placeholder with a non-matching character in it
-  (`docs/reference/<the-doc>.md`) or an existing local file. The `.json` walk that
-  exempts `{repo: …, path: "docs/…"}` objects only runs for files that ARE `.json`;
-  a fenced JSON block inside a `.md` gets no such exemption.
-- **`docs/.linkignore` ignores by CITING FILE, not by target** (`rel.startsWith(g)`),
-  so it cannot excuse one foreign path in an otherwise-checked document — it would
-  switch the whole file off.
-- **Write jq's US separator as the escape `\u001f`, never as a literal 0x1f byte.**
-  Both work at runtime, but a literal control byte is invisible in a diff, survives
-  no copy-paste, and cannot be written through tooling that rejects control
-  characters in its input.
-
-## US-2 — The report reads like counterpart's, and fails nothing
-Thu Sep  3 2026
-
-US-1 built the check; nothing rendered it and nothing called it. Added the report
-layer and wired it into `chief lint`, on counterpart.sh's terms exactly.
-
-Files:
-- `engine/claims.sh` — `claims_stale_report` (one line per finding: DOCUMENT, the
-  claim, and what the tree actually shows — `counterpart_shipped_report`'s shape),
-  `claims_correction_note`, `claims_report_block` (heading follows the content; the
-  note prints only where there is something to correct; returns 0 unconditionally).
-  `⚑` = violated, `?` = could-not-check, and the two stay apart.
-- `bin/chief` `cmd_lint` — sources `claims.sh`, calls `claims_report_block` beside
-  `counterpart_report_block`, and the "what the gate SAW" sentence now carries the
-  claim count too (`0 "downstreamCounterpart" + N document-claim declaration(s)
-  checked`). US-1's doc already promised that sentence; it is now true.
-- `docs/reference/cross-repo-dependencies.md` — a "What it prints" subsection: the
-  rendering, `⚑` vs `?`, and the print-only rule with its reasoning.
-- `VERSION` 0.9.11 → 0.9.12 + README + ROADMAP bold version.
-- `tasks/chief/118-….json` — US-1's `notes` had a bare `docs/reference/kcs-…md` in
-  it, which is a DEAD LINK to the doc-link ratchet (see below). Backticked.
-
-**Observed for US-2.** With `CHIEF_PROJECT=koine` and six declarations: the violated
-one rendered `⚑ docs/reference/kcs-encoding-gate-verification.md — claims
-agora:console/src/kcs/scenarios/resume-checkpoint.ts is ABSENT, but it EXISTS: …`;
-the three could-not-check cases each rendered as a `?` line naming why (repo not
-checked out here / no such document in this repo / unknown claim "improved"); the two
-claims that still hold printed **nothing**. `chief lint` with a violated claim exited
-**rc=0** and still printed `✓ 3 tasklist(s) clean (0 "downstreamCounterpart" + 2
-document-claim declaration(s) checked…)`; with no registry it printed nothing.
-`grep` confirms `claims.sh` is sourced by `bin/chief` alone — driver.sh, agent.sh and
-lib.sh never mention it, so no run path can refuse on a claim. Gates: `bash -n` clean
-over `bin/chief` + `engine/*.sh` + `install.sh` + `test/*.sh`; doc-links **0 dead vs
-0 on main**; `test/doc-sync.sh` **PASS** (v0.9.12 == VERSION 0.9.12, 41 merged
-tasklists named); `test/version-bump.sh` **PASS**; `smoke` / `ratelimit` /
-`noworkguard` all **PASS**; quality ratchet OK. shellcheck absent on this host; CI
-carries it.
-
-### Learnings for future iterations
-
-- **The doc-link ratchet dedupes by TARGET, so one bare path in a `notes` string can
-  cost a later story the gate.** US-1 measured `0 dead vs 0 on main` and then wrote
-  `koine docs/reference/kcs-…md` into its own `notes` — `tasks/chief/*.json` is
-  tracked, `BARE_DOC` matches a space-preceded `docs/…md`, and the branch went red on
-  a reference nobody had read since. Measure doc-links **after** writing notes, not
-  before, and backtick any `docs/…` path in prose you are about to commit.
-- **A `docs/…` path inside a fenced EXAMPLE OUTPUT block is checked too.** Rendering a
-  report in a doc means rendering it with a placeholder (`docs/reference/<the-doc>.md`)
-  unless the file really exists in this repo.
-- **The Bash tool's shell here is zsh, and sourcing `engine/*.sh` into it silently
-  produces wrong answers** — `claims_scan` returned nothing under zsh with six valid
-  records, and returned all six under `bash -c`. Drive engine functions through
-  `bash -c '…'`, never a bare `( . engine/x.sh; f )`.
-- **`crossrepo_root` reads `$REPO`/`$CHIEF_PROJECT` before `$PWD`, and the agent runs
-  with `CHIEF_PROJECT` exported**, so `cd`ing to another repo to exercise a cross-repo
-  helper changes nothing. Set `CHIEF_PROJECT=<that repo>` for the run instead.
-- And it caught me in the same turn: the US-2 `notes` I wrote about that trap quoted
-  the report line `⚑ docs/reference/kcs-…md — claims …`, whose path is preceded by a
-  SPACE (the backtick opens before the `⚑`), so it read as a dead link too. A quoted
-  report line needs the path elided as well. `tasks/chief/*.json` is scanned;
-  `.chief/state/*` is not.
-
-## US-3 — Proof it catches the case that motivated it, and does not cry wolf
-Thu Sep  3 2026
-
-US-1 built the check and US-2 rendered it; nothing had ever driven either against the
-incident. New `test/doc-claims.sh` reconstructs it and pins the three ways a checker
-of this shape goes wrong.
-
-Files:
-- `test/doc-claims.sh` (new) — two scaffolded repos under a temp dir, hermetic in
-  `$CHIEF_RUNS`/`$CHIEF_REPOS`, no agent (this is `chief lint` plus the module's own
-  reader). Five sections: (1) THE INCIDENT — koine's document claims an agora path is
-  `absent`, agora has it, and the report must name the DOCUMENT, the PATH, the claim
-  (`is ABSENT`), what the tree shows (`it EXISTS`) and the resolved location, with
-  `chief lint` still exiting 0; (2) the sign REVERSED, the KGP shape, so the `present`
-  predicate cannot rot unnoticed; (3) NEGATIVE CONTROL — both predicates holding
-  produce no ⚑, no heading and no correction note, asserted **together with**
-  `2 document-claim declaration(s) checked` so the silence cannot come from having
-  read nothing; (4) unresolvable ≠ violated (a repo not checked out, and a document
-  that no longer exists), and one unresolvable record must not cost the finding beside
-  it; (5) NO REGISTRY COSTS NOTHING, measured as jq INVOCATIONS under a shimmed `jq`.
-- `test/crossrepo.sh` — two assertions repaired. US-2 widened lint's "what the gate
-  SAW" sentence to carry both links, which split the fragment
-  `1 "downstreamCounterpart" declaration(s) checked` in two; the branch was carrying a
-  red gate US-2 never ran. Now asserted as the whole sentence.
-- `.chief/verify.sh` (`CHIEF_BYSTANDER_TESTS`), `test/all.sh` (`BASH_SUITE`) and
-  `.github/workflows/ci.yml` — the three lists that make a test a gate.
-- `CLAUDE.md` — the layout entry for the new test.
-
-**Observed for US-3.** `test/doc-claims.sh` **CLAIMS PASS**; `test/crossrepo.sh`
-**XREPO PASS** (it FAILED before the repair, on the split sentence). The behavioural
-block under the bystander guard — smoke · ratelimit · noworkguard · crossrepo ·
-doc-claims — **BYSTANDER PASS, 5 tests, bystander alive, orphan reaped, no fixture
-leaked**. `bash -n` clean over `bin/chief` + `engine/*.sh` + `install.sh` +
-`templates/*.sh` + `test/*.sh` + `.chief/verify.sh`; quality ratchet **OK — no tracked
-metric regressed**; doc-links **0 dead vs 0 on main**; `test/doc-sync.sh` **PASS**;
-`test/version-bump.sh` **PASS**. No VERSION bump: this story touches `test/`,
-`.github/`, `.chief/` and `CLAUDE.md` only, and the bump gate's scope is
-`engine/ bin/ scripts/ install.sh` — bumping anyway would be a version nobody can
-distinguish by behaviour. shellcheck is not installed on this host; CI carries
-`shellcheck -S error`.
-
-### Learnings for future iterations
-
-- **MUTATE THE ENGINE TO PROVE THE TEST.** A new test that passes on its first run has
-  proved nothing yet. Two mutations, each in a `cp -R bin engine templates test` copy
-  of the tree (the test derives `$ROOT` from its own location, so a copy is enough —
-  no `git show`, which CI's shallow clone cannot serve): neuter the `violated` emission
-  → section 1 fails with "the stale claim was not reported at all"; make it emit
-  regardless of the predicate → section 3 fails with "a claim that still holds was
-  reported as a finding". Both arms of a report/silence pair need their own mutation,
-  or one of them is decorative.
-- **A silence assertion needs a WITNESS in the same breath.** "No output" is what a
-  correct checker and a checker that read nothing both produce. Section 3 asserts the
-  count sentence (`2 … declaration(s) checked`) beside the silence, and section 5's
-  jq probe runs the WITH-registry case FIRST and requires ≥1 — otherwise "0 jq calls"
-  would also pass with a dead counter.
-- **Widening a shared summary line breaks the tests that assert a fragment of it.**
-  US-2 inserted `+ N document-claim` into lint's count sentence; two `test/crossrepo.sh`
-  assertions matched across the insertion point and went red on a branch that never ran
-  that test. Adding a clause to a line another test greps means grepping for that line
-  across `test/` in the same edit.
-- **A backtick in a double-quoted string inside a test RUNS, and `bash -n` is clean on
-  it.** `fail "a `present` claim was not reported"` is command substitution. Same trap
-  as the engine's heredocs, one register down; check with
-  `grep -n '[^\\]`' test/<file>.sh` before committing.
-
-## Post-story fix — the merge phase reported MERGED on a checkout that never happened
-Thu Sep  3 2026
-
-Every story on this branch was already `passes:true`, but the merge-time
-`.chief/verify.sh` came back RED and left a `⚠️ PRIOR VERIFICATION FAILED` block at the
-top of this log. One failure, and it was NOT in this tasklist's code:
-
-    merge-batch| MERGE-BATCH FAIL: PART A: alpha was not retired to completed/
-    BYSTANDER FAIL: test/merge-batch.sh failed
-
-Unlike 116's PART C flake, **the test was right and the engine was wrong.** Isolated
-PART A harness: reproduced 1 in 4 under load. The failing repo's evidence:
-
-    alpha.log|  Already up to date.
-    alpha.log|    !! branch kept: chief/alpha is not an ancestor of main (unmerged work)
-    alpha.log|  >> alpha MERGED @f19d300        <-- f19d300 is alpha's STORY commit
-    reflog|  @{15} checkout: moving from main to chief/alpha
-    reflog|  @{14} commit: chore(chief): alpha complete @f19d300 — record + retire
-    reflog|  @{13} checkout: moving from chief/alpha to main
-
-There is no `chief/alpha -> main` entry between @{15} and @{14}: the merge phase's
-`work_checkout "$work_repo" "$work_base"` **failed and was ignored** (its output is
-`>/dev/null 2>&1` and its return value was unused). HEAD stayed on the branch, so
-`git merge --no-ff chief/alpha` merged the branch into itself — `Already up to date.`,
-**exit 0** — and the site read that as success: status `MERGED @<branch tip>`,
-`finalize_merged` writing the completed record + retire commit onto **chief/alpha**
-(@{14}), main never moving, `completed/` never getting a record, and the run summary
-printing `alpha  done  [MERGED @e4619e0]`. @{13} is the EXIT trap's identical checkout
-landing first time seconds later — which is what makes the cause transient.
-
-Confirmed the mechanism deterministically in a scratch repo: with `.git/index.lock`
-held, `git checkout main` exits **128** and HEAD does not move; `git merge --no-ff feat`
-then prints `Already up to date.` and exits **0**. The contention is real — the project
-index is SHARED, and the reconcile step's isolation guard (`git checkout -- tasks/…`)
-and `finalize_merged`'s `rm`/`add`/`commit` both mutate it, which is why both already
-take `idx_lock`. `work_checkout` never did.
-
-Files:
-- `engine/driver.sh` — `work_checkout` RETRIES (`CHIEF_CHECKOUT_RETRIES`, default 3,
-  1s apart) instead of losing a race git does not retry for us; new
-  `work_checkout_or_stop` is the GUARDED form and is used at BOTH ends of the merge
-  phase. The branch checkout's existing 3-line inline arm collapses into it, so
-  `run_worker` gets one line SHORTER, not longer, and the helper has two call sites.
-- `engine/mergequeue.sh` — `mq_merge_member`'s base checkout guarded the same way, via
-  the `mq_member_fail` shape its own branch checkout already used.
-- `test/merge-checkout.sh` (new, in all three gate lists) — a `git` shim holds a REAL
-  `.git/index.lock` across `checkout <base>`. PART A holds it for ONE attempt (retried,
-  merged, retired); PART B holds it for every attempt (CHECKOUT-FAILED, 0 merge commits,
-  nothing retired, nothing stranded on the branch, no `>> solo MERGED`).
-- `VERSION` 0.9.12 → 0.9.13 + README/ROADMAP bold; `CLAUDE.md` invariant.
-
-### Learnings for future iterations
-
-- **A git command whose no-op case exits 0 needs its PRECONDITION checked, not its own
-  exit status.** `git merge --no-ff X` cannot fail when HEAD is already X — so the merge
-  site's success check was structurally incapable of catching a base checkout that did
-  not happen. The same shape is worth auditing anywhere the engine does
-  "position, then act".
-- **A guarded call and an unguarded call to the same helper, three lines apart, is the
-  smell.** driver.sh checked `work_checkout`'s return for the BRANCH and ignored it for
-  the BASE. The asymmetry was the whole bug; the fix was to give both ends one guarded
-  helper rather than to add a second inline arm (which `run_worker` has no room for).
-- **`idx_lock` was NOT the right instrument here.** It would not cover git processes
-  chief does not own (an operator's editor, a `git status` in the same checkout), and
-  holding it across a rebase + a ten-minute verify would make every peer's isolation
-  guard wait out its 120s break. A bounded retry plus an honest non-zero is proportionate.
-- **Reproduce a load-dependent failure in an ISOLATED harness before touching anything.**
-  `sed -n '47,199p' test/merge-batch.sh` + a pinned `ROOT` ran PART A alone in ~90s and
-  hit 1 in 4; the full test is six parts. Keep the temp dir on failure (`trap` printing
-  `WORK=` instead of `rm -rf`) — the reflog was the whole diagnosis and it lives there.
-- **Then make it DETERMINISTIC for the committed test.** A shim that holds the real lock
-  turns "1 in 4 under load" into "always", and the same lever expresses both the
-  transient and the persistent case. A flaky reproduction is not a regression test.
-- **Mutation-check a fix like this in a COPY of the tree** (`cp -R` the worktree,
-  `git checkout HEAD -- engine/driver.sh engine/mergequeue.sh` in the copy). Both parts
-  failed there with the exact production symptom — `MERGED @<branch tip>` in the summary
-  beside `unmerged branches for review: chief/solo`. Note the copy shares the worktree's
-  gitdir, so check `git status` in the REAL tree afterwards.
-- The driver RE-SEEDS `.chief/state/progress.txt` at run start; this file is tracked, so
-  it was restored from `git show HEAD:` before appending (as 116's note already warned).
-
-## Verification recovery — checkout-race regression
-Thu Sep 3 2026
-
-The prior merge-time failure is resolved by the committed checkout guard. Observed
-`test/merge-checkout.sh`: **MERGE-CHECKOUT PASS** — a one-attempt index-lock race is
-retried and merged/retired; a persistent race returns CHECKOUT-FAILED with zero merges
-and no retirement. The previous `test/merge-batch.sh` failure was specifically PART A's
-missing retirement; its isolated rerun reached PART C green before the host's existing
-parallel test load made the long queue fixture overlap, so it was stopped rather than
-allowed to contaminate another run. The recorded full `chief verify` below is the final
-merge-bar witness.
-
-### Learnings for future iterations
-
-- A long, stateful integration fixture must run as one invocation: do not retry it while
-  a previous invocation still owns its temporary child processes.
-
----
-## 900-dead-code-paydown — US-1: An inventory, measured before anything is removed (2026-09-03)
-
-Wrote `docs/explanation/dead-code-audit.md` — the checked-in candidate inventory, with
-the exact search behind every finding, and linked it from `docs/README.md` (whose own
-rule is "a document not linked here does not exist"). No code changed.
-
-WHAT THE SEARCHES ACTUALLY FOUND (numbers, so US-2 does not re-derive them):
-  • 560 production shell functions (bin/chief + engine/*.sh + install.sh) checked for
-    references across every TRACKED file, word-boundary, definition line excluded.
-    Exactly ONE has zero references: `crossrepo_completed()` (engine/crossrepo.sh:33).
-    98 have exactly one — that is the quality ratchet's `single_use_functions` metric,
-    NOT a liveness finding, and several are one-call-site by stated design.
-  • 12 function names defined in two production files. ALL TWELVE are degradation
-    stubs behind `if [ -f "$DIR/<module>.sh" ] … else <stub> fi`, each with the reason
-    written at the site. Deleting them would leave every test green and remove chief's
-    entire older-engine-tree compatibility story. This is the single most important
-    line in the audit.
-  • 142 CHIEF_* identifiers split into reads/writes. Three are write-only:
-    CHIEF_SWEEP_REFUSED (but its own comment declares it an output, so Class B) and
-    CHIEF_SWEEP_STARTUP_BYTES/_COUNT (nothing declares those — Class A).
-  • 3 test files registered in ZERO of the three gate lists: parked-decisions, ps-all,
-    update-reroot. parked-decisions is cited as run in three of 106's story notes, so
-    it LOST its registration. Likely a re-registration, not a deletion.
-  • scripts/check-tasklist-categories.mjs (109 lines) is invoked by nothing —
-    verify.sh runs check-doc-links.mjs and not this one.
-  • ZERO commented-out code blocks, ZERO unreferenced docs/templates/fixtures.
-
-## Learnings for future iterations
-
-- **`mapfile` does not exist on this host** (bash 3.2, macOS) and **the Bash tool's
-  shell is zsh**, which does NOT word-split unquoted `$VAR`. Two scans silently
-  returned "everything is dead" and "nothing is dead" before that was noticed. Any
-  multi-file scan goes in a `/tmp/*.sh` run as `bash /tmp/x.sh`, and uses `git grep`
-  (tracked files, no file-list array needed) rather than expanding a path list.
-- **Substring matching makes a dead-code scan useless.** `grep -F "$fn"` over short
-  names (`status`, `field`, `render`) reports every function as live. The scan must be
-  `git grep -nE "(^|[^A-Za-z0-9_])${fn}([^A-Za-z0-9_]|$)"` with the DEFINING line
-  filtered out by `file:line:` prefix.
-- **In this engine, a second definition of a name is a compatibility STUB, not
-  duplication.** engine/agent.sh, engine/monitor.sh each carry a block of them. Check
-  for the enclosing `if [ -f "$_AGENT_DIR/x.sh" ]` / `if [ -f "$_MON_DIR/x.sh" ]`
-  before calling anything a duplicate.
-- **`shellcheck` is not installed locally** (it is in CI at `-S error`, which reports
-  neither SC2034 nor SC2317). A dead-variable scan here is hand-rolled and strictly
-  weaker than shellcheck's — say so rather than implying coverage.
-- The two structural false-positive generators for a shell dead-variable scan are
-  `awk -v NAME=…` bindings and `eval "_pfx_$key=…"` indirect expansion
-  (engine/live.sh's `_lv_*`). Both are read; neither is greppable.
-
----
-## 900-dead-code-paydown — US-2: Removal, with the tree still green and the reason recorded (2026-09-03)
-
-Three reviewable commits, plus one separate pre-existing fix. The disposition of every
-US-1 finding is now `docs/explanation/dead-code-audit.md` §8 — §§2–5 were left AS
-MEASURED so the searches still re-run against the state that produced them.
-
-THE RULE THIS SWEEP APPLIED (§8, stated once so US-3 and 901 inherit it):
-**unreferenced code is deleted; working code that no gate invokes is registered.**
-Both are "dead" by this tasklist's definition and they fail differently — nothing can
-notice `crossrepo_completed` going, while a test in zero gate lists is WORSE than an
-absent one because it reads as coverage. Four of the six findings were the second kind.
-
-- step 1/3 `2c5ee09` — the two Class A findings and nothing else. `crossrepo_completed()`
-  (engine/crossrepo.sh, the only zero-reference function of 560) and
-  `CHIEF_SWEEP_STARTUP_BYTES`/`_COUNT` (engine/sweep.sh, assigned as the last statement
-  before `return 0`). Both searches re-run immediately before the deletion and pasted
-  into the commit. VERSION 0.9.13 -> 0.9.14 + README/ROADMAP bold.
-- `10e3753` — ROADMAP row for `118`, PRE-EXISTING: its retire commit filed the
-  completed/ record without the row `test/doc-sync.sh` requires, so main is red on that
-  gate today. Separate commit, because it is not a removal.
-- step 2/3 `e9738e5` — Class D, all four REGISTERED rather than removed:
-  parked-decisions + update-reroot into all three lists, ps-all into BASH_SUITE + CI
-  only (a real watcher, excluded for monitor.sh's reason, stated in its own header),
-  check-tasklist-categories.mjs into .chief/verify.sh + CI.
-- step 3/3 — this note, the §8 disposition, the story flags.
-
-MEASURED, per artifact: parked-decisions PASS (0.36s) · update-reroot PASS (5.6s) ·
-ps-all was RED 3/3 and is PASS 3/3 after the fix · categories guard `OK — 4 tasklists
-categorized` · both new merge-gate entries PASS under test/bystander.sh (2/2, bystander
-alive) · doc-links 0 dead vs 0 on main · doc-sync PASS (42 merged tasklists) ·
-version-bump PASS (0.9.14) · crossrepo XREPO PASS · sweep 55 passed 0 failed.
-
-### Learnings for future iterations
-
-- **CI HAS NOT PARSED SINCE 2026-08-25, and no local gate can see that.** Five step
-  names in `.github/workflows/ci.yml` begin with a backtick — a RESERVED INDICATOR in
-  YAML, so `- name: `chief status` …` is not a legal plain scalar. GitHub then reports a
-  run of THE FILE (name `.github/workflows/ci.yml`, not the workflow `ci`) with ZERO
-  jobs: `gh api repos/:owner/:repo/actions/runs/33047688561` → conclusion failure,
-  `jobs = []`. Quoted them; `python3 -c "import yaml; yaml.safe_load(open(...))"` now
-  parses the file (72 steps). Validate this file that way after ANY edit to it — it is
-  the third of the three gate lists and the only one nothing local checks.
-  (Every run in the API's last 20 is still a failure; that is `115`'s subject.)
-- **A test that no gate runs rots silently, and ps-all is the proof.** Of the three
-  unregistered files, exactly one was red — and it was red on a WALL-CLOCK assumption
-  (`sleep 0.2` before reading a watcher's output; first render measured ~400ms here),
-  not on a behaviour change. Registration therefore has to run the file first: the
-  finding "3 tests in zero lists" is not the same size as the work.
-- **Re-run the search immediately before the deletion, and paste it into the commit.**
-  US-1's inventory was one day old and still correct, but the commit is where a reviewer
-  looks, and `git grep -n "<name>" -- .` in the message is checkable in seconds.
-- **Fix a doc a removal STRANDS in the removal commit; fix rot it merely EXPOSES in its
-  own.** The ROADMAP/118 gap has nothing to do with dead code — it was surfaced only
-  because this branch bumped VERSION and so paid the doc-sync gate.
-- macOS/zsh notes that cost time again: the Bash tool's shell is **zsh** (no `timeout`,
-  no word-splitting on unquoted `$VAR`), and `echo ===` is a zsh syntax error. Multi-step
-  scans and edits go in a `/tmp/*.py` or `/tmp/*.sh` run explicitly with `python3`/`bash`.
-
-GATE (US-2, final tree): `chief verify` **exit 0, GREEN**, ~20 min — quality ratchet OK,
-`bash -n` clean, version-bump PASS (0.9.14), bystander block **57 test(s)** (55 before
-this branch; +2 are the new merge-gate registrations) with the decoy alive and a genuine
-orphan still reaped, doc-sync PASS (v0.9.14, 42 merged tasklists), tasklist jq parse +
-category coverage OK. Verdict RECORDED for tree fb83c89c. The CI-parse invariant is now
-in CLAUDE.md, beside the heredoc-backtick one it rhymes with.
-
----
-## 900-dead-code-paydown — US-3: What the sweep could not decide (2026-09-03)
-
-Docs only, no code touched, nothing removed. `docs/explanation/dead-code-audit.md`
-gains **§9** (the undecidable list) and **§10** (the limits of the method, in full);
-§6 — which had promised "US-3 states them in full" — now points forward at both, and
-the header status line records them.
-
-WHY IT IS TWO SECTIONS. §9 is a list of *candidates*; §10 is a list of *properties of
-the instrument*. They are not the same claim, and collapsing them is how "we could not
-tell" turns into "we did not look". Each §9 class names the search that produced it and
-the number it produced, so an undecidable finding is re-runnable exactly like a
-decidable one.
-
-THE EIGHT CLASSES, with what each actually measured on this tree:
-
-- **9.1 constructed names** — 10 executable `eval` sites + 1 `${!VAR}`. Three of them
-  evaluate OPERATOR-SUPPLIED SHELL (`CHIEF_ITER_HOOK`, driver warm-ups, the per-tasklist
-  `verify` array): the boundary at which chief runs text this repo does not contain.
-  `gitenv.sh`'s `GIT_CONFIG_KEY_$n` is doubly undecidable — its consumer is **git**.
-  `LIVE_FIELDS` is a closed literal list of 16; the quality tolerance family is closed
-  today (11 KNOWN metrics, 11 defaults) and would silently open on a twelfth.
-- **9.2 dispatch through a variable** — `"$livefn" "$wt"` (sweep.sh:327,425). Decidable
-  ONLY because both callers pass the literal `chief_reap_wt_live`.
-- **9.3 `command -v <fn>` capability probes** — 13 functions. **None is probe-only**
-  (probe refs 1–2 against other refs 3–102). A measured negative, and the audit's
-  clearest false-NEGATIVE generator: the probe string outlives the last real caller.
-- **9.4 consumers outside the repo** — 4 dispatch aliases (`generate` `watch` `tail`
-  `subscribe`) invoked by nothing, in no README row, no doc, no usage block, and
-  STRUCTURALLY invisible to `test/doc-sync.sh:95`, which checks `${arm%%|*}` only.
-- **9.5 operator input** — 13 `CHIEF_*` read by the engine and assigned nowhere in the
-  tree; 4 (`CHIEF_QUALITY_CONFIG`, `CHIEF_SWEEP_DEPTH`, `CHIEF_SWEEP_MAX`,
-  `CHIEF_SWEEP_STARTUP_DRY_RUN`) occur ONLY at the read.
-- **9.6 the event stream** — 33 types, 21 asserted by no test, 4 with no in-tree
-  consumer of any kind.
-- **9.7 scaffolded code** — `templates/tasklist.example.json`, 0 test references
-  (verify.sh 53 · config 21 · agent-context.md 3 · quality.conf 2 · zones.conf 2).
-- **9.8 prompt text** — excluded from scope rather than sampled.
-
-§10's nine limits are the instrument: no shellcheck, no runtime trace, constructed
-names, mention-counted-as-reference (measured: 0 functions kept alive by prose alone),
-deletion changing the question, tracked-files-and-the-worktree-is-the-boundary,
-version skew, published-API-has-no-local-caller, and time. It closes with what would
-LIFT each, in cost order.
-
-### Learnings for future iterations
-
-- **"Undecidable" is a result, not a deferral — and it has to be measured like one.**
-  Every class here names its command and its count. Three of the eight came back as
-  measured NEGATIVES (no probe-only function, no prose-only function, the tolerance
-  family closed) and those are the most valuable rows in the section: they are what
-  stops 901 or a future sweep re-running the same scan.
-- **The `command -v <fn>` probe is a reference a grep cannot discount.** 13 names in
-  this engine carry one. If a future sweep counts references rather than reading them,
-  every one of those functions is permanently un-deletable and permanently un-auditable.
-- **An audit run inside a worktree cannot see a cross-repo consumer, by contract.**
-  Chief's agent rules forbid reaching out of the worktree, which is exactly the scope a
-  cross-repo liveness question needs. That is not a gap to be quietly fixed by reaching
-  anyway — it is stated as §10's limit 6, with "a `git grep` run from ABOVE the repos"
-  named as what would lift it.
-- **A gate can be structurally blind and still be right.** `test/doc-sync.sh` reduces
-  each dispatch arm to its primary name before checking README coverage, so four aliases
-  can never fail it. That is a defensible choice for a documentation-drift gate; it just
-  means the aliases have no reader in this repo, and a liveness audit has to know which
-  gate would have caught what.
-- macOS/zsh again: the multi-file scans went in `/tmp/*.sh` run as `bash`, `git grep`
-  throughout, word-boundary `-E` patterns with the defining `file:line:` prefix filtered
-  out. `grep -c .` rather than `wc -l` when the input may be a single empty line — `wc`
-  counts one where there is nothing.
-
-GATE (US-3): `chief verify` **exit 0, GREEN** — bystander block **57 test(s)** with the
-decoy run alive (orphan 23896 reaped, bystander 8730 left alone) · verify-cache OK (PARTS
-B–E) · CIGATE PASS · XREPO PASS · CLAIMS PASS · GEN OK · DOC-SYNC PASS (v0.9.14, 42 merged
-tasklists) · tasklists jq parse OK · doc-links **0 dead references**. Verdict RECORDED for
-tree `e5288a63`, then re-recorded once this note and the story notes were written in.
-Docs + tasklist only, so no `VERSION` bump is owed (`test/version-bump.sh` reads
-`engine/`/`bin/`/`scripts/`/`install.sh`, none of which this story touches).
-## US-1 — The final verify streams, so the record keeps moving
-Thu Sep  3 2026
-
-`_agent_verify_final` (engine/agent.sh) ran the gate inside a command substitution:
-
-    output="$(run_verify "$CHIEF_PROJECT" "$CHIEF_TASKLIST" 2>&1)" || rc=$?
-    printf '%s\n' "$output"
-
-Nothing reached the log until the hook RETURNED. That is the whole invisibility half
-of the incident: talos:83 ran 7h41m, read `stalled in agent-turn — no activity for
-1h06m`, and its log ENDED at the completion token — 192 of 192 lines — over a branch
-with 7 commits and 4/4 stories passing.
-
-Files:
-- `engine/agent.sh` — the capture is now a plain `run_verify … 2>&1 || rc=$?`. NO
-  pipeline: `| tee` would hand us tee's status, and a red gate reported green accepts
-  a completion it must refuse. `local output` dropped with it.
-- `test/verify-stream.sh` — new. PART A the first line is in the log while the hook is
-  still running · PART B the status is still the hook's (red refuses the completion,
-  both verdicts recorded, red streams too) · PART C REPRODUCTION against a copy of the
-  engine with the command substitution restored.
-- `.chief/verify.sh`, `test/all.sh`, `.github/workflows/ci.yml` — the three lists.
-- `VERSION` 0.9.13 → 0.9.14; README + ROADMAP bold version to match.
-- `ROADMAP.md` — a row for `118`, which merged onto main without one and was failing
-  `test/doc-sync.sh` on arrival (pre-existing, inherited from the base).
-
-### Learnings for future iterations
-
-- **A "did it stream?" test must be a HANDSHAKE, not a sleep.** The obvious shape —
-  hook prints, sleeps N, prints again, poller races the window — is exactly the
-  load-sensitive assertion CLAUDE.md warns about, and this file goes in the merge gate
-  where `-p N` workers run beside it. First draft did that and took 28s. Instead the
-  hook prints its marker and BLOCKS on a go-file that the prober touches the moment it
-  reads the marker out of the log. Streaming then costs no wall clock and cannot be
-  starved (the hook waits as long as the machine needs); buffering cannot be rescued by
-  the same generosity, because a captured line is physically unable to appear before the
-  hook exits — it just times out. 7.5s, and the verdict is not a race.
-- A done-file the hook touches as its LAST act is what turns "before it exited" into a
-  fact. Check it FIRST in the poll loop, so an already-exited hook can never be credited
-  with a live read — the conservative direction.
-- **A red gate does not end the agent loop** (that is what a red gate is for), so a
-  fixture provider that commits every turn keeps a red probe alive to the hard cap of 20
-  — 20 × the hook. `test/verify-cache.sh`'s `FAKE_COMMIT` flag exists for this; copy it.
-  Bounding the hook's own wait to the first invocation of a probe is the other half.
-- `test/doc-sync.sh` fails on the BASE's debt as soon as your branch touches any file in
-  its trigger set (`VERSION`, `README.md`, `ROADMAP.md`, `tasks/chief/completed/`). 118
-  merged without its roadmap row; the first branch to bump VERSION inherits that.
-
-## US-2 — It publishes the phase whose threshold already fits it
-Thu Sep  3 2026
-
-The second half of the talos:83 incident, and the nearly-free one. `monitor.sh`'s
-`STALE_PHASE_SECONDS` has given `verifying` **3060s** since it was measured, precisely
-because a gate legitimately runs for tens of minutes — but `grep -n 'phase=verifying'`
-returned exactly ONE publisher (driver.sh's merge-phase verify). `_agent_verify_final`
-never said it was verifying, so its gate was timed as an agent turn against 900s. The
-right threshold existed; this code path did not use it.
-
-Files:
-- `engine/agent.sh` — `_agent_verify_final` reads the current phase, publishes
-  `phase=verifying`, runs the gate, and restores the prior phase before recording the
-  verdict. The gate is now `run_verify … | _verify_tick` with `rc=${PIPESTATUS[0]}` on
-  the very next line — US-1's "no pipeline" was about a bare `$?` picking up tee's
-  status, and PIPESTATUS is the instrument `_capture_provider_output` already uses for
-  exactly that.
-- `engine/agent.sh` — new `_verify_tick`: stdin → stdout unchanged, bumping the
-  liveliness record as the bytes go past, rate-limited by `$SECONDS` (a builtin, so no
-  fork per line). **Deliberately not `_beat_start`**: that ticker beats on a TIMER, and
-  a timer here would tick a wedged gate forever and make `verifying` unflaggable — the
-  trade monitor.sh refuses in writing for provider-waiting. The record moves when the
-  OUTPUT moves.
-- `engine/agent.sh` — `_beat_start`'s HEAD-moved promotion no longer overwrites
-  `verifying` with `writing` (it falls back to a bare heartbeat), so streaming output
-  cannot re-label a verify on its first line.
-- `engine/monitor.sh` — the STALE_PHASE_SECONDS note said "neither phase has a ticker
-  behind it (only the agent turn does)", which this story falsifies; it now records the
-  two publishers and that the boundary one is output-driven on purpose.
-- `test/verify-stream.sh` — PART D (the record reads `verifying` mid-gate · the output
-  bumps it · `chief ps` renders it at 40m with no flag) and PART E (REPRODUCTION: drop
-  only the phase publish and the same gate reads `stalled in agent-turn`). PART C's sed
-  anchor followed the call line to the pipeline form.
-- `VERSION` 0.9.14 → 0.9.15 + README/ROADMAP bold.
-
-### Learnings for future iterations
-
-- **A heartbeat and a stall flag are the same instrument pointed opposite ways.** The
-  tempting fix — start `_beat_start` around the verify — makes the phase quiet-proof and
-  therefore hang-proof in the wrong sense: nothing could ever be reported stale in it
-  again. `monitor.sh` already writes the rule down for provider-waiting ("It wants a
-  LONGER threshold, not silence"); the same sentence decides the ticker's *source*. Tick
-  from the thing whose absence IS the failure — here, the gate's own output.
-- **`${PIPESTATUS[0]}` has to be read on the LINE AFTER the pipeline.** Any command in
-  between (an `echo`, a `[ … ]`, a `local`) replaces the array. The comment says so
-  because a later edit inserting one line is silent and turns a red gate green.
-- **`$SECONDS` is the cheap clock for a per-line rate limit.** `date +%s` is a fork, and
-  a verbose gate is tens of thousands of lines. Assigning it is safe only because the
-  body runs in a pipeline's subshell — say that where it is assigned.
-- **Backdate `phase_since` AND `heartbeat` together** when asking the render what it
-  would say at 40m (`test/stall-flag.sh`'s `mkrow` does both). `heartbeat` is what the
-  stall flag reads; `phase_since` is what `verifying for 40m` reads. Backdating one
-  gives a coherent-looking row that asserts on the wrong half — the first draft here
-  rendered `verifying for 2s · … 40m ago` and the `for 40m` assertion failed while the
-  flag half was already right. `live_set` PRESERVES `phase_since` across a write that
-  does not CHANGE the phase, which is exactly what lets a backdate survive the ticker
-  and become a probe OF the ticker.
-- **Mutation-check the ticker, not just the publish.** `cp -R engine test` to a temp
-  dir, stub `_verify_tick`'s `live_set` to `:`, and run the copied test (its `ROOT` is
-  `BASH_SOURCE`-relative, so it picks up the copied engine). PART D fails there, which
-  is what makes "the output bumps the record" an assertion rather than a hope.
-- The quality ratchet's `single_use_functions` went 17 → 18 (tol 2) on `_verify_tick`.
-  US-3 has one left before it has to dedupe.
-
-## US-3 — The stall flag still fires on a real hang
-Thu Sep  3 2026
-
-The negative control for US-2, and the reason US-2 is a fix rather than a trade. Moving
-a healthy gate out of the flag's way is only half a fix; if it moved a WEDGED one out
-with it, `verifying` would have become unflaggable and the incident would have been
-swapped for a blind spot. `monitor.sh` already refuses that trade in writing for
-provider-waiting — "It wants a LONGER threshold, not silence" — and the same sentence
-binds here.
-
-No engine change was needed: `_beat_stop` runs before `_agent_verify_final`, so no
-timer ticker is alive across the boundary gate, and `_verify_tick` only writes when
-output moves. The story is the ASSERTION that this is true, plus the doc an operator
-reads at 1am.
-
-Files:
-- `test/verify-stream.sh` — PART F, the two cases the incident conflated, held apart by
-  ONE record so the only variable is the emission. F1: a hook that produces no stdout
-  and does not return, record aged to 70m (past `verifying`'s own 3060s, so the longer
-  threshold has EXPIRED rather than exempted it) — the row reads
-  `⚠ stalled in verifying — no activity for 1h10m, past its 51m limit`, and the
-  heartbeat is byte-identical to the value it was aged to. F2: the same record, the same
-  `phase_since`, one line of output — the flag goes and `verifying for 1h10m` stays.
-- `test/verify-stream.sh` — `spawn_iteration` (the launcher, shared by the phase probe
-  and F so the control's environment IS its subject's) and `ps_row` (the synthesized run
-  registry + one `monitor.sh once` render, callable repeatedly, which is what lets F ask
-  the same question of the same record twice).
-- `docs/guides/monitoring.md` — a `verifying has two publishers` subsection under the
-  threshold table: which half of the engine wrote the row, what ticks each, how to read
-  `verifying for 41m` against `12s ago` as two separate facts, why the ticker is
-  output-driven and not a timer, and that a `stalled in agent-turn` over a log ending at
-  the completion token is a pre-0.9.15 engine.
-
-### Learnings for future iterations
-
-- **A fix to a stall flag is not finished until the flag has been shown to still
-  fire.** The whole class of change here — a longer threshold, a new phase, a ticker —
-  buys quiet, and quiet is indistinguishable from a blind spot unless something asserts
-  the alarm still works. Write the negative control in the same file, against the same
-  machinery, or the next person has no way to tell which one they inherited.
-- **The sharpest form of that control is ONE record read TWICE.** Two probes at two ages
-  invite "well, of course, 40m < 51m". Same record, same phase, same `phase_since`, one
-  line of output between the renders: the verdict flips and the only thing that changed
-  is the emission. `live_set` preserving `phase_since` across a non-phase write is what
-  makes it possible.
-- **Wait on the HEARTBEAT, not on the log line.** `_verify_tick` prints the line and
-  THEN writes the record, so a marker in the log is not yet a tick. Polling the log and
-  reading the record immediately is a race that fails under load; poll `live_get …
-  heartbeat` past its previous value instead.
-- **A gate with no stdout still needs a start signal, and a FILE is the honest one.**
-  The silent hook appends to a counter file to say it has been entered. That is exactly
-  the channel the monitor does not have, which is the point of the control — and it
-  keeps the "produces no output" claim literal.
-- **Mutation-check a negative control in BOTH directions it can rot.** Setting
-  `verifying:3060` to `999999` fails F1 alone (A–E stay green — the exemption is
-  invisible to every other part). Wrapping the gate in `_beat_start`/`_beat_stop` — the
-  tempting "just keep it beating" fix — fails F on the heartbeat assertion. Both had to
-  be run to know F is testing the policy and the ticker rather than restating them.
-- A mutation that trips an EARLIER part hides the one you are checking. `_beat_start`
-  around the gate fails PART E first; re-run with that part's `fail` sed-swapped to
-  `note` in a copy under `test/` — under `test/`, because the file derives `$ROOT` from
-  `${BASH_SOURCE[0]}` and a copy in `/tmp` looks for the engine at `/engine`.
-
----
-
-## Verification recovery — test/verify-stream.sh PART D/E were RACY under load
-
-The branch came back from the merge gate red on `test/verify-stream.sh` PART D
-("the record was NOT bumped by the gate's own output") with all three stories
-already passing. The engine was NOT at fault — the flake is in the probe.
-
-WHAT REPRODUCES IT. Standalone the file is green every time; that is why it passed
-in US-2's and US-3's own runs and failed under `test/bystander.sh`, which runs it
-as 1 of 58. Six concurrent runs of the file: 2 failed, in two different places —
-PART D on `HB_TICKED=0`, and PART E with the row rendering
-`↳ agent-turn for 40m · iter 1 · 0s ago`, i.e. a heartbeat that was never aged.
-
-THE CAUSE, one race with two faces. `_verify_tick` PRINTS a line and THEN writes
-the record, so at the instant a marker reaches the log that `live_set` is still in
-flight, and `phase_probe` sampled once on each side of it:
-
-  - `backdate` (live_get + sed + mv) races that write. The tick lands after the
-    `sed` and restores `heartbeat` to `now`, so the baseline `hb_before` is `now`
-    and the second line cannot beat it by 100 -> PART D. In PART E the same
-    clobber leaves a fresh heartbeat at 40m, so no stall flag -> the reproduction
-    stops reproducing. (Quieter variant: a tick between backdate's own `live_get`
-    and its `sed` leaves the pattern unmatched, and a no-op backdate looks exactly
-    like a successful one.)
-  - `hb_after` was read the moment `MARK_SECOND` hit the log — before the bump —
-    so a working ticker reads as a dead one.
-
-PART F already had both right and said so ("The marker reaching the LOG is not the
-tick"), and established quiescence by hand before its own backdate. D and E did
-not. The fix factors F's discipline into two helpers so the parts cannot drift:
-`backdate_settled` (re-assert until a read-back comes back aged — bounded, because
-every call site is a point where the hook is BLOCKED on a release file, so at most
-one tick is in flight) and `await_tick` (poll for the bump past a floor instead of
-sampling once). Test-only change; no engine edit, so VERSION stays 0.9.15.
-
-MEASURED. Before the fix: 2 of 6 concurrent runs failed (PART D once, PART E once)
-— that is the reproduction, run before the fix, and it is the mutation check.
-After: 16 of 16 concurrent runs green, plus standalone green at ~20s wall.
-test/stall-flag.sh PASS, test/liveliness.sh PASS, test/verify-cache.sh PASS,
-test/doc-sync.sh PASS, test/version-bump.sh PASS. bash -n clean over bin/chief,
-engine/*.sh, test/*.sh, install.sh. check-doc-links: 0 dead references.
-Quality ratchet OK — no tracked metric regressed. shellcheck not installed on this
-host (CI enforces it).
-
-### Learnings for future iterations
-
-- **A test that samples a record around a marker in the log is racy by
-  construction.** Everywhere in this engine the pattern is *emit the bytes, then
-  write the record* — `_verify_tick` does it, and it is the right order (the
-  record is stamped for output that has actually left). So the log marker is
-  strictly EARLIER than the state change it implies. Never read the record on the
-  strength of having grepped the log: **poll the record**. Write the assertion as
-  "wait until the value moves past X, with a deadline", never as "read it once".
-- **An external write to a liveliness record must be CONFIRMED, not issued.**
-  `live_set` is a read-modify-write and so is any `sed`-in-place backdate; they
-  clobber each other silently and in both directions. Re-assert until a read-back
-  agrees. This is only bounded because the fixture can park the subject first
-  (a hook blocked on a release file) — a probe with no such quiescent point has
-  no safe backdate at all, and needs a different instrument.
-- **Green standalone is not green in the suite.** `test/bystander.sh` runs 58
-  files and the box is loaded; a timing-sensitive new test should be run ~8-way
-  concurrent before it is called done. That reproduces in seconds what otherwise
-  surfaces as one red merge gate ten minutes into a verify.
-- **When the merge gate comes back red with every story passing, suspect the test
-  before the engine** — but prove it: reproduce the failure first, on the unfixed
-  file, and keep that reproduction as the mutation check.
-
----
-## BASE INTEGRATION — rebased onto main @81dc98b (2026-09-03)
-
-Not a user story. All three stories were already `passes:true` and committed; the
-branch could not merge because `900-dead-code-paydown` landed on `main` underneath
-it and chief's automatic rebase conflicted (8 commits behind, forensics at
-`.chief/state/snapshots/119-a-long-verify-is-not-a-hang.rebase-conflict.md`).
-
-FIRST, THE STALE ALARM. `progress.txt` was re-seeded with a
-`⚠️ PRIOR VERIFICATION FAILED` block naming `test/verify-stream.sh` PART D. That
-block is from `…verify-failed.log` stamped **14:15**; the fix for exactly that
-failure is commit `5d8bd4b` at **14:24**. The driver re-seeds from the last
-recorded failure and has no way to know a later commit addressed it — so check
-the log's mtime against the branch's own log before re-fixing anything. PART D is
-green standalone here (A-F, "VERIFY-STREAM OK", 19.0s).
-
-THE FOUR CONFLICTS, and the rule each was resolved under:
-
-- `.chief/state/prd.json` — took the BRANCH side whole. `main`'s copy is 900's
-  runtime tasklist, not a change to this one; there is nothing to merge.
-- `.chief/state/progress.txt` — UNION, both sides kept. This file is
-  **accumulative across tasklists**, which is worth knowing before resolving it:
-  `main`'s header is still `116-a-decision-tasklist-cannot-finish` and 900 appended
-  under it. Taking one side would silently delete a merged tasklist's notes. The
-  two sides appended disjoint sections, so the resolution is deleting the three
-  marker lines — and `^=======$` as a sed pattern is safe here only because the
-  file's own rules are 80 `=` characters, not 7.
-- `.chief/verify.sh` — UNION of `CHIEF_BYSTANDER_TESTS`. 900 registered
-  `parked-decisions` + `update-reroot`; this branch added `verify-stream`. Taking
-  either side alone silently unregisters the other's tests, which is the failure
-  mode 900 exists to fix (a test in zero gate lists reads as coverage). 60 entries.
-- `ROADMAP.md` — both sides were the SAME row (118) worded differently, so `main`'s
-  already-merged text was kept and this branch's reword dropped. One row for 118.
-
-THEN THE INHERITED DEBT. With the rebase done, `doc-sync` went red: 900 merged and
-`ROADMAP.md` never named it. Fixed in `e0ecc74`.
-
-### Learnings for future iterations
-
-- **A `⚠️ PRIOR VERIFICATION FAILED` block can be older than the fix.** It is seeded
-  from `$SNAP/<name>.verify-failed.log`, which is only rewritten by the next failing
-  merge attempt — so a commit made after that log was written leaves the block
-  standing and accusing. `ls -la` the snapshot against `git log --date=iso` before
-  spending an iteration re-fixing something HEAD already fixed.
-- **`git add` on `.chief/state/*` needs `-f` mid-rebase.** `prd.json` and
-  `progress.txt` are tracked exceptions inside a gitignored directory; staging a
-  conflict resolution in them fails with "paths are ignored by one of your
-  .gitignore files" and the rebase will not continue until you force it.
-- **`.chief/verify.sh`'s test list is a union point, not a version.** Two branches
-  registering different tests conflict on one line, and either `--ours` or
-  `--theirs` compiles, passes `bash -n`, and quietly drops a merge gate. Diff the
-  two lists as SETS before resolving.
-- **Retiring a tasklist is a roadmap edit and nothing automates it.** The driver's
-  retire commit writes `tasks/chief/completed/<stem>.json` and does not touch
-  `ROADMAP.md`, so every merge arms `doc-sync` for the *next* branch that touches
-  `VERSION`/`README.md`/`ROADMAP.md`. 118 charged 900 for this; 900 charged 119.
-  Adding your own row while the branch is still in flight is what stops the chain.
-
-## 120/US-1 — A recorded verdict is reused whatever its status
-Thu Sep  3 2026
-
-The verify cache reused a GREEN verdict and re-earned a RED one, so an agent that
-could not fix a gate paid the entire gate again on every iteration to be told the
-same thing (cuneiform 2026-09-03: `388-the-panel-emission-contract` ran 01:55→07:52,
-merged nothing, five full ~11.6-min gate runs, six identical failures, one
-byte-identical tree).
-
-Files:
-- `engine/lib.sh` — `verify_cache_try` honours ANY recorded status and RETURNS the
-  recorded exit status on a hit, 1 on a miss, with `$VERIFY_CACHE_HIT` /
-  `$VERIFY_CACHE_STATUS` / `$VERIFY_CACHE_RECORD` set on every call. New
-  `verify_cache_output` replays the retained report. `verify_cache_record` takes an
-  optional 4th arg (a file, or `-` for stdin) and retains the tail of a RED gate's
-  output as `<key>.out`, pruned together with its record.
-- `engine/agent.sh` — `_agent_verify_final` gained a third arm: a red hit replays the
-  report and returns 1, so `COMPLETE_OK=0` exactly as a fresh red does. The gate's
-  output is `tee`d into a scratch file on the way past so the record can carry it.
-- `engine/driver.sh` — the merge-phase verify is three arms for the same reason; a red
-  hit fills `$vout` from the replay, so `.verify-failed.log` still names what broke.
-- `bin/chief` — `cmd_verify` tees too, so a red recorded by `chief verify` is
-  replayable.
-- `test/verify-cache.sh` — PART D inverted to the new contract (reuse + replay + still
-  refuses completion), plus the red-path invalidation control.
-- `VERSION` 0.9.15 → 0.9.17, README + ROADMAP bold version with it.
-
-### The key grew a FOURTH component, and that is the real find here
-
-Reusing a red exposed a latent unsoundness in `tree.base.hook`. A project worktree
-never initializes its submodules, so the AGENT BOUNDARY runs the hook with `dep/` an
-empty directory; the MERGE PHASE runs `submodules_sync` first (93) and runs the same
-hook, over the same tree, against a submodule checked out to match the gitlink. Same
-tree sha, same base, same hook — a different filesystem, and CHIEF ITSELF is what
-moved it. `test/submodule-gitlink.sh` is exactly that gate: with three parts it read
-the boundary's legitimate red ("submodule working tree is STALE") back at the merge
-and never re-ran the check `93` exists to guarantee, ending a mergeable tasklist
-VERIFY-FAILED three attempts running.
-
-The same hole exists for GREEN and pre-dates this tasklist (it arrived with 117's
-boundary read) — a boundary green taken over a stale submodule tree could be reused at
-merge, which is the direction that MERGES something unchecked. Nothing had noticed
-because a green boundary verify over an empty `dep/` is rare; a red one is not.
-`verify_cache_subs` (a cksum of `git submodule status --recursive`, `nosub` where
-there are none) closes both.
-
-### Learnings for future iterations
-
-- **A HIT/MISS predicate that also carries a status must fail in the SAFE direction.**
-  `verify_cache_try` cannot signal both from its return alone (miss and red hit are
-  both non-zero), so the choice is which confusion a careless caller makes. Returning
-  the RECORDED STATUS means a caller that ignores `$VERIFY_CACHE_HIT` re-runs a red
-  hit — wasteful, never wrong. The inverse (0 = hit) would make the same oversight
-  skip the gate and accept a failing tree.
-- **`verify_cache_record` reads its output file TWICE** (line count, then tail), so a
-  process substitution silently records nothing on the second read. The `-` stdin mode
-  exists for callers that already hold the output in a variable.
-- **The FAKE PROVIDER in test/verify-cache.sh must commit at most ONCE per
-  `run_agent`.** A red gate refuses the completion, so the loop takes another turn; a
-  provider that commits every turn never stops making progress and runs to the hard
-  iteration ceiling (observed: 20 iterations, 24 hook runs). It now skips the commit
-  when its token is already in `product.txt`.
-- **A verdict cache key must name every input the gate READS, not every input the
-  COMMIT names.** The tree sha describes the repository's content; the hook runs
-  against a FILESYSTEM, and for a superproject those differ by exactly the submodule
-  checkout — which chief moves between its own two reads. Anything else chief mutates
-  between a record and its reuse belongs in the key on the same argument.
-- **`run_worker` (driver.sh) is the `function_length_max` ceiling.** It measured
-  596 → 616 raw lines; a 12-line addition put the ratchet at +14 against a tolerance
-  of 15. Condensing the arm to 11 lines and moving the scratch-file handling into
-  `verify_cache_record` brought it to +6. Any story touching that function should
-  check `bash engine/quality.sh ratchet` before it is happy.
-- **A follow-up commit touching `engine/` re-stales `VERSION`,** exactly as CLAUDE.md
-  says. The submodule-key fix landed as its own commit and `chief verify` blocked on
-  VERSION-BUMP before running a single test; 0.9.16 -> 0.9.17 plus both bold README /
-  ROADMAP versions cleared it.
-- **`test/ratelimit.sh` can fail inside the bystander block under host load** while
-  passing 3/3 standalone. Observed once here: its run reached `● rl finished →
-  MERGED @29dc2e0` and was then TERMed, with load average 5.65 and two other repos'
-  chief runs live on the machine. Re-run it standalone before believing a bystander
-  ratelimit failure.
-- **Two tests anchor `sed` patches on lines in `_agent_verify_final`, and this story
-  moved one of them.** `test/verify-stream.sh` PART C restores the pre-119
-  command-substitution form; its anchor was the `run_verify … | _verify_tick` line,
-  now `… | tee "$vlog" | _verify_tick`. It failed with "its anchor moved. Fix this
-  patch, do not delete the reproduction" — which is the right failure, and the right
-  response is to re-anchor it. `test/verify-cache.sh` PART E patches
-  `if verify_cache_try ` in the same function and still applies. Grep both before
-  touching that function.
-- **`chief verify` IS the escape hatch until US-2 ships one.** It never reads the
-  cache and always records, so a red verdict cached over a flaky gate can be cleared
-  by re-running it. That is exactly what US-2 needs to make reachable from a RUN.
-
-## 120/US-2 — The operator can force a re-run
-Thu Sep  3 2026
-
-US-1 made a RED verdict reusable. That is only safe if the operator can DISBELIEVE
-one: a gate whose answer is not a function of the tree (a real clock, a real network,
-a race, an order-dependent suite) records a verdict chief cannot distinguish from a
-sound one, and with reuse in place that verdict would stand for as long as the tree
-does. `CHIEF_VERIFY_CACHE=0` is that hatch.
-
-Files:
-- `engine/lib.sh` — `verify_cache_try` declines every lookup when
-  `CHIEF_VERIFY_CACHE=0`, checked AFTER the record is located so the forced run can
-  NAME the verdict it is ignoring. Overwriting is free: every caller records after
-  running, so the fresh verdict replaces the disbelieved one with no extra code.
-  The reasoning for why the default is safe is now written beside the code rather
-  than only in the tasklist.
-- `docs/reference/verify-hook.md` — "Forcing a re-run: `CHIEF_VERIFY_CACHE=0`", in
-  the cache section beside `chief verify`, with both log lines and the reuse-any-
-  status behaviour the hatch exists against.
-- `test/verify-cache.sh` — PART F, both directions over ONE red record and ONE
-  unmoved tree.
-- `VERSION` 0.9.17 → 0.9.18, README + ROADMAP bold version with it.
-
-### Learnings for future iterations
-
-- **A test harness that always SETS a toggle cannot fail when the toggle's DEFAULT
-  is wrong.** `run_agent` passed `CHIEF_VERIFY_CACHE="${VC_HATCH:-1}"`, so flipping
-  the engine's default to "cache off" (`${CHIEF_VERIFY_CACHE:-0}`) passed all seven
-  parts — the value the operator actually gets was never exercised. The harness now
-  `env -u`s the variable unless PART F sets it, and that mutation fails PART A. The
-  `-u` form has to sit at the END of the option list, because `env` stops reading
-  options at the first NAME=VALUE and the same slot has to be legal in both forms.
-- **A bypass is not an override.** The hatch had to REPLACE the record, not just
-  decline to read it, or the next un-hatched run serves the very verdict the
-  operator spent the gate to disbelieve. It costs nothing here (every caller of
-  `verify_cache_try` records after running) but it is the assertion worth writing:
-  PART F plants a sentinel line in the record and fails if it survives.
-- **Check an escape hatch AFTER locating what it overrides.** Putting the test at
-  the top of `verify_cache_try` is one line cheaper and produces a log a person
-  cannot act on — an ordinary miss and a forced re-run read identically. Locating
-  the record first lets the line name it.
-- **A red bystander block under load is worth one standalone re-run before it is
-  worth an iteration.** `test/teardown.sh` failed inside the first full gate at
-  load average 15.26 on 14 physical cores (two other repos' chief runs live), and
-  passed standalone immediately, all four parts, then passed inside the green run.
-  That is the third test in this tasklist to do it (ratelimit and merge-batch in
-  US-1) — the pattern is real and the tell is the load line in `chief ps`.
-
-## 120/US-3 — The saving is demonstrated, not asserted
-Fri Sep  4 2026
-
-US-1 and US-2 built the mechanism and its hatch; both are asserted against the
-cache's own internals and against counts that only mean something read down the
-file. What was still missing is the CLAIM: that the incident this tasklist was
-opened for now costs one gate run instead of five. That is a number, and it is
-measured here rather than argued.
-
-Files:
-- `test/verify-cache.sh` — new **PART G**, the incident end to end against a cache
-  that has never held anything: its own repo (`$WORK/repo-loop`, so
-  `verify_cache_dir` keys it to its own directory) with its own extra commit (so
-  its tree sha differs from the scratch tree PARTS A–E recorded verdicts for, and
-  the record it asserts on cannot be inherited), a RED hook, and a reset counter.
-  Three iterations — nothing changes, nothing changes, then the tree moves — and
-  the assertions are 1, 1, 2 hook invocations with every completion refused.
-- `docs/reference/verify-hook.md` — new `### What a verdict is keyed on`: the four
-  components in a table, one row per component saying WHY that component is in the
-  key (not what it is), where records live, the 32-record prune, and the
-  status-agnostic reuse rule with the cuneiform measurement behind it. The two
-  places that still said `tree · base · hook` now name the four-part key and point
-  at that section; `### Forcing a re-run` no longer re-states the reuse rule, it
-  now opens on the determinism assumption the hatch exists for.
-- `ROADMAP.md` — the `117` row said the boundary "tries the cache" and stopped
-  there, which left green-only reuse reading as deliberate. It now says the
-  `status=0` limit was the first implementation's and names `120` and the doc.
-
-### Learnings for future iterations
-
-- **The saving starts INSIDE one iteration, not between two.** A red boundary
-  verify refuses the completion, so `run_agent` takes another turn, and that
-  turn's own boundary verify is over the same unmoved tree — served from the
-  record the first turn just wrote. Measured by mutation: restoring
-  `[ "$st" = 0 ] || return 1` in `verify_cache_try` makes PART G fail at
-  ITERATION 1 (`paid the gate 2x, expected 1`), before the two-iteration
-  assertion is ever reached. Worth knowing when reading any hook count in this
-  file: one `run_agent` is one gate run only because of the fix.
-- **The fixture commits ON the base branch, so "the tree moved" also moves the
-  base.** `scratch_repo` inits `main` and `CHIEF_VERIFY_BASE=main`, so an
-  invalidation assertion after a commit proves the KEY moved, not which half of
-  it did — a mutation that drops `tree` from the key entirely still passes PART
-  G's iteration 3, because `base` alone changed. PART C is the real component
-  isolation (it moves the hook blob with the tree standing still, which is the
-  only one of the four movable from outside the repo). Said so in the comment
-  rather than letting the assertion overclaim.
-- **A `.out` replay assertion is not a "did it run" assertion.** PART G greps
-  iteration 2's log for the fixture hook's own line, which is present whether the
-  hook ran or was replayed; only the counter tells those apart. Both are asserted,
-  in that order — the counter for the fact, the grep for what the operator sees.
-- **Mutation-checking a part that sits below other parts needs the file split.**
-  PARTS A–F fail first under any mutation of this mechanism, so PART G's own
-  sensitivity cannot be observed by mutating and running the file. Built a
-  standalone harness instead — everything above `# ═══ PART A` plus the PART G
-  block, into a temp dir beside a copied `engine/` (`ROOT` is derived from
-  `BASH_SOURCE`, so the copy is what gets driven). Cheap, and reusable for any
-  late part in a cumulative test file.
+## ⚠️ PRIOR VERIFICATION FAILED — FIX THESE BEFORE REPORTING COMPLETE
+```
+doc-links: 0 dead vs 0 on main
+verify: quality — ratchet (engine/quality.sh, deltas vs main)
+chief quality: ratchet — measuring 14 changed path(s) on HEAD and at main
+quality: scope — the 7 changed source file(s), HEAD vs main
+quality:   ok     duplicate_blocks             15 -> 9        (delta -6     tol 0)
+quality:   ok     duplicate_line_pct          0.9 -> 0.83     (delta -0.07  tol 1)
+quality:   ok     max_nesting_depth             6 -> 6        (delta 0      tol 1)
+quality:   ok     function_length_max         596 -> 602      (delta +6     tol 15)
+quality:   ok     function_length_mean      22.43 -> 22.66    (delta +0.23  tol 5)
+quality:   ok     single_use_functions         67 -> 67       (delta 0      tol 2)
+quality:   skip   lint_violations        not measured — no linter configured for this language; shellcheck is not installed
+quality: no baseline at .chief/quality-baseline.json — whole-tree ratchet inactive
+quality:   (create it once with: chief quality ratchet --write-baseline, then commit it)
+quality: OK — no tracked metric regressed (allowing)
+verify: shell — bash -n
+verify: shellcheck not installed — skipping (CI enforces it)
+verify: policy — VERSION bump (test/version-bump.sh)
+VERSION-BUMP PASS — VERSION (0.9.18) covers every engine/bin change on HEAD
+verify: behavioral — the hermetic subset, under the bystander guard (test/bystander.sh)
+bystander: decoy run up — driver pid 80953, agent pid 80957, run bystander-sibling-1479888099-1700-80953
+bystander:   its registry is /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.WBsMW3tS2T/decoy/runs, which no test below can read
+bystander: [1/60] test/smoke.sh
+  smoke| SMOKE PASS — install → init → dry-run honoured → agent loop → verify → merge → completed + $HOME-init guard (offline)
+bystander: [2/60] test/provider-conformance.sh
+  provider-conformance| provider-conformance: roster-drift guard OK — agent.sh, bin/chief and this harness agree: amp claude codex devin opencode 
+  provider-conformance| provider-conformance: claude — argv · stdin prompt · model:wired
+  provider-conformance| provider-conformance: devin — argv · prompt-file prompt · model:wired
+  provider-conformance| provider-conformance: opencode — argv · stdin prompt · model:wired
+  provider-conformance| provider-conformance: amp — argv · stdin prompt · model:unwired
+  provider-conformance| provider-conformance: codex — argv · stdin prompt · model:wired
+  provider-conformance| provider-conformance: CLI surface OK — a --<provider> shorthand for each, and every unwired provider refuses --model
+  provider-conformance| PROVIDER-CONFORMANCE PASS — 5 providers: argv, prompt channel, model stance (wired propagates, unwired refuses), shorthand, completion; validators in lockstep
+bystander: [3/60] test/ratelimit.sh
+  ratelimit| ratelimit: detection fixtures (exit 2 = limit, exit 1 = stall)
+  ratelimit|    ok  exit 2  ← --print epoch form
+  ratelimit|    ok  exit 2  ← reset-time sentence
+  ratelimit|    ok  exit 2  ← 5-hour window
+  ratelimit|    ok  exit 2  ← weekly window
+  ratelimit|    ok  exit 2  ← second person
+  ratelimit|    ok  exit 2  ← structured 429 body
+  ratelimit|    ok  exit 2  ← terse 429 + rc!=0
+  ratelimit|    ok  exit 1  ← no-progress turn
+  ratelimit|    ok  exit 1  ← non-limit CLI error
+  ratelimit|    ok  exit 1  ← 429 text, rc=0
+  ratelimit| ratelimit: reset-ETA parse (relative windows must not sleep the 60min fallback)
+  ratelimit|    ok  ~17min  ← devin throughput window (16 min)
+  ratelimit|    ok  ~1min  ← retry in 30 seconds
+  ratelimit|    ok  ~6min  ← try again in 5 min
+  ratelimit|    ok  ~61min  ← reset in 1 hour
+  ratelimit|    ok  ~90min  ← clock time later today (9:25AM)
+  ratelimit|    ok  ~60min  ← no window stated → fallback
+  ratelimit|    ok  ~60min  ← prose duration must not arm the timer
+  ratelimit| RATELIMIT PASS — parallel driver kept the sleeping worker alive; agent slept ~6s then resumed → merged
+bystander: [4/60] test/provider-unavailable.sh
+  provider-unavailable| provider-unavailable: classification (exit 8 = never served, 2 = limit, 1 = stall)
+  provider-unavailable|    ok  exit 8  ← 529 (the observed message)
+  provider-unavailable|    ok  exit 8  ← structured overloaded_error
+  provider-unavailable|    ok  exit 8  ← status key, pretty-printed
+  provider-unavailable|    ok  exit 8  ← 502 bad gateway
+  provider-unavailable|    ok  exit 8  ← 500 internal
+  provider-unavailable|    ok  exit 8  ← connection reset
+  provider-unavailable|    ok  exit 8  ← socket hang up
+  provider-unavailable|    ok  exit 8  ← 401 revoked key
+  provider-unavailable| provider-unavailable: the UNCHANGED classifications
+  provider-unavailable|    ok  exit 1  ← no-progress turn
+  provider-unavailable|    ok  exit 1  ← non-provider crash
+  provider-unavailable|    ok  exit 1  ← 529 text, rc=0
+  provider-unavailable|    ok  exit 2  ← 429 rate_limit_error
+  provider-unavailable|    ok  exit 2  ← usage limit prose
+  provider-unavailable|    ok  exit 1  ← PROVIDER_NOTURN_LIMIT=0 restores the pre-fix behaviour
+  provider-unavailable| provider-unavailable: the pair (a turn that ran vs turns that never reached the model)
+  provider-unavailable|    ok  exit 8
+  provider-unavailable|    ok  iteration 1 → 'Iteration 1: progress — US-1 passed; out/US-1.txt changed (outside .chief/state/) (1/2 passing). Continuing...'
+  provider-unavailable|    ok  the stall counter was never charged
+  provider-unavailable|    ok  the refused iterations are named as such
+  provider-unavailable|    ok  iteration 2 re-attempted 3× — the budget was not charged
+  provider-unavailable|    ok  the committed work and the reason both survive the stop
+  provider-unavailable| provider-unavailable: the run summary
+  provider-unavailable|    ok  status = PROVIDER-UNAVAILABLE 0/1
+  provider-unavailable|    ok  reported as a block, never as a failure or a stall
+  provider-unavailable|    ok  branch kept, nothing merged or retired
+  provider-unavailable| provider-unavailable: the research phase
+  provider-unavailable|    ok  exit 8, and never reported as RESEARCH FAILED
+  provider-unavailable|    ok  3 calls bounded by PROVIDER_NOTURN_LIMIT; the attempt budget was untouched
+  provider-unavailable|    ok  named as a refusal, not as a phase that failed
+  provider-unavailable| PROVIDER-UNAVAILABLE PASS — a request the API refused is not an attempt the agent made
+bystander: [5/60] test/provider-backoff.sh
+  provider-backoff| provider-backoff: 529 + Retry-After (delta-seconds) — the provider's interval wins
+  provider-backoff|    ok  waited 5s (>= the 4s asked for), 2 calls, exit 8
+  provider-backoff| provider-backoff: 529 + Retry-After (HTTP-date)
+  provider-backoff|    ok  an HTTP-date Retry-After produced a 5s measured wait
+  provider-backoff| provider-backoff: an absurd Retry-After is clamped to the cap
+  provider-backoff|    ok  86400s clamped to the 3s cap
+  provider-backoff| provider-backoff: 529 with no Retry-After — exponential backoff with jitter
+  provider-backoff|    ok  waits of 1s then 2s, 5s measured, 3 calls, exit 8
+  provider-backoff|    ok  stall counter is 0 in the log and in the live record
+  provider-backoff| provider-backoff: the wait is visible in chief ps
+  provider-backoff|    ok  ps renders: provider-backoff for 0s · US-1 · iter 1 · retry at 07:56 (in 7s) · provider attempt 2/3 · 0s ago
+  provider-backoff| provider-backoff: a connection reset — ambiguous, so transient, and said out loud
+  provider-backoff|    ok  retried after a 3s wait, and the log says it could not tell
+  provider-backoff| provider-backoff: a 401 fails fast — no wait, no second attempt
+  provider-backoff|    ok  1 call, 0s, stopped with its reason
+  provider-backoff| provider-backoff: PROVIDER_BACKOFF=0 disables waiting
+  provider-backoff|    ok  3 calls in 2s, no wait
+  provider-backoff| PROVIDER-BACKOFF PASS — a transient refusal is waited out; a permanent one is not
+bystander: [6/60] test/worktree-pending.sh
+  worktree-pending| worktree-pending: the read (git status --porcelain -uall -> one phrase)
+  worktree-pending|    ok  clean tree -> ''
+  worktree-pending|    ok  missing path · non-repo · /dev/null · no argument -> '' and exit 0
+  worktree-pending|    ok  9 uncommitted file(s) (7 untracked, 1 modified, 1 staged) · added.txt, kept.txt, dogfood/
+  worktree-pending|    ok  survives a rename and a multi-byte path: 10 uncommitted file(s) (8 untracked, 1 modified, 2 staged) · added.txt, renamed.txt, dogfood/ +1 more
+  worktree-pending| worktree-pending: the run (INCOMPLETE, with work standing in the worktree)
+  worktree-pending|    ok  status = INCOMPLETE 1/2
+  worktree-pending|    ok  work pending: 7 uncommitted file(s) (5 untracked, 1 modified, 1 staged) · dogfood/, out/ — produced but NOT committed; nothing is lost (git -C /Users/dldekerlegand/.chief/worktrees/repo-3042338053/wp status)
+  worktree-pending|    ok  the summary names the work and how to see it
+  worktree-pending|    ok  branch kept with US-1 committed; the rest is on disk
+  worktree-pending| worktree-pending: the clean INCOMPLETE (silence is not an answer)
+  worktree-pending|    ok  no uncommitted work: everything this run produced is committed on the branch
+  worktree-pending| --- chief ps (two failed rows) ---
+  worktree-pending| CHIEF · 1 active run(s) · 2026-09-04 07:57:18
+  worktree-pending| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 4.46 / 14 physical core(s)
+  worktree-pending| 
+  worktree-pending| mrepo  (pid 75702 · -p2 · claude · 0s · →main)
+  worktree-pending|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.pBKB0cb224/mrepo
+  worktree-pending|    ✗ has-work               failed    ?/?     chief/has-work
+  worktree-pending|        ↳ work pending: 2029 uncommitted file(s) (2021 untracked, 5 modified, 3 staged) · dogfood/ — produced but NOT committed; nothing is lost (git -C /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.pBKB0cb224/mwt/has-work status)
+  worktree-pending|    ✗ no-work                failed    ?/?     chief/no-work
+  worktree-pending|        ↳ no work produced: nothing committed, and nothing uncommitted in the worktree either
+  worktree-pending|    ok  the two failed rows render differently
+  worktree-pending| WORKTREE-PENDING PASS — work already on disk is named, counted and never called no work
+bystander: [7/60] test/limitstate.sh
+  limitstate| LIMITSTATE PASS — usage limit → 'rate-limited' (dependent stays schedulable); genuine stall → 'failed' (dependent blocked)
+bystander: [8/60] test/limitresume.sh
+  limitresume| limitresume: PART A — a limit-interrupted run heals itself
+  limitresume|    ok  paused, waited ~12s, resumed at story 2, merged
+  limitresume| limitresume: PART B — a limit that never lifts is bounded, not a hang
+  limitresume|    ok  backed off once, capped at 1 re-dispatch each, ended cleanly in 10s
+  limitresume| LIMITRESUME PASS — the driver waits out a usage limit and re-dispatches (bounded, reset-aware, no thrash)
+bystander: [9/60] test/limitmonitor.sh
+  limitmonitor| --- chief ps (synthetic paused run) ---
+  limitmonitor| CHIEF · 1 active run(s) · ⚠ 2 unregistered · 2026-09-04 07:57:52
+  limitmonitor| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 7.37 / 14 physical core(s)
+  limitmonitor| 
+  limitmonitor| repo  (pid 4086 · -p2 · claude · 1s · →main)
+  limitmonitor|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.7NPkTKkbB6/repo
+  limitmonitor|    ⏸ pause-eta              paused    ?/?     chief/pause-eta
+  limitmonitor|        ↳ paused: usage limit — retry at 08:12 (15m) · re-dispatch 1/3
+  limitmonitor|    ⏸ pause-noeta            paused    ?/?     chief/pause-noeta
+  limitmonitor|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3
+  limitmonitor|    ● work-run               running   ?/?     chief/work-run
+  limitmonitor|    ✗ dead-fail              failed    ?/?     chief/dead-fail
+  limitmonitor|    ⤬ dead-block             blocked   ?/?     chief/dead-block
+  limitmonitor| 
+  limitmonitor| ⚠ 2 unregistered driver(s) — alive, but missing from the run registry (/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.7NPkTKkbB6/runs):
+  limitmonitor|    ⚠ cuneiform  (pid 4939 · run cuneiform-2849022191-1788522638-4939)
+  limitmonitor|      /Users/dldekerlegand/Development/cuneiform
+  limitmonitor|        ↳ in flight: 388-the-panel-emission-contract running
+  limitmonitor|        ↳ in flight: 389-one-envelope-one-caller pending
+  limitmonitor|        ↳ in flight: 390-the-spine-emits-data pending
+  limitmonitor|        ↳ in flight: 391-approvals-are-never-fabricated pending
+  limitmonitor|        ↳ in flight: 392-governance-stops-defaulting-approve pending
+  limitmonitor|        ↳ in flight: 393-the-readiness-watcher pending
+  limitmonitor|        ↳ in flight: 394-mess-paydown       pending
+  limitmonitor|        ↳ in flight: 395-the-tenancy-tail   pending
+  limitmonitor|        ↳ in flight: 396-the-gate-costs-what-it-covers pending
+  limitmonitor|        ↳ in flight: 900-dead-code-paydown  pending
+  limitmonitor|        ↳ in flight: 901-docs-tell-the-truth pending
+  limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
+  limitmonitor|        ↳ stop it:  kill 4939    then:  chief reap    (reaps whatever it leaves behind)
+  limitmonitor|    ⚠ talos  (pid 16113 · run talos-423558440-1788522655-16113)
+  limitmonitor|      /Users/dldekerlegand/Development/talos
+  limitmonitor|        ↳ in flight: 87-declared-vs-honoured running
+  limitmonitor|        ↳ in flight: 88-unanchored-ignore-audit pending
+  limitmonitor|        ↳ in flight: 89-the-findings-read-path pending
+  limitmonitor|        ↳ in flight: 90-a-live-model-in-the-director pending
+  limitmonitor|        ↳ in flight: 900-dead-code-paydown  pending
+  limitmonitor|        ↳ in flight: 901-docs-tell-the-truth pending
+  limitmonitor|        ↳ in flight: 91-the-measurement-fortnight pending
+  limitmonitor|        ↳ in flight: 92-argos-is-a-network-edge pending
+  limitmonitor|        ↳ in flight: 93-the-commercial-channel-fails-closed pending
+  limitmonitor|        ↳ holds this repo's driver.lock — a new run here will refuse to start
+  limitmonitor|        ↳ stop it:  kill 16113    then:  chief reap    (reaps whatever it leaves behind)
+  limitmonitor| LIMITMONITOR PASS — a usage-limit pause renders as 'paused: usage limit — retry at 08:12 · re-dispatch 1/3', distinct from running/failed/blocked
+bystander: [10/60] test/pause.sh
+  pause| pause: PART A — a pre-armed repo runs no agent turn
+  pause|    ok  0 agent calls, exit 0, flag survived launch init, no retry budget spent
+  pause| pause: PART B — a pause armed mid-run drains, it does not kill
+  pause|    ok  1 iteration ran to completion, committed, parked with branch + worktree kept
+  pause| pause: PART C — resume re-arms the park and continues where it stopped
+  pause|    ok  resumed at story 2, verified, merged, retired
+  pause| pause: PART D — chief ps distinguishes an operator pause from a usage limit
+  pause| --- chief ps (both holds armed) ---
+  pause| CHIEF · 1 active run(s) · 2026-09-04 07:58:04
+  pause| Machine activity: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 6.93 / 14 physical core(s)
+  pause| 
+  pause| mrepo  (pid 16250 · -p2 · claude · 0s · →main)
+  pause|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.X7y7zyDrao/mrepo
+  pause|    ⏸ OPERATOR PAUSE armed 0s ago — no tasklist launches, no new agent iterations · lift: chief resume
+  pause|      ↳ draining: work-run — each stops at its next iteration boundary, then parks
+  pause|    ⏸ usage-limit window until 08:13 (15m) — Chief waits this one out itself
+  pause|      ↳ BOTH holds are armed — lifting either one alone changes nothing
+  pause|    ⏸ op-park                paused-op ?/?     chief/op-park
+  pause|        ↳ paused: operator hold (chief pause) — armed 07:58 · branch + worktree kept · resume: chief resume · usage-limit window also armed until 08:13
+  pause|    ⏸ limit-wait             paused    ?/?     chief/limit-wait
+  pause|        ↳ paused: usage limit — retry at 08:13 (15m) · re-dispatch 0/3
+  pause|    ● work-run               running   ?/?     chief/work-run
+  pause|    ok  both ⏸, different notes, and the header names both holds
+  pause| PAUSE PASS — an operator pause drains at a safe checkpoint, parks with branch + worktree kept, resumes from committed state, and is legible in chief ps
+bystander: [11/60] test/plan-review.sh
+  plan-review| plan-review: PART A — no reviewer parks the tasklist and never blocks the scheduler
+  plan-review|    ok  1 plan turn, no code, parked awaiting-review, plan banked, sibling merged
+  plan-review| plan-review: PART B — an approval implements exactly that plan, and is asked for once
+  plan-review|    ok  asked once, implemented the approved plan, verified, merged, verdict banked
+  plan-review| plan-review: PART C — a rejection re-plans with the annotations, bounded by the budget
+  plan-review|    ok  re-planned with the annotations, stopped at 2 rounds, parked, no code written
+  plan-review| plan-review: PART D — what counts as 'no reviewer', and what an approval covers
+  plan-review|    ok  five ways to have no reviewer, and an approval that covers exactly one plan
+  plan-review| PLAN-REVIEW PASS — an unapproved plan never becomes code: it parks (siblings run on), a later approval resumes it, and a rejection re-plans within its budget
+bystander: [12/60] test/research.sh
+  research| research: PART A — produced once, persisted, and carried into both stories
+  research|    ok  1 research turn, 4 sections, persisted, both stories briefed, opt-out paid nothing
+  research| research: PART B — reused on resume (zero second turn), and hand-editable
+  research|    ok  resumed with zero research turns, and the hand-edited map is what US-2 read
+  research| research: PART C — what validates, what does not, and who decides to run it
+  research|    ok  empty sections fail, a prefix heading passes, and the override beats the tasklist both ways
+  research| RESEARCH PASS — the map is bought once per tasklist, validated against its four required sections, banked outside the worktree, reused by every story and by a resumed run, and a hand-edited map is what the next story reads
+bystander: [13/60] test/liveliness.sh
+  liveliness| liveliness: part 1 — the record
+  liveliness|    ok  atomic write · unquoted numbers · heartbeat bumps · phase_since pinned to the phase
+  liveliness| liveliness: part 2 — a real run
+  liveliness|    ok  mid-turn record: state=running phase=provider-waiting story=US-1 iter=1
+  liveliness|    ok  mid-run `chief ps`: phase · story · iter · age, ANSI-free when piped
+  liveliness|    ok  post-run: state=done phase=merged, record uncommitted + gitignored
+  liveliness| liveliness: part 3 — the rendering
+  liveliness| --- chief ps (synthetic: fresh · stalled · paused · no-record) ---
+  liveliness| CHIEF · 1 active run(s) · 2026-09-04 07:58:52
+  liveliness| Machine activity: 1 live run(s) · 2 agent turn(s) · 0 gate(s) · load average: 7.00 / 14 physical core(s)
+  liveliness| 
+  liveliness| mrepo  (pid 59598 · -p4 · claude · 1s · →main)
+  liveliness|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.F4NivJYI8h/mrepo
+  liveliness|    ● work-fresh             running   2/4     chief/work-fresh
+  liveliness|        ↳ agent-turn for 1m · US-2 · iter 3 · 31s ago
+  liveliness|    ⚠ work-hung              running   1/5     chief/work-hung
+  liveliness|        ↳ agent-turn for 40m · US-9 · iter 7 · no progress last iter (2) · ⚠ stalled in agent-turn — no activity for 40m, past its 15m limit
+  liveliness|    ⏸ pause-eta              paused    1/4     chief/pause-eta
+  liveliness|        ↳ paused: usage limit — retry at 08:13 (15m) · re-dispatch 1/3 · paused 40m · 40m ago
+  liveliness|    ● norecord               running   ?/?     chief/norecord
+  liveliness| LIVELINESS PASS — record written atomically + emitted by a real run; `chief ps` shows phase/story/iter/age, flags a 40m-quiet run as stalled (knob: CHIEF_STALE_SECONDS), and keeps a usage-limit pause reading as 'paused … retry at 08:13'
+bystander: [14/60] test/teardown.sh
+  teardown| teardown: part 1 — interrupt mid-iteration (reap first, forget second)
+  teardown|    ok  SIGINT to group 62830: tree reaped (agent.sh · tool · its child, TERM→KILL) then records released — 63 ordered samples, 0 violations
+  teardown| teardown: part 2 — a SIGKILLed driver leaves a tree that argv cannot find
+  teardown|    ok  orphaned agent.sh + tool + child: invisible to the old argv sweep, found and stopped by the reaper
+  teardown| teardown: part 3 — a LIVE driver with no run file is reported, not hidden
+  teardown|    ok  unregistered driver named with its repo + in-flight tasklist; a second driver refused; SIGTERM reaped the tree
+  teardown| teardown: part 4 — an escaped, detached descendant, reaped by the inherited marker
+  teardown|    ..  this platform will not show another process's environment; the platform READ is scripted from the decoys' own $CHIEF_RUN_ID, every gate below it is real
+  teardown|    ok  live registered run: its tree and the marker-carrying escapee are all protected
+  teardown|    ok  escaped descendant found by $CHIEF_RUN_ID alone and stopped; its unmarked twin and an operator's shell untouched
+  teardown| TEARDOWN PASS — Ctrl-C reaps the tree before releasing the records (never the reverse); a SIGKILLed run's boring-argv tree is still found and stopped; a live driver with no run file is reported, not hidden; and the descendant that walked out of the worktree is reaped by the marker it inherited
+bystander: [15/60] test/reapscope.sh
+  reapscope| REAPSCOPE PASS — orphans found by cwd + run marker (never by argv paths); live runs, lock-holding drivers and a developer's own claude untouched; repo scoping holds; an unscoped sweep out of a foreign registry is refused; the disk pass collects a stale worktree's build dirs and spares a live run's
+bystander: [16/60] test/reapenv.sh
+  reapenv| REAPENV SKIP (end-to-end) — this platform will not show another process's environment, so key 3 is inert here and cannot be exercised. The gates were still checked as units above; CI runs the full half on Linux.
+  reapenv| REAPENV PASS — the inherited marker reaps only what it names: a live run's marker, an unparseable one and an operator's shell are all spared; cwd matches and the before/after protected set are untouched
+bystander: [17/60] test/sweep.sh
+  sweep| sweep: 55 passed, 0 failed
+bystander: [18/60] test/noworkguard.sh
+  noworkguard| NOWORK PASS — false-complete (COMPLETE + zero commits) caught as EMPTY-NO-WORK; not merged, not retired
+bystander: [19/60] test/evidence-gate.sh
+  evidence-gate| EVIDENCE PASS — a force-passed story with empty notes fails as UNVERIFIED (story + criterion quoted); self-reported and evidenced work still merges
+bystander: [20/60] test/criteria-scope.sh
+  criteria-scope| SCOPE PASS — an undeclared cross-repo criterion fails as UNSATISFIABLE before any agent turn (story + criterion + hatch named); declared and local work still merges
+bystander: [21/60] test/measured-bars.sh
+  measured-bars| MEASURE PASS — a claimed bar with no observed value is 'unverified', not passing (story + bar + criterion quoted); the stop is recorded for the resume, re-engages the agent on exactly those bars, and is cleared by the merge, while an all-pass branch with no marker still merges agent-free
+bystander: [22/60] test/terminal-false.sh
+  terminal-false|   corpus: 47 tasklists classify identically before and after
+  terminal-false| TERMINAL PASS — a declared negative settles, survives into completed/, and is never re-driven;
+  terminal-false|                an undeclared story is untouched; an unmeasured declaration settles nothing.
+bystander: [23/60] test/repeat-stop.sh
+  repeat-stop|   predicate: N is the knob (default 3); identical trips, unmeasured and moving do not
+  repeat-stop| REPEAT PASS — an outcome recorded identically at N consecutive boundaries stops the tasklist,
+  repeat-stop|               names the story, quotes the finding and both fixes, fires with progress scoring
+  repeat-stop|               every iteration, never fires on a measurement that moves, and N is a knob.
+bystander: [24/60] test/retire-negative.sh
+  retire-negative| RETIRE PASS — a delivered-plus-measured-negative tasklist retires with its finding citable in
+  retire-negative|               completed/; unfinished work, an unmeasured declaration, an all-passing tasklist
+  retire-negative|               and a trapped dependent are each REFUSED with the story named.
+bystander: [25/60] test/unverified-resume.sh
+  unverified-resume| UNVERIFIED-RESUME PASS — reproduced on the un-fixed engine (re-run: 0 agent turns, UNVERIFIED twice), closed on the shipped one (re-engaged, told the bar, MERGED), with a finished all-pass branch still merging agent-free and a never-recorded value bounded by the demote limit
+bystander: [26/60] test/boundary-demotion.sh
+  boundary-demotion| BOUNDARY PASS — an unmeasured story is back at passes:false before the next turn begins, the next turn's PROMPT names it and quotes its bar, an evidenced re-mark counts as progress, a story demoted twice running ends the run instead of spinning, and the merge floor still catches a last-turn marking
+bystander: [27/60] test/bookkeeping-progress.sh
+  bookkeeping-progress| BOOKKEEPING PASS — 2 turns of state-only commits scored as stalls and stopped at the budget (pre-change: 20), reported as BOOKKEEPING ONLY, nothing merged; the work+notes pairing ran 3 turns to COMPLETE with its notes intact on main
+bystander: [28/60] test/five-cases.sh
+  five-cases| five-cases: 9 replayed tasklists in 64s wall-clock (the gates' own share is milliseconds — see below)
+  five-cases| five-cases: 5 passes of measure_gate + criteria_scope_report over gr-104.json: 0s
+  five-cases| FIVE-CASES PASS — all five recorded failures now fail (2 before any agent turn); 344/349 and a measured 104 still merge; 104-as-recorded is the one stated cost
+bystander: [29/60] test/stall-flag.sh
+  stall-flag| stall-flag: part 1 — the exempt/flagged table
+  stall-flag| stall-flag: part 2 — the exemption expires
+  stall-flag| stall-flag: part 3 — the flag names the state and its limit
+  stall-flag| stall-flag: part 4 — a dead worker is not a quiet one
+  stall-flag| stall-flag: part 5 — chief ps and chief monitor
+  stall-flag| --- chief ps (quiet-by-design · not-exempt · past-the-ceiling · re-tuned · gone) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-09-04 08:04:57
+  stall-flag| Machine activity: 1 live run(s) · 4 agent turn(s) · 1 gate(s) · load average: 14.66 / 14 physical core(s) · OVERSUBSCRIBED
+  stall-flag| 
+  stall-flag| mrepo  (pid 95684 · -p3 · claude · 0s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.zGhfhye182/mrepo
+  stall-flag|    ● limit-wait             running   1/4     chief/limit-wait
+  stall-flag|        ↳ rate-limited-waiting for 40m · US-1 · iter 2 · 40m ago
+  stall-flag|    ⚠ prov-wait              running   1/4     chief/prov-wait
+  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 2 · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
+  stall-flag|    ⚠ limit-dead             running   1/4     chief/limit-dead
+  stall-flag|        ↳ rate-limited-waiting for 6h40m · US-1 · iter 2 · ⚠ stalled in rate-limited-waiting — no activity for 6h40m, past its 6h30m limit
+  stall-flag|    ● gate-wait              running   1/4     chief/gate-wait
+  stall-flag|        ↳ verifying for 40m · US-1 · iter 2 · 40m ago
+  stall-flag|    ✗ worker-off             gone      1/4     chief/worker-off
+  stall-flag|        ↳ agent-turn for 1m · US-1 · iter 2 · ✗ dead — its worker pid is gone and left no verdict · chief reap
+  stall-flag| stall-flag: part 6 — elapsed-in-phase in every arm, from phase_since
+  stall-flag| --- chief ps (running · rate-limited · operator-paused · in-review · zone-hold) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-09-04 08:05:00
+  stall-flag| Machine activity: 1 live run(s) · 2 agent turn(s) · 0 gate(s) · load average: 13.97 / 14 physical core(s)
+  stall-flag| 
+  stall-flag| mrepo  (pid 95684 · -p3 · claude · 3s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.zGhfhye182/mrepo
+  stall-flag|    ● held-run               running   1/4     chief/held-run
+  stall-flag|        ↳ agent-turn for 40m · US-3 · iter 2 · 0s ago
+  stall-flag|    ⏸ held-limit             paused    1/4     chief/held-limit
+  stall-flag|        ↳ paused: usage limit — retries when the window resets · re-dispatch 0/3 · paused 25m · 0s ago
+  stall-flag|    ⏸ held-op                paused-op 1/4     chief/held-op
+  stall-flag|        ↳ paused: operator hold — the flag is already lifted; 'chief resume' re-arms this as pending · branch + worktree kept · resume: chief resume · parked 1h01m · 0s ago
+  stall-flag|    ⏸ held-review            in-review 1/4     chief/held-review
+  stall-flag|        ↳ awaiting review: a human has not approved its plan · branch + worktree + plan kept · held 3h10m · approve it, then: chief run
+  stall-flag|    ⏸ held-zone              zone-hold 1/4     chief/held-zone
+  stall-flag|        ↳ awaiting-approval: rebased + verified GREEN, held at engine (1 changed file(s)) · held 13m · approve: chief approve held-zone
+  stall-flag| stall-flag: part 7 — 'no progress last iter' vs the at-risk flag
+  stall-flag| --- chief ps (spent budget · early · no-budget · quiet-and-counting) ---
+  stall-flag| CHIEF · 1 active run(s) · 2026-09-04 08:05:03
+  stall-flag| Machine activity: 1 live run(s) · 4 agent turn(s) · 0 gate(s) · load average: 13.97 / 14 physical core(s)
+  stall-flag| 
+  stall-flag| mrepo  (pid 95684 · -p3 · claude · 6s · →main)
+  stall-flag|   /var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.zGhfhye182/mrepo
+  stall-flag|    ● spent-budget           running   1/4     chief/spent-budget
+  stall-flag|        ↳ agent-turn for 31s · US-1 · iter 4 · no progress last iter (2/2) · 31s ago
+  stall-flag|    ● early-stall            running   1/4     chief/early-stall
+  stall-flag|        ↳ agent-turn for 31s · US-1 · iter 4 · no progress last iter (1/5) · 31s ago
+  stall-flag|    ● old-record             running   1/4     chief/old-record
+  stall-flag|        ↳ agent-turn for 32s · US-1 · iter 4 · no progress last iter (2) · 32s ago
+  stall-flag|    ⚠ really-quiet           running   1/4     chief/really-quiet
+  stall-flag|        ↳ provider-waiting for 40m · US-1 · iter 4 · no progress last iter (1/2) · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit
+  stall-flag| stall-flag: part 8 — two no-progress iterations
+  stall-flag|    ok  transcript: agent-turn provider-waiting agent-turn stalled integrating agent-turn provider-waiting agent-turn stalled integrating 
+  stall-flag| stall-flag: part 9 — a re-engaged branch says so
+  stall-flag|    ok  re-engaged: every story passes but the branch failed verify post-rebase last run (.chief/state/snapshots/re.verify-failed.log)
+  stall-flag| stall-flag: OK — per-phase thresholds, a flag that names the state, gone ≠ quiet, elapsed-in-phase in every arm, the counter told apart from the flag, a phase that is about NOW, and a re-engagement that announces itself
+bystander: [30/60] test/headless.sh
+  headless| HEADLESS PASS — run-id announced · exit codes 0/3/4 · valid JSON summary · non-headless unchanged
+bystander: [31/60] test/events.sh
+  events| events: run 1 — a merged tasklist
+  events| --- ok-3136256109-1788527185-46572.events.jsonl (8 events) ---
+  events| {"v":1,"schema":"chief.event/1","ts":1788527185,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"run.started","name":null,"story":null,"state":"running","detail":"base=main parallel=1 machine_budget=14 machine_budget_disabled=0 provider=claude automerge=1 names:ev","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527187,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"tasklist.launched","name":"ev","story":null,"state":"running","detail":null,"usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527189,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"story.passed","name":"ev","story":"US-1","state":"running","detail":"iteration 1 — 1/2 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527189,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"agent.turn","name":"ev","story":null,"state":"running","detail":"iteration 1 — 1/2 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527192,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"story.passed","name":"ev","story":"US-2","state":"running","detail":"iteration 2 — 2/2 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527193,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"agent.turn","name":"ev","story":null,"state":"running","detail":"iteration 2 — 2/2 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527195,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"tasklist.merged","name":"ev","story":null,"state":"done","detail":"chief/ev --no-ff into main @74f05da","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527197,"runId":"ok-3136256109-1788527185-46572","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/ok","event":"run.finished","name":null,"story":null,"state":"merged","detail":"exit=0","usage":null,"limit":null}
+  events|    ok  8 events: launched → US-1 → US-2 → merged → run.finished(merged), all schema-valid
+  events|    ok  a provider that reports no usage yields usage:null / limit:null on every line
+  events|    ok  `chief events <run-id>` replays the log verbatim; `-l` lists it
+  events| events: run 2 — a verify-failed tasklist
+  events| --- bad-1687018051-1788527197-52903.events.jsonl (16 events) ---
+  events| {"v":1,"schema":"chief.event/1","ts":1788527197,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"run.started","name":null,"story":null,"state":"running","detail":"base=main parallel=1 machine_budget=14 machine_budget_disabled=0 provider=claude automerge=1 names:evbad","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527198,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"tasklist.launched","name":"evbad","story":null,"state":"running","detail":null,"usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527199,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"story.passed","name":"evbad","story":"US-1","state":"running","detail":"iteration 1 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527199,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 1 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527203,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 2 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527207,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 3 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527210,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 4 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527211,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"tasklist.verify-failed","name":"evbad","story":null,"state":"failed","detail":"verify exited 1 post-rebase; log: .chief/state/snapshots/evbad.verify-failed.log","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527214,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"tasklist.launched","name":"evbad","story":null,"state":"running","detail":null,"usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527214,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"tasklist.re-engaged","name":"evbad","story":null,"state":"running","detail":"every story passes but the branch failed verify post-rebase last run (.chief/state/snapshots/evbad.verify-failed.log)","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527215,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 1 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527218,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 2 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527221,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 3 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527224,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"agent.turn","name":"evbad","story":null,"state":"running","detail":"iteration 4 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527227,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"tasklist.verify-failed","name":"evbad","story":null,"state":"failed","detail":"verify exited 1 post-rebase; log: .chief/state/snapshots/evbad.verify-failed.log","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527230,"runId":"bad-1687018051-1788527197-52903","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/bad","event":"run.finished","name":null,"story":null,"state":"verify-failed","detail":"exit=4","usage":null,"limit":null}
+  events|    ok  16 events: launched → US-1 → verify-failed(failed) → run.finished(verify-failed)
+  events| events: run 3 — usage reported + a limit slept out
+  events| --- lim-186433571-1788527231-72221.events.jsonl (8 events) ---
+  events| {"v":1,"schema":"chief.event/1","ts":1788527231,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"run.started","name":null,"story":null,"state":"running","detail":"base=main parallel=1 machine_budget=14 machine_budget_disabled=0 provider=claude automerge=1 names:evlim","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527233,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"tasklist.launched","name":"evlim","story":null,"state":"running","detail":null,"usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527235,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"agent.turn","name":"evlim","story":null,"state":"running","detail":"iteration 1 — 0/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527236,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"tasklist.rate-limit-wait","name":"evlim","story":null,"state":"rate-limited","detail":"sleeping 1s — wait 1/8","usage":null,"limit":{"hit":true,"retry_at":1788527237,"waits":1,"max_waits":8}}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527238,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"story.passed","name":"evlim","story":"US-1","state":"running","detail":"iteration 1 — 1/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527238,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"agent.turn","name":"evlim","story":null,"state":"running","detail":"iteration 1 — 1/1 passing","usage":{"input_tokens":1200,"output_tokens":340,"total_tokens":null,"cost_usd":0.0421,"duration_ms":18324,"turns":3,"model":null},"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527242,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"tasklist.merged","name":"evlim","story":null,"state":"done","detail":"chief/evlim --no-ff into main @63fc29e","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527244,"runId":"lim-186433571-1788527231-72221","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim","event":"run.finished","name":null,"story":null,"state":"merged","detail":"exit=0","usage":null,"limit":null}
+  events|    ok  8 events: limit slept out with limit{hit,retry_at,waits,max_waits}; the reporting turn carries usage{tokens,cost,duration}
+  events| events: run 4 — a limit the loop won't retry (driver-side)
+  events| --- lim2-39038500-1788527244-78556.events.jsonl (5 events) ---
+  events| {"v":1,"schema":"chief.event/1","ts":1788527244,"runId":"lim2-39038500-1788527244-78556","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim2","event":"run.started","name":null,"story":null,"state":"running","detail":"base=main parallel=1 machine_budget=14 machine_budget_disabled=0 provider=claude automerge=1 names:evlim2","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527245,"runId":"lim2-39038500-1788527244-78556","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim2","event":"tasklist.launched","name":"evlim2","story":null,"state":"running","detail":null,"usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527246,"runId":"lim2-39038500-1788527244-78556","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim2","event":"agent.turn","name":"evlim2","story":null,"state":"running","detail":"iteration 1 — 0/1 passing","usage":null,"limit":null}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527247,"runId":"lim2-39038500-1788527244-78556","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim2","event":"tasklist.rate-limited","name":"evlim2","story":null,"state":"rate-limited","detail":"usage limit — branch kept, reset ETA 1788534504","usage":null,"limit":{"hit":true,"retry_at":1788534504,"waits":0,"max_waits":null}}
+  events| {"v":1,"schema":"chief.event/1","ts":1788527251,"runId":"lim2-39038500-1788527244-78556","repo":"/var/folders/9k/xdzjsfds05j_wfmhs2yr176m0000gp/T/tmp.O66AYgZqDJ/lim2","event":"run.finished","name":null,"story":null,"state":"paused","detail":"exit=7","usage":null,"limit":null}
+  events|    ok  5 events: tasklist.rate-limited carries the parsed reset ETA the scheduler itself is using
+  events| EVENTS PASS — one NDJSON log per run at $CHIEF_RUNS/<run-id>.events.jsonl; every line schema-valid (v=1 · chief.event/1) and stamped with its run id; a merged tasklist and a verify-failed one each emit their full documented sequence, `chief events` replays them verbatim, and the usage/cost/limit block is populated only where the provider exposed the signal (null everywhere else)
+bystander: [32/60] test/container.sh
+  container| container: prefix/worktree resolution under a container-shaped environment: OK
+  container| container: un-opted-in dubious ownership refuses up front and names CHIEF_GIT_SAFE_DIRECTORY: OK
+  container| container: no $HOME + relocated worktrees + dubious ownership + no identity → implement→verify→merge: OK
+  container| container: CHIEF_GIT_IDENTITY_NAME/_EMAIL override: OK
+  container| container: safe.directory modes + command-scope additivity: OK
+  container| container: chief ps leaves foreign registry entries alone (and still prunes local dead ones): OK
+  container| container: driver.lock: foreign is refused, stale-local is still cleared: OK
+  container| container: run-id liveness declines foreign records, unchanged for local ones: OK
+  container| CONTAINER PASS — no $HOME · relocated prefix+worktrees · dubious ownership · no committer · foreign PID namespace
+bystander: [33/60] test/account-env.sh
+  account-env| ACCOUNT-ENV PASS — designated env reaches the provider ONLY, values leak nowhere, a bogus designation fails the launch, an undesignated run is unchanged
+bystander: [34/60] test/stale-resume.sh
+  stale-resume| STALE-RESUME PASS — clean drift rebased at pickup and merged; a conflicting one was aborted, noted and handed to the agent (branch untouched, tasklist not failed); an all-pass branch was re-engaged instead of walking into the merge phase; a mid-run sibling merge was re-integrated at the iteration boundary (once per moved base) and a conflicting one was handed to the next iteration
+bystander: [35/60] test/conflict-forensics.sh
+  conflict-forensics| CONFLICT-FORENSICS PASS — a merge-phase rebase conflict wrote a report naming the conflicted file, the base tip, the merge-base and the colliding sibling tasklist; the worker log and .status point at it (status value unchanged); a later successful merge cleared it
+bystander: [36/60] test/rebase-refusal.sh
+  rebase-refusal| REBASE-REFUSAL PASS — a strictly-ahead branch merges with no rebase at all; a real content conflict is still REBASE-CONFLICT naming its files and still spends all 3 attempts; a rebase refused by a half-operated-on work repo is REBASE-REFUSED with its own cause-and-fix note, never a conflict, and costs exactly ONE agent run while its dependents block as they always did
+bystander: [37/60] test/dirty-checkout.sh
+  dirty-checkout| DIRTY-CHECKOUT FAIL: the next run did not announce that it was giving back work a killed run had parked
+  dirty-checkout| --- dc-kill.log
+  dirty-checkout|   (clearing a stale driver lock from a dead run — owner pid 88746)
+  dirty-checkout|   machine activity before launch: 1 live run(s) · 0 agent turn(s) · 0 gate(s) · load average: 16.58 / 14 physical core(s) · OVERSUBSCRIBED · 1 stale record(s) ignored
+  dirty-checkout|   machine budget: 14 agent turn(s) across 14 physical core(s)
+  dirty-checkout| >> startup: /Users/dldekerlegand/.chief/worktrees/cuneiform-2849022191/388-the-panel-emission-contract — LEFT ALONE, a live run is behind it
+  dirty-checkout| >> startup: /Users/dldekerlegand/.chief/worktrees/cuneiform-2849022191/389-one-envelope-one-caller — LEFT ALONE, a live run is behind it
+  dirty-checkout| >> startup: /Users/dldekerlegand/.chief/worktrees/insimul-1518311552/native — symlink
+  dirty-checkout| >> startup: /Users/dldekerlegand/.chief/worktrees/talos-423558440/87-declared-vs-honoured — LEFT ALONE, a live run is behind it
+  dirty-checkout| chief startup sweep: freed 0 B across 0 unreferenced worktree(s)
+  dirty-checkout|   (auto-recover: base repo stranded on 'chief/dc-kill' from a crashed run — restoring 'main')
+  dirty-checkout| ERROR: could not restore 'main' from 'chief/dc-kill' — resolve by hand.
+  dirty-checkout| --- worker log
+  dirty-checkout| ### worker dc-kill  (branch chief/dc-kill, iters 2)  Fri Sep  4 08:10:36 CDT 2026
+  dirty-checkout| Starting Chief — Provider: claude — budget 2 iters (extends while progressing; hard cap 3; stall limit 1)
+  dirty-checkout| 
+  dirty-checkout| ===============================================================
+  dirty-checkout|   Chief Iteration 1 (claude) — budget 2 · cap 3 · 0/1 passing
+  dirty-checkout| ===============================================================
+  dirty-checkout| <promise>COMPLETE</promise>
+  dirty-checkout| verify: ok
+  dirty-checkout| >> agent verification passed and was recorded for the current tree
+  dirty-checkout| 
+  dirty-checkout| Chief completed all tasks! (iteration 1)
+  dirty-checkout| >> dc-kill acquired merge lock after 0x2s
+  dirty-checkout| >> dc-kill: the work repo had uncommitted tracked changes — PARKED in the stash @6915b9b for the merge, and restored on the way out (they are not lost if this run dies: git stash list)
+BYSTANDER FAIL: test/dirty-checkout.sh failed (its output is above)
+verify: BLOCK — behavioral tests failed (see above)
+```
