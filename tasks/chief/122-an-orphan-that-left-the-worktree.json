@@ -1,0 +1,64 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/122-an-orphan-that-left-the-worktree",
+  "dependsOn": [],
+  "touches": [
+    "engine/reap.sh",
+    "engine/driver.sh",
+    "engine/monitor.sh",
+    "test",
+    "docs",
+    "VERSION",
+    "ROADMAP.md"
+  ],
+  "iters": 8,
+  "warmup": [
+    "sed -n '1,70p' engine/reap.sh",
+    "sed -n '/^stop_reap_tree()/,/^}/p' engine/driver.sh",
+    "grep -n 'chief_scan_descendants' engine/*.sh | head",
+    "grep -n 'SKIP' test/reapenv.sh",
+    "ls test/ | grep -iE 'reap|teardown|orphan'"
+  ],
+  "description": "On macOS, `chief reap` cannot see the one shape of orphan its third key exists to catch — a descendant that has left the run's worktree AND carries an argv with no marker — because the third key reads process environments, and macOS will not show them. The shape is not hypothetical: it was found in the field, burning two cores.\n\nFIELD RECORD, 2026-09-11, macOS 26.5. Four runs across two downstream repositories were cut off around 00:58. Every driver pid was dead, and each state file still said `running`. A manual sweep then found and killed:\n\n  - `UnrealEditor-Cmd -unattended` on a temporary `engine-version-probe-<uuid>.uproject`, launched by a downstream tasklist's run (the only code that spawns it lived on `chief/160` at the time). PPID 1, process-group leader dead, cwd `/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac`, argv carrying no `--chief-run=` marker, 78 minutes old, 99% CPU rising to 199%, and it IGNORED SIGTERM. That is exactly the residual shape `engine/reap.sh` describes — chdir'd out of the worktree AND wearing an argv that says nothing — on the one platform where the key built for it is dark.\n  - a product re-export script run by a second downstream repository's tasklist. Its root's cwd was inside that tasklist's worktree, so key 1 would match the root; its children (`uv`, `pytest` at 2.3 GB) had cwds in $TMPDIR.\n  - an agora registry (`node src/main.ts`, cwd `agora/registry`, listening on :8899, 2h13m). Most likely from a downstream tasklist's run; that attribution is UNVERIFIED.\n\nAfter those were killed, `chief reap -n` reported 'no orphaned chief processes of any kind' and — correctly — that the inherited-$CHIEF_RUN_ID key was inactive on this platform, with cwd + argv carrying the sweep. Be precise about what that does and does not prove: reap was run AFTER the kills, so this is not an observation of reap missing the editor. It is a demonstration BY CONSTRUCTION that none of the three keys can see that process on macOS. US-1 turns the construction into an observed failure.\n\nTHIS RESOLVES AN UNVERIFIED IN REAP.SH'S OWN NOTES. They say the leaked integration-test servers 'were the suspected escapees, but their cwd was never recorded ... so whether they beat key 1 is UNVERIFIED', and call key 3 'belt-and-braces, not a proven hole'. On macOS it is a proven hole, and `test/reapenv.sh` SKIPS its end-to-end half on macOS — so the shape has ZERO coverage on the platform this fleet actually runs on.\n\nWHY THE WALK LOSES THEM. `stop_reap_tree` and `chief_scan_descendants` walk PPID edges down from the live driver. A process reparented to launchd has no edge back to anything chief can start a walk from. The tree has to be RECORDED while it is still connected.\n\nPROPOSED MECHANISM — choose, measure, justify in notes. A descendant LEDGER: while a run is live, the driver (or the monitor) periodically snapshots its process tree — pid, ppid, START TIME, argv — into the run's state directory. `chief reap` then treats a still-live pid found in a DEAD run's ledger as a candidate if and only if its start time matches the recorded one. PID reuse is the failure to refuse: a recycled pid with a different start time is never a match. The snapshot cadence bounds what can escape between two snapshots; state the bound. Alternatives worth ruling in or out by measurement rather than argument: process-group ids do NOT tie back on their own (observed the same night: an agent's Bash tool put each command in its own process group — pgid 24417, led by a `zsh -c` under a `claude` pid); session behaviour on macOS is unmeasured.\n\nUNION, NEVER REPLACEMENT, AND NO SCOPE WEAKENED. Keys 1-3 keep working exactly as they do. A registered live run and every descendant stay protected; another repo's runs stay out of scope; unresolved processes are still listed LEFT ALONE; every process is still NAMED BEFORE IT IS SIGNALLED.\n\nRELATED, IN OTHER REPOS: downstream tasklists stop an engine outliving its launcher in the first place, and fix the disk leaks found in the same sweep. A reaper is for what escapes anyway, so both halves are wanted.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "The field escape is reproduced on macOS, in a test that fails today",
+      "acceptanceCriteria": [
+        "A hermetic test builds the field shape: a descendant of a registered run that chdirs outside the worktree, execs with an argv carrying no `--chief-run=` marker, ignores SIGTERM, and is reparented to launchd when its parent is SIGKILLed. After the run's driver is gone, the test asserts that `chief reap` names that process and stops it.",
+        "On the CURRENT engine, on macOS, that test FAILS. The failing output is recorded in notes. It is not SKIPPED — a skip is how this shape stayed invisible.",
+        "Where the platform shows process environments (Linux), key 3 is expected to catch it already. Record which result was observed on which platform rather than inferring either.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` green."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "reap finds it on macOS without reading any process's environment",
+      "acceptanceCriteria": [
+        "The chosen key (the ledger, or a measured alternative the notes justify) makes US-1's test pass on macOS with key 3 inactive.",
+        "PID reuse is refused. A ledger entry whose pid is alive but whose start time differs from the recorded one is reported LEFT ALONE and never signalled — shown by a test that plants exactly that entry.",
+        "reap's report names the new key as the evidence for each process it finds (for example: recorded in run X's ledger at T, start time matched), next to the existing cwd/argv/env evidence.",
+        "Keys 1-3 are unchanged, and `test/teardown.sh`, `test/reapenv.sh` and `test/reapscope.sh` stay green.",
+        "The startup sweep a `chief run` already performs benefits without a separate code path. Confirm it, and say so in notes.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; behavioural core green; `VERSION` bumped (`test/version-bump.sh`); `ROADMAP.md` names this stem (`test/doc-sync.sh`)."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "The platform gap is stated where the next reader looks",
+      "acceptanceCriteria": [
+        "`engine/reap.sh`'s key-3 note replaces 'UNVERIFIED' and 'belt-and-braces, not a proven hole' with the 2026-09-11 field record, and names the key that now covers the shape on macOS.",
+        "`chief reap -n`'s 'this key was inactive' line says which key carried the sweep in its place, so an empty result on macOS is never read as 'nothing escaped'.",
+        "The doc that documents `chief reap` carries the same record.",
+        "GATES: as US-2."
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
