@@ -2248,6 +2248,12 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
   echo "names=$NAMES"
 } > "$RUN_FILE" 2>/dev/null || true
+# The DESCENDANT LEDGER opens with the registry entry (engine/ledger.sh). Nothing is
+# below us yet, so this first snapshot is a header — but it is what makes the file
+# exist, and every later poll replaces it. A tree can only be recorded while it is
+# still CONNECTED: once this driver dies its descendants are re-parented to PID 1 and
+# no PPID walk reaches them again.
+chief_ledger_snapshot "$CHIEF_RUNS" "$$" "$CHIEF_RUN_ID"
 chief_machine_activity "$CHIEF_RUNS"
 # Sampled by the one function that owns the reading, so the launch banner, the
 # hold reasons below and `chief ps` all quote the same number.
@@ -3377,6 +3383,10 @@ drain_said=""      # the mid-run "pause armed, draining" notice is said once
 machine_hold_said=""
 while :; do
   stop_check
+  # Re-record this run's process tree, once per poll. The cadence IS the bound on
+  # what can escape the reaper: anything spawned, orphaned and left behind between
+  # two snapshots was never recorded (engine/ledger.sh). One `ps` and one `awk`.
+  chief_ledger_snapshot "$CHIEF_RUNS" "$$" "$CHIEF_RUN_ID"
   # Mark tasklists whose dep failed as blocked (they can never run).
   for n in $NAMES; do
     [ "$(get_state "$n")" = "pending" ] || continue

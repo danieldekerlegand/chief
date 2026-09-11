@@ -393,18 +393,15 @@ chief_sweep_startup() {
   rootc="$(chief_sweep_canon "$root")"
   [ -n "$rootc" ] || return 0
   case "$max" in ''|*[!0-9]*) max=100 ;; esac
-  for repo in "$current"; do
-    [ -n "$repo" ] && git -C "$repo" worktree prune 2>/dev/null || true
-  done
+  [ -z "$current" ] || git -C "$current" worktree prune 2>/dev/null || true
   if [ -f "$repos" ]; then
     while IFS= read -r repo; do
       [ -n "$repo" ] && git -C "$repo" worktree prune 2>/dev/null || true
     done < "$repos"
   fi
-  for repo in "$current"; do
-    [ -n "$repo" ] || continue
-    refs="${refs}$(git -C "$repo" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')"$'\n'
-  done
+  if [ -n "$current" ]; then
+    refs="${refs}$(git -C "$current" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')"$'\n'
+  fi
   if [ -f "$repos" ]; then
     while IFS= read -r repo; do
       [ -n "$repo" ] || continue

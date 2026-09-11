@@ -43,24 +43,51 @@
 #      export already exists, this only reads it. Same run id, so the same repo
 #      scoping applies. Union, not replacement: matching ANY of the three keys makes
 #      a process a candidate, so neither of the other two can regress.
-#      Be honest about how much this is actually carrying: a field census of 176
+#      How much it actually carries, and where it stops. A field census of 176
 #      orphans across three repos found key 1 covering MORE than expected — the bare
 #      `yes` load-generators (whose cwd `lsof` still reported after the worktree was
 #      deleted) and a whole server + npm/tsx tree both sat squarely inside it. The
 #      167 leaked integration-test servers that ran out of a temp dir were the
 #      suspected escapees, but their cwd was never recorded before they were killed,
-#      so whether they beat key 1 is UNVERIFIED. This key is therefore belt-and-
-#      braces, not a proven hole: it exists for the process that escapes BOTH of the
-#      others — chdir'd out of the worktree AND wearing an argv that says nothing —
-#      which is the one shape inheritance can still see. test/teardown.sh part 4
-#      builds exactly that process (detached from the tree, `sleep` for a command
-#      line, in a temp dir) and pins that this key finds it and stops it.
+#      so whether they beat key 1 was never established. The shape this key exists
+#      for, though, is no longer a hypothesis — it has been seen:
+#      FIELD RECORD, 2026-09-11, macOS 26.5. Four runs were cut off around 00:58,
+#      every driver pid dead and every state file still reading `running`. A manual
+#      sweep found `UnrealEditor-Cmd -unattended` on a temporary
+#      `engine-version-probe-<uuid>.uproject` spawned by a downstream tasklist's run:
+#      PPID 1, cwd in `/Users/Shared/Epic Games/UE_5.8/…`, NO marker on argv, 78
+#      minutes old, 199% CPU, and ignoring SIGTERM. That is exactly the residual
+#      shape — chdir'd out of the worktree AND wearing an argv that says nothing —
+#      and it was burning two cores on the one platform where the key built for it
+#      is dark. So this key is a PROVEN hole rather than belt-and-braces, and the
+#      proof arrived from the direction that makes it worst.
 #      Where a host will not show another process's environment (macOS since SIP
-#      accepts `ps -E` and silently prints none), this key degrades to nothing and
-#      keys 1 and 2 carry the sweep — the availability is PROBED, never assumed, so
-#      an empty read is reported as "the key is inactive" and never as "no orphans".
+#      accepts `ps -E` and silently prints none), this key degrades to NOTHING. The
+#      availability is PROBED, never assumed, so an empty read is reported as "the
+#      key is inactive" and never as "no orphans" — but an inactive key is not a
+#      covered shape, and cwd + argv alone do not cover this one. What covers it on
+#      such a host is KEY 4 below, which reads no environment at all; the report
+#      says so in the same breath as "inactive", so an empty sweep on macOS can
+#      never be read as "nothing escaped".
+#      Coverage is RECORDED rather than inferred: test/reap-escaped.sh rebuilds the
+#      field process and asks all four keys one at a time, printing each answer, so
+#      the log says which key saw it on which platform. test/teardown.sh part 4 pins
+#      this key itself on hosts that have it (detached from the tree, `sleep` for a
+#      command line, in a temp dir).
 #      Inheritance is also what makes key 3 the DANGEROUS one, so it alone is gated —
 #      see "the inherited marker's blast radius" below.
+#   4. THE DESCENDANT LEDGER (engine/ledger.sh), which is the same residual case
+#      approached from the other end. Keys 1-3 all SEARCH for a process, and the
+#      shape key 3 exists for is invisible to a search on a host that will not show
+#      another process's environment — on macOS, key 3 is inert and that shape has no
+#      key at all. So while a run is LIVE its driver RECORDS its own process tree
+#      (pid · start time · command) beside its <pid>.run file, once per scheduler
+#      poll; a still-live pid in a DEAD run's ledger is a candidate whatever its cwd,
+#      argv or environment now say. PID REUSE is the failure to refuse, so an entry
+#      whose pid is alive with a DIFFERENT start time than the one recorded is
+#      reported LEFT ALONE and never signalled. Bounded, not eliminated: what is
+#      spawned and orphaned inside one poll interval was never recorded. Union, like
+#      the rest — it can only ever add a candidate.
 #
 # SCOPING — what this must never kill:
 #   · another repo's run, or another driver's tree (scope by worktree root / run-id
@@ -103,6 +130,13 @@ if ! command -v chief_sweep_candidate >/dev/null 2>&1; then
   # shellcheck source=engine/sweep.sh
   . "$_REAP_DIR/sweep.sh"
 fi
+
+# KEY 4, the descendant ledger (engine/ledger.sh). Sourced unconditionally — this
+# file is the only consumer, and the driver reaches the recording half through here.
+# It calls chief_ns_token and chief_runs_dir, both defined BELOW: function bodies
+# resolve at call time, and nothing here runs at source time.
+# shellcheck source=engine/ledger.sh
+. "$_REAP_DIR/ledger.sh"
 
 CHIEF_PREFIX_DEFAULT="$(chief_prefix)"
 CHIEF_WT_ROOT_ALL="$(chief_worktree_root)"             # every repo's worktrees live here
@@ -759,6 +793,109 @@ _chief_unresolved_add() {   # $1 = pid, $2 = run id (may be empty)
 "
 }
 
+# ── KEY 4: WHAT A LIVE RUN RECORDED ABOUT ITS OWN TREE ───────────────────────
+#
+# engine/ledger.sh writes it; this reads it. The reasoning for the key is there —
+# here is what the SWEEP is allowed to conclude from it:
+#
+#   · the ledger lives in OUR registry, so resolvability (the check keys 2 and 3
+#     need) holds by construction: it was written by a run that registered here,
+#     exactly as a cwd inside our own worktree root is ours by construction;
+#   · a FOREIGN pid namespace's numbers are not ours to interpret, so a ledger
+#     stamped with one is declined outright rather than read optimistically;
+#   · a LIVE run's ledger names live work, never orphans — its tree is protected
+#     instead, the same treatment key 3 gives a live run's marker;
+#   · a live pid whose start time DIFFERS from the recorded one is a recycled
+#     number, not a survivor. Left alone, reported, never signalled.
+#
+# A ledger with nothing alive left in it is deleted: it can no longer be evidence of
+# anything, and pruning it is the same registry bookkeeping monitor.sh already does
+# for a run file whose pid is gone. That is also the only thing this function writes.
+CHIEF_LEDGER_MATCH_INFO=""   # "<pid><TAB><run id><TAB><recorded epoch>" per MATCH
+CHIEF_LEDGER_REUSE_INFO=""   # "<pid><TAB><run id><TAB><recorded start><TAB><start now>"
+
+chief_ledger_scan() {   # $1 = run id prefix ('' = every run in this registry)
+  local want="${1:-}" runs f rid rec pid st cmd now live
+  CHIEF_LEDGER_MATCH_INFO=""; CHIEF_LEDGER_REUSE_INFO=""
+  chief_ledger_available || return 0
+  runs="${CHIEF_RUNS:-$CHIEF_PREFIX_DEFAULT/runs}"
+  for f in "$runs"/*.ledger; do
+    [ -e "$f" ] || continue
+    rid="$(chief_ledger_field "$f" runid)"
+    case "$rid" in "$want"*) ;; *) continue ;; esac
+    [ -n "${CHIEF_RUN_ID:-}" ] && [ "$rid" = "$CHIEF_RUN_ID" ] && continue
+    chief_ns_foreign "$(chief_ledger_field "$f" ns)" && continue
+    if chief_run_id_live "$rid"; then
+      _chief_protect_tree "$(chief_run_id_pid "$rid")"
+      continue
+    fi
+    rec="$(chief_ledger_field "$f" recorded)"
+    live=""
+    while IFS=$'\t' read -r pid st cmd; do
+      case "$pid" in ''|*[!0-9]*) continue ;; esac       # a header line, or a stray
+      [ -n "$st" ] || continue
+      chief_pid_alive "$pid" || continue
+      live=1
+      now="$(chief_ledger_starttime "$pid")"
+      if [ "$now" != "$st" ]; then                       # a recycled number, not a survivor
+        CHIEF_LEDGER_REUSE_INFO="$CHIEF_LEDGER_REUSE_INFO$pid	$rid	$st	${now:-unreadable}
+"
+        continue
+      fi
+      CHIEF_LEDGER_MATCH_INFO="$CHIEF_LEDGER_MATCH_INFO$pid	$rid	${rec:-?}
+"
+      _chief_cand_add "$pid" "[ledger] recorded in run $rid's tree · start time matched" "$rid" ""
+    done < "$f"
+    [ -n "$live" ] || rm -f "$f" 2>/dev/null || true
+  done
+  return 0
+}
+
+# The evidence line for a pid this key found: WHEN the run recorded it, and that the
+# number is still the same process. Empty for every pid the ledger did not match, so
+# a caller can tell the two kinds of finding apart rather than guessing from the tag.
+chief_ledger_evidence() {   # $1 = pid
+  local pid="${1:-}" rid rec when
+  [ -n "$pid" ] || return 0
+  IFS=$'\t' read -r rid rec <<EOF
+$(printf '%s\n' "$CHIEF_LEDGER_MATCH_INFO" | awk -F'\t' -v q="$pid" '$1==q {print $2 "\t" $3; exit}')
+EOF
+  [ -n "${rid:-}" ] || return 0
+  # WHEN it was recorded, in a form a person can compare against an incident report.
+  # BSD `date -r` and GNU `date -d @` in that order, degrading to the raw epoch rather
+  # than to nothing — the recorded time is the operator's only handle on how stale a
+  # finding is, and a missing one must not read as "just now".
+  case "${rec:-}" in
+    ''|*[!0-9]*) when="at an unrecorded time" ;;
+    *) when="at $(date -r "$rec" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+                  || date -d "@$rec" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+                  || printf 'epoch %s' "$rec")" ;;
+  esac
+  printf 'run %s recorded this pid in its own process tree %s, and its start time still matches, so it is the same process; that run'"'"'s driver (pid %s) is gone' \
+    "$rid" "$when" "$(chief_run_id_pid "$rid")"
+}
+
+# The pid-reuse half of "left alone", kept apart from the unresolvable-run half
+# because the two mean opposite things to an operator: unresolvable says the sweep is
+# pointed at the wrong prefix, this says the sweep is pointed at the right one and
+# correctly declined a number that has been handed to somebody else since.
+chief_report_ledger_reuse() {
+  local pid rid was now
+  [ -n "$CHIEF_LEDGER_REUSE_INFO" ] || return 0
+  echo "  ↷ left alone — ledger entries whose pid is alive but is NOT the process that was" \
+       "recorded (the number was reused). A reaped pid here would be somebody else's work:" >&2
+  printf '%s\n' "$CHIEF_LEDGER_REUSE_INFO" | while IFS=$'\t' read -r pid rid was now; do
+    [ -n "$pid" ] || continue
+    # Matched by an EARNED key anyway (its cwd is in our worktree root, or it is a
+    # descendant of something that was): it is not being left alone at all.
+    case " $CHIEF_ORPHANS " in *" $pid "*) continue ;; esac
+    printf '       · pid %-7s PID REUSED · LEFT ALONE · run %s\n' "$pid" "$rid" >&2
+    printf '         ↳ recorded as starting %s; the live pid %s started %s\n' "$was" "$pid" "$now" >&2
+    printf '         %s\n' "$(chief_pid_cmd "$pid")" >&2
+  done
+  return 0
+}
+
 # ── A HOST-WIDE SWEEP OUT OF A FOREIGN REGISTRY IS AN INCIDENT ────────────────
 #
 # The two halves of this sweep have different reach, and that asymmetry is the whole
@@ -881,6 +1018,13 @@ EOF
     done <<EOF
 $(chief_pids_env_marked "${marker#"$CHIEF_RUN_MARKER"}")
 EOF
+    # Key 4 — what a live run RECORDED about its own tree, before that tree lost its
+    # driver and every edge back to chief with it. Scoped by the same run-id prefix
+    # the two keys above use, and a union with all three: _chief_cand_add keeps the
+    # first reason recorded, so a pid the cwd, argv or env key already found is
+    # unaffected. Runs BEFORE the descendant walk below, so a child spawned since the
+    # last snapshot is still collected as [tree].
+    chief_ledger_scan "${marker#"$CHIEF_RUN_MARKER"}"
   fi
   # Whatever the agent spawned that then wandered off the worktree (a build in a
   # temp dir, a server in /). Parentage is the only relation that reaches those.
@@ -967,17 +1111,26 @@ chief_reap_pids() {    # $1 = pids  $2 = label  [$3 = grace seconds]
 # run can tell at a glance which findings to look twice at. The two lines under it
 # are what make a reap accountable — see "whose work was that" above.
 chief_report_orphans() {   # $1 = headline
-  local pid why rid hint
+  local pid why rid hint ev
   echo "$1" >&2
   echo "       keys: [cwd] cwd inside a chief worktree · [argv] --chief-run= marker" \
-       "· [env] inherited \$CHIEF_RUN_ID · [tree] descendant of a match" >&2
+       "· [env] inherited \$CHIEF_RUN_ID · [ledger] recorded in its run's tree while that run was live" \
+       "· [tree] descendant of a match" >&2
   printf '%s\n' "$CHIEF_ORPHAN_INFO" | while IFS=$'\t' read -r pid why rid hint; do
     [ -n "$pid" ] || continue
     [ "$rid" = "-" ] && rid=""
     [ "$hint" = "-" ] && hint=""
     printf '       · pid %-7s %s\n' "$pid" "$why" >&2
     printf '         ↳ %s\n' "$(chief_reap_origin "$rid" "$hint")" >&2
-    printf '         ↳ ORPHAN — %s\n' "$(chief_reap_evidence "$rid")" >&2
+    # A [ledger] finding rests on a RECORD, not on a read of the process — so it
+    # cites the record. Keyed off the reason the candidate was added rather than off
+    # "is this pid in the ledger", or a pid the cwd key found and the ledger also
+    # happens to hold would be reported under evidence its tag does not name.
+    case "$why" in
+      '"'"'[ledger]'"'"'*) ev="$(chief_ledger_evidence "$pid")" ;;
+      *)          ev="" ;;
+    esac
+    printf '         ↳ ORPHAN — %s\n' "${ev:-$(chief_reap_evidence "$rid")}" >&2
     printf '         %s\n' "$(chief_pid_cmd "$pid")" >&2
   done
   return 0
@@ -1030,6 +1183,7 @@ chief_reap_orphans() {
   local scope="${1:-}" marker="${2:-}" label="${3:-a previous run}" grace="${4:-${CHIEF_REAP_GRACE:-5}}"
   chief_find_orphans "$scope" "$marker"
   chief_report_unresolved
+  chief_report_ledger_reuse
   [ -n "$CHIEF_ORPHANS" ] || return 0
   chief_report_orphans "  ⚠ orphaned chief processes from $label — still running with no live registered run. About to reap each of these:"
   chief_reap_pids "$CHIEF_ORPHANS" "$label" "$grace"
@@ -1330,6 +1484,7 @@ chief_reap_main() {
     # that misreading deletes builds here rather than merely reporting them.
     chief_find_orphans "$CHIEF_WT_ROOT_ALL" "$CHIEF_RUN_MARKER$scope" || return $?
     chief_report_unresolved
+    chief_report_ledger_reuse
     # The viewer half of "left alone": PPID 1 that this host cannot read as
     # re-parenting, so the view may be one somebody is watching.
     [ "${CHIEF_VIEWER_DECLINED:-0}" -gt 0 ] \
@@ -1341,10 +1496,25 @@ chief_reap_main() {
       # "of any kind" is load-bearing. This line used to be true of agent work only,
       # while nine abandoned views ran behind it — see "the other orphan" above.
       echo "chief reap: no orphaned chief processes of any kind — no agent work, no abandoned monitor views ($where)"
-      # An empty env read is not evidence of an empty host — say which keys actually ran.
-      [ -n "$(chief_env_key_mode)" ] || echo "  (this platform will not show another" \
-        "process's environment, so the inherited-\$CHIEF_RUN_ID key was inactive —" \
-        "cwd + argv carried this sweep)"
+      # An empty env read is not evidence of an empty host — say which keys actually
+      # ran IN ITS PLACE. Naming only cwd + argv here would be misleading on exactly
+      # the host where it matters: the 2026-09-11 field escape (an unattended engine
+      # left over from a dead run, 199% CPU, ignoring TERM) wore neither of them, and
+      # what covers it is key 4. If key 4 is dark too, that is the case an operator
+      # must not read as a clean host, so it is stated outright.
+      if [ -z "$(chief_env_key_mode)" ]; then
+        if chief_ledger_available; then
+          echo "  (this platform will not show another process's environment, so the" \
+            "inherited-\$CHIEF_RUN_ID key was inactive — cwd + argv + the descendant" \
+            "ledger, key 4, recorded by each live run, carried this sweep)"
+        else
+          echo "  (this platform will not show another process's environment AND reports" \
+            "no process start times, so the inherited-\$CHIEF_RUN_ID key AND the" \
+            "descendant-ledger key were BOTH inactive — only cwd + argv carried this" \
+            "sweep, and a descendant that left its worktree with a boring argv would not" \
+            "have been found by any key)"
+        fi
+      fi
     fi
     if [ -n "$CHIEF_ORPHANS" ]; then
       # shellcheck disable=SC2086

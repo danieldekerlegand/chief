@@ -57,7 +57,10 @@ QUALITY_SCHEMA="chief.quality/1"
 # common floor for "this is a copy, not a coincidence". Recorded in the output so a
 # baseline is never compared against a record computed with a different window.
 QUALITY_DUP_WINDOW="${CHIEF_QUALITY_DUP_WINDOW:-6}"
-# shellcheck severity for the lint family. Lower = stricter = noisier.
+# Severity floor for the lint family (shellcheck's -S). Lower = stricter = noisier.
+# NOT spelled with that tool's name as the comment's first word: a comment opening
+# `# shellcheck …` IS a directive to it, and an unparseable one fails the whole file
+# (SC1072/SC1073) rather than being read as the prose it plainly is.
 QUALITY_SHELLCHECK_SEVERITY="${CHIEF_QUALITY_SHELLCHECK_SEVERITY:-warning}"
 
 qq_die()  { echo "chief quality: $*" >&2; exit 2; }

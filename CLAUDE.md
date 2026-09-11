@@ -10,7 +10,8 @@ the parallel-safety model are in `docs/`.
 
 - The **engine** (`engine/driver.sh` scheduler+worker, `engine/agent.sh` one iteration,
   `engine/monitor.sh` run registry, `engine/lib.sh` shared helpers, `engine/live.sh` per-tasklist
-  liveliness records, `engine/events.sh` the NDJSON event stream, `engine/reap.sh` orphan reaping)
+  liveliness records, `engine/events.sh` the NDJSON event stream, `engine/reap.sh` orphan reaping,
+  `engine/ledger.sh` the recorded descendant tree that reaping's fourth key reads)
   and the **CLI** (`bin/chief`), including the roadmap → tasklists generator
   (`engine/gen.sh`, `chief gen` — input contract in `docs/reference/roadmap-input.md`).
 - The hermetic **test suite** (`test/*.sh`), the `chief init` **templates** (`templates/`), and the
@@ -324,6 +325,30 @@ engine/
                      #   across containers is never read as "that pid is dead". `chief reap` runs the
                      #   DISK pass too (--no-disk / --disk-only / --disk-age), under the same
                      #   foreign-registry refusal — misreading a live run there deletes a build
+  ledger.sh          #   KEY 4: the DESCENDANT LEDGER, and the only key that is a RECORD rather
+                     #   than a SEARCH. Keys 1-3 ask the process table (cwd · argv · inherited
+                     #   $CHIEF_RUN_ID), and the shape key 3 exists for — chdir'd OUT of the
+                     #   worktree AND wearing a boring argv — is unanswerable on macOS, where
+                     #   SIP accepts `ps -E` and prints no environment. So key 3 is INERT here
+                     #   and that shape had no key at all: found in the field 2026-09-11,
+                     #   `UnrealEditor-Cmd -unattended` from a downstream tasklist's run, PPID 1, 78
+                     #   minutes old, 199% CPU, ignoring SIGTERM. A PPID walk cannot reach it
+                     #   either — re-parented to launchd, there is no edge back to chief — so
+                     #   the tree is recorded WHILE IT IS STILL CONNECTED: the driver writes
+                     #   $CHIEF_RUNS/<pid>.ledger (pid · start time · command per descendant)
+                     #   once per scheduler poll, and a still-live pid in a DEAD run's ledger is
+                     #   a candidate whatever its cwd, argv and environment now say. PID REUSE
+                     #   is the failure to refuse, so an entry whose pid is alive with a
+                     #   DIFFERENT start time is reported LEFT ALONE and never signalled — and
+                     #   both sides of that comparison go through ONE function
+                     #   (chief_ledger_starttime), because a second reader spelling the token
+                     #   differently does not degrade, it INVERTS. The bound is the cadence:
+                     #   what is spawned, orphaned AND abandoned inside one poll was never
+                     #   recorded. EARNED, not inherited — it holds what the driver's own tree
+                     #   held, so it needs none of key 3's three gates. The snapshot must not
+                     #   record ITSELF: `$(ps …)` is captured to a variable and a `kill -0`
+                     #   builtin drops the two processes that took it, or every ledger would
+                     #   name them and none could be read as what the run was doing
 templates/           # scaffolded into a repo by `chief init` (config · verify.sh · agent-context.md · tasklist.example.json · quality.conf · zones.conf)
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
@@ -363,6 +388,20 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   no merge commit, no completed/ record and NO retire commit
                      #   stranded on the branch. MUTATION-CHECKED both ways — on the
                      #   unfixed engine both parts report `MERGED @<branch tip>`
+                     #   reap-escaped.sh — the FIELD shape, built: a descendant that leaves
+                     #   the worktree, execs a boring argv, ignores TERM and is re-parented
+                     #   to PID 1 when its driver is SIGKILLed with the run file still
+                     #   reading `running`. It asks the FOUR keys one at a time and PRINTS
+                     #   each answer, so the log records which key saw it on which platform
+                     #   instead of inferring either — and it is SKIPPED NOWHERE, a skip
+                     #   being how the hole stayed invisible for as long as it did. It
+                     #   records its tree by calling the engine's own
+                     #   chief_ledger_snapshot, not by hand-writing a file, so it cannot
+                     #   pass against a format only the test knows how to produce; a
+                     #   sibling that STAYS in the worktree is the positive control, so "the
+                     #   escapee was not named" can never read as "the sweep never ran".
+                     #   PART B plants the entry the start-time check exists for — alive pid,
+                     #   wrong start time — and pins that it is REPORTED and LEFT ALONE
 docs/                # Diataxis, per the ecosystem documentation standard, and docs/README.md is
                      # the map: A DOCUMENT NOT LINKED THERE DOES NOT EXIST. guides/ (containers ·
                      # headless-invocation · local-inference-preset · monitoring · providers) ·
