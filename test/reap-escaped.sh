@@ -27,18 +27,24 @@
 #
 # IT IS NOT SKIPPED ANYWHERE. A skip is how this shape stayed invisible, and the
 # platform is not a reason to stop asserting — it is the thing being asserted about.
-# Both platform answers are PRINTED rather than inferred: the three keys are asked
+# Both platform answers are PRINTED rather than inferred: the four keys are asked
 # individually, by name, before the sweep is run, so the log says which key saw the
 # process on this host and which did not. Where the environment is readable (Linux)
-# key 3 is expected to carry it; where it is not (macOS) nothing in the engine can,
-# until a key that does not read environments is added.
+# key 3 is expected to carry it; where it is not (macOS) nothing did, until key 4.
 #
-# NOT YET IN THE THREE GATE LISTS (.chief/verify.sh's CHIEF_BYSTANDER_TESTS,
-# test/all.sh's BASH_SUITE, .github/workflows/ci.yml). It lands RED on purpose — it
-# is the observation that the hole is real, made before the key that closes it exists
-# — and a red file in the merge gate would block the very branch that fixes it. The
-# story that adds the key adds this file to all three in the same commit; until then
-# it is run by hand (`bash test/reap-escaped.sh`) and its failure is the deliverable.
+# KEY 4 IS WHAT MAKES THIS FILE GREEN (engine/ledger.sh, US-2). The run's driver
+# RECORDS its process tree — pid, start time, command — into the run registry once
+# per scheduler poll, while that tree is still connected to it; a still-live pid in a
+# DEAD run's ledger is an orphan whatever its cwd, argv or environment now say. The
+# fixture therefore records its tree the way the driver does — by calling the
+# engine's own chief_ledger_snapshot, not by hand-writing a file, so this test cannot
+# pass against a format only it knows how to produce.
+#
+# PART B is the other half of that key, and the reason it is safe: a ledger is a list
+# of NUMBERS, and a number outlives its process. It plants an entry whose pid is very
+# much alive but whose start time is not the recorded one, and pins that the sweep
+# REPORTS it and LEAVES IT ALONE. A key that reaped on pid alone would kill whatever
+# inherited the number.
 #
 # Hermetic in STATE and in PROCESSES, on test/reapenv.sh's terms: a temp
 # $CHIEF_PREFIX/$CHIEF_RUNS/$CHIEF_REPOS bounds what is READ, and every sweep is
@@ -109,8 +115,13 @@ waitfile() {  # $1 = path  $2 = seconds
 cat > "$WORK/fakedriver.sh" <<'EOS'
 #!/usr/bin/env bash
 set -u
-SIG="$1"; WT="$2"; ELSEWHERE="$3"; IDBASE="$4"; ARGV0="$5"
+SIG="$1"; WT="$2"; ELSEWHERE="$3"; IDBASE="$4"; ARGV0="$5"; SRC="$6"
 export CHIEF_RUN_ID="$IDBASE-$$"          # exported to the whole tree, as the driver does
+# The RECORDING half of key 4, taken from the engine rather than imitated: the
+# driver's own chief_ledger_snapshot, called as driver.sh calls it. If the ledger
+# format changes, this fixture changes with it — which is the point.
+# shellcheck source=engine/reap.sh
+. "$SRC/engine/reap.sh"
 cd "$WT" || exit 1                        # where the driver puts the agent
 printf '%s' "$$"             > "$SIG/driver.pid"
 printf '%s' "$CHIEF_RUN_ID"  > "$SIG/runid"
@@ -125,14 +136,17 @@ printf '%s' "$!" > "$SIG/stay.pid"
   exec -a "$ARGV0" bash -c 'trap "" TERM; while :; do sleep 1; done'
 ) </dev/null >/dev/null 2>&1 &
 printf '%s' "$!" > "$SIG/escape.pid"
+# Record the tree BEFORE announcing readiness, so the test never races the cadence:
+# by the time anything below runs, the escapee is in the ledger.
+chief_ledger_snapshot "$CHIEF_RUNS" "$$" "$CHIEF_RUN_ID"
 : > "$SIG/up"
-while :; do sleep 1; done
+while :; do chief_ledger_snapshot "$CHIEF_RUNS" "$$" "$CHIEF_RUN_ID"; sleep 1; done
 EOS
 
 # Faithful to the record: a game engine on a temp project file, nothing chief-shaped.
 ARGV0="UnrealEditor-Cmd -unattended /var/tmp/engine-version-probe-0f3c.uproject"
 bash -c 'exec -a "bash /engine/driver.sh --chief-run='"$IDBASE"'-$$" bash "$0" "$@"' \
-  "$WORK/fakedriver.sh" "$SIG" "$WT" "$WORK/elsewhere" "$IDBASE" "$ARGV0" &
+  "$WORK/fakedriver.sh" "$SIG" "$WT" "$WORK/elsewhere" "$IDBASE" "$ARGV0" "$PREFIX/src" &
 shim=$!
 PIDS="$PIDS $shim"
 disown "$shim" 2>/dev/null || true
@@ -189,6 +203,23 @@ case " $CHIEF_PROTECTED " in
 esac
 note "while the run is live, pid $ESC is protected as a descendant of driver $DRV"
 
+# …and that is the window in which the ledger was written. Asserted HERE, before the
+# driver dies, because "the ledger is missing" and "the ledger missed this pid" are
+# different defects from "the sweep did not read it", and only this moment can tell
+# them apart.
+LEDGER="$CHIEF_RUNS/$DRV.ledger"
+[ -s "$LEDGER" ] || fail "the run recorded no ledger at $LEDGER while it was live — key 4 has nothing to read"
+chief_ledger_available || fail "this host cannot report a process start time (ps -o lstart=), so key 4 is inert here and this test cannot assert on it"
+awk -F'\t' -v p="$ESC" '$1==p {f=1} END{exit !f}' "$LEDGER" \
+  || fail "the ledger does not name the escapee (pid $ESC) — it was recorded before the descendant existed:
+$(cat "$LEDGER")"
+ESC_START="$(chief_ledger_starttime "$ESC")"
+awk -F'\t' -v p="$ESC" -v st="$ESC_START" '$1==p && $2==st {f=1} END{exit !f}' "$LEDGER" \
+  || fail "the ledger's start time for pid $ESC is not the one chief_ledger_starttime reads back ('$ESC_START'),
+  so every honest entry would be refused as a reused pid:
+$(cat "$LEDGER")"
+note "the run's ledger records pid $ESC with start time $ESC_START"
+
 # ── the run dies the way the four cut-off runs did ────────────────────────────
 kill -9 "$DRV" 2>/dev/null || true
 n=0
@@ -207,9 +238,13 @@ k2="$(chief_pids_tagged "$CHIEF_RUN_MARKER$RE" | awk -v p="$ESC" '$1==p {print "
 k3="$(chief_pids_env_marked "$RE" | awk -v p="$ESC" '$1==p {print "yes"}')"
 note "key 1 (cwd inside a chief worktree): ${k1:-no}"
 note "key 2 (--chief-run= on argv):        ${k2:-no}"
+k4="$(chief_ledger_scan "$RE"; printf '%s' "$CHIEF_LEDGER_MATCH_INFO" | awk -v p="$ESC" '$1==p {print "yes"}')"
 note "key 3 (inherited \$CHIEF_RUN_ID):     ${k3:-no}   [env read: ${ENVMODE:-none}]"
+note "key 4 (recorded in the run's ledger): ${k4:-no}"
 [ -z "$k1" ] || fail "key 1 matched the escapee, so this fixture is not the residual shape"
 [ -z "$k2" ] || fail "key 2 matched the escapee, so this fixture is not the residual shape"
+[ -n "$k4" ] || fail "key 4 did not match the escapee (pid $ESC) even though the ledger names it and the run is dead —
+  the reading half of the key is broken, not the recording half"
 c1="$(chief_pids_cwd_under "$WTS" | awk -v p="$STAY" '$1==p {print "yes"}')"
 note "key 1 on the control that STAYED in the worktree: ${c1:-no}"
 [ -n "$c1" ] || fail "key 1 cannot see the control process (pid $STAY) either, so nothing below would distinguish a missing key from a broken fixture"
@@ -241,4 +276,57 @@ esac
 
 note "reap found and stopped the escaped orphan; the sweep said:"
 printf '%s\n' "$out" | sed 's/^/  | /'
-echo "REAPESC PASS — an orphan that left the worktree, took a boring argv and ignored TERM is still found and stopped (env read: ${ENVMODE:-none})"
+case "$out" in
+  *"[ledger]"*) ;;
+  *) fail "the escapee was found, but not on the ledger key — on a host where the
+  environment read is '${ENVMODE:-none}' that means something else matched it, and this
+  test is no longer asserting on the key it exists for:
+$out" ;;
+esac
+
+# ── PART B: A LEDGER IS A LIST OF NUMBERS, AND A NUMBER IS REUSED ─────────────
+#
+# The key's safety rests entirely on the start-time check, so plant the exact entry
+# that check exists for: a DEAD run's ledger naming a pid that is alive and is NOT
+# the process that was recorded. It must be reported and left alone. The live pid
+# here is deliberately reapable-looking in every other respect — outside the
+# worktree, no marker, not protected — so if the check were dropped it WOULD die.
+bash -c 'exit 0' & DEADPID=$!
+wait "$DEADPID" 2>/dev/null || true
+alive "$DEADPID" && fail "pid $DEADPID is still alive; part B needs a run id whose driver is provably gone"
+( cd "$WORK/elsewhere" && exec -a "innocent-bystander --not-chief" sleep 900 ) </dev/null >/dev/null 2>&1 &
+BYST=$!
+PIDS="$PIDS $BYST"
+alive "$BYST" || fail "the bystander process did not start"
+B_RID="${RE}escrepo-$CK-1700000002-$DEADPID"
+{
+  printf 'runid=%s\n' "$B_RID"
+  printf 'ns=%s\n' "$(chief_ns_token)"
+  printf 'recorded=%s\n' "$(date +%s)"
+  # The SAME pid, a start time that is not its own. Nothing else about the entry is
+  # wrong — this is the one field the refusal turns on.
+  printf '%s\t%s\t%s\n' "$BYST" "Thu_Jan_1_00:00:00_1970" "sleep 900"
+} > "$CHIEF_RUNS/$DEADPID.ledger"
+note "planted run $B_RID's ledger naming live pid $BYST with a start time it never had"
+
+out2="$("$CHIEF" reap --grace 1 --no-disk --scope "$RE" 2>&1)" || true
+case "$out2" in
+  *"PID REUSED"*) ;;
+  *) fail "the sweep did not report the reused pid $BYST as left alone — a refusal nobody
+  can see reads exactly like a key that never looked:
+$out2" ;;
+esac
+grep -q "pid $BYST .*PID REUSED" <<<"$out2" \
+  || fail "the PID-REUSED line does not name pid $BYST:
+$out2"
+alive "$BYST" || fail "pid $BYST was SIGNALLED despite its start time not matching the ledger entry —
+  the key reaped on a bare pid, which is whatever happens to be wearing that number now:
+$out2"
+case "$out2" in
+  *"reaping"*"$BYST"*|*"hard-killing"*"$BYST"*) fail "pid $BYST appears in a reap line:
+$out2" ;;
+esac
+note "the reused pid was reported and left alone; the sweep said:"
+printf '%s\n' "$out2" | sed 's/^/  | /'
+
+echo "REAPESC PASS — an orphan that left the worktree, took a boring argv and ignored TERM is still found and stopped, and a reused pid is refused (env read: ${ENVMODE:-none}, ledger: ${CHIEF_LEDGER_MODE:-none})"

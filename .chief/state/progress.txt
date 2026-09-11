@@ -2074,3 +2074,83 @@ Learnings for future iterations:
   The one saving grace is that chief's own end-of-turn run records for whatever tree
   HEAD ends on, so the merge read is still served from a cache; the cost is paying the
   ~10-minute behavioural block one extra time.
+
+## 122 US-2 — reap finds it on macOS without reading any process's environment
+Fri Sep 11 2026
+
+KEY 4, the DESCENDANT LEDGER. Keys 1-3 all SEARCH the process table, and the one
+shape key 3 exists for (chdir'd out of the worktree AND a boring argv) is
+unanswerable on macOS, where SIP accepts `ps -E` and prints nothing. So the tree is
+now RECORDED while it is still connected: the driver writes
+`$CHIEF_RUNS/<driver pid>.ledger` — run id, PID-namespace token, and `pid TAB
+start-time TAB command` per live descendant — once per scheduler poll, and a
+still-live pid in a DEAD run's ledger is a candidate whatever its cwd, argv and
+environment now say.
+
+Files:
+- `engine/ledger.sh` (new) — the recording half plus the one primitive both halves
+  share: `chief_ledger_starttime` (`ps -o lstart=`, squeezed to a token),
+  `chief_ledger_available` (PROBED, like `chief_env_key_mode`), `chief_ledger_tree`
+  (one `ps` + one `awk`, parent walk inside awk), `chief_ledger_snapshot` (temp file
+  + `mv`, so a concurrent reader never sees half a record), `chief_ledger_field`.
+- `engine/reap.sh` — key 4 in the header's numbered list; `chief_ledger_scan` (the
+  reader, called from `chief_find_orphans` BEFORE the descendant walk so a child
+  spawned since the last snapshot is still collected as `[tree]`),
+  `chief_ledger_evidence`, `chief_report_ledger_reuse`, `[ledger]` in the key legend.
+- `engine/driver.sh` — `chief_ledger_snapshot` at run registration and at the top of
+  every scheduler pass.
+- `test/reap-escaped.sh` — key-4 probe line + the ledger assertions while the run is
+  still LIVE, and PART B (the reused pid). Added to all THREE gate lists
+  (`.chief/verify.sh`, `test/all.sh`, `.github/workflows/ci.yml`).
+- `engine/quality.sh`, `engine/sweep.sh` — the three pre-existing `shellcheck -S
+  error` failures that have been red on `main` since shellcheck got stricter.
+- `VERSION` 0.9.22 → 0.9.23, README + ROADMAP restamped, ROADMAP rows for `122` and
+  for `901` (which merged without one and was failing `test/doc-sync.sh` on `main`).
+
+### Learnings for future iterations
+
+- **A snapshot of your own process tree RECORDS THE SNAPSHOT.** The first version
+  piped `ps -eo … | awk` and every ledger named exactly two processes: its own `ps`
+  and its own `awk`. Capturing into a variable (`snap="$(ps …)"` — chief_scan_
+  descendants' idiom) and filtering with the `kill -0` BUILTIN fixes both, because a
+  command substitution is reaped before it returns while a piped `awk` is still alive
+  when the reading loop runs. Dead entries are harmless to a liveness-checking
+  reader, but a record that always names two processes cannot be read as a record of
+  what the run was doing.
+- **`ps -o lstart=` is the portable start-time token, and ONE function must own it.**
+  Both sides of the pid-reuse check go through `chief_ledger_starttime`. A /proc fast
+  path on Linux would be exact, and would also be a second reader — and a
+  disagreement here does not degrade, it INVERTS: every honest entry becomes a
+  refusal, or every reused pid becomes a match. Same reason `engine/crossrepo.sh`
+  insists there is one resolver.
+- **A test that installs from `git rev-parse HEAD` cannot see a NEW engine file at
+  all.** The usual form of this trap is an uncommitted edit being invisible; with a
+  new module the symptom is louder and more confusing — `chief_ledger_snapshot:
+  command not found` from inside the fixture, because `$PREFIX/src/engine/ledger.sh`
+  did not exist in the installed clone. Commit, then run, then `--amend`.
+- **Measure the fixture's RECORDING separately from the sweep's READING.** The test
+  asserts the ledger exists, names the escapee, AND carries the exact token
+  `chief_ledger_starttime` reads back — before the driver is killed. Without that
+  third assertion a format mismatch would present as "reap did not find it", which is
+  the same failure as having no key at all.
+- **`single_use_functions` is the metric a new key trips**, because a key is naturally
+  one scan + one evidence line + one report (tolerance 2, and four new helpers in one
+  existing file is +3). Functions in a file the branch CREATES are deferred — there is
+  no base version to compare — so the charge lands entirely on the module you extend.
+  Inlining the smallest of them (a date format that had exactly one caller) was the
+  honest fix; do that rather than loosening the tolerance.
+- **`# shellcheck …` as the first words of a PROSE comment fails the whole file to
+  parse** (SC1072/SC1073) — `engine/quality.sh:60` had been red on `main` for this.
+  The fix is to not start the comment with the tool's name, and the rewrite has to
+  avoid it too: my first attempt at the explanatory comment tripped the same check.
+
+- **`chief verify` during an agent turn runs the PROJECT CHECKOUT's hook, not the
+  branch's.** The driver exports `CHIEF_VERIFY_HOOK=<project>/.chief/verify.sh`, so
+  a branch that ADDS a test to `CHIEF_BYSTANDER_TESTS` does not run it in its own
+  local gate — the block reported 65 tests where this branch's list has 66. The
+  branch's list is what runs at MERGE (the branch is checked out in the project by
+  then), which is correct, but it also means the recorded verdict's `hook` component
+  is the base's hook and the merge read will miss the cache anyway. Run a newly added
+  behavioural test under the guard explicitly:
+  `CHIEF_BYSTANDER_TESTS="<name>" bash test/bystander.sh`. Worth doing for any test
+  that SIGNALS processes — hermetic in state is not hermetic in processes.
