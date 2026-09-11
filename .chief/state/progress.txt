@@ -1997,3 +1997,80 @@ no `.chief/claims.json` here, so no cross-repo claim to resolve.
   for a docs sweep.** Every mechanical check here answers "does this symbol resolve",
   and no mechanical check answers "does this sentence describe what the code does". Say
   which one was run, or the reader takes the stronger claim.
+
+## 122 US-1 — The field escape is reproduced on macOS, in a test that fails today
+Fri Sep 11 2026
+
+`engine/reap.sh`'s key 3 (the inherited `$CHIEF_RUN_ID`, read out of a candidate's
+ENVIRONMENT) is the only key that can see a descendant which chdir'd out of the
+worktree AND took an argv with no `--chief-run=` marker. On macOS that key is DARK —
+`ps -E` is accepted under SIP and prints nothing, so `chief_env_key_mode` is empty —
+and `test/reapenv.sh` SKIPS its end-to-end half there. So the shape had ZERO coverage
+on the platform this fleet runs on, and on 2026-09-11 it showed up in the field:
+`UnrealEditor-Cmd -unattended` on a temp `.uproject` from a downstream tasklist's run, PPID 1,
+78 minutes old, 199% CPU, ignoring SIGTERM.
+
+Files:
+- `test/reap-escaped.sh` (new) — builds that process and asserts `chief reap` NAMES it
+  and STOPS it. Fails today, on purpose: EXIT=1 with key 1 `no`, key 2 `no`, key 3 `no`
+  (env read `none`). Deliberately NOT added to the three gate lists yet — see below.
+
+Learnings for future iterations:
+- **A red test is landed by keeping it OUT of the three gate lists.** A test that
+  records a hole BEFORE the key that closes it exists cannot go in
+  `.chief/verify.sh`'s `CHIEF_BYSTANDER_TESTS` / `test/all.sh`'s `BASH_SUITE` /
+  `.github/workflows/ci.yml` — it would block the very branch that fixes it. Nothing
+  derives one list from another and nothing enumerates `test/`, so the file is simply
+  unwired; `bash -n` and `shellcheck` DO glob `test/*.sh`, so it must still be clean.
+  The story that adds the key adds the file to all three in the same commit. The
+  header says so, in those words, so the next reader does not take the gap for an
+  oversight.
+- **On macOS a cwd read back out of the process table is `/private/var/…` while
+  `$TMPDIR` is `/var/…`.** `engine/reap.sh` canonicalises its scope dir first
+  (`chief_reap_canon` = `cd && pwd -P`); a test that compares the literal strings
+  reports "it escaped the worktree" for EVERY process in the worktree, which is a
+  false PASS for a test of this shape. Compare against both spellings (`canon()` in
+  `test/reap-escaped.sh`). The first draft of this test passed its own escape
+  assertion for exactly the wrong reason, and the positive control is what caught it.
+- **A negative assertion about a sweep needs a process the sweep DOES find.** The
+  fixture spawns a sibling that STAYS in the worktree; key 1 names it and it is
+  reaped in the same run, so "the escapee was not listed" can never be read as "the
+  sweep never ran" or "the fixture never started". Asserted at both levels: the key
+  primitive (`chief_pids_cwd_under`) and the `chief reap` report.
+- **`$$` survives `exec`, which is how a fixture wears a run id that names its own
+  pid** (`bash -c 'exec -a "… --chief-run=$IDBASE-$$" bash "$0" "$@"' script args…`).
+  `test/reapenv.sh` stages its unregistered live driver the same way. For
+  `chief_run_id_resolvable` to account for the run at all, a worktree dir named
+  `<repo>-<cksum>` matching the run id's cksum field must exist under the temp
+  worktree root — without it the sweep correctly REFUSES to judge the run and every
+  assertion below reads as "not found" for the wrong reason.
+- **Re-parenting is cheaper to stage by killing the parent than by double-forking.**
+  `kill -9` the fixture driver and its child is re-parented to PID 1 within a second;
+  poll `ps -o ppid=` rather than sleeping a fixed time. `trap "" TERM` in the escapee
+  also pins the TERM -> KILL escalation, since the field process ignored SIGTERM too.
+- The driver's own transient `sleep 1` (from `while :; do sleep 1; done`) survives its
+  parent for up to a second with its cwd still in the worktree, so it shows up as an
+  extra `[cwd]` orphan in the report. Harmless, but do not build an assertion on it —
+  it is racy. That is what the explicit control process is for.
+- **`shellcheck -S error` is RED on main, and has been since shellcheck got stricter.**
+  Three findings, none of them this branch's: `engine/quality.sh:60` SC1073+SC1072 —
+  a PROSE comment that begins `# shellcheck severity for the lint family.` is parsed
+  as a shellcheck DIRECTIVE and fails to parse — and `engine/sweep.sh:396,404` SC2066
+  (`for repo in "$current"`, which cannot word-split). CI run 33978312283 (2026-09-05)
+  fails on exactly these, on BOTH jobs, byte-identical to a local run. So the next
+  iteration that touches `engine/` should clear them in passing; it owes a `VERSION`
+  bump anyway, which is the reason NOT to clear them from a test-only story (the bump
+  would then drag `doc-sync` in behind it). Note the general trap: a comment in an
+  engine file must never begin with the word `shellcheck` after the `#`.
+- `brew install shellcheck` fails on this host (`/opt/homebrew` is owned by another
+  user and wants a `sudo chown`). The standalone release tarball works and installs
+  nothing: `curl -fsSL .../shellcheck-v0.10.0.darwin.aarch64.tar.xz | tar x` in
+  `/tmp` and run the binary from there. Worth doing — `.chief/verify.sh` silently
+  SKIPS shellcheck when it is absent, so a branch can be "green" locally and red in CI.
+- **`git commit --amend` AFTER `chief verify` throws the verdict away.** The cache key
+  is `tree.base.hook.subs`, so amending — even to add a note to `progress.txt`, with
+  no `.sh` touched — changes the tree and the recorded verdict no longer applies to
+  HEAD. Finish the commit (notes, tasklist flags, progress) FIRST, then verify once.
+  The one saving grace is that chief's own end-of-turn run records for whatever tree
+  HEAD ends on, so the merge read is still served from a cache; the cost is paying the
+  ~10-minute behavioural block one extra time.
