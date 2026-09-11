@@ -1,0 +1,86 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/123-a-resolution-that-erases-merged-work",
+  "dependsOn": [],
+  "touches": [
+    "engine/driver.sh",
+    "engine/zones.sh",
+    "engine/mergequeue.sh",
+    "test",
+    "docs",
+    "VERSION",
+    "ROADMAP.md"
+  ],
+  "iters": 9,
+  "warmup": [
+    "sed -n '/^integrate_base()/,/^}/p' engine/driver.sh",
+    "sed -n '/^conflict_report()/,/^}/p' engine/driver.sh",
+    "grep -n 'pre_mb\\|strictly ahead\\|REBASE-CONFLICT\\|zones_merge_gate\\|INTEGRATED_SHA_REL' engine/driver.sh engine/mergequeue.sh",
+    "sed -n '/^zones_merge_gate()/,/^}/p' engine/zones.sh",
+    "sed -n '/^budget_holds()/,/^}/p' engine/budget.sh",
+    "grep -n 'resolve' test/stale-resume.sh test/conflict-forensics.sh | head -20"
+  ],
+  "description": "A conflict resolution can silently delete work that has already merged, and nothing in the merge floor notices. The floor rebases onto the latest base and re-verifies, which catches TEXTUAL interference (a conflict) and STALENESS (a red gate). It never compares what a rebase REMOVED against what landed on the base while the branch was in flight, so a resolution that throws the base side away passes both.\n\nTHE INCIDENT, in a downstream repository. A tasklist branch reached the merge floor about eight days stale. Its rebase onto the base conflicted, and the agent resolving it was working from chief's instruction to rebase and resolve 'keeping BOTH sides' intent'. The replayed commit nonetheless kept the BRANCH's stale copy of two whole files. That erased what seven already-merged tasklists had added to them: a module declaration, about two dozen command registrations, a validation check, a UI warning, and several tests. The agent then fixed only what the compiler flagged, the verify gate went green, and chief merged. Every layer that could have noticed was blind to this shape by construction. A deleted test cannot fail. An undeclared module is not compiled, so its errors vanish with it. Commands registered by string name are checked by no compiler. The gate was green because the evidence had been deleted along with the work.\n\nWHERE THE RESOLUTION HAPPENS. The merge floor itself never resolves a conflict: a REBASE-CONFLICT stops the tasklist, and ROADMAP's 'No AI auto-conflict-resolution' row stays true. Chief hands resolution off in two places.\n  (1) integrate_base's conflict arm (engine/driver.sh), at pickup or at an iteration boundary. It ABORTS its own rebase and writes .chief/state/INTEGRATE-BASE.md, which tells the agent to `git rebase <base>` and, at each stop, 'resolve the conflicts keeping BOTH sides' intent — the <base> side is already-merged work, so never discard it, and never discard your own'.\n  (2) conflict_report's 'Resolve it' runbook, written on a REBASE-CONFLICT stop in the serialized floor and in the merge queue's mq_stack_member. It tells a human, or the next run's agent, to do the same by hand.\nEither way the resolved branch comes back to the floor ALREADY rebased. It takes the 'strictly ahead of <base> — rebase is a no-op' arm, verifies green and merges. The floor's own rebase never sees the conflict it exists to catch.\n\nWHAT CHIEF RECORDS TODAY, AND WHAT IT THROWS AWAY. No durable record holds a branch's original fork point or its pre-rebase tip.\n  - The worktree is created with `git worktree add -b <branch> <base>`, and the base sha is written nowhere.\n  - integrate_base writes the base tip it integrated against to $wt/.chief/state/.integrated-base. That file is inside the worktree, which run_worker deletes at the top of every run. It is a THROTTLE key, not a fork record: it is written before acting, on clean and conflicted attempts alike.\n  - The merge phase reads `pre_mb` (the merge-base of branch and base) just before its rebase. For a branch the agent already rebased, that is the NEW base, not the original fork, and it feeds conflict_report only.\n  - The branch reflog would hold the pre-rebase tip, but chief does not control it: reflogs can be disabled or expire, and they go when the branch is deleted, which chief does on merge.\nSo the check needs a record chief writes itself, under the driver's durable state and never under the worktree (CLAUDE.md's durable-state invariant).\n\nTHE PRECISE CHECK. The branch's intended change is its PRE-rebase diff (original fork to original tip). After the rebase, the post-rebase diff runs from the new fork to the new tip. A line qualifies as deleted by the resolution when all three hold: the post-rebase diff removes it, the pre-rebase diff did NOT remove it, and it is present in the new base. Attribute each such line to the base commit that introduced it (between the original fork and the new base). When that commit arrived through a chief auto-merge ('Merge chief/<stem> (chief, auto-verified)'), also name the sibling tasklist, the way conflict_report already does for conflicted files.\nTwo edges the definition must settle rather than ignore:\n  - A base line the resolution only MOVED within its file is still present at the tip, so it is not a loss.\n  - A commit made AFTER the resolution (a later story legitimately removing a line the base added) also appears in the post-minus-pre difference. Either the check excludes it precisely (the replayed commits are the ones with a pre-rebase counterpart; commits authored after the integration have none), or it flags it and the override covers it. Choose, justify the choice with a measurement in notes, and pin it in a test. A mistake in the permissive direction repeats the incident; a mistake in the strict direction costs one `chief approve`.\n\nENFORCEMENT REUSES THE POLICY LAYER; IT DOES NOT INVENT ONE. zones_merge_gate (engine/zones.sh) is already the merge phase's one 'green is not enough authority' question. budget_holds (engine/budget.sh) shows how a second rule joins it: it contributes zone-shaped hold lines, and the branch is held AWAITING-APPROVAL with one request file, one checksum-bound verdict and one `chief approve`. A resolution-deletion finding joins the same way, with one difference. A review zone and a budget in `block` mode are opt-in; this rule is not, and it must stay armed when a repo has no zones.conf or has disarmed its review rules. Both merge paths already call zones_merge_gate (driver.sh and mergequeue.sh), so folding the rule in there covers the batch queue too. One gap in the house pattern must be closed rather than inherited: zones_clear_record deletes the approval file on merge, so an override that must stay RECORDED has to land somewhere that outlives the merge.\n\nKeep the detector out of the driver's worker body. The quality ratchet's function_length_max counts raw line span, and the merge phase already sits inside a very long function. The detector belongs in its own engine module, sourced the way budget.sh and zones.sh are, with a line in CLAUDE.md's layout.\n\nNOT IN SCOPE. The merge-policy approval-flow rework (ROADMAP's Planned row). This tasklist adds a hold whose finding is line-precise, which is the kind of hold that earns its friction, but it does not change how holds are presented or approved. Chief still does not resolve conflicts itself.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "Chief can say which lines a resolution deleted, and whose work they were",
+      "acceptanceCriteria": [
+        "The branch's ORIGINAL fork point and its PRE-rebase tip are recorded durably, under the driver's state directory and never the worktree (which run_worker deletes every run). They are recorded at every point where chief hands a conflict to someone else to resolve: integrate_base's conflict arm, and the REBASE-CONFLICT arm of both the serialized merge floor and the merge queue. The fork point is also recorded at branch creation if the check needs it. The record survives a run ending and a later run resuming the branch, and it is cleared when the tasklist merges, along with the other per-tasklist artifacts that are cleared there.",
+        "A detector takes the recorded (fork, pre-rebase tip) and the branch's current (base, tip). It prints every line that the post-rebase diff removes, that the pre-rebase diff did not remove, that is present in the new base, and that no longer appears in that file at the tip. Each line is printed with its file, its text, and the base commit that introduced it; when that commit arrived through a chief auto-merge, the sibling tasklist's name is printed too.",
+        "The post-resolution-commit edge is settled. A line removed by a commit made after the resolution (one with no pre-rebase counterpart) is either excluded precisely or flagged by design. Notes record which was chosen, why, and the measurement behind it, and a test pins the choice. Binary and renamed paths are either checked or reported as UNCHECKED; they are never silently skipped.",
+        "Unit tests source the module directly (no driver) and run it against temp repos. The incident shape (the base adds a line after the fork; the resolution keeps the branch's stale copy of the whole file) is FLAGGED with that line, its file and its commit. A line the branch's own pre-rebase diff removes is NOT flagged. A clean rebase yields nothing. A base line the resolution only moved within the file is NOT flagged.",
+        "The detector lives in its own engine module, sourced by the driver rather than added to the worker body, and CLAUDE.md's layout has a line for it.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` green; `VERSION` bumped (`test/version-bump.sh`); `ROADMAP.md` names this stem (`test/doc-sync.sh`)."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "A merge that would erase merged work is held, and the hold names whose work it was",
+      "acceptanceCriteria": [
+        "When the detector reports at least one line, the merge does not happen. The branch is held through the existing policy layer: the finding joins zones_merge_gate as zone-shaped hold lines, the way budget_holds does, and the tasklist ends AWAITING-APPROVAL with its branch kept, rebased and green. There is no new park state and no new approval command.",
+        "The hold names each file, each deleted line, and each base commit and sibling tasklist whose work would be lost. It does so in the worker log, the approval request file, the run summary's awaiting-approval block and `chief approve --list`. A long list is truncated with a count, never silently.",
+        "The hold is always armed. It applies with no .chief/zones.conf, with every zone rule set to `serialize`, and under CHIEF_DIFF_BUDGET=warn and =off. A test shows each case.",
+        "The override is `chief approve <name> -m <reason>`. The approval is bound by checksum to exactly the flagged lines, so a re-resolution that deletes something different asks again. The approval, with who, when, the note and the lines it covered, survives the merge in the tasklist's completed/ record. zones_clear_record deletes the approval file on merge, so the file alone is not a record.",
+        "Both merge paths are covered: the serialized floor and the opt-in merge queue, which both call zones_merge_gate. Notes say how the batch path was checked.",
+        "The cost is measured and the run condition is decided. Either the check runs only when US-1 recorded a resolution for this branch, or it runs on every merge because the measured cost is negligible. Notes record the measurement (wall time and git invocations on a realistic branch) and the choice. If the conditional path is chosen, a branch with no recorded resolution pays at most one file-existence test.",
+        "test/stale-resume.sh, test/conflict-forensics.sh, test/overlap-zones.sh and test/merge-batch.sh stay green. If an existing fixture's scripted resolution itself drops base lines, that fixture was modelling the bug: fix the fixture, never loosen the rule, and say so in notes.",
+        "The rule is documented where the policy layer is documented (docs/reference/overlap-zones.md, or a new reference doc with the Status · Updated · Owner banner, linked from docs/README.md). The doc states the rule's limit: it sees deleted lines, not broken meaning. A resolution that keeps every base line but changes what they do is still the verify gate's business.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` green; `VERSION` bumped (`test/version-bump.sh`); `ROADMAP.md` names this stem (`test/doc-sync.sh`)."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "The resolution instruction shows what the base changed, and requires keeping it",
+      "acceptanceCriteria": [
+        "The INTEGRATE-BASE note that integrate_base writes no longer stops at 'keeping BOTH sides' intent'. For each conflicted file, it includes what the base changed in that file since the fork point: the `git diff <fork>..<base> -- <file>` hunks, bounded, with an over-limit diff truncated to its size plus the exact command that shows all of it. It states that those changes are already-merged work that must still be present after the resolution, and that chief compares the result and holds the merge if they are not.",
+        "The note names the trap by its mechanism. Taking one side of a whole file during a rebase discards every base-side change in that file, conflicted hunks or not. It also says that in a rebase `--ours` is the base and `--theirs` is the branch's commit being replayed, the reverse of a merge.",
+        "conflict_report's 'Resolve it' runbook, for REBASE-CONFLICT and MERGE-CONFLICT, carries the same per-file base-side diff and the same requirement, because a human or the next run's agent resolves from it.",
+        "A test asserts that the note handed to the agent carries the base-side diff. The fixture plants a unique marker line on the base after the fork, and the note contains that marker under the conflicted file's entry. The assertion is on the planted marker plus a string only the engine emits, never on a heading that templates/agent-context.md quotes.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` green; `VERSION` bumped (`test/version-bump.sh`); `ROADMAP.md` names this stem (`test/doc-sync.sh`)."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-4",
+      "title": "The incident is reproduced end to end, and so are the merges that must still happen",
+      "acceptanceCriteria": [
+        "A new hermetic test drives the real driver with a scripted fake agent in a temp repo. The base gains a line in a shared file after the branch forks. The branch's own edit to that file conflicts. The agent resolves as in the incident, by keeping the branch's stale copy of the whole file, and verify comes back green. Asserted: the tasklist is NOT merged, the base did not move, the status is AWAITING-APPROVAL, and the report names the file, the planted line and the base commit that added it.",
+        "The test is mutation-checked. With the detector neutered in a copy of the engine (not `git show HEAD~N`, because CI clones shallow), the same fixture MERGES. Notes record that observed run, so the test is shown to reproduce the incident rather than restate behaviour that always worked.",
+        "Negative control (a): a branch whose pre-rebase diff intentionally deletes a line conflicts, is resolved correctly, and merges with no hold.",
+        "Negative control (b): a branch that rebases cleanly (the base advanced on an unrelated file, so no resolution was needed) merges unchanged. Notes record what the check cost on that path.",
+        "Override: running `chief approve <name> -m <reason>` on the held tasklist and then `chief run` merges it, and the completed record carries the approval with its note and the lines it covered.",
+        "The new test file is in all three gate lists: .chief/verify.sh's CHIEF_BYSTANDER_TESTS, test/all.sh's BASH_SUITE, and .github/workflows/ci.yml. ci.yml still parses (`python3 -c \"import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))\"`).",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` green; `VERSION` bumped (`test/version-bump.sh`); `ROADMAP.md` names this stem (`test/doc-sync.sh`)."
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

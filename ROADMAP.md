@@ -9,9 +9,9 @@
 **Status:** Shipping & self-hosting (**v0.9.24** — [`VERSION`](VERSION) is the source of truth; this
 line is checked against it by `test/doc-sync.sh`) — the built program is **48/48 tasklists merged**
 (`77`–`122` plus the `900`/`901` paydown, every record in [`tasks/chief/completed/`](tasks/chief/completed/)
-stamped with a real `mergedToMain` that `git merge-base --is-ancestor` finds on `main`); **no
-tasklist is live** (`tasks/chief/` holds no active JSON), and the one planned row — the merge-policy
-approval-flow rework — has no tasklist yet ·
+stamped with a real `mergedToMain` that `git merge-base --is-ancestor` finds on `main`); **one
+tasklist is live** — `123`, a `fix` authored 2026-09-11 (a conflict resolution can erase merged
+work) — and the merge-policy approval-flow rework is still a planned row with no tasklist ·
 **Last updated:** 2026-09-11
 
 This is the single canonical roadmap. Chief is a tool, not a product, and is **self-hosting** — its
@@ -92,7 +92,7 @@ implements their work) and contract definitions (those live in `koine`).
 
 ## Milestones
 
-One list, everything: shipped capability bands, the one planned row that has no tasklist yet, the
+One list, everything: shipped capability bands, the planned rows that have not merged, the
 ongoing steady-state bars, and the open threads that carry a recorded decision rather than a plan. Chief was extracted from a production multi-tasklist setup, then generalized, so the
 shipped rows are **capability bands, not a linear rewrite** — the earliest rows predate self-hosting
 and carry no single tasklist. Status legend: **✅ shipped · 🚧 partial / ongoing · ⬜ planned**. The
@@ -324,14 +324,16 @@ reports must be an outcome chief checked.**
 | ✅ | **A long verify is not a hang** — `_agent_verify_final` ran the project's gate inside a **command substitution** and under the wrong phase, so nothing reached the log until the gate returned and the liveliness record stopped advancing. The gate now **streams**, and it publishes `phase=verifying` — whose `STALE_PHASE_SECONDS` threshold of 3060s already existed for exactly this and had exactly one publisher, so the verify was being timed as a 900s agent turn. The quiet is not bought by exempting the phase: a gate that emits nothing is **still** flagged once `verifying`'s own threshold passes (`test/verify-stream.sh` PART F). Measured on talos: a healthy 4/4 branch — 7 commits, 2,752 insertions — read `⚠ stalled in agent-turn` for 1h06m while its gate was doing its job | `chief/119-a-long-verify-is-not-a-hang` · `e394a7f` |
 | ✅ | **An orphan that left the worktree is invisible to reap on macOS** — `chief reap`'s three keys search the process table (cwd · argv · inherited `$CHIEF_RUN_ID`), and the third exists for exactly one shape: a descendant that chdir'd OUT of the worktree AND exec'd a boring argv. That key reads another process's ENVIRONMENT, which macOS refuses under SIP — so on the platform this fleet runs on the shape had no key at all, and `test/reapenv.sh` SKIPPED its end-to-end half there. Found in the field 2026-09-11: `UnrealEditor-Cmd -unattended` on a temp `.uproject` from a downstream tasklist's run, PPID 1, 78 minutes old, 199% CPU, ignoring SIGTERM. A PPID walk cannot reach it — re-parented to launchd, there is no edge back to chief — so the tree is now RECORDED while it is still connected: a per-poll descendant ledger beside the run file, and a still-live pid in a DEAD run's ledger is an orphan whatever its cwd, argv and environment now say. PID reuse is refused on a recorded start time, and reported LEFT ALONE — reaping's fourth key, `engine/ledger.sh` | `chief/122-an-orphan-that-left-the-worktree` · `6bd1f28` |
 
-### Planned — ⬜ no tasklist yet
+### Planned — ⬜ not yet merged
 
-Harness work the operator has asked for and nobody has written a tasklist for. A row here is a
-request, not queued work: it becomes one when `tasks/chief/NN-slug.json` exists.
+Harness work the operator has asked for that has not merged. A row whose Tasklist column says
+*proposed* is a request, not queued work: it becomes one when `tasks/chief/NN-slug.json` exists. A
+row that names a tasklist is authored and live in [`tasks/chief/`](tasks/chief/).
 
 | Status | Milestone | Tasklist |
 |---|---|---|
 | ⬜ | **The merge-policy approval flow earns its friction back** — asked for by the operator 2026-09-10. That day `91`'s `review` zones were **disarmed ecosystem-wide**: every `review` rule in two downstream repositories' `.chief/zones.conf` became `serialize`, and each file carries a `DISARMED 2026-09-10` banner saying why — the awaiting-approval hold was costing more than it caught. The defect is granularity, not the hold. A path-glob zone cannot tell *added a routine adapter* from *changed the policy it guards*, so every hold read as noise and was approved unread. The merge floor is untouched by the disarm (rebase → re-verify → `--no-ff` still catches textual interference and staleness); what is lost until this lands is the human checkpoint on design-level overlap. Re-arming is a one-word edit per rule (`serialize` → `review`), and it should wait until the flow can tell those two changes apart | *(proposed — no tasklist authored yet)* |
+| ⬜ | **A conflict resolution can erase merged work** — found in a downstream repository. A branch about eight days behind its base conflicted on rebase. The resolution kept the branch's stale copy of two whole files and silently deleted what seven already-merged tasklists had added to them: a module declaration, about two dozen command registrations, a validation check, a UI warning and several tests. The verify gate went green (a deleted test cannot fail, an undeclared module is not compiled, and nothing checks a command registered by string name), and chief merged. The merge floor catches textual interference and staleness, but nothing compared what a rebase *removed* against what landed on the base while the branch was in flight. The fix records each branch's fork point and pre-rebase tip. It flags any line the rebased branch removes that its own pre-rebase diff did not remove and that the base still carries. It holds such a merge through the existing policy layer, with one recorded `chief approve` override, naming the lines and the base commits whose work would be lost. And the resolution instruction stops saying "keep both sides" without showing what the base changed | `chief/123-a-resolution-that-erases-merged-work` · *authored 2026-09-11, unmerged* |
 
 ### Open threads — ⬜ parked, with conditions
 
@@ -359,7 +361,8 @@ it is chief-cloud's, not a chief convenience).
   merge throughput · `93`–`103` operating the fleet (merge safety, durability, the evidence rule) ·
   `104`–`109` **operator ergonomics** · `110`–`113` + `117`/`118`/`120`/`121` **iteration-outcome
   honesty** · `114`–`116` + `119` + `122` **checked outcomes** · `900`/`901` **maintenance paydown**.
-- **0 live tasklists** — [`tasks/chief/`](tasks/chief/) holds no active JSON. The three the
+- **1 live tasklist** — `123-a-resolution-that-erases-merged-work` (authored 2026-09-11, *Planned*
+  above) is the only active JSON in [`tasks/chief/`](tasks/chief/). The three the
   2026-08-26 count named as live (`114`, `115`, `116`) merged that day and are rowed under *Checked
   outcomes* above, with `119` and `122`. **1 planned row** has no tasklist yet: the merge-policy
   approval-flow rework (*Planned* above).
