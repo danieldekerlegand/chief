@@ -7,10 +7,12 @@
 > merges — across any repo, any agent provider.*
 
 **Status:** Shipping & self-hosting (**v0.9.24** — [`VERSION`](VERSION) is the source of truth; this
-line is checked against it by `test/doc-sync.sh`) — the built program is **37/37 tasklists merged**
-(`77`–`113`, every record in [`tasks/chief/completed/`](tasks/chief/completed/) stamped with a real
-`mergedToMain`); the live head is iteration-outcome honesty and the gates around it ·
-**Last updated:** 2026-08-26
+line is checked against it by `test/doc-sync.sh`) — the built program is **48/48 tasklists merged**
+(`77`–`122` plus the `900`/`901` paydown, every record in [`tasks/chief/completed/`](tasks/chief/completed/)
+stamped with a real `mergedToMain` that `git merge-base --is-ancestor` finds on `main`); **no
+tasklist is live** (`tasks/chief/` holds no active JSON), and the one planned row — the merge-policy
+approval-flow rework — has no tasklist yet ·
+**Last updated:** 2026-09-11
 
 This is the single canonical roadmap. Chief is a tool, not a product, and is **self-hosting** — its
 own work is driven by chief against tasklists in [`tasks/chief/`](tasks/chief/); this file tracks
@@ -41,11 +43,13 @@ implements their work) and contract definitions (those live in `koine`).
   `reap.sh` · `sweep.sh` · `measure.sh` · `quality.sh` · `research.sh` · `review.sh` · `zones.sh` ·
   `mergequeue.sh` · `concurrency.sh` · `budget.sh` · `repeat.sh` · `retire.sh` · `decision.sh` ·
   `criteria.sh` · `crossrepo.sh` · `counterpart.sh` · `gen.sh` · `gitenv.sh` · `preset.sh` ·
-  `terminal.sh`.
-- **CLI** (`bin/chief`) — the dispatch table is 22 subcommands: `init · run · list · status · lint ·
-  gen · ps · monitor · logs · events · usage · models · reap · quality · retire · approve · decide ·
-  pause · resume · version · update · help`. `test/doc-sync.sh` asserts README's command table covers
-  every one of them.
+  `terminal.sh` · `cigate.sh` · `claims.sh` · `ledger.sh`.
+- **CLI** (`bin/chief`) — the dispatch table is 24 subcommands: `init · run · list · status · lint ·
+  gen · ps · monitor · logs · events · usage · models · reap · quality · verify · cigate · retire ·
+  approve · decide · pause · resume · version · update · help`. `test/doc-sync.sh` asserts README's
+  command table covers every one of them. *(Recounted 2026-09-11 from the `case "$cmd"` dispatch:
+  this line said 22 and omitted `verify` and `cigate`, and nothing gates this line — only the
+  README table.)*
 - **Multi-provider:** Claude Code (default), Devin, OpenCode, Amp and Codex via `--provider`/`--model`
   (or `CHIEF_PROVIDER`/`CHIEF_MODEL` in `.chief/config`, or the `--claude`/`--devin`/`--opencode`/
   `--amp`/`--codex` shortcuts); legacy `CHIEF_TOOL`/`--tool` still accepted. **All five are
@@ -63,8 +67,9 @@ implements their work) and contract definitions (those live in `koine`).
 - **Gates beyond the test oracle:** the deterministic code-quality ratchet (`chief quality ratchet`,
   `88`, `8924a86`), the evidence rule that refuses to pass a story whose measurable criterion carries
   no observation (`98`, `482b5ef`), declared overlap zones that hold a green branch for `chief approve`
-  (`91`, `55c2e89`), and the opt-in plan-review and research checkpoints (`89`, `2e64bff`; `90`,
-  `e8a54ec`).
+  (`91`, `55c2e89`), the opt-in plan-review and research checkpoints (`89`, `2e64bff`; `90`,
+  `e8a54ec`), and `chief cigate`, which reports a CI gate that did not run as not run rather than
+  passed (`115`, `fcd9238`).
 - **Observability:** host-wide run registry (`~/.chief/runs/`) surfaced by `chief ps`/`chief monitor`
   with provider + model shown; `chief logs [-f]` tails a run; `chief events` is the machine-readable
   NDJSON stream (`81`, `00db922`); `chief status` reports what is left and what can start now across a
@@ -76,17 +81,19 @@ implements their work) and contract definitions (those live in `koine`).
   roadmap → tasklist authoring (`83`, `3ca2edf`).
 - **Self-installing/updating** via `install.sh` + `chief update`; CI (shellcheck + `bash -n` + the
   behavioral suite) runs on Ubuntu and macOS (bash 3.2 is the compatibility floor).
-- **Chief program:** **37/37 authored tasklists merged** (`77`–`113`). Every record in
-  [`tasks/chief/completed/`](tasks/chief/completed/) was checked on 2026-08-26 and carries a real
-  `mergedToMain` sha; the band ran `bd030a6` (2026-08-01) through `716c9e4` (2026-08-26). Three
-  tasklists are live and unmerged: `114` (this one), `115`, `116`.
+- **Chief program:** **48/48 authored tasklists merged** (`77`–`122`, `900`, `901`). Every record
+  in [`tasks/chief/completed/`](tasks/chief/completed/) was re-checked on 2026-09-11 and carries a
+  `mergedToMain` sha that is an ancestor of `main`; the band ran `bd030a6` (2026-08-01) through
+  `6bd1f28` (2026-09-11). No tasklist is live. *(The 2026-08-26 count read 37/37 with `114`, `115`
+  and `116` live; all three merged that day, and `117`–`122` and `900`/`901` were authored and
+  merged after it.)*
 
 ---
 
 ## Milestones
 
-One list, everything: shipped capability bands, the three tasklists in flight, the ongoing
-steady-state bars, and the open threads that carry a recorded decision rather than a plan. Chief was extracted from a production multi-tasklist setup, then generalized, so the
+One list, everything: shipped capability bands, the one planned row that has no tasklist yet, the
+ongoing steady-state bars, and the open threads that carry a recorded decision rather than a plan. Chief was extracted from a production multi-tasklist setup, then generalized, so the
 shipped rows are **capability bands, not a linear rewrite** — the earliest rows predate self-hosting
 and carry no single tasklist. Status legend: **✅ shipped · 🚧 partial / ongoing · ⬜ planned**. The
 Tasklist column names the Chief tasklist that delivered a row (✅, with its merge sha) or the
@@ -221,7 +228,7 @@ a tasklist running *again*, which a merged tasklist never does.
 | ✅ | **Concurrency is machine-wide** — `-p N` bounded one run while nothing bounded runs against each other, so five concurrent runs on a 14-core host reached **load average 62, 4.4× oversubscribed**, and one cuneiform iteration spent ~5 hours whose entire output was *"Gate is still on `engine-build` … Waiting"* behind three concurrent `verify.sh` processes. A machine-wide budget now defaults to the hardware, and contention is visible where the operator already looks ([`docs/reference/concurrency.md`](docs/reference/concurrency.md)) | `chief/108-concurrency-is-machine-wide` · `35d2568` |
 | ✅ | **Reclaim a merged tasklist's worktree** — reclamation was keyed to a tasklist *running again*, which a merged one never does, and every removal was best-effort with its failure discarded. `~/.chief/worktrees` had reached **94 GB across 1,867 containers**, 1,857 of them dead shells, on a host at 84% full. Retirement now reclaims, a removal that loses is **reported** at every site, and a startup sweep bounds the debt earlier runs stranded | `chief/109-reclaim-a-merged-tasklists-worktree` · `3a26242` |
 
-### Iteration-outcome honesty — ✅ shipped (`110`–`113`, 2026-08-22 → 08-26)
+### Iteration-outcome honesty — ✅ shipped (`110`–`113`, then `117`/`118`/`120`/`121`; 2026-08-22 → 09-04)
 
 **One thesis, four measurements: chief learning to tell real progress from motion.** Every row is the
 same defect in a different direction — chief's *iteration-outcome classifier* answering a question
@@ -302,25 +309,35 @@ Deliberate non-goals, not backlog:
 | ⬜ | `touches` tags stay advisory *by default* — the **merge floor**, not perfect tagging, is the correctness guarantee (under-tagging costs a wasted rebase, over-tagging costs parallelism; neither costs correctness). A project may opt a named domain into policy with `91`'s overlap zones; nothing is enforced that was not declared | never |
 | ⬜ | Cross-host run aggregation — the monitor + registry stay per host/user; the fleet-wide view across machines is **chief-cloud's** (its daemon + control plane aggregate over chief's on-disk state and its `81` event stream), never a chief feature | never — chief-cloud's |
 
-### In flight — 🚧 authored, unmerged
+### Checked outcomes — ✅ shipped (`114`–`116`, `119`, `122`; 2026-08-26 → 09-11)
 
-The live head, and it is the same thesis as the `110`–`113` band above: **an outcome chief reports
-must be an outcome chief checked.** Records are in [`tasks/chief/`](tasks/chief/); none carries a
-`mergedToMain` yet.
+Rowed here as *In flight — 🚧 authored, unmerged* until 2026-09-11. All five have since merged:
+each record is in [`tasks/chief/completed/`](tasks/chief/completed/) with a `mergedToMain` that is
+an ancestor of `main`. The thesis is the same as the `110`–`113` band above: **an outcome chief
+reports must be an outcome chief checked.**
 
 | Status | Milestone | Tasklist |
 |---|---|---|
-| 🚧 | **The roadmap states what is true today** — this file. It documented the `77`–`92` era, claimed `v0.8.0` against a `VERSION` two minor releases ahead, listed 12 of 22 subcommands, and was silent on `93`–`113`; the fix includes extending the doc-sync gate to cover it, because the gate that would have caught this deliberately did not | `chief/114-the-roadmap-describes-a-program-that-ended` |
-| 🚧 | **A gate that did not run is not a gate that passed** — every private repo in the portfolio had dead CI for an unknown period (an account-level billing block, byte-identical on all three), and vita's workflow triggers only `on: pull_request` while chief merges locally and pushes — so its CI had never run once, and a tasklist merged `auto-verified` on the premise that it had. Chief does not become a CI client; it refuses to let **absence read as success** | `chief/115-a-gate-that-did-not-run-is-not-a-gate-that-passed` |
-| 🚧 | **A decision tasklist cannot finish** — `106` shipped the operator surface and the halt and never connected them: the verdict `chief decide` writes is read by nothing, the halt is unconditional on every later run, neither `--retire` nor `--unpark` fits, a decision tasklist that *carries code* (2,209 insertions in the first real one) has no path to merge after the verdict, and `AWAITING-DECISION` — a successful terminal state — is reported as a failure that blocks five dependents | `chief/116-a-decision-tasklist-cannot-finish` |
-| 🚧 | **A long verify is not a hang** — `_agent_verify_final` ran the project's gate inside a **command substitution** and under the wrong phase, so nothing reached the log until the gate returned and the liveliness record stopped advancing. The gate now **streams**, and it publishes `phase=verifying` — whose `STALE_PHASE_SECONDS` threshold of 3060s already existed for exactly this and had exactly one publisher, so the verify was being timed as a 900s agent turn. The quiet is not bought by exempting the phase: a gate that emits nothing is **still** flagged once `verifying`'s own threshold passes (`test/verify-stream.sh` PART F). Measured on talos: a healthy 4/4 branch — 7 commits, 2,752 insertions — read `⚠ stalled in agent-turn` for 1h06m while its gate was doing its job | `chief/119-a-long-verify-is-not-a-hang` |
-| 🚧 | **An orphan that left the worktree is invisible to reap on macOS** — `chief reap`'s three keys search the process table (cwd · argv · inherited `$CHIEF_RUN_ID`), and the third exists for exactly one shape: a descendant that chdir'd OUT of the worktree AND exec'd a boring argv. That key reads another process's ENVIRONMENT, which macOS refuses under SIP — so on the platform this fleet runs on the shape had no key at all, and `test/reapenv.sh` SKIPPED its end-to-end half there. Found in the field 2026-09-11: `UnrealEditor-Cmd -unattended` on a temp `.uproject` from a downstream tasklist's run, PPID 1, 78 minutes old, 199% CPU, ignoring SIGTERM. A PPID walk cannot reach it — re-parented to launchd, there is no edge back to chief — so the tree is now RECORDED while it is still connected: a per-poll descendant ledger beside the run file, and a still-live pid in a DEAD run's ledger is an orphan whatever its cwd, argv and environment now say. PID reuse is refused on a recorded start time, and reported LEFT ALONE | `chief/122-an-orphan-that-left-the-worktree` |
+| ✅ | **The roadmap states what is true today** — this file. It documented the `77`–`92` era, claimed `v0.8.0` against a `VERSION` two minor releases ahead, listed 12 of 22 subcommands, and was silent on `93`–`113`; the fix includes extending the doc-sync gate to cover it, because the gate that would have caught this deliberately did not | `chief/114-the-roadmap-describes-a-program-that-ended` · `4a20241` |
+| ✅ | **A gate that did not run is not a gate that passed** — every private repo in the portfolio had dead CI for an unknown period (an account-level billing block, byte-identical on all three), and vita's workflow triggers only `on: pull_request` while chief merges locally and pushes — so its CI had never run once, and a tasklist merged `auto-verified` on the premise that it had. Chief does not become a CI client; it refuses to let **absence read as success** — shipped as `chief cigate` (`engine/cigate.sh`), whose third state is DID NOT RUN | `chief/115-a-gate-that-did-not-run-is-not-a-gate-that-passed` · `fcd9238` |
+| ✅ | **A decision tasklist cannot finish** — `106` shipped the operator surface and the halt and never connected them: the verdict `chief decide` writes is read by nothing, the halt is unconditional on every later run, neither `--retire` nor `--unpark` fits, a decision tasklist that *carries code* (2,209 insertions in the first real one) has no path to merge after the verdict, and `AWAITING-DECISION` — a successful terminal state — is reported as a failure that blocks five dependents | `chief/116-a-decision-tasklist-cannot-finish` · `244b43d` |
+| ✅ | **A long verify is not a hang** — `_agent_verify_final` ran the project's gate inside a **command substitution** and under the wrong phase, so nothing reached the log until the gate returned and the liveliness record stopped advancing. The gate now **streams**, and it publishes `phase=verifying` — whose `STALE_PHASE_SECONDS` threshold of 3060s already existed for exactly this and had exactly one publisher, so the verify was being timed as a 900s agent turn. The quiet is not bought by exempting the phase: a gate that emits nothing is **still** flagged once `verifying`'s own threshold passes (`test/verify-stream.sh` PART F). Measured on talos: a healthy 4/4 branch — 7 commits, 2,752 insertions — read `⚠ stalled in agent-turn` for 1h06m while its gate was doing its job | `chief/119-a-long-verify-is-not-a-hang` · `e394a7f` |
+| ✅ | **An orphan that left the worktree is invisible to reap on macOS** — `chief reap`'s three keys search the process table (cwd · argv · inherited `$CHIEF_RUN_ID`), and the third exists for exactly one shape: a descendant that chdir'd OUT of the worktree AND exec'd a boring argv. That key reads another process's ENVIRONMENT, which macOS refuses under SIP — so on the platform this fleet runs on the shape had no key at all, and `test/reapenv.sh` SKIPPED its end-to-end half there. Found in the field 2026-09-11: `UnrealEditor-Cmd -unattended` on a temp `.uproject` from a downstream tasklist's run, PPID 1, 78 minutes old, 199% CPU, ignoring SIGTERM. A PPID walk cannot reach it — re-parented to launchd, there is no edge back to chief — so the tree is now RECORDED while it is still connected: a per-poll descendant ledger beside the run file, and a still-live pid in a DEAD run's ledger is an orphan whatever its cwd, argv and environment now say. PID reuse is refused on a recorded start time, and reported LEFT ALONE — reaping's fourth key, `engine/ledger.sh` | `chief/122-an-orphan-that-left-the-worktree` · `6bd1f28` |
+
+### Planned — ⬜ no tasklist yet
+
+Harness work the operator has asked for and nobody has written a tasklist for. A row here is a
+request, not queued work: it becomes one when `tasks/chief/NN-slug.json` exists.
+
+| Status | Milestone | Tasklist |
+|---|---|---|
+| ⬜ | **The merge-policy approval flow earns its friction back** — asked for by the operator 2026-09-10. That day `91`'s `review` zones were **disarmed ecosystem-wide**: every `review` rule in two downstream repositories' `.chief/zones.conf` became `serialize`, and each file carries a `DISARMED 2026-09-10` banner saying why — the awaiting-approval hold was costing more than it caught. The defect is granularity, not the hold. A path-glob zone cannot tell *added a routine adapter* from *changed the policy it guards*, so every hold read as noise and was approved unread. The merge floor is untouched by the disarm (rebase → re-verify → `--no-ff` still catches textual interference and staleness); what is lost until this lands is the human checkpoint on design-level overlap. Re-arming is a one-word edit per rule (`serialize` → `review`), and it should wait until the flow can tell those two changes apart | *(proposed — no tasklist authored yet)* |
 
 ### Open threads — ⬜ parked, with conditions
 
 Not a wishlist: each is a thread with a **recorded decision and a stated condition for re-opening**.
 Chief is a tool and its scope stays deliberately small, so anything else known is either an authored
-tasklist, an ongoing bar, or a **By design** non-goal above (cross-host run aggregation moved there:
+tasklist, a **Planned** row above, an ongoing bar, or a **By design** non-goal above (cross-host run aggregation moved there:
 it is chief-cloud's, not a chief convenience).
 
 | Status | Thread | Disposition |
@@ -332,18 +349,20 @@ it is chief-cloud's, not a chief convenience).
 
 ## Chief Tasklist Status
 
-- **37/37 authored tasklists merged** (`77`–`113`). Records live in
-  [`tasks/chief/completed/`](tasks/chief/completed/), each stamped with a `mergedToMain` sha; all 37
-  were checked against git on 2026-08-26 and none is missing one. The band runs `bd030a6`
-  (2026-08-01) → `716c9e4` (2026-08-26).
-- The merged program reads as **five bands**, and the last three are named phases above rather than
+- **48/48 authored tasklists merged** (`77`–`122`, `900`, `901`). Records live in
+  [`tasks/chief/completed/`](tasks/chief/completed/), each stamped with a `mergedToMain` sha; all 48
+  were re-checked against git on 2026-09-11 (`git merge-base --is-ancestor <sha> main`) and none is
+  missing one or unreachable. **0 retired or superseded.** The band runs `bd030a6` (2026-08-01) →
+  `6bd1f28` (2026-09-11).
+- The merged program reads as **seven bands**, and the last five are named phases above rather than
   runs of numbers: `77`–`87` hardening & the embeddable engine · `88`–`92` agent-output quality then
   merge throughput · `93`–`103` operating the fleet (merge safety, durability, the evidence rule) ·
-  `104`–`109` **operator ergonomics** · `110`–`113` **iteration-outcome honesty**.
-- **3 live tasklists** in [`tasks/chief/`](tasks/chief/), rowed under *In flight* above:
-  `114-the-roadmap-describes-a-program-that-ended` (this file),
-  `115-a-gate-that-did-not-run-is-not-a-gate-that-passed`, `116-a-decision-tasklist-cannot-finish`.
-  All three continue the `110`–`113` thesis: an outcome chief reports must be an outcome chief checked.
+  `104`–`109` **operator ergonomics** · `110`–`113` + `117`/`118`/`120`/`121` **iteration-outcome
+  honesty** · `114`–`116` + `119` + `122` **checked outcomes** · `900`/`901` **maintenance paydown**.
+- **0 live tasklists** — [`tasks/chief/`](tasks/chief/) holds no active JSON. The three the
+  2026-08-26 count named as live (`114`, `115`, `116`) merged that day and are rowed under *Checked
+  outcomes* above, with `119` and `122`. **1 planned row** has no tasklist yet: the merge-policy
+  approval-flow rework (*Planned* above).
 - The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep, not discrete
   tasklists, and the two **open threads** (conflict-predictor binding, desktop GUI) are decided-and-
   parked with reversal conditions in [`docs/decisions/`](docs/decisions/) — not unscoped wishes.
