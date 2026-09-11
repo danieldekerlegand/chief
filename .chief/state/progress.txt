@@ -2154,3 +2154,56 @@ Files:
   behavioural test under the guard explicitly:
   `CHIEF_BYSTANDER_TESTS="<name>" bash test/bystander.sh`. Worth doing for any test
   that SIGNALS processes — hermetic in state is not hermetic in processes.
+
+## 122 US-3 — The platform gap is stated where the next reader looks
+Fri Sep 11 2026
+
+The record from US-1/US-2 written onto the three surfaces a reader actually meets:
+the key-3 comment in the engine, the line `chief reap` prints when a key is dark,
+and the doc that documents `chief reap`.
+
+Files:
+- `engine/reap.sh` — key 3's note loses "UNVERIFIED" and "belt-and-braces, not a
+  proven hole" for the 2026-09-11 field record (UnrealEditor-Cmd, PPID 1, no argv
+  marker, cwd outside the worktree, 199% CPU, ignoring TERM), states that under SIP
+  the key degrades to NOTHING and that cwd + argv do not cover that shape, and names
+  KEY 4 as what does. The 176-orphan census stays — it is still the honest account of
+  what key 1 carries — but its open question is now "was never established" rather
+  than a standing UNVERIFIED, because the shape itself has been seen.
+- `engine/reap.sh` `chief_reap_main` — the empty-sweep note now names the keys that
+  carried it ("cwd + argv + the descendant ledger, key 4, recorded by each live run"),
+  and has a second branch for a host where `ps -o lstart=` is also unavailable, which
+  says outright that BOTH keys were inactive and this shape would not have been found.
+- `docs/explanation/drivers-and-safety.md` — "Two durable markers" → four durable
+  keys (union, never replacement), `[ledger]` in the sample report's key legend, and a
+  new section "The key that is a record, not a search" carrying the field record, the
+  PPID-walk argument, a sample `[ledger]` finding, the PID-REUSED refusal, the
+  POLL_SECONDS bound and the inactive-vs-unchecked distinction.
+- `VERSION` 0.9.23 → 0.9.24, README + ROADMAP restamped; ROADMAP's historical row for
+  `77` no longer asserts "(belt-and-braces)" in the present tense.
+
+### Learnings for future iterations
+
+- **A comment that says a hole is unproven is a claim with a shelf life.** Key 3's
+  note had "UNVERIFIED" and "belt-and-braces, not a proven hole" in it from `77`; the
+  field record that refuted it arrived a month later and the note would have kept
+  telling the next reader not to worry. If a comment records an open question, the
+  tasklist that closes it owes an edit to that comment — and the cheapest way to find
+  those is to grep the exact hedging words (`UNVERIFIED`, `suspected`,
+  `belt-and-braces`) across `engine/` and `docs/` before calling a story done.
+- **The report line for an inactive key must name its REPLACEMENT, not just its own
+  absence.** "the inherited-$CHIEF_RUN_ID key was inactive — cwd + argv carried this
+  sweep" was accurate and still misleading, because the escape it exists for wears
+  neither cwd nor argv. Two branches, not one string: name the key that covered it,
+  and when nothing covered it say THAT. The all-dark branch is the one an operator
+  must never read as a clean host.
+- **A prose edit to `engine/` still owes the full engine discipline.** This story
+  changed four lines of executable shell and several hundred of comment, and it still
+  needed `VERSION` + README + ROADMAP moved together (`test/version-bump.sh`,
+  `test/doc-sync.sh`) — a comment-only commit touching `engine/` trips the bump gate
+  exactly as a behavioural one does.
+- **The key legend lives in two places.** `chief_report_orphans` prints it and
+  `docs/explanation/drivers-and-safety.md` quotes it inside a fenced sample report.
+  Nothing checks that the two agree — the doc had been missing `[ledger]` since it was
+  added — so adding a key is an edit to both, and the doc copy is the one no test will
+  catch.

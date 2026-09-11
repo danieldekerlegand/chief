@@ -691,7 +691,8 @@ closed on an older engine, a crash between the reap and the record.
 `claude --dangerously-skip-permissions --print` carry no worktree path on their
 command line; only their transient children (a pytest, a build) do. A sweep matching
 the worktree path therefore killed the leaves and left the engine above them alive to
-spawn more. Two durable markers replace it:
+spawn more. Four durable keys replace it — a **union**, never a replacement: matching
+any one of them makes a process a candidate, so none of the others can regress.
 
 - **cwd** — every process in an agent tree runs *inside* the run's worktree
   (`$CHIEF_PREFIX/worktrees/<repo>-<cksum>/<tasklist>`). Not in argv, but in the
@@ -703,6 +704,17 @@ spawn more. Two durable markers replace it:
   every `agent.sh` frame, and exported as `$CHIEF_RUN_ID` to the whole tree. This is
   what catches the driver itself, whose cwd is wherever the operator was standing.
   The `<repo>-<cksum>` prefix is what scopes a sweep to **one** repo's runs.
+- **the inherited marker** — that same `$CHIEF_RUN_ID`, read back out of a
+  candidate's *environment*. cwd and argv are both escapable in principle (chdir out
+  of the worktree; exec a boring argv), but an exported variable is inherited through
+  both, so this is the residual case — and it is cheap, since the export already
+  exists. Same run id, so the same repo scoping applies.
+- **the descendant ledger** — the same residual case approached from the other end,
+  and the one key that is a *record* rather than a *search*. While a run is live its
+  driver writes its own process tree (pid · start time · command) beside its
+  `<pid>.run` file, once per scheduler poll; a still-live pid found in a **dead**
+  run's ledger is a candidate whatever its cwd, argv or environment now say. See
+  "the key that is a record" below for why it exists and what it refuses.
 
 Anything below a matched process is included through parentage, so a build that
 wandered off into a temp dir is not missed.
@@ -742,7 +754,7 @@ run is dead — and only then is it reaped:
 
 ```
 chief reap: 2 orphaned process(es) — chief work with no live, registered run. About to reap each of these:
-       keys: [cwd] cwd inside a chief worktree · [argv] --chief-run= marker · [env] inherited $CHIEF_RUN_ID · [tree] descendant of a match
+       keys: [cwd] cwd inside a chief worktree · [argv] --chief-run= marker · [env] inherited $CHIEF_RUN_ID · [ledger] recorded in its run's tree while that run was live · [tree] descendant of a match
        · pid 40987   [argv] chief engine process · run chief-2915283-1753996812-40321
          ↳ repo /Users/you/Development/chief · run chief-2915283-1753996812-40321
          ↳ ORPHAN — a run file in /Users/you/.chief/runs claims this run, and its driver (pid 40321) is gone
@@ -794,7 +806,9 @@ Two rules close it:
   right prefix, gets it. This applies to the argv key *and* the inherited-`$CHIEF_RUN_ID`
   key, which is what makes macOS and Linux agree: under SIP the environment key is inert,
   so argv is the fallback there, and a fallback must never be more aggressive than the
-  primary it stands in for.
+  primary it stands in for. The ledger key needs no such rule and gets one for free —
+  it only ever reads ledgers **in this registry**, so a run this install cannot account
+  for has no ledger here to be found in.
 - **A host-wide sweep out of a foreign registry is refused before it scans anything.**
   An empty run-id prefix read against a `$CHIEF_RUNS` that is not this host's own exits
   non-zero with a diagnosis. Scope it (`--scope <repo>-<cksum>-`), or point `$CHIEF_RUNS`
@@ -806,6 +820,69 @@ Two rules close it:
 run belonging to another install — its own driver argv, its own `$CHIEF_RUNS`, its own
 worktree root — and runs the whole behavioural block over it, asserting after every test
 that the bystander is still alive.
+
+### The key that is a record, not a search
+
+Keys 1–3 all *look for* a process: they ask the process table about a cwd, an argv or
+an environment. On 2026-09-11 that ran out.
+
+**Field record, macOS 26.5.** Four runs were cut off around 00:58 — three in one downstream repository,
+one in another — every driver pid dead, every state file still reading
+`running`. A manual sweep found, among others, `UnrealEditor-Cmd -unattended` running
+on a temporary `engine-version-probe-<uuid>.uproject`, spawned by a downstream
+tasklist's run: **PPID 1**, cwd in `/Users/Shared/Epic Games/UE_5.8/…`, **no** marker on
+argv, 78 minutes old, 199% CPU, and ignoring `SIGTERM`. It had chdir'd out of the
+worktree *and* exec'd an argv that says nothing — precisely the shape key 3 exists
+for, on the one platform where key 3 is dark. Under SIP `ps -E` is accepted and prints
+no environment, so that shape had **no key at all** on the platform this fleet runs
+on, and `test/reapenv.sh` skipped its end-to-end half here. Key 3's own notes used to
+call that hole "belt-and-braces, not a proven hole"; it is proven now.
+
+A PPID walk cannot close it either. `stop_reap_tree` and `chief_scan_descendants`
+walk edges *down* from a live driver; once the driver dies its descendants are
+re-parented to launchd and there is no edge back to anything chief could start from.
+The tree has to be **recorded while it is still connected**.
+
+So it is. While a run is live, its driver snapshots its own process tree into the run
+registry beside its `<pid>.run` file — one `<driver pid>.ledger` holding the run id,
+the PID namespace those pids are numbered in, and `pid · start time · command` per
+live descendant — once per scheduler poll. `chief reap` then treats a still-live pid
+found in a **dead** run's ledger as a candidate, and reports it under `[ledger]` with
+the record as its evidence rather than a read of the process:
+
+```
+       · pid 75348   [ledger] recorded in run downstream-…-1757…-75336's tree · start time matched
+         ↳ repo /Users/you/Development/downstream · run downstream-…-1757…-75336
+         ↳ ORPHAN — a run file in /Users/you/.chief/runs claims this run, and its driver (pid 75336) is gone
+         UnrealEditor-Cmd -unattended /var/tmp/engine-version-probe-0f3c.uproject
+```
+
+**PID reuse is the failure to refuse.** A ledger is a list of numbers and a number
+outlives the process that wore it, so every entry carries the start time its pid had
+when it was recorded. A live pid whose start time does *not* match is reported
+`PID REUSED · LEFT ALONE` and never signalled. Both sides of that comparison go
+through one function (`chief_ledger_starttime`): a second reader spelling the token
+differently would not degrade the check, it would invert it.
+
+**The bound, stated rather than argued.** The cadence is `POLL_SECONDS` (default 5s),
+so a process spawned, orphaned *and* abandoned inside one poll interval was never
+recorded. The key bounds what can escape; it does not eliminate it. Where a host
+cannot report start times at all, the key is *inactive* rather than unchecked
+(`chief_ledger_available`), exactly as key 3 is under SIP.
+
+**An empty sweep names the keys that carried it.** On a host with no environment read,
+`chief reap` follows "no orphaned chief processes of any kind" with a line saying the
+inherited-`$CHIEF_RUN_ID` key was inactive and that cwd + argv + the ledger carried the
+sweep instead — and, if the ledger key is dark too, that *both* were inactive and this
+shape would not have been found. An empty result is only good news when you know which
+keys produced it.
+
+`test/reap-escaped.sh` rebuilds the field process (leaves the worktree, execs a boring
+argv, ignores `TERM`, re-parented to PID 1 when its driver is `SIGKILL`ed with the run
+file still reading `running`), asks all four keys one at a time and **prints each
+answer**, so the log records which key saw it on which platform instead of inferring
+either. Its part B plants the reused-pid entry and pins that it is reported and left
+alone. It is skipped on no platform — a skip is how this shape stayed invisible.
 
 ## The registry tells the truth in both directions
 

@@ -43,22 +43,37 @@
 #      export already exists, this only reads it. Same run id, so the same repo
 #      scoping applies. Union, not replacement: matching ANY of the three keys makes
 #      a process a candidate, so neither of the other two can regress.
-#      Be honest about how much this is actually carrying: a field census of 176
+#      How much it actually carries, and where it stops. A field census of 176
 #      orphans across three repos found key 1 covering MORE than expected — the bare
 #      `yes` load-generators (whose cwd `lsof` still reported after the worktree was
 #      deleted) and a whole server + npm/tsx tree both sat squarely inside it. The
 #      167 leaked integration-test servers that ran out of a temp dir were the
 #      suspected escapees, but their cwd was never recorded before they were killed,
-#      so whether they beat key 1 is UNVERIFIED. This key is therefore belt-and-
-#      braces, not a proven hole: it exists for the process that escapes BOTH of the
-#      others — chdir'd out of the worktree AND wearing an argv that says nothing —
-#      which is the one shape inheritance can still see. test/teardown.sh part 4
-#      builds exactly that process (detached from the tree, `sleep` for a command
-#      line, in a temp dir) and pins that this key finds it and stops it.
+#      so whether they beat key 1 was never established. The shape this key exists
+#      for, though, is no longer a hypothesis — it has been seen:
+#      FIELD RECORD, 2026-09-11, macOS 26.5. Four runs were cut off around 00:58,
+#      every driver pid dead and every state file still reading `running`. A manual
+#      sweep found `UnrealEditor-Cmd -unattended` on a temporary
+#      `engine-version-probe-<uuid>.uproject` spawned by a downstream tasklist's run:
+#      PPID 1, cwd in `/Users/Shared/Epic Games/UE_5.8/…`, NO marker on argv, 78
+#      minutes old, 199% CPU, and ignoring SIGTERM. That is exactly the residual
+#      shape — chdir'd out of the worktree AND wearing an argv that says nothing —
+#      and it was burning two cores on the one platform where the key built for it
+#      is dark. So this key is a PROVEN hole rather than belt-and-braces, and the
+#      proof arrived from the direction that makes it worst.
 #      Where a host will not show another process's environment (macOS since SIP
-#      accepts `ps -E` and silently prints none), this key degrades to nothing and
-#      keys 1 and 2 carry the sweep — the availability is PROBED, never assumed, so
-#      an empty read is reported as "the key is inactive" and never as "no orphans".
+#      accepts `ps -E` and silently prints none), this key degrades to NOTHING. The
+#      availability is PROBED, never assumed, so an empty read is reported as "the
+#      key is inactive" and never as "no orphans" — but an inactive key is not a
+#      covered shape, and cwd + argv alone do not cover this one. What covers it on
+#      such a host is KEY 4 below, which reads no environment at all; the report
+#      says so in the same breath as "inactive", so an empty sweep on macOS can
+#      never be read as "nothing escaped".
+#      Coverage is RECORDED rather than inferred: test/reap-escaped.sh rebuilds the
+#      field process and asks all four keys one at a time, printing each answer, so
+#      the log says which key saw it on which platform. test/teardown.sh part 4 pins
+#      this key itself on hosts that have it (detached from the tree, `sleep` for a
+#      command line, in a temp dir).
 #      Inheritance is also what makes key 3 the DANGEROUS one, so it alone is gated —
 #      see "the inherited marker's blast radius" below.
 #   4. THE DESCENDANT LEDGER (engine/ledger.sh), which is the same residual case
@@ -1481,10 +1496,25 @@ chief_reap_main() {
       # "of any kind" is load-bearing. This line used to be true of agent work only,
       # while nine abandoned views ran behind it — see "the other orphan" above.
       echo "chief reap: no orphaned chief processes of any kind — no agent work, no abandoned monitor views ($where)"
-      # An empty env read is not evidence of an empty host — say which keys actually ran.
-      [ -n "$(chief_env_key_mode)" ] || echo "  (this platform will not show another" \
-        "process's environment, so the inherited-\$CHIEF_RUN_ID key was inactive —" \
-        "cwd + argv carried this sweep)"
+      # An empty env read is not evidence of an empty host — say which keys actually
+      # ran IN ITS PLACE. Naming only cwd + argv here would be misleading on exactly
+      # the host where it matters: the 2026-09-11 field escape (an unattended engine
+      # left over from a dead run, 199% CPU, ignoring TERM) wore neither of them, and
+      # what covers it is key 4. If key 4 is dark too, that is the case an operator
+      # must not read as a clean host, so it is stated outright.
+      if [ -z "$(chief_env_key_mode)" ]; then
+        if chief_ledger_available; then
+          echo "  (this platform will not show another process's environment, so the" \
+            "inherited-\$CHIEF_RUN_ID key was inactive — cwd + argv + the descendant" \
+            "ledger, key 4, recorded by each live run, carried this sweep)"
+        else
+          echo "  (this platform will not show another process's environment AND reports" \
+            "no process start times, so the inherited-\$CHIEF_RUN_ID key AND the" \
+            "descendant-ledger key were BOTH inactive — only cwd + argv carried this" \
+            "sweep, and a descendant that left its worktree with a boring argv would not" \
+            "have been found by any key)"
+        fi
+      fi
     fi
     if [ -n "$CHIEF_ORPHANS" ]; then
       # shellcheck disable=SC2086

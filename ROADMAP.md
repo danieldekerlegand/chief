@@ -6,7 +6,7 @@
 > tasklist of user stories + acceptance criteria into merged, verified work with no silent bad
 > merges — across any repo, any agent provider.*
 
-**Status:** Shipping & self-hosting (**v0.9.23** — [`VERSION`](VERSION) is the source of truth; this
+**Status:** Shipping & self-hosting (**v0.9.24** — [`VERSION`](VERSION) is the source of truth; this
 line is checked against it by `test/doc-sync.sh`) — the built program is **37/37 tasklists merged**
 (`77`–`113`, every record in [`tasks/chief/completed/`](tasks/chief/completed/) stamped with a real
 `mergedToMain`); the live head is iteration-outcome honesty and the gates around it ·
@@ -103,7 +103,7 @@ steady-state, not a discrete tasklist.
 | ✅ | Concurrency scheduler — `-p N`, `dependsOn` ordering, `touches` conflict-domains, `chief run -n` dry-run waves | — |
 | ✅ | Resume & resilience — branch reuse, dead-pid lock auto-clear, `RATE_LIMIT_RETRY` pause/resume, `RESET=1` | — |
 | ✅ | Merge-safety hardening — no-work guard, verify-failure re-engagement, mid-merge crash recovery | — |
-| ✅ | Orphan reaping — reap by cwd, argv `--chief-run` marker, and inherited `$CHIEF_RUN_ID` (belt-and-braces) | `77-reap-by-inherited-run-marker` · `bd030a6` |
+| ✅ | Orphan reaping — reap by cwd, argv `--chief-run` marker, and inherited `$CHIEF_RUN_ID` (then thought belt-and-braces; proven a real hole, and covered by a fourth key, in `122`) | `77-reap-by-inherited-run-marker` · `bd030a6` |
 | ✅ | Operator pause/resume — `chief pause`/`chief resume` (`--all` = fleet-wide) with **drain** semantics: the iteration in flight runs to completion, a finished agent loop still verifies + merges, the rest park as `paused` with branch + worktree kept | — |
 | ✅ | Liveliness records — a per-tasklist fine-grained record (`engine/live.sh`: iteration · story · phase · last activity) next to the coarse state, surfaced by `chief ps`/`chief monitor` so "running" vs. hung is visible | — |
 | ✅ | Driver-level usage-limit re-dispatch — the scheduler waits out a `rate-limited` tasklist and re-dispatches it itself, bounded by `RATE_LIMIT_REDISPATCH_MAX` (no operator needed; separate from the per-worker `RATE_LIMIT_RETRY` knobs) | — |
