@@ -443,6 +443,13 @@ finalize_merged() {
   # is written ONCE, here, after the last rebase this tasklist will ever see, so it is
   # where "who approved this, and why" can be kept for a reader six months out. Purely
   # additive and never fatal: no verdict, no jq, or a bad read all leave $rec as it was.
+  # THE MERGE POLICY LAYER'S APPROVAL, on the same terms and for the same reason:
+  # zones_clear_record deletes the verdict file at the merge site a few lines after
+  # this runs, so the file alone is no record of who allowed a held branch through
+  # (engine/zones.sh's zones_stamp_record says what it carries). Guarded by command -v
+  # like the two stamps around it — an older install simply does not stamp.
+  command -v zones_stamp_record >/dev/null 2>&1 \
+    && zones_stamp_record "$rec" "${STATE:-}" "$name" 2>/dev/null || true
   local _fm_vf
   if command -v decision_verdict_file >/dev/null 2>&1; then
     _fm_vf="$(decision_verdict_file "$CHIEF_PROJECT" "$name")"

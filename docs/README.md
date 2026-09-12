@@ -30,6 +30,7 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 - [The per-story diff-size budget](reference/diff-budget.md)
 - [The event stream — chief's machine-readable status contract](reference/events.md)
 - [Overlap zones — where a green gate is not enough authority to merge](reference/overlap-zones.md)
+- [Resolution deletions — the hold that stops a merge from erasing merged work](reference/resolution-deletions.md)
 - [Provider unavailability — an iteration that never reached the model](reference/provider-unavailability.md)
 - [Roadmap input contract (`chief gen`)](reference/roadmap-input.md)
 - [`chief status` — what is left, and what can start now](reference/status.md)

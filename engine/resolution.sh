@@ -301,3 +301,88 @@ resolution_render() {
     }'
   return 0
 }
+
+# ── the HOLD: a green gate is not authority to erase already-merged work ─────
+#
+# The finding joins the merge phase's ONE policy question (zones_merge_gate) as
+# zone-shaped hold lines, exactly the way engine/budget.sh's over-budget stories do.
+# One checksum, one request file, one `chief approve`, whether a branch tripped a
+# declared zone, an oversized story, a resolution deletion, or all three — asking a
+# person three times about one branch is how a gate becomes noise.
+#
+# ONE DIFFERENCE FROM THE OTHER TWO RULES, and it is the reason this file states it
+# rather than inheriting it: a `review` zone is opt-in (a repo declares it) and the
+# diff budget's teeth are opt-in (CHIEF_DIFF_BUDGET=block). THIS RULE IS ALWAYS
+# ARMED. It holds with no .chief/zones.conf, with every declared zone set to
+# `serialize`, and under CHIEF_DIFF_BUDGET=warn and =off — because the thing it
+# reports is not a policy preference about where review is warranted, it is evidence
+# that work which already passed this repo's gates and merged would be UNDONE. There
+# is no repo for which that is the default-acceptable outcome, and the incident it
+# was built from happened in a repo with no zones.conf at all.
+#
+# The cost of asking is a FILE-EXISTENCE TEST on every branch that never had a
+# conflict handed to it (resolution_deletions' fast path), which is why this runs on
+# every merge rather than behind a condition.
+
+# resolution_evaluate STATE NAME REPO BASE [BRANCH] — measure, into a global.
+#
+# A GLOBAL and not stdout, deliberately: zones_merge_gate composes its hold lines
+# inside a `$( )`, and a global written in a subshell is lost (the same discipline
+# engine/concurrency.sh's render states). The caller samples ONCE in the parent, then
+# the two readers below — the log note and the hold lines — spend the same records.
+# Measuring twice would also mean a branch could be DESCRIBED with one finding and
+# HELD on another if the repo changed underneath, which is a shape nobody could debug.
+resolution_evaluate() {
+  # A shell variable and not an EXPORTED one: a subshell inherits it either way, and
+  # exporting would copy a finding that can run to hundreds of lines into the
+  # environment of every process the merge phase goes on to start.
+  RESOLUTION_RECORDS="$(resolution_deletions "$3" "$1" "$2" "$4" "${5:-}")"
+  return 0
+}
+
+# resolution_holds [LIMIT] -> the flagged lines as ZONE-SHAPED hold lines
+#     <policy> <TAB> <matcher> <TAB> <what matched it> <TAB> <reason>
+# read from the global resolution_evaluate set. Nothing at all when nothing was
+# erased — including when the only records are UNCHECKED, which is a path chief could
+# not compare and not evidence that anything was lost (the log note still says so).
+#
+# The FIRST line is a summary carrying the id of the WHOLE finding, and it is what
+# binds the approval. zones_digest hashes the hold lines it is given, so without it a
+# truncated list would bind only the lines that survived truncation and a
+# re-resolution that erased a different set of the same size would reuse the old YES.
+# With it, any change to any flagged line changes the id and `chief approve` asks again.
+resolution_holds() {
+  printf '%s\n' "${RESOLUTION_RECORDS:-}" | LC_ALL=C awk -F'\t' -v lim="${1:-20}" -v id="$(
+      printf '%s\n' "${RESOLUTION_RECORDS:-}" | LC_ALL=C sort | cksum | tr -s ' ' '-' | tr -d ' \n')" '
+    $1 == "LINE" { n++; file[n] = $2; sha[n] = $3; sib[n] = $4; subj[n] = $5; text[n] = $6 }
+    END {
+      if (n == 0) exit 0
+      printf "review\tresolution:deleted\t%d line(s) of already-merged work would be erased\tthis branch'\''s conflict resolution dropped them; the approval is bound to this exact set (id %s)\n", n, id
+      for (i = 1; i <= n && i <= lim; i++)
+        printf "review\tresolution:deleted\t%s: %s\tadded to the base by %s%s — %s\n", \
+          file[i], text[i], sha[i], (sib[i] == "" ? "" : " (tasklist " sib[i] ")"), subj[i]
+      if (n > lim)
+        printf "review\tresolution:deleted\t… and %d more erased line(s) (%d in total)\tthe full list is in the worker log — docs/reference/resolution-deletions.md\n", n - lim, n
+    }'
+  return 0
+}
+
+# resolution_note NAME — the paragraph in the worker log, beside budget_note's.
+# Prints the UNCHECKED records too, and prints them even when nothing was flagged:
+# "I could not compare this path" and "I compared it and it is clean" are different
+# answers, and only one of them is honest about a binary or renamed file.
+resolution_note() {
+  local n u
+  [ -n "${RESOLUTION_RECORDS:-}" ] || return 0
+  n="$(printf '%s\n' "$RESOLUTION_RECORDS" | LC_ALL=C awk -F'\t' '$1 == "LINE" { n++ } END { print n + 0 }')"
+  u="$(printf '%s\n' "$RESOLUTION_RECORDS" | LC_ALL=C awk -F'\t' '$1 == "UNCHECKED" { n++ } END { print n + 0 }')"
+  if [ "$n" -gt 0 ]; then
+    echo "!! $1: this branch's CONFLICT RESOLUTION would ERASE $n line(s) of already-merged work —"
+    echo "   they are on ${CHIEF_BASE_BRANCH:-the base}, this branch's own pre-rebase diff never removed them, and they are gone at its tip:"
+  elif [ "$u" -gt 0 ]; then
+    echo "   resolution check: nothing erased, but $u path(s) could not be compared —"
+  fi
+  resolution_render "$RESOLUTION_RECORDS"
+  [ "$n" -gt 0 ] && echo "   Restore them on the branch and re-run, or approve the loss deliberately: chief approve $1 -m '<why>'"
+  return 0
+}

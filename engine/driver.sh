@@ -68,7 +68,10 @@
 #     domain declared an OVERLAP ZONE with policy `review` (engine/zones.sh,
 #     docs/reference/overlap-zones.md), or a story blew the per-story DIFF-SIZE
 #     BUDGET under CHIEF_DIFF_BUDGET=block (engine/budget.sh,
-#     docs/reference/diff-budget.md). One state, one approval, for both.
+#     docs/reference/diff-budget.md), or its CONFLICT RESOLUTION would erase
+#     already-merged work (engine/resolution.sh,
+#     docs/reference/resolution-deletions.md — the one rule of the three that is
+#     always armed). One state, one approval, for all three.
 #     The merge floor ALREADY RAN: it is rebased onto the latest base and its verify
 #     came back green, and it is held anyway, because the risk the layer exists for —
 #     two parallel branches whose designs disagree — is invisible to every automated
@@ -3063,7 +3066,7 @@ run_worker() {
       # One gate, one approval — a declared zone and an oversized story never both ask.
       if ! zones_merge_gate "$name" "$branch" "$work_repo" "$work_base" "$STATE" \
                             "$(touches_of "$name" | tr '\n' ' ')"; then
-        worker_park awaiting-approval "the merge policy layer (overlap zone / diff budget) — rebased + verified, held for a human" \
+        worker_park awaiting-approval "the merge policy layer (overlap zone / diff budget / erased merged work) — rebased + verified, held for a human" \
           "   Branch $branch is kept (rebased, green) — approve what no gate can check, then re-run:  chief approve $name && chief run"
         exit 0
       fi
@@ -3780,8 +3783,9 @@ if [ -n "$indecision" ]; then
   # decision an operator answers today and one that quietly holds up a band for a week.
   [ -n "$dechold" ] && echo "    (held behind the answer, NOT blocked:$dechold — the next run schedules them)"
 fi
-# Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
-# or an over-budget story (docs/reference/diff-budget.md). Reported apart from the
+# Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md),
+# an over-budget story (docs/reference/diff-budget.md), or a conflict resolution that
+# would erase already-merged work (docs/reference/resolution-deletions.md). Reported apart from the
 # three holds above because what is true of this one is stronger: the branch is
 # rebased onto the latest base and its verify came back green. Nothing is wrong with
 # it — the repo declared that green is not sufficient authority to merge this change.

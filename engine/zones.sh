@@ -34,15 +34,21 @@
 #     list AND the zones it matched (`zones_digest`). Approving a branch does not
 #     pre-approve the next thing it does, and widening the registry re-asks.
 #
-# THE OTHER RULE IN THE SAME LAYER. `zones_merge_gate` below is the merge phase's ONE
-# policy question, and it asks two rules: the declared zones here, and the per-story
-# DIFF-SIZE BUDGET in engine/budget.sh (which reports on every branch and, under
-# CHIEF_DIFF_BUDGET=block, contributes hold lines in this file's own zone shape).
-# They are unified at the gate rather than stacked as two checkpoints because they
-# are the same question — "this branch is green and still needs a person" — and a
-# branch that trips both must be asked about ONCE. A plan approval (docs/plan-review.md)
-# is the genuinely different decision: it is asked BEFORE any code exists, about
-# intent; this one is asked AFTER the floor has run, about a finished, verified diff.
+# THE OTHER RULES IN THE SAME LAYER. `zones_merge_gate` below is the merge phase's
+# ONE policy question, and it asks three rules: the declared zones here, the
+# per-story DIFF-SIZE BUDGET in engine/budget.sh (which reports on every branch and,
+# under CHIEF_DIFF_BUDGET=block, contributes hold lines in this file's own zone
+# shape), and what a CONFLICT RESOLUTION DELETED of already-merged work
+# (engine/resolution.sh). They are unified at the gate rather than stacked as three
+# checkpoints because they are the same question — "this branch is green and still
+# needs a person" — and a branch that trips all three must be asked about ONCE.
+# The third differs from the first two in one way worth stating here: both of these
+# are OPT-IN (a repo declares a zone; an operator sets CHIEF_DIFF_BUDGET=block) and
+# the resolution rule is ALWAYS ARMED, because it does not report a preference about
+# where review is warranted — it reports that merged work would be undone.
+# A plan approval (docs/plan-review.md) is the genuinely different decision: it is
+# asked BEFORE any code exists, about intent; this one is asked AFTER the floor has
+# run, about a finished, verified diff.
 #
 # REGISTRY FORMAT (docs/reference/overlap-zones.md). One zone per line, in
 # `.chief/zones.conf` (override with $CHIEF_ZONES); `#` starts a comment:
@@ -240,8 +246,21 @@ zones_merge_gate() {
   budget_evaluate "$name" "$repo" "$scope" "$state"
   budget_annotate "${SNAP:-}/$name.json" "$state" "$name"
   budget_note "$state" "$name"
+  # THE POLICY LAYER'S THIRD RULE, and the only one that is ALWAYS ARMED
+  # (engine/resolution.sh · docs/reference/resolution-deletions.md): what a conflict
+  # resolution on this branch DELETED of work that had already merged. A `review`
+  # zone is opt-in and the budget's teeth are opt-in; this is not, because it does
+  # not report a preference about where review is warranted — it reports that work
+  # which already passed this repo's gates would be UNDONE. Measured in the PARENT,
+  # because the composition below is a subshell and a global written there is lost.
+  # $scope and not $base on purpose: in the merge queue it is the tip this member was
+  # stacked on, so the comparison stays per BRANCH and a member is never charged with
+  # what a peer earlier in the batch removed.
+  resolution_evaluate "$state" "$name" "$repo" "$scope" "$branch"
+  resolution_note "$name"
   zmatch="$( [ -n "$conf" ] && zones_match review "$conf" "$files" "$touches"
-             budget_holds "$state" "$name" )"
+             budget_holds "$state" "$name"
+             resolution_holds )"
   [ -n "$zmatch" ] || return 0                    # nothing in the policy layer matched
   # Bound to WHAT it approved: the changed-file list plus the zones it matched. An
   # approval for a previous change of this branch does not carry over, and widening
@@ -259,7 +278,7 @@ zones_merge_gate() {
   # to record the park: what was held, which zone held it, and what is actually being
   # asked — which is never "is this green" (it is), but "does this design agree".
   echo "!! $name HELD BY THE MERGE POLICY LAYER — it is rebased onto $base and its verify came back GREEN;"
-  echo "   it is not merged because it changed something this repo declared needs a human first:"
+  echo "   it is not merged because the merge policy layer matched what it changed:"
   zones_render "$zmatch"
   echo "   The merge floor already ran. What is being asked is the thing no gate can check: whether this"
   echo "   branch's design agrees with what else landed. The request: $(zones_request_file "$state" "$name")"
@@ -277,6 +296,32 @@ zones_clear_record() {
   local state="$1" name="$2"
   rm -f "$(zones_request_file "$state" "$name")" \
         "$(zones_approval_file "$state" "$name")" 2>/dev/null || true
+}
+
+# zones_stamp_record COMPLETED_JSON STATE NAME — carry the APPROVAL past the merge.
+#
+# zones_clear_record above deletes the verdict file the moment the branch lands, and
+# that is right — a verdict whose subject is now on the base can only mislead a later
+# reader into thinking something is actionable. But then the file alone is no record:
+# six months out, "who allowed this branch to erase two dozen registered commands, and
+# what did they say about it" would have no answer anywhere. So the verdict is folded
+# into completed/<name>.json, which is written ONCE (finalize_merged, after the last
+# rebase this tasklist will ever see) and is the same place a DECISION tasklist's
+# verdict lands. What it carries is what was approved: who, when, the note — and the
+# `zones` array, which for a resolution hold IS the list of erased lines.
+#
+# Purely additive and never fatal: no approval, no jq, or an unreadable record all
+# leave the completed record exactly as it was. Called BEFORE zones_clear_record by
+# construction — finalize_merged runs first at both merge sites.
+zones_stamp_record() {
+  local rec="$1" app tmp
+  app="$(zones_approval_file "$2" "$3")"
+  [ -s "$app" ] && [ -s "$rec" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  tmp="$rec.approval.$$"
+  jq --slurpfile a "$app" '.approval = $a[0]' "$rec" > "$tmp" 2>/dev/null && mv "$tmp" "$rec" \
+    || rm -f "$tmp" 2>/dev/null
+  return 0
 }
 
 # zones_branch_status REPO REQUEST — return 0 for a live, unmerged branch, 1 for a

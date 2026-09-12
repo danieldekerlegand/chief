@@ -364,7 +364,7 @@ mq_merge_member() {
   if ! zones_merge_gate "$name" "$branch" "$repo" "$base" "$STATE" \
                         "$(touches_of "$name" | tr '\n' ' ')" "$scope"; then
     mq_member_park "$name" awaiting-approval \
-      "the merge policy layer (overlap zone / diff budget) — rebased + verified, held for a human" \
+      "the merge policy layer (overlap zone / diff budget / erased merged work) — rebased + verified, held for a human" \
       "   Branch $branch is kept (rebased, green) — approve what no gate can check, then re-run:  chief approve $name && chief run"
     return 1
   fi

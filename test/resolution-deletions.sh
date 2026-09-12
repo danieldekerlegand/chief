@@ -304,6 +304,217 @@ has 'binary' "$(resolution_render "$OUT")" \
   && check 0 "resolution_render renders the UNCHECKED record with its reason" \
   || check 1 "resolution_render renders the UNCHECKED record with its reason: <$OUT>"
 
+
+# ── the HOLD (US-2): the finding joins the merge policy layer ────────────────
+# Still no driver — zones.sh's gate is asked directly, against the same temp repos.
+# live.sh only defines functions (zones_merge_gate keeps a liveliness record); budget.sh
+# is the layer's second rule and the gate calls it unconditionally.
+# shellcheck source=engine/live.sh
+. "$ROOT/engine/live.sh"
+# shellcheck source=engine/budget.sh
+. "$ROOT/engine/budget.sh"
+# shellcheck source=engine/zones.sh
+. "$ROOT/engine/zones.sh"
+
+# The incident as a REUSABLE fixture: a branch whose resolution keeps its own stale
+# copy of the shared file, with the handoff recorded. Leaves $R rebased and resolved,
+# $STATE holding the record, and CHIEF_PROJECT pointing at the repo (the gate resolves
+# .chief/zones.conf relative to it, and must never reach chief's own).
+incident_repo() {   # $1 = name, $2… = the sibling's lines to land on the base
+  new_repo "$1"
+  local nm="$1"; shift          # $@ is now the sibling's lines and nothing else
+  printf 'alpha\nbeta\ngamma\nBRANCH_TAIL\n' > "$R/shared.txt"
+  git -C "$R" commit -q -am "feat: [US-1] - branch edits the shared file"
+  land_on_base "$R" "77-register-commands" shared.txt "$(printf 'alpha\nbeta\ngamma\n'; printf '%s\n' "$@")"
+  resolution_record "$STATE" "$nm" "$R" work main
+  git -C "$R" rebase main >/dev/null 2>&1 && fail "fixture $nm was supposed to conflict"
+  git -C "$R" checkout -q --theirs -- shared.txt     # the incident: OUR whole file wins
+  git -C "$R" add shared.txt
+  GIT_EDITOR=true git -C "$R" rebase --continue >/dev/null 2>&1
+  export CHIEF_PROJECT="$R"
+  unset ZONES_CONF
+}
+gate() {   # $1 = name -> the gate's own log; sets GATE_RC
+  GATE_RC=0
+  zones_merge_gate "$1" work "$R" main "$STATE" "" 2>&1 || GATE_RC=$?
+}
+req_of() { jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | @tsv' \
+             "$(zones_request_file "$STATE" "$1")" 2>/dev/null; }
+
+echo
+echo "== J. the hold is ALWAYS ARMED — it is not a declared zone and not the budget =="
+# The rule this file exists for is the only one in the policy layer that a repo cannot
+# be missing. A `review` zone is opt-in; CHIEF_DIFF_BUDGET=block is opt-in; the
+# incident happened in a repo with neither. Each arm below is one of the ways a repo
+# can have the policy layer switched all the way off.
+incident_repo armed REGISTERED_COMMAND_delta
+unset CHIEF_DIFF_BUDGET
+gate armed
+[ "$GATE_RC" = 1 ] && check 0 "with NO .chief/zones.conf at all, the merge is HELD" \
+                   || check 1 "with no zones.conf the gate returned $GATE_RC (want 1)"
+printf 'serialize\tpath:*\n' > "$R/zones.conf"; ZONES_CONF="$R/zones.conf"
+gate armed
+[ "$GATE_RC" = 1 ] && check 0 "with every declared zone set to 'serialize', still HELD" \
+                   || check 1 "with a serialize-only registry the gate returned $GATE_RC (want 1)"
+unset ZONES_CONF; rm -f "$R/zones.conf"
+CHIEF_DIFF_BUDGET=warn gate armed
+[ "$GATE_RC" = 1 ] && check 0 "under CHIEF_DIFF_BUDGET=warn, still HELD" \
+                   || check 1 "under CHIEF_DIFF_BUDGET=warn the gate returned $GATE_RC (want 1)"
+CHIEF_DIFF_BUDGET=off gate armed
+[ "$GATE_RC" = 1 ] && check 0 "under CHIEF_DIFF_BUDGET=off, still HELD" \
+                   || check 1 "under CHIEF_DIFF_BUDGET=off the gate returned $GATE_RC (want 1)"
+
+echo
+echo "== K. the hold NAMES the loss, in all four places a person reads it =="
+LOG="$(gate armed; :)"
+has REGISTERED_COMMAND_delta "$LOG" && check 0 "the worker log carries the erased line" \
+                                    || check 1 "the worker log carries the erased line: <$LOG>"
+has shared.txt "$LOG" && check 0 "…and the file" || check 1 "…and the file: <$LOG>"
+has 77-register-commands "$LOG" && check 0 "…and the sibling tasklist whose work it was" \
+                                || check 1 "…and the sibling tasklist: <$LOG>"
+has 'would ERASE 1 line' "$LOG" && check 0 "…and says plainly what is about to happen" \
+                                || check 1 "…and says plainly what is about to happen: <$LOG>"
+REQ="$(req_of armed)"
+has 'resolution:deleted' "$REQ" && check 0 "the approval request carries the finding as a review zone" \
+                                || check 1 "the approval request carries the finding: <$REQ>"
+has REGISTERED_COMMAND_delta "$REQ" && check 0 "…with the erased line in it" \
+                                    || check 1 "…with the erased line in it: <$REQ>"
+has 77-register-commands "$REQ" && check 0 "…and the sibling tasklist" \
+                                || check 1 "…and the sibling tasklist: <$REQ>"
+# The run summary's awaiting-approval block renders exactly this (driver.sh), and
+# `chief approve --list` is zones_show. Both read the request file, so both are pinned
+# here rather than assumed from the fact that the file is correct.
+has REGISTERED_COMMAND_delta "$(zones_render "$REQ")" \
+  && check 0 "the run summary's awaiting-approval block names the erased line" \
+  || check 1 "the run summary's awaiting-approval block names the erased line"
+has REGISTERED_COMMAND_delta "$(zones_show "$STATE" armed)" \
+  && check 0 "chief approve --list names the erased line" \
+  || check 1 "chief approve --list names the erased line: <$(zones_show "$STATE" armed)>"
+
+echo
+echo "== L. the override, and what it is BOUND to =="
+# The binding is the whole point: approving THIS loss must not pre-approve a
+# re-resolution that loses something else. Both fixtures below change the same one
+# file, so the changed-file half of the digest is identical and only the flagged
+# lines can move it.
+incident_repo bound DELTA_ONE DELTA_TWO
+# A resolution that keeps DELTA_ONE and erases only DELTA_TWO.
+printf 'alpha\nbeta\ngamma\nDELTA_ONE\nBRANCH_TAIL\n' > "$R/shared.txt"
+git -C "$R" commit -q --amend --no-edit -a
+gate bound
+[ "$GATE_RC" = 1 ] && check 0 "a resolution that erases one of the two base lines is HELD" \
+                   || check 1 "a resolution that erases one base line returned $GATE_RC (want 1)"
+CHANGE1="$(jq -r .change "$(zones_request_file "$STATE" bound)")"
+zones_approve "$STATE" bound "we meant to drop it" >/dev/null 2>&1
+gate bound
+[ "$GATE_RC" = 0 ] && check 0 "chief approve <name> -m <reason> releases exactly that loss" \
+                   || check 1 "the approved branch is still held ($GATE_RC)"
+# The re-resolution: same file, same story, a DIFFERENT line erased.
+printf 'alpha\nbeta\ngamma\nBRANCH_TAIL\n' > "$R/shared.txt"
+git -C "$R" commit -q --amend --no-edit -a
+gate bound
+[ "$GATE_RC" = 1 ] && check 0 "a re-resolution that erases something DIFFERENT asks again" \
+                   || check 1 "a re-resolution that erases more was let through ($GATE_RC)"
+CHANGE2="$(jq -r .change "$(zones_request_file "$STATE" bound)")"
+[ "$CHANGE1" != "$CHANGE2" ] && check 0 "…because the approval id is over the flagged lines ($CHANGE1 -> $CHANGE2)" \
+                             || check 1 "the approval id did not move: $CHANGE1"
+# The approval outlives the merge in completed/, because zones_clear_record deletes
+# the file. finalize_merged stamps it there first.
+zones_approve "$STATE" bound "the second loss too" >/dev/null 2>&1
+printf '{"project":"t","userStories":[]}\n' > "$WORK/bound-completed.json"
+zones_stamp_record "$WORK/bound-completed.json" "$STATE" bound
+[ "$(jq -r '.approval.note' "$WORK/bound-completed.json")" = "the second loss too" ] \
+  && check 0 "the completed record carries the approval's note" \
+  || check 1 "the completed record carries the approval's note: $(cat "$WORK/bound-completed.json")"
+[ -n "$(jq -r '.approval.by' "$WORK/bound-completed.json")" ] \
+  && check 0 "…and who gave it" || check 1 "…and who gave it"
+[ "$(jq -r '.approval.at' "$WORK/bound-completed.json")" -gt 0 ] \
+  && check 0 "…and when" || check 1 "…and when"
+has DELTA_ONE "$(jq -r '(.approval.zones // [])[] | .matched' "$WORK/bound-completed.json")" \
+  && check 0 "…and the lines it covered" \
+  || check 1 "…and the lines it covered: $(jq -c '.approval.zones' "$WORK/bound-completed.json")"
+zones_clear_record "$STATE" bound
+[ -n "$(jq -r '.approval.zones[0].zone' "$WORK/bound-completed.json")" ] \
+  && check 0 "…and it survives zones_clear_record, which deletes the file on merge" \
+  || check 1 "the record did not survive the clear"
+
+echo
+echo "== M. a long list is truncated WITH A COUNT, never silently =="
+RESOLUTION_RECORDS="$(resolution_deletions "$R" "$STATE" bound main work)"
+HOLDS="$(resolution_holds 1)"
+has 'and 1 more erased line(s) (2 in total)' "$HOLDS" \
+  && check 0 "the truncated hold states how many it is not showing, and the total" \
+  || check 1 "the truncated hold does not state the count: <$HOLDS>"
+[ "$(printf '%s\n' "$HOLDS" | LC_ALL=C awk -F'\t' '$2 == "resolution:deleted"' | wc -l | tr -d ' ')" = 3 ] \
+  && check 0 "…and the summary line is still there above it (summary + 1 + truncation)" \
+  || check 1 "…truncation produced $(printf '%s\n' "$HOLDS" | wc -l) line(s)"
+has 'id ' "$(printf '%s\n' "$HOLDS" | head -1)" \
+  && check 0 "the summary line carries the id of the WHOLE finding, so truncation cannot loosen the binding" \
+  || check 1 "the summary line carries no full-set id: <$HOLDS>"
+
+echo
+echo "== N. the run condition: the branch that never had a conflict pays no git =="
+# This is why the check is asked on EVERY merge rather than behind a condition. A
+# branch with no recorded resolution must cost a file-existence test and nothing else,
+# so the count asserted here is git INVOCATIONS, not wall time (which is load-bearing
+# on nobody's machine but measurable on everybody's).
+new_repo free
+mkdir -p "$WORK/shim"
+REAL_GIT="$(command -v git)"
+cat > "$WORK/shim/git" <<EOS
+#!/bin/sh
+printf 'x' >> "\$GITCOUNT"
+exec "$REAL_GIT" "\$@"
+EOS
+chmod +x "$WORK/shim/git"
+export GITCOUNT="$WORK/gitcount"; : > "$GITCOUNT"
+OLDPATH="$PATH"; PATH="$WORK/shim:$PATH"
+resolution_deletions "$R" "$STATE" free main work >/dev/null 2>&1
+NGIT="$(wc -c < "$GITCOUNT" | tr -d ' ')"
+: > "$GITCOUNT"
+resolution_deletions "$R" "$STATE" bound main work >/dev/null 2>&1   # no record in THIS state dir either
+PATH="$OLDPATH"
+[ "$NGIT" = 0 ] && check 0 "no recorded resolution: ZERO git invocations (one stat, then nothing)" \
+                || check 1 "the free path spent $NGIT git invocation(s)"
+: > "$GITCOUNT"
+PATH="$WORK/shim:$PATH"
+incident_repo cost REGISTERED_COMMAND_delta
+: > "$GITCOUNT"
+resolution_deletions "$R" "$STATE" cost main work >/dev/null 2>&1
+NGIT2="$(wc -c < "$GITCOUNT" | tr -d ' ')"
+PATH="$OLDPATH"
+echo "  note the recorded path spent $NGIT2 git invocation(s) on a one-file finding"
+[ "$NGIT2" -gt 0 ] && check 0 "…and the recorded path really does run the comparison" \
+                   || check 1 "the recorded path ran no git at all"
+echo
+echo "== O. the merge queue: the comparison is per BRANCH, not per batch tip =="
+# Both merge paths call the same gate, and the batch path differs in exactly one
+# argument: SCOPE, the tip this member was STACKED ON. It is what the resolution rule
+# is measured from, and the assertion below is why — with the scope honoured, a member
+# is not charged with a line a PEER earlier in the batch legitimately removed; measured
+# from the base instead, it is. The negative half is the whole point: it fails on the
+# engine that passes $base here, so the plumbing cannot rot back silently.
+new_repo queue
+printf 'one\ntwo\n' > "$R/other.txt"
+git -C "$R" commit -q -am "feat: [US-1] - the member's own story, nowhere near shared.txt"
+land_on_base "$R" "77-register-commands" shared.txt "$(printf 'alpha\nbeta\ngamma\nDELTA\n')"
+resolution_record "$STATE" queue "$R" work main
+git -C "$R" rebase main >/dev/null 2>&1 || fail "fixture queue was supposed to rebase cleanly"
+# The batch tip: a PEER, stacked on the base, that legitimately removes a base line.
+git -C "$R" checkout -q -b peer main
+printf 'alpha\ngamma\nDELTA\n' > "$R/shared.txt"
+git -C "$R" commit -q -am "feat: [US-1] - the peer drops beta on purpose"
+PEER="$(git -C "$R" rev-parse peer)"
+git -C "$R" checkout -q work
+git -C "$R" rebase "$PEER" >/dev/null 2>&1 || fail "fixture queue was supposed to stack cleanly"
+export CHIEF_PROJECT="$R"; unset ZONES_CONF CHIEF_DIFF_BUDGET
+GATE_RC=0; zones_merge_gate queue work "$R" main "$STATE" "" "$PEER" >/dev/null 2>&1 || GATE_RC=$?
+[ "$GATE_RC" = 0 ] && check 0 "stacked on a peer that removed a base line, the member is NOT held" \
+                   || check 1 "the member was charged with its peer's removal (gate returned $GATE_RC)"
+GATE_RC=0; zones_merge_gate queue work "$R" main "$STATE" "" main >/dev/null 2>&1 || GATE_RC=$?
+[ "$GATE_RC" = 1 ] && check 0 "…and measured from the base instead it WOULD be — the scope is load-bearing" \
+                   || check 1 "the scope makes no difference here, so the fixture proves nothing ($GATE_RC)"
+
 echo
 echo "resolution-deletions: $P/$N assertion(s) passed"
 [ "$FAILED" = 0 ] || exit 1

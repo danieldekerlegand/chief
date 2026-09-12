@@ -276,7 +276,24 @@ engine/
                      #   excluded PRECISELY — a rebase preserves author date/author/subject, so the
                      #   window ends at the newest REPLAYED commit and the story the agent went on
                      #   to implement is out of scope. Binary and renamed paths are UNCHECKED, never
-                     #   silently clean. It sees deleted LINES, not broken meaning
+                     #   silently clean. It sees deleted LINES, not broken meaning. The
+                     #   finding then HOLDS the merge, through zones_merge_gate and in
+                     #   budget.sh's zone shape — one request, one checksum, one
+                     #   `chief approve` — with one difference from both of its neighbours:
+                     #   a `review` zone and CHIEF_DIFF_BUDGET=block are OPT-IN and this rule
+                     #   is ALWAYS ARMED (no zones.conf, all-`serialize`, budget warn/off —
+                     #   it holds anyway), because it does not report a preference about
+                     #   where review is warranted, it reports that merged work would be
+                     #   UNDONE. The binding is over the FLAGGED LINES, which is why the
+                     #   truncated list still carries an id of the whole finding: bind to
+                     #   what survived truncation and a re-resolution erasing a different
+                     #   set of the same size reuses the old YES. zones_clear_record deletes
+                     #   the verdict on merge, so zones_stamp_record folds it into
+                     #   completed/<name>.json first (who · when · note · the lines it
+                     #   covered). Run on EVERY merge, not conditionally: no record is one
+                     #   file-existence test, 0 git (~0.8ms); a recorded one is ~1.0s / 61
+                     #   git on a 12-file branch, against a merge phase that just paid the
+                     #   whole verify gate. docs/reference/resolution-deletions.md
   review.sh          #   the HUMAN half of the plan checkpoint (docs/plan-review.md): a person reads
                      #   the plan artifact and only an APPROVED plan reaches implementation. The
                      #   review SURFACE is adopted, not built (plannotator's one-shot approval gate),
