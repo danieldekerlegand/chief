@@ -439,6 +439,17 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   no merge commit, no completed/ record and NO retire commit
                      #   stranded on the branch. MUTATION-CHECKED both ways — on the
                      #   unfixed engine both parts report `MERGED @<branch tip>`
+                     #   resolution-incident.sh — the INCIDENT through the real driver,
+                     #   where resolution-deletions.sh is the module alone: a stale branch,
+                     #   a pickup conflict, an agent that keeps the BRANCH's copy of the
+                     #   whole file (`git checkout --theirs`, the mechanism and not a
+                     #   simulation of its outcome), a GREEN gate — and no merge. Its
+                     #   negative controls cost more than its positive one: a branch whose
+                     #   own intent is a DELETION, resolved correctly, must merge untouched.
+                     #   MUTATION-CHECKED — with resolution_deletions() neutered in a copy
+                     #   of the engine the same fixture MERGES and the sibling's line is
+                     #   gone from main, so the assertion fails on the detector rather than
+                     #   on behaviour that always worked
                      #   reap-escaped.sh — the FIELD shape, built: a descendant that leaves
                      #   the worktree, execs a boring argv, ignores TERM and is re-parented
                      #   to PID 1 when its driver is SIGKILLed with the run file still

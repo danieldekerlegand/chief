@@ -45,7 +45,7 @@ BASH_SUITE=(
   smoke usage usage-report concurrency machine-budget gate-budget load-admission concurrency-monitor provider provider-conformance ratelimit provider-unavailable provider-backoff worktree-pending limitstate limitresume limitmonitor pause plan-review research liveliness monitor monitor-orphan ps-all teardown reapscope reapenv reap-escaped sweep bystander noworkguard evidence-gate criteria-scope measured-bars terminal-false repeat-stop retire-negative unverified-resume boundary-demotion bookkeeping-progress five-cases stall-flag noworkguard-jsononly headless events container account-env
   status-deps status-scope status-categories status-json status-perf park-reasons parked-decisions decision decision-agent decision-e2e
   stale-resume conflict-forensics rebase-refusal dirty-checkout submodule-gitlink submodule-resume touches-audit
-  quality-ratchet overlap-zones resolution-deletions merge-batch merge-checkout verify-cache verify-stream cigate
+  quality-ratchet overlap-zones resolution-deletions resolution-incident merge-batch merge-checkout verify-cache verify-stream cigate
   gen doc-sync
   crossrepo doc-claims submodule nested-submodule nested-submodule-pointer retry-on-failure per-tasklist-verify retire-dirty-tasklist
   version-bump update-reroot
