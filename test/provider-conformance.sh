@@ -44,7 +44,19 @@ WORK="$(mktemp -d)"
 # host mid-suite makes every agent.sh below exit 3 before running a single turn — a
 # fixture-independent failure that reads as a regression in whatever happened to run
 # after the flag appeared. No test here ever wants to inherit one.
+#
+# CHIEF_VERIFY_HOOK is the same hole, one door along, and it is the one that bites:
+# driver.sh exports the REAL project's hook path into the agent turn, agent.sh reads
+# `${CHIEF_VERIFY_HOOK:-$CHIEF_PROJECT/.chief/verify.sh}` — the inherited value WINS over
+# the fixture's own hook — and every case below then runs the host repo's gate with a
+# temp fixture as cwd. Measured: `chief verify` from inside a chief worktree reported
+# `bash: scripts/check-roadmap-truth.sh: No such file or directory` and this suite failed
+# "a committed COMPLETE must end the loop", while the identical tree passed the moment
+# the variable was cleared. Its four siblings (repo, base, tasks dir, cache state) point
+# at the host project just as wrongly, so they go too.
 unset CHIEF_PAUSE_FILE
+unset CHIEF_VERIFY_HOOK CHIEF_VERIFY_REPO CHIEF_VERIFY_BASE \
+      CHIEF_VERIFY_TASKS_DIR CHIEF_VERIFY_CACHE_STATE
 trap 'rm -rf "$WORK"' EXIT
 export CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos"
 export GIT_AUTHOR_NAME=conformance GIT_AUTHOR_EMAIL=conformance@test
