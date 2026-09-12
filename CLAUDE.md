@@ -250,6 +250,57 @@ engine/
                      #   failure); it says nothing about two branches whose DESIGNS disagree — both
                      #   rebase clean, both verify green, the result is still wrong. No automated
                      #   gate detects that, so a declared domain holds the branch for `chief approve`
+  resolution.sh      #   WHAT A CONFLICT RESOLUTION DELETED — the third shape, and the one the
+                     #   floor is blind to BY CONSTRUCTION. The floor catches textual
+                     #   interference and staleness; it never compares what a rebase REMOVED
+                     #   against what landed on the base while the branch was in flight. Measured
+                     #   downstream: an 8-day-stale branch conflicted, the resolution kept the
+                     #   BRANCH's copy of two whole files, and seven merged tasklists' work went
+                     #   with them (registered commands 68 -> 44). Every gate was green because a
+                     #   deleted test cannot fail and an undeclared module is not compiled. Chief
+                     #   still never resolves a conflict itself — it HANDS OFF, in integrate_base's
+                     #   conflict arm and in conflict_report's runbook, and the branch comes back
+                     #   ALREADY rebased, so the floor's own rebase takes the "strictly ahead"
+                     #   no-op arm and never sees it. Nothing chief kept could answer the question
+                     #   afterwards (the base sha at `worktree add` is written nowhere;
+                     #   `.integrated-base` is a THROTTLE key inside the worktree run_worker
+                     #   deletes; `pre_mb` is read AFTER the agent rebased; the reflog is not
+                     #   chief's to rely on), so the (fork, pre-rebase tip) pair is RECORDED at
+                     #   each handoff — under $STATE, plus a PIN REF, because after the rebase
+                     #   those commits are unreachable and gc's to take. A line is a deletion when
+                     #   the post-rebase diff removes it, the pre-rebase diff did NOT, the base has
+                     #   it, and the tip no longer does — the fourth clause settles the MOVE edge
+                     #   for free. Removals are NET of re-adds: a file whose last line lacked a
+                     #   trailing newline has that line rewritten by any append, and counting the
+                     #   removal half alone flags it everywhere. The post-resolution-commit edge is
+                     #   excluded PRECISELY — a rebase preserves author date/author/subject, so the
+                     #   window ends at the newest REPLAYED commit and the story the agent went on
+                     #   to implement is out of scope. Binary and renamed paths are UNCHECKED, never
+                     #   silently clean. It sees deleted LINES, not broken meaning. The
+                     #   finding then HOLDS the merge, through zones_merge_gate and in
+                     #   budget.sh's zone shape — one request, one checksum, one
+                     #   `chief approve` — with one difference from both of its neighbours:
+                     #   a `review` zone and CHIEF_DIFF_BUDGET=block are OPT-IN and this rule
+                     #   is ALWAYS ARMED (no zones.conf, all-`serialize`, budget warn/off —
+                     #   it holds anyway), because it does not report a preference about
+                     #   where review is warranted, it reports that merged work would be
+                     #   UNDONE. The binding is over the FLAGGED LINES, which is why the
+                     #   truncated list still carries an id of the whole finding: bind to
+                     #   what survived truncation and a re-resolution erasing a different
+                     #   set of the same size reuses the old YES. zones_clear_record deletes
+                     #   the verdict on merge, so zones_stamp_record folds it into
+                     #   completed/<name>.json first (who · when · note · the lines it
+                     #   covered). Run on EVERY merge, not conditionally: no record is one
+                     #   file-existence test, 0 git (~0.8ms); a recorded one is ~1.0s / 61
+                     #   git on a 12-file branch, against a merge phase that just paid the
+                     #   whole verify gate. It also writes the INSTRUCTION half at both
+                     #   handoffs (resolution_keep_base_requirement ·
+                     #   resolution_base_side_diff): the note and the runbook SHOW
+                     #   `git diff <fork>..<base>` per conflicted file, because the
+                     #   base-side work the incident erased was in the same FILES but
+                     #   not in the conflicted HUNKS and so was never on screen — a
+                     #   rule discovered only as a merge block is a rule nobody was
+                     #   told. docs/reference/resolution-deletions.md
   review.sh          #   the HUMAN half of the plan checkpoint (docs/plan-review.md): a person reads
                      #   the plan artifact and only an APPROVED plan reaches implementation. The
                      #   review SURFACE is adopted, not built (plannotator's one-shot approval gate),
@@ -388,6 +439,17 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   no merge commit, no completed/ record and NO retire commit
                      #   stranded on the branch. MUTATION-CHECKED both ways — on the
                      #   unfixed engine both parts report `MERGED @<branch tip>`
+                     #   resolution-incident.sh — the INCIDENT through the real driver,
+                     #   where resolution-deletions.sh is the module alone: a stale branch,
+                     #   a pickup conflict, an agent that keeps the BRANCH's copy of the
+                     #   whole file (`git checkout --theirs`, the mechanism and not a
+                     #   simulation of its outcome), a GREEN gate — and no merge. Its
+                     #   negative controls cost more than its positive one: a branch whose
+                     #   own intent is a DELETION, resolved correctly, must merge untouched.
+                     #   MUTATION-CHECKED — with resolution_deletions() neutered in a copy
+                     #   of the engine the same fixture MERGES and the sibling's line is
+                     #   gone from main, so the assertion fails on the detector rather than
+                     #   on behaviour that always worked
                      #   reap-escaped.sh — the FIELD shape, built: a descendant that leaves
                      #   the worktree, execs a boring argv, ignores TERM and is re-parented
                      #   to PID 1 when its driver is SIGKILLed with the run file still

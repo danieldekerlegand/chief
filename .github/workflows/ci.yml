@@ -212,6 +212,12 @@ jobs:
       - name: Merge policy layer (a review zone / oversized story holds a GREEN branch for one durable approval)
         run: bash test/overlap-zones.sh
 
+      - name: What a resolution DELETED (the incident flagged with its line, file and sibling; intent, a move, a clean rebase and a later commit are not)
+        run: bash test/resolution-deletions.sh
+
+      - name: The incident END TO END (a whole-file resolution is HELD by a real run; neutered, the same fixture merges and the base's line is gone)
+        run: bash test/resolution-incident.sh
+
       - name: Merge queue (batch tip verified ONCE; red tip bisected; ratchet attributed; absent, the floor verifies N times)
         run: bash test/merge-batch.sh
 

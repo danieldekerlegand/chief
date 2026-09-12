@@ -144,9 +144,9 @@ before it writes code and once before its finished branch merges — and never t
 the same thing. An approved plan is not an approved merge: what the branch became is the
 subject of the second question, and it is the only one the first could not have seen.
 
-## The other rule in the same layer: the diff-size budget
+## The other rules in the same layer: the diff-size budget, and resolution deletions
 
-The merge phase asks **one** policy question, and two rules answer it. The second is the
+The merge phase asks **one** policy question, and three rules answer it. The second is the
 per-story [diff-size budget](diff-budget.md): chief measures every branch's diff against
 the base, decomposed by story, and — under `CHIEF_DIFF_BUDGET=block` — an oversized story
 holds the branch exactly as a `review` zone does.
@@ -154,8 +154,17 @@ holds the branch exactly as a `review` zone does.
 They are unified at the gate rather than stacked as two checkpoints because they are the
 same question — *this branch is green and still needs a person* — so a branch that trips
 a declared zone **and** a size budget is asked about once, on one request file, with one
-checksum-bound verdict and one `chief approve`. The request lists both reasons; a budget
+checksum-bound verdict and one `chief approve`. The request lists every reason; a budget
 hold appears in it as `budget:lines` or `budget:files` next to any zones that matched.
+
+The third rule is [resolution deletions](resolution-deletions.md): when a branch's
+conflict resolution throws away lines that already merged, the branch is held and the
+finding names each line, the commit that added it and the sibling tasklist whose work
+it was, as `resolution:deleted` hold lines in the same request. It differs from the two
+above in one way worth stating here — **it is always armed**. A `review` zone is opt-in
+and `CHIEF_DIFF_BUDGET=block` is opt-in; that rule holds with no `zones.conf` at all,
+because it does not report a preference about where review is warranted, it reports
+that already-merged work would be undone.
 
 ## What this is not
 

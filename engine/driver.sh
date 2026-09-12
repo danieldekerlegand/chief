@@ -68,7 +68,10 @@
 #     domain declared an OVERLAP ZONE with policy `review` (engine/zones.sh,
 #     docs/reference/overlap-zones.md), or a story blew the per-story DIFF-SIZE
 #     BUDGET under CHIEF_DIFF_BUDGET=block (engine/budget.sh,
-#     docs/reference/diff-budget.md). One state, one approval, for both.
+#     docs/reference/diff-budget.md), or its CONFLICT RESOLUTION would erase
+#     already-merged work (engine/resolution.sh,
+#     docs/reference/resolution-deletions.md — the one rule of the three that is
+#     always armed). One state, one approval, for all three.
 #     The merge floor ALREADY RAN: it is rebased onto the latest base and its verify
 #     came back green, and it is held anyway, because the risk the layer exists for —
 #     two parallel branches whose designs disagree — is invisible to every automated
@@ -527,6 +530,13 @@ source "$ENGINE/budget.sh"
 # them — and asks nothing at all of a repo that declares no zones and stays in budget.
 source "$ENGINE/zones.sh"
 ZONES_CONF="$(zones_file "$REPO")"
+# WHAT A CONFLICT RESOLUTION DELETED (engine/resolution.sh). Its own module and not a
+# line of the worker body on purpose: the merge phase is already one of the longest
+# functions here and the quality ratchet's function_length_max counts raw line span.
+# It records the (fork, pre-rebase tip) pair at every point the driver hands a
+# conflict to someone else to resolve, and reads it back to answer the one question
+# the merge floor cannot: did the resolution throw away work that had already merged.
+source "$ENGINE/resolution.sh"
 # The OPT-IN BATCH MERGE QUEUE (engine/mergequeue.sh). Sourced after zones.sh because
 # its eligibility rule consults the zone registry: a branch that needs a human's yes
 # is never merged on the strength of a shared batch tip. Sourcing it is free — with
@@ -888,7 +898,7 @@ INTEGRATE_NOTE_REL="$STATE_REL/INTEGRATE-BASE.md"
 INTEGRATED_SHA_REL="$STATE_REL/.integrated-base"
 integrate_base() {
   local name="$1" branch="$2" wt="$3" repo="$4" base="$5"
-  local note="$wt/$INTEGRATE_NOTE_REL" behind base_sha base_tip conflicted
+  local note="$wt/$INTEGRATE_NOTE_REL" behind base_sha base_tip conflicted fork
   mkdir -p "$wt/$STATE_REL" 2>/dev/null || true
   rm -f "$note" 2>/dev/null || true                 # a stale note must never re-instruct
   base_tip="$(git -C "$repo" rev-parse --verify --quiet "$base" 2>/dev/null)"
@@ -908,6 +918,17 @@ integrate_base() {
   # rebase — the real answer — before putting the branch back exactly as it was.
   conflicted="$(git -C "$wt" diff --name-only --diff-filter=U 2>/dev/null)"
   git -C "$wt" rebase --abort 2>/dev/null || true
+  # HANDOFF. Chief is about to ask someone else to rebase this branch, and the branch
+  # comes back already rebased — the merge floor's own rebase then takes the "strictly
+  # ahead" no-op arm and never sees what the resolution did. So the fork point and the
+  # pre-rebase tip are recorded HERE, while they are still the truth, under the
+  # driver's state dir (engine/resolution.sh; never the worktree, which run_worker
+  # deletes at the top of every run).
+  resolution_record "$STATE" "$name" "$repo" "$branch" "$base"
+  # The same fork point, for the INSTRUCTION half: the note has to SHOW the agent
+  # what landed on the base under these files, or the base-side work that did not
+  # conflict is never on screen (engine/resolution.sh's handoff-instruction section).
+  fork="$(git -C "$repo" merge-base "$branch" "$base" 2>/dev/null || echo)"
   if [ -z "$conflicted" ]; then                     # fall back to a merge preview (git >= 2.38)
     conflicted="$(git -C "$repo" merge-tree --write-tree --name-only "$branch" "$base" 2>/dev/null \
                     | awk 'NR==1{next} /^$/{exit} {print}')"
@@ -927,6 +948,9 @@ integrate_base() {
     echo "2. At each stop, resolve the conflicts keeping BOTH sides' intent — the"
     echo "   \`$base\` side is already-merged work, so never discard it, and never"
     echo "   discard your own — then \`git add <files>\` and \`git rebase --continue\`."
+    echo "   **Read \"What \`$base\` changed\" below first** and check every hunk in it is"
+    echo "   still present when you are done; chief checks the same thing and holds the"
+    echo "   merge if it is not."
     echo "   \`git rebase --abort\` returns you to exactly this state if you need it."
     echo "3. Re-run the project's quality gates and make them green."
     echo
@@ -946,6 +970,11 @@ integrate_base() {
     else
       echo "- (git could not preview them — \`git rebase $base\` will show them)"
     fi
+    echo
+    echo "## What \`$base\` changed in these files since the fork — KEEP ALL OF IT"
+    echo
+    resolution_keep_base_requirement "$base"
+    resolution_base_side_diff "$repo" "$fork" "$base_tip" "$conflicted"
     echo
     echo "base: $base @$base_sha · behind: $behind commit(s) · branch: $branch"
   } > "$note" 2>/dev/null || true
@@ -1460,6 +1489,16 @@ conflict_report() {
     echo "Resolve inside the rebase, not with \`git merge $base\`: chief rebases this branch"
     echo "again at merge time and a rebase replays the original commits, so a resolution"
     echo "recorded in a merge commit is discarded and the conflict returns."
+    echo
+    echo "Before you resolve, read **What \`$base\` changed under these files** below, and"
+    echo "check every hunk in it is still present when you are done."
+    echo
+    # The same instruction integrate_base's note carries, because whoever reads THIS
+    # file — a human, or the next run's agent — resolves the same conflict from it.
+    echo "## What \`$base\` changed under these files — KEEP ALL OF IT"
+    echo
+    resolution_keep_base_requirement "$base"
+    resolution_base_side_diff "$repo" "$mb" "$base" "$files"
   } > "$out" 2>/dev/null || true
 }
 
@@ -2980,6 +3019,10 @@ run_worker() {
             conflict_report "$name" "$branch" "$work_repo" "$work_base" "$pre_mb" "REBASE-CONFLICT" "$rpt"
             rm -f "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
             git -C "$work_repo" rebase --abort 2>/dev/null || true
+            # The floor's OTHER handoff: this report's "Resolve it" runbook is read by
+            # a human or by the next run's agent, and the branch comes back rebased.
+            # After the abort, so the branch ref is unambiguously its pre-rebase tip.
+            resolution_record "$STATE" "$name" "$work_repo" "$branch" "$work_base"
             live_set "$live" phase=rebase-conflict
             event_emit tasklist.rebase-conflict name="$name" state=failed detail="onto $work_base; forensics: $rpt"
             echo "REBASE-CONFLICT see $SNAP_REL/$name.rebase-conflict.md" > "$STATE/$name.status"
@@ -3045,7 +3088,7 @@ run_worker() {
       # One gate, one approval — a declared zone and an oversized story never both ask.
       if ! zones_merge_gate "$name" "$branch" "$work_repo" "$work_base" "$STATE" \
                             "$(touches_of "$name" | tr '\n' ' ')"; then
-        worker_park awaiting-approval "the merge policy layer (overlap zone / diff budget) — rebased + verified, held for a human" \
+        worker_park awaiting-approval "the merge policy layer (overlap zone / diff budget / erased merged work) — rebased + verified, held for a human" \
           "   Branch $branch is kept (rebased, green) — approve what no gate can check, then re-run:  chief approve $name && chief run"
         exit 0
       fi
@@ -3067,6 +3110,7 @@ run_worker() {
               "$SNAP/$name.rebase-conflict.md" \
               "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
         zones_clear_record "$STATE" "$name"
+        resolution_clear_record "$STATE" "$name" "$work_repo"
         live_set "$live" phase=merged story=
         event_emit tasklist.merged name="$name" state=done detail="$branch --no-ff into $work_base @$sha${sub:+ ($sub)}"
         echo "MERGED @$sha${sub:+ ($sub)}" > "$STATE/$name.status"; echo ">> $name MERGED @$sha${sub:+ in $sub}"
@@ -3761,8 +3805,9 @@ if [ -n "$indecision" ]; then
   # decision an operator answers today and one that quietly holds up a band for a week.
   [ -n "$dechold" ] && echo "    (held behind the answer, NOT blocked:$dechold — the next run schedules them)"
 fi
-# Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md)
-# or an over-budget story (docs/reference/diff-budget.md). Reported apart from the
+# Held by the MERGE POLICY LAYER — an overlap zone (docs/reference/overlap-zones.md),
+# an over-budget story (docs/reference/diff-budget.md), or a conflict resolution that
+# would erase already-merged work (docs/reference/resolution-deletions.md). Reported apart from the
 # three holds above because what is true of this one is stronger: the branch is
 # rebased onto the latest base and its verify came back green. Nothing is wrong with
 # it — the repo declared that green is not sufficient authority to merge this change.
