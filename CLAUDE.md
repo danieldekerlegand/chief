@@ -245,6 +245,31 @@ engine/
                      #   WARNS by default and blocks only on request, because a rename sweep, a
                      #   codemod and a real refactor are all legitimately big and a gate that
                      #   stops them is a gate that gets turned off
+  surface.sh         #   WHAT WITHIN A WATCHED PATH IS LOAD-BEARING — zones.sh's third matcher,
+                     #   `surface:<glob>:<ere>`. The defect it repairs is GRANULARITY, not the
+                     #   hold: a `path:` glob cannot tell "added a routine consumer under a
+                     #   watched path" from "changed the surface that path guards", so every
+                     #   hold read as noise and every hold was APPROVED UNREAD — and on
+                     #   2026-09-10 every `review` rule in two downstream registries was
+                     #   rewritten to `serialize` on one day. So a zone can say what within
+                     #   the path it cares about: the rule matches when the branch's DIFF to a
+                     #   matching file adds or removes a line matching the ERE. The diff and
+                     #   not the file's content, because matching a regex against the file as
+                     #   it now stands holds every branch that touched a file which HAPPENS to
+                     #   contain a declaration — the file-level rule again, wearing a regex.
+                     #   BOTH SIGNS: deleting a declaration is the most consequential edit to
+                     #   one. The REGEX REACHES AWK THROUGH ENVIRON, never `-v`, which
+                     #   escape-processes its value: `-v re='^[a-z_]+\(\)'` arrives as
+                     #   `^[a-z_]+()`, an empty group matching EVERY line, silently restoring
+                     #   the coarse rule it replaced. FAILS CLOSED — an unreadable diff (rc 2)
+                     #   or an unsourced module (rc 127) falls back to the coarse `path:` half
+                     #   rather than to no rule, so the catch-all arm in zones_match is the
+                     #   fail-closed one and only an explicit rc 3 skips the rule. Glob
+                     #   semantics stay zones.sh's (zones_path_match), never a second copy.
+                     #   The old forms keep their meaning exactly and re-arming stays the
+                     #   one-word `serialize` -> `review` edit; narrowing is separate and
+                     #   opt-in. It targets holds more precisely — it does not judge whether a
+                     #   design is right
   zones.sh           #   the OVERLAP ZONE REGISTRY, a policy layer ABOVE the merge floor. The floor
                      #   catches TEXTUAL interference (rebase conflict) and staleness (verify
                      #   failure); it says nothing about two branches whose DESIGNS disagree — both

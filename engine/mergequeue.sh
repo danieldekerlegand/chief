@@ -153,6 +153,10 @@ mq_batchable() {
   conf="${ZONES_CONF:-}"
   [ -n "$conf" ] || return 0
   files="$(git -C "$repo" diff --name-only "$base...$branch" 2>/dev/null)"
+  # A `surface:` zone reads the branch's diff, not just its file list, so admission has
+  # to state the same range it just listed — otherwise the narrowed rule is unevaluable
+  # here and every branch under a watched path falls back to the coarse answer.
+  surface_scope "$repo" "$base...$branch"
   [ -z "$(zones_match review "$conf" "$files" "$(touches_of "$name" | tr '\n' ' ')" 2>/dev/null)" ] || return 1
   return 0
 }

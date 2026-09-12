@@ -524,6 +524,12 @@ source "$ENGINE/repeat.sh"
 # merge gate calls it — the two are one policy layer with one approval, not two
 # checkpoints. Warn-only by default: it reports, and the merge continues.
 source "$ENGINE/budget.sh"
+# WHAT WITHIN A WATCHED PATH IS LOAD-BEARING (engine/surface.sh): the `surface:`
+# matcher's half of the registry — whether the branch's DIFF to a watched file touched
+# the declared surface, or merely landed underneath it. Sourced BEFORE zones.sh for the
+# same reason budget.sh is: zones_match dispatches into it, and a matcher belongs to the
+# registry rather than to the worker body.
+source "$ENGINE/surface.sh"
 # The OVERLAP ZONE REGISTRY (engine/zones.sh): the per-repo declaration of domains
 # where a green gate is not sufficient authority to merge. A policy layer ABOVE the
 # merge floor — it runs after the rebase and after a green verify, never instead of

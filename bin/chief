@@ -1291,6 +1291,11 @@ cmd_approve() {
     *)          names="$names $1"; shift ;;
   esac; done
   load_project
+  # surface.sh before zones.sh, exactly as the driver sources them: zones_match
+  # dispatches a `surface:` matcher into it, and a missing module would be reported as
+  # an unevaluable rule on every line of a narrowed registry.
+  # shellcheck disable=SC1091
+  [ -f "$ENGINE/surface.sh" ] && source "$ENGINE/surface.sh"
   # shellcheck disable=SC1091
   source "$ENGINE/zones.sh"
   # live.sh only defines functions; used to keep the liveliness record in step with
