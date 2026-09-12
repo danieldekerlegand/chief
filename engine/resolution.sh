@@ -123,6 +123,118 @@ resolution_clear_record() {
   return 0
 }
 
+# ── the HANDOFF INSTRUCTION: what the base changed, and that it must survive ──
+#
+# The two halves of this file answer the same question at opposite ends of the
+# handoff. Below is the CHECK, run after the resolution comes back. Here is the
+# INSTRUCTION, written before it goes out — because a rule that is only ever
+# discovered as a merge block is a rule nobody was told.
+#
+# The incident's agent was working from "resolve the conflicts keeping BOTH sides'
+# intent", and did exactly that for every hunk git showed it. The base-side work it
+# erased was in the same FILES but not in the conflicted HUNKS, so it was never on
+# screen: a whole-file resolution (`git checkout --ours <file>`, or pasting one
+# version over the other) throws away every base-side change in that file, and the
+# ones that did not conflict are precisely the ones nobody looks at. So the note
+# SHOWS them — `git diff <fork>..<base> -- <file>`, per conflicted file — and says
+# plainly that they must still be there afterwards and that chief checks.
+#
+# The sides are also NAMED, because they are reversed here: in a rebase `--ours` is
+# the BASE and `--theirs` is the branch commit being replayed, the opposite of a
+# merge, and a resolver reaching for the familiar meaning takes the wrong side of
+# every file.
+
+# resolution_keep_base_requirement BASE — the prose half, identical at both handoff
+# sites (integrate_base's INTEGRATE-BASE note and conflict_report's runbook), because
+# a human and the next run's agent resolve from the same rule.
+resolution_keep_base_requirement() {
+  local base="$1"
+  echo "Every hunk below is **already-merged work**: it passed this repo's gates and"
+  echo "landed on \`$base\` while this branch was in flight. **After your resolution it"
+  echo "must still be present.** Chief compares the result against this branch's own"
+  echo "pre-rebase diff and HOLDS the merge (AWAITING-APPROVAL) when a line that is on"
+  echo "\`$base\`, and that this branch never removed itself, is gone at your tip —"
+  echo "docs/reference/resolution-deletions.md."
+  echo
+  echo "**The trap, by its mechanism:** taking ONE SIDE OF A WHOLE FILE —"
+  echo "\`git checkout --ours <file>\`, \`git checkout --theirs <file>\`, or opening the"
+  echo "file and pasting one version over it — discards **every** base-side change in"
+  echo "that file, not only the conflicted hunks. The changes that did NOT conflict are"
+  echo "exactly the ones you will never see on screen. Resolve hunk by hunk instead."
+  echo
+  echo "**In a rebase the sides are reversed from a merge:** \`--ours\` is the BASE"
+  echo "(\`$base\` — already-merged work) and \`--theirs\` is YOUR commit being replayed."
+  return 0
+}
+
+# resolution_base_side_diff REPO FORK BASE FILES [LINE-LIMIT] [FILE-LIMIT] — the
+# evidence half: `git diff <fork>..<base>` per conflicted file.
+#
+# BOUNDED, and never silently: an over-limit diff is cut to LINE-LIMIT lines and
+# followed by its real size plus the exact command that shows all of it, the same
+# truncate-with-a-count discipline resolution_render uses for the finding. A file the
+# base never touched says so — "the conflict is inside this branch's own replay" is a
+# different answer from "there was nothing to keep", and a resolver needs to know
+# which one it is looking at.
+resolution_base_side_diff() {
+  local repo="$1" fork="$2" base="$3" files="$4"
+  local lim="${5:-${CHIEF_RESOLUTION_DIFF_LINES:-80}}"
+  local flim="${6:-${CHIEF_RESOLUTION_DIFF_FILES:-12}}"
+  local tmp f d n shown=0 skipped=0
+  if [ -z "$files" ]; then
+    echo
+    echo "(git could not preview the conflicted paths — \`git rebase $base\` will show them,"
+    echo "and \`git diff $fork..$base\` shows everything the base changed since the fork)"
+    return 0
+  fi
+  if [ -z "$fork" ] || [ -z "$base" ]; then
+    echo
+    echo "(chief could not determine the fork point, so it cannot show you the base side"
+    echo "here — read it with \`git log -p $base\` before resolving)"
+    return 0
+  fi
+  # A temp file and not a pipe: the loop keeps counters, and a `while read` on the
+  # right of a pipe runs in a subshell that loses them.
+  tmp="$(mktemp)" || return 0
+  printf '%s\n' "$files" > "$tmp"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ "$shown" -ge "$flim" ]; then skipped=$((skipped + 1)); continue; fi
+    shown=$((shown + 1))
+    echo
+    echo "### $f"
+    echo
+    d="$(git -C "$repo" diff --no-color --no-ext-diff "$fork" "$base" -- "$f" 2>/dev/null)"
+    if [ -z "$d" ]; then
+      echo "(nothing on \`$base\` changed this file since the fork — this conflict is inside"
+      echo "this branch's own replay)"
+      continue
+    fi
+    n="$(printf '%s\n' "$d" | wc -l | tr -d ' ')"
+    echo '```diff'
+    if [ "$n" -gt "$lim" ]; then
+      printf '%s\n' "$d" | sed -n "1,${lim}p"
+      echo '```'
+      echo
+      echo "… truncated at $lim of $n lines. Resolve against ALL of it — read the rest with:"
+      echo
+      echo '```sh'
+      echo "git -C $repo diff $fork..$base -- $f"
+      echo '```'
+    else
+      printf '%s\n' "$d"
+      echo '```'
+    fi
+  done < "$tmp"
+  rm -f "$tmp" 2>/dev/null || true
+  if [ "$skipped" -gt 0 ]; then
+    echo
+    echo "… and $skipped more conflicted file(s) not shown here (showing $shown). The base"
+    echo "side of every one of them: \`git -C $repo diff $fork..$base -- <file>\`."
+  fi
+  return 0
+}
+
 # resolution_diff_lines REPO FROM TO PATH SIGN — the lines this diff removes (SIGN
 # `-`) or adds (SIGN `+`), one per line, verbatim.
 #

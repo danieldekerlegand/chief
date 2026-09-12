@@ -898,7 +898,7 @@ INTEGRATE_NOTE_REL="$STATE_REL/INTEGRATE-BASE.md"
 INTEGRATED_SHA_REL="$STATE_REL/.integrated-base"
 integrate_base() {
   local name="$1" branch="$2" wt="$3" repo="$4" base="$5"
-  local note="$wt/$INTEGRATE_NOTE_REL" behind base_sha base_tip conflicted
+  local note="$wt/$INTEGRATE_NOTE_REL" behind base_sha base_tip conflicted fork
   mkdir -p "$wt/$STATE_REL" 2>/dev/null || true
   rm -f "$note" 2>/dev/null || true                 # a stale note must never re-instruct
   base_tip="$(git -C "$repo" rev-parse --verify --quiet "$base" 2>/dev/null)"
@@ -925,6 +925,10 @@ integrate_base() {
   # driver's state dir (engine/resolution.sh; never the worktree, which run_worker
   # deletes at the top of every run).
   resolution_record "$STATE" "$name" "$repo" "$branch" "$base"
+  # The same fork point, for the INSTRUCTION half: the note has to SHOW the agent
+  # what landed on the base under these files, or the base-side work that did not
+  # conflict is never on screen (engine/resolution.sh's handoff-instruction section).
+  fork="$(git -C "$repo" merge-base "$branch" "$base" 2>/dev/null || echo)"
   if [ -z "$conflicted" ]; then                     # fall back to a merge preview (git >= 2.38)
     conflicted="$(git -C "$repo" merge-tree --write-tree --name-only "$branch" "$base" 2>/dev/null \
                     | awk 'NR==1{next} /^$/{exit} {print}')"
@@ -944,6 +948,9 @@ integrate_base() {
     echo "2. At each stop, resolve the conflicts keeping BOTH sides' intent — the"
     echo "   \`$base\` side is already-merged work, so never discard it, and never"
     echo "   discard your own — then \`git add <files>\` and \`git rebase --continue\`."
+    echo "   **Read \"What \`$base\` changed\" below first** and check every hunk in it is"
+    echo "   still present when you are done; chief checks the same thing and holds the"
+    echo "   merge if it is not."
     echo "   \`git rebase --abort\` returns you to exactly this state if you need it."
     echo "3. Re-run the project's quality gates and make them green."
     echo
@@ -963,6 +970,11 @@ integrate_base() {
     else
       echo "- (git could not preview them — \`git rebase $base\` will show them)"
     fi
+    echo
+    echo "## What \`$base\` changed in these files since the fork — KEEP ALL OF IT"
+    echo
+    resolution_keep_base_requirement "$base"
+    resolution_base_side_diff "$repo" "$fork" "$base_tip" "$conflicted"
     echo
     echo "base: $base @$base_sha · behind: $behind commit(s) · branch: $branch"
   } > "$note" 2>/dev/null || true
@@ -1477,6 +1489,16 @@ conflict_report() {
     echo "Resolve inside the rebase, not with \`git merge $base\`: chief rebases this branch"
     echo "again at merge time and a rebase replays the original commits, so a resolution"
     echo "recorded in a merge commit is discarded and the conflict returns."
+    echo
+    echo "Before you resolve, read **What \`$base\` changed under these files** below, and"
+    echo "check every hunk in it is still present when you are done."
+    echo
+    # The same instruction integrate_base's note carries, because whoever reads THIS
+    # file — a human, or the next run's agent — resolves the same conflict from it.
+    echo "## What \`$base\` changed under these files — KEEP ALL OF IT"
+    echo
+    resolution_keep_base_requirement "$base"
+    resolution_base_side_diff "$repo" "$mb" "$base" "$files"
   } > "$out" 2>/dev/null || true
 }
 

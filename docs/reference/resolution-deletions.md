@@ -70,6 +70,35 @@ direction costs one `chief approve`.
 not check this" and "I checked this and it is clean" are different answers. An
 `UNCHECKED` record alone does not hold a merge; it is printed in the worker log.
 
+## What the resolver is told, before it resolves
+
+A rule discovered only as a merge block is a rule nobody was told. Both places where
+chief hands a conflict to someone else — `integrate_base`'s `INTEGRATE-BASE.md` note
+and `conflict_report`'s runbook (`REBASE-CONFLICT` and `MERGE-CONFLICT`) — carry the
+same three things, written by `resolution_keep_base_requirement` and
+`resolution_base_side_diff` in `engine/resolution.sh`:
+
+1. **What the base changed under each conflicted file**, as
+   `git diff <fork>..<base> -- <file>`, one section per file. An over-limit diff is cut
+   to its first `CHIEF_RESOLUTION_DIFF_LINES` (default 80) lines and followed by its
+   real size and the exact command that shows the rest; over
+   `CHIEF_RESOLUTION_DIFF_FILES` (default 12) files, the remainder is named with a
+   count. A file the base never touched says so, because "there was nothing to keep"
+   and "the conflict is inside this branch's own replay" are different answers.
+2. **That those hunks are already-merged work and must still be present afterwards**,
+   and that chief compares the result and holds the merge when they are not.
+3. **The trap, by its mechanism.** Taking one side of a whole file — `git checkout
+   --ours <file>`, `git checkout --theirs <file>`, or pasting one version over the
+   other — discards *every* base-side change in that file, not only the conflicted
+   hunks, and the changes that did not conflict are exactly the ones never on screen.
+   That is the incident, in one sentence. The note also states that **in a rebase
+   `--ours` is the base and `--theirs` is the commit being replayed**, the reverse of a
+   merge, because a resolver reaching for the familiar meaning takes the wrong side of
+   every file.
+
+The diff is scoped to the *conflicted* paths and to `<fork>..<base>`, so it shows the
+work at risk rather than the whole base history.
+
 ## What the hold looks like
 
 The finding joins `zones_merge_gate` as zone-shaped hold lines, so it uses the

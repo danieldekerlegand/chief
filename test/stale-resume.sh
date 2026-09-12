@@ -236,7 +236,12 @@ git checkout -q "chief/sr-conf"
 printf 'the branch edited this line\n' > shared.txt
 git commit -q -am "feat: branch edits shared.txt"
 git checkout -q main
-printf 'a merged sibling edited this line\n' > shared.txt     # base moves into the same file
+# The base's side carries a UNIQUE marker line beside the conflicting one. It is the
+# shape the incident turned on: a base-side change in the same FILE that is not in the
+# conflicted HUNK, so a whole-file resolution drops it and nobody ever saw it. The note
+# has to put it on screen.
+B_MARKER="SR-B-BASE-MARKER-7c31"
+printf 'a merged sibling edited this line\n%s\n' "$B_MARKER" > shared.txt   # base moves into the same file
 git commit -q -am "Merge chief/sibling (chief, auto-verified)"
 branch_tip="$(git rev-parse "chief/sr-conf")"
 main_tip="$(git rev-parse main)"
@@ -250,9 +255,28 @@ note="$(cat "$NOTE")"
 has "base: main @"     "$note" || fail "B: the note does not name the base branch"
 has "1 commit(s) behind" "$note" || fail "B: the note does not report the behind count"
 has "shared.txt"       "$note" || fail "B: the note does not list the conflicted file"
+# THE BASE SIDE, SHOWN (US-3). Listing the conflicted path is not enough: the resolver
+# has to see WHAT landed on the base under it, or the base-side changes that did not
+# conflict stay off screen and a whole-file resolution erases them silently.
+has "$B_MARKER" "$note" \
+  || fail "B: the note does not show what the base changed under the conflicted file (marker $B_MARKER absent)"
+note_diff="$(printf '%s\n' "$note" | sed -n '/^### shared.txt$/,$p')"
+has "$B_MARKER" "$note_diff" \
+  || fail "B: the base-side diff is not under the conflicted file's own entry (### shared.txt)"
+has "+$B_MARKER" "$note_diff" \
+  || fail "B: the marker is not shown as an ADDED base-side line — this is not a diff"
+# Strings only integrate_base emits — never a heading templates/agent-context.md quotes.
+has "discards **every** base-side change in" "$note" \
+  || fail "B: the note does not name the whole-file-resolution trap by its mechanism"
+has "**In a rebase the sides are reversed from a merge:**" "$note" \
+  || fail "B: the note does not say that --ours is the base in a rebase"
+has "HOLDS the merge (AWAITING-APPROVAL)" "$note" \
+  || fail "B: the note does not state that chief checks the result and holds the merge"
 # The instruction has to REACH the agent, not merely exist on disk.
 ev="$(cat "$WORK/sr-conf/evidence/sr-conf.progress.txt" 2>/dev/null || echo)"
 [ -f "$WORK/sr-conf/evidence/sr-conf.note.md" ] || fail "B: the agent never saw the note (no evidence copy)"
+has "$B_MARKER" "$(cat "$WORK/sr-conf/evidence/sr-conf.note.md")" \
+  || fail "B: the note the agent was HANDED carries no base-side diff (marker $B_MARKER absent)"
 has "BASE INTEGRATION REQUIRED" "$ev" || fail "B: the agent's progress.txt carries no integration instruction"
 has "before any user story"     "$ev" || fail "B: the instruction does not put integration ahead of story work"
 # …and the branch is left EXACTLY as it was: clean, attached, un-rebased.
@@ -347,4 +371,4 @@ has "a merged sibling edited this line" "$shared" || fail "E: the base's side of
 [ -f tasks/chief/completed/sr-drift.json ]        || fail "E: tasklist not retired after the integrated merge"
 
 ARM=""
-echo "STALE-RESUME PASS — clean drift rebased at pickup and merged; a conflicting one was aborted, noted and handed to the agent (branch untouched, tasklist not failed); an all-pass branch was re-engaged instead of walking into the merge phase; a mid-run sibling merge was re-integrated at the iteration boundary (once per moved base) and a conflicting one was handed to the next iteration"
+echo "STALE-RESUME PASS — clean drift rebased at pickup and merged; a conflicting one was aborted, noted and handed to the agent (branch untouched, tasklist not failed) with the base-side diff under each conflicted file; an all-pass branch was re-engaged instead of walking into the merge phase; a mid-run sibling merge was re-integrated at the iteration boundary (once per moved base) and a conflicting one was handed to the next iteration"

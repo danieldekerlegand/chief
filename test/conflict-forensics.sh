@@ -108,7 +108,7 @@ if [ "$MODE" = collide ] && [ -n "${CHIEF_TEST_BASE_REPO:-}" ] && [ ! -f "$ADVAN
   : > "$ADVANCED"
   ( cd "$CHIEF_TEST_BASE_REPO"
     git checkout -q -b "chief/$CHIEF_TEST_SIBLING" main
-    printf 'a merged sibling edited this line\n' > shared.txt
+    printf 'a merged sibling edited this line\n%s\n' "${CHIEF_TEST_MARKER:-}" > shared.txt
     git commit -q -am "feat: [US-1] - sibling rewrites shared.txt"
     git checkout -q main
     git merge -q --no-ff "chief/$CHIEF_TEST_SIBLING" \
@@ -122,6 +122,9 @@ chmod +x "$WORK/fakebin/claude"
 
 # ── 3. The fixture ────────────────────────────────────────────────────────────
 SIBLING=cf-sibling
+# The base-side line that does NOT conflict by itself — the report has to show it, or a
+# resolver taking the whole file loses it without ever seeing it (US-3).
+MARKER=CF-BASE-MARKER-3ab7
 mkdir -p "$REPO"; cd "$REPO"
 git init -q -b main 2>/dev/null || { git init -q && git checkout -q -b main; }
 git commit -q --allow-empty -m init
@@ -141,7 +144,7 @@ git add -A && git commit -q -m "fixture"
 run_chief() {   # $1 = CHIEF_TEST_MODE, $2 = log file
   ( cd "$REPO" && PATH="$WORK/fakebin:$PATH" \
       WT_ROOT="$WORK/wt" CHIEF_TEST_MODE="$1" CHIEF_TEST_SIBLING="$SIBLING" \
-      CHIEF_TEST_BASE_REPO="$REPO" \
+      CHIEF_TEST_BASE_REPO="$REPO" CHIEF_TEST_MARKER="$MARKER" \
       "$CHIEF" run "$NAME" ) >"$2" 2>&1 || true
 }
 worker_log() { cat "$REPO/.chief/state/parallel/$NAME.log" 2>/dev/null || echo; }
@@ -182,6 +185,21 @@ has "chief auto-merge of sibling tasklist \`$SIBLING\`" "$report" \
 has "sibling rewrites shared.txt" "$report" \
   || fail "the report does not list the sibling's own commit under the conflicted file"
 has "## Likely collider" "$report" || fail "the report has no collider summary"
+# The RESOLVE half (US-3): whoever resolves from this file — a human, or the next
+# run's agent — must see what landed on the base under each conflicted path, not just
+# which commits touched it. Asserted on the planted marker under this report's own
+# base-side section, plus a sentence only conflict_report/resolution.sh emits.
+has "## What \`main\` changed under these files — KEEP ALL OF IT" "$report" \
+  || fail "the report's runbook carries no base-side diff section"
+base_side="$(printf '%s\n' "$report" | sed -n '/^## What `main` changed under these files/,$p')"
+has "+$MARKER" "$base_side" \
+  || fail "the base-side section does not show the base's own added line ($MARKER) as a diff"
+has "### shared.txt" "$base_side" \
+  || fail "the base-side diff is not broken out per conflicted file"
+has "discards **every** base-side change in" "$report" \
+  || fail "the report does not name the whole-file-resolution trap by its mechanism"
+has "HOLDS the merge (AWAITING-APPROVAL)" "$report" \
+  || fail "the report does not say chief checks the resolution and holds the merge"
 has "touches" "$report" || fail "the collider summary does not suggest a touches/dependsOn fix"
 
 # Nothing merged, and the branch is exactly as the agent left it.
@@ -197,4 +215,4 @@ case "$status" in MERGED*) ;; *) fail "run 2: expected MERGED after the agent in
 [ -f "$REPORT" ] && fail "the conflict report survived a successful merge — a stale report is worse than none"
 [ -f "$REPO/tasks/chief/completed/$NAME.json" ] || fail "run 2: tasklist not retired"
 
-echo "CONFLICT-FORENSICS PASS — a merge-phase rebase conflict wrote a report naming the conflicted file, the base tip, the merge-base and the colliding sibling tasklist; the worker log and .status point at it (status value unchanged); a later successful merge cleared it"
+echo "CONFLICT-FORENSICS PASS — a merge-phase rebase conflict wrote a report naming the conflicted file, the base tip, the merge-base, the colliding sibling tasklist and the base-side diff the resolution must keep; the worker log and .status point at it (status value unchanged); a later successful merge cleared it"

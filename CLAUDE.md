@@ -293,7 +293,14 @@ engine/
                      #   covered). Run on EVERY merge, not conditionally: no record is one
                      #   file-existence test, 0 git (~0.8ms); a recorded one is ~1.0s / 61
                      #   git on a 12-file branch, against a merge phase that just paid the
-                     #   whole verify gate. docs/reference/resolution-deletions.md
+                     #   whole verify gate. It also writes the INSTRUCTION half at both
+                     #   handoffs (resolution_keep_base_requirement ·
+                     #   resolution_base_side_diff): the note and the runbook SHOW
+                     #   `git diff <fork>..<base>` per conflicted file, because the
+                     #   base-side work the incident erased was in the same FILES but
+                     #   not in the conflicted HUNKS and so was never on screen — a
+                     #   rule discovered only as a merge block is a rule nobody was
+                     #   told. docs/reference/resolution-deletions.md
   review.sh          #   the HUMAN half of the plan checkpoint (docs/plan-review.md): a person reads
                      #   the plan artifact and only an APPROVED plan reaches implementation. The
                      #   review SURFACE is adopted, not built (plannotator's one-shot approval gate),
