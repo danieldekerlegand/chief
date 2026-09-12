@@ -285,10 +285,3 @@ terminal_live_counts() {
     negative="$(_int "$TERMINAL_NEGATIVE")" total="$(_int "$TERMINAL_TOTAL")" "$@"
 }
 
-# terminal_any PRD — 0 when at least one story DECLARES the field, 1 otherwise. The
-# cheap guard every caller uses before spending a fork on the reports above: a tasklist
-# that never heard of this feature pays one jq and takes every old code path.
-terminal_any() {
-  [ "$(jq -r '[ (.userStories // [])[] | select(.terminalFalse == true) ] | length' \
-       "$1" 2>/dev/null || echo 0)" != "0" ]
-}
