@@ -539,7 +539,16 @@ VERSION              # engine version — bump on any engine/bin/install change
   link that blocks the merge. Reference the module, not the doc that doesn't exist yet.
 - **A new `test/*.sh` is a gate only when it is in THREE lists**: `.chief/verify.sh`'s
   `CHIEF_BYSTANDER_TESTS` (the merge gate), `test/all.sh`'s `BASH_SUITE`, and
-  `.github/workflows/ci.yml`. Nothing derives one from another. Relatedly, a behavioural
+  `.github/workflows/ci.yml`. Nothing derives one from another. **And adding it to the
+  first list does not make it run in THAT BRANCH'S OWN gate**: `chief verify` resolves
+  the hook at `$CHIEF_PROJECT` — the project checkout — not inside the worktree, so a
+  worktree's edit to `.chief/verify.sh` only takes effect once it has merged. The
+  branch that ADDS a test therefore gets a green verdict that never executed it
+  (measured on `910`: the branch's list held 69 names, the hook that ran held 68, and
+  the new name appears nowhere in the log). Run the new file directly — `bash
+  test/<new>.sh` — and say so in the notes; a `chief verify` PASS is not evidence
+  about it. Same root cause as the `git rev-parse HEAD` note above, one level up:
+  the gate reads the project, not your working tree. Relatedly, a behavioural
   test must not assert on prompt text that a **doc quotes** — `templates/agent-context.md`
   quotes the engine's injected headings verbatim while explaining them, so grepping a
   prompt for one matches even when nothing was injected. Assert on a string only the
