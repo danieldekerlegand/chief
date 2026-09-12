@@ -308,6 +308,12 @@ mq_stack_member() {
         conflict_report "$name" "$branch" "$repo" "$base" "$pre_mb" "REBASE-CONFLICT" "$rpt"
         rm -f "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
         git -C "$repo" rebase --abort 2>/dev/null || true
+        # The batch queue's handoff, recorded on the floor's terms (engine/resolution.sh):
+        # an ejected member is resolved from the very same runbook and comes back
+        # already rebased, so it needs the same (fork, pre-rebase tip) pair. Recorded
+        # against $base and not the batch tip: the fork this is measured from is the
+        # branch's own, and a batch tip is an artefact of one run.
+        resolution_record "$STATE" "$name" "$repo" "$branch" "$base"
         mq_member_fail "$name" rebase-conflict "REBASE-CONFLICT see $SNAP_REL/$name.rebase-conflict.md" \
           tasklist.rebase-conflict "onto the merge-batch tip; forensics: $rpt" \
           "!! $name rebase conflict onto the batch tip — EJECTED from the batch and left for manual merge; what collided and with whom: $rpt"
@@ -380,6 +386,7 @@ mq_merge_member() {
           "$SNAP/$name.rebase-conflict.md" \
           "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" \
           "$(zones_request_file "$STATE" "$name")" "$(zones_approval_file "$STATE" "$name")" 2>/dev/null || true
+    resolution_clear_record "$STATE" "$name" "$repo"
     live_set "$live" phase=merged story=
     event_emit tasklist.merged name="$name" state=done detail="$branch --no-ff into $base @$sha${sub:+ ($sub)} (merge batch)"
     printf 'MERGED @%s%s\n' "$sha" "${sub:+ ($sub)}" > "$STATE/$name.status"

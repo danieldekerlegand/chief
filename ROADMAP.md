@@ -6,7 +6,7 @@
 > tasklist of user stories + acceptance criteria into merged, verified work with no silent bad
 > merges — across any repo, any agent provider.*
 
-**Status:** Shipping & self-hosting (**v0.9.25** — [`VERSION`](VERSION) is the source of truth; this
+**Status:** Shipping & self-hosting (**v0.9.26** — [`VERSION`](VERSION) is the source of truth; this
 line is checked against it by `test/doc-sync.sh`) — the built program is **48/48 tasklists merged**
 (`77`–`122` plus the `900`/`901` paydown, every record in [`tasks/chief/completed/`](tasks/chief/completed/)
 stamped with a real `mergedToMain` that `git merge-base --is-ancestor` finds on `main`); **one

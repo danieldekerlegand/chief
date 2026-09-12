@@ -527,6 +527,13 @@ source "$ENGINE/budget.sh"
 # them — and asks nothing at all of a repo that declares no zones and stays in budget.
 source "$ENGINE/zones.sh"
 ZONES_CONF="$(zones_file "$REPO")"
+# WHAT A CONFLICT RESOLUTION DELETED (engine/resolution.sh). Its own module and not a
+# line of the worker body on purpose: the merge phase is already one of the longest
+# functions here and the quality ratchet's function_length_max counts raw line span.
+# It records the (fork, pre-rebase tip) pair at every point the driver hands a
+# conflict to someone else to resolve, and reads it back to answer the one question
+# the merge floor cannot: did the resolution throw away work that had already merged.
+source "$ENGINE/resolution.sh"
 # The OPT-IN BATCH MERGE QUEUE (engine/mergequeue.sh). Sourced after zones.sh because
 # its eligibility rule consults the zone registry: a branch that needs a human's yes
 # is never merged on the strength of a shared batch tip. Sourcing it is free — with
@@ -908,6 +915,13 @@ integrate_base() {
   # rebase — the real answer — before putting the branch back exactly as it was.
   conflicted="$(git -C "$wt" diff --name-only --diff-filter=U 2>/dev/null)"
   git -C "$wt" rebase --abort 2>/dev/null || true
+  # HANDOFF. Chief is about to ask someone else to rebase this branch, and the branch
+  # comes back already rebased — the merge floor's own rebase then takes the "strictly
+  # ahead" no-op arm and never sees what the resolution did. So the fork point and the
+  # pre-rebase tip are recorded HERE, while they are still the truth, under the
+  # driver's state dir (engine/resolution.sh; never the worktree, which run_worker
+  # deletes at the top of every run).
+  resolution_record "$STATE" "$name" "$repo" "$branch" "$base"
   if [ -z "$conflicted" ]; then                     # fall back to a merge preview (git >= 2.38)
     conflicted="$(git -C "$repo" merge-tree --write-tree --name-only "$branch" "$base" 2>/dev/null \
                     | awk 'NR==1{next} /^$/{exit} {print}')"
@@ -2980,6 +2994,10 @@ run_worker() {
             conflict_report "$name" "$branch" "$work_repo" "$work_base" "$pre_mb" "REBASE-CONFLICT" "$rpt"
             rm -f "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
             git -C "$work_repo" rebase --abort 2>/dev/null || true
+            # The floor's OTHER handoff: this report's "Resolve it" runbook is read by
+            # a human or by the next run's agent, and the branch comes back rebased.
+            # After the abort, so the branch ref is unambiguously its pre-rebase tip.
+            resolution_record "$STATE" "$name" "$work_repo" "$branch" "$work_base"
             live_set "$live" phase=rebase-conflict
             event_emit tasklist.rebase-conflict name="$name" state=failed detail="onto $work_base; forensics: $rpt"
             echo "REBASE-CONFLICT see $SNAP_REL/$name.rebase-conflict.md" > "$STATE/$name.status"
@@ -3067,6 +3085,7 @@ run_worker() {
               "$SNAP/$name.rebase-conflict.md" \
               "$SNAP/$name.merge-conflict.md" "$SNAP/$name.rebase-refused.md" 2>/dev/null || true
         zones_clear_record "$STATE" "$name"
+        resolution_clear_record "$STATE" "$name" "$work_repo"
         live_set "$live" phase=merged story=
         event_emit tasklist.merged name="$name" state=done detail="$branch --no-ff into $work_base @$sha${sub:+ ($sub)}"
         echo "MERGED @$sha${sub:+ ($sub)}" > "$STATE/$name.status"; echo ">> $name MERGED @$sha${sub:+ in $sub}"

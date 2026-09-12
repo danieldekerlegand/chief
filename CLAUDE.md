@@ -250,6 +250,33 @@ engine/
                      #   failure); it says nothing about two branches whose DESIGNS disagree — both
                      #   rebase clean, both verify green, the result is still wrong. No automated
                      #   gate detects that, so a declared domain holds the branch for `chief approve`
+  resolution.sh      #   WHAT A CONFLICT RESOLUTION DELETED — the third shape, and the one the
+                     #   floor is blind to BY CONSTRUCTION. The floor catches textual
+                     #   interference and staleness; it never compares what a rebase REMOVED
+                     #   against what landed on the base while the branch was in flight. Measured
+                     #   downstream: an 8-day-stale branch conflicted, the resolution kept the
+                     #   BRANCH's copy of two whole files, and seven merged tasklists' work went
+                     #   with them (registered commands 68 -> 44). Every gate was green because a
+                     #   deleted test cannot fail and an undeclared module is not compiled. Chief
+                     #   still never resolves a conflict itself — it HANDS OFF, in integrate_base's
+                     #   conflict arm and in conflict_report's runbook, and the branch comes back
+                     #   ALREADY rebased, so the floor's own rebase takes the "strictly ahead"
+                     #   no-op arm and never sees it. Nothing chief kept could answer the question
+                     #   afterwards (the base sha at `worktree add` is written nowhere;
+                     #   `.integrated-base` is a THROTTLE key inside the worktree run_worker
+                     #   deletes; `pre_mb` is read AFTER the agent rebased; the reflog is not
+                     #   chief's to rely on), so the (fork, pre-rebase tip) pair is RECORDED at
+                     #   each handoff — under $STATE, plus a PIN REF, because after the rebase
+                     #   those commits are unreachable and gc's to take. A line is a deletion when
+                     #   the post-rebase diff removes it, the pre-rebase diff did NOT, the base has
+                     #   it, and the tip no longer does — the fourth clause settles the MOVE edge
+                     #   for free. Removals are NET of re-adds: a file whose last line lacked a
+                     #   trailing newline has that line rewritten by any append, and counting the
+                     #   removal half alone flags it everywhere. The post-resolution-commit edge is
+                     #   excluded PRECISELY — a rebase preserves author date/author/subject, so the
+                     #   window ends at the newest REPLAYED commit and the story the agent went on
+                     #   to implement is out of scope. Binary and renamed paths are UNCHECKED, never
+                     #   silently clean. It sees deleted LINES, not broken meaning
   review.sh          #   the HUMAN half of the plan checkpoint (docs/plan-review.md): a person reads
                      #   the plan artifact and only an APPROVED plan reaches implementation. The
                      #   review SURFACE is adopted, not built (plannotator's one-shot approval gate),
