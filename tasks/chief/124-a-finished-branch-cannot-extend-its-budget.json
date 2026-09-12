@@ -1,0 +1,56 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/124-a-finished-branch-cannot-extend-its-budget",
+  "dependsOn": [],
+  "touches": [
+    "engine/agent.sh",
+    "engine/live.sh",
+    "test",
+    "docs",
+    "VERSION",
+    "README.md",
+    "ROADMAP.md"
+  ],
+  "iters": 8,
+  "warmup": [
+    "sed -n '2305,2370p' engine/agent.sh",
+    "sed -n '2388,2430p' engine/agent.sh",
+    "sed -n '750,800p' engine/agent.sh",
+    "sed -n '1,60p' test/bookkeeping-progress.sh",
+    "grep -n 'mark_reengage\\|PRIOR VERIFICATION FAILED' engine/driver.sh",
+    "grep -n 'STALL_LIMIT' docs/reference/tasklist-schema.md docs/guides/monitoring.md"
+  ],
+  "description": "A BRANCH WHOSE STORIES ALL PASS CAN RUN PAST ITS BUDGET INDEFINITELY, BY WRITING NOTES.\n\nWHAT HAPPENED, measured on 2026-09-12 in a downstream repository (named nowhere in this repo; the figures come from that run's `events.jsonl` and `chief logs`). A tasklist's three stories all passed. Its merge-phase verify then failed post-rebase — one test binary killed by the OS with SIGTRAP inside the allocator, from host memory pressure the tasklist did not cause — and the driver re-engaged it with the `## ⚠️ PRIOR VERIFICATION FAILED` block (`engine/driver.sh`: `mark_reengage` and the progress.txt injection). The agent then ran **18 iterations against a budget of 10 and a hard cap of 30**. The header of every one read `3/3 passing`. Each committed one tracked markdown file recording one more diagnosis of an environmental failure it could not fix, and each was scored `Iteration N: progress — <that file> changed (outside .chief/state/)`. The run's recorded agent spend was about $112, and the run ended verify-failed.\n\nWHY NOTHING STOPPED IT. `engine/agent.sh:2319` scores an iteration as progress when a story flips OR `_product_changed` (`:757`) finds a path outside `${BOOKKEEPING_REL}`. Progress resets `stall`, and the give-up arm at `:2391` fires only when `stall >= STALL_LIMIT && i >= MAX_ITERATIONS`. With every story already passing, no story CAN flip — so the diff was the only arm left, and a note committed to a tracked file satisfied it every single time. The two nets built for neighbouring shapes both miss this one by construction: `test/bookkeeping-progress.sh` stops a commit whose ENTIRE diff is chief's own state, and this diff was outside it; `engine/repeat.sh` judges a story that keeps recording the same outcome while `passes` stays false, and here every story was true.\n\nTHE RULE. When every story passes at the START of an iteration, a product diff is not evidence of progress toward completion — there is no story left for it to complete, and the only thing that can still advance is the gate verdict. In that state a diff alone must not reset `stall`. The minimum acceptable version is that diffs stop EXTENDING the budget: the give-up arm already requires `i >= MAX_ITERATIONS`, so an agent genuinely repairing a red gate keeps its full budget and loses only the ability to buy iterations past it. A stronger version that counts a CHANGE in the branch's recorded verify verdict (red to green, or a different failing-gate set) as progress is welcome — but only if the verdict is read from something chief recorded, never from the agent's text.\n\n⛔ REFUSED. (1) Prose matching. The decision recorded at `engine/agent.sh:2399-2408` — chief cannot reliably hear an agent asking to be stopped, and a phrase list rots — stands. (2) Exempting documentation or `*.md` paths by name: a tasklist whose PRODUCT is documentation flips its stories on doc commits and must keep scoring them as progress while any story is still false. (3) Changing what `bk-both` in `test/bookkeeping-progress.sh` asserts: real work mid-story is progress, and stays progress.\n\nPUBLIC REPOSITORY. Nothing this tasklist adds or edits may name a downstream repository, tasklist or path. Describe the incident by its shape, as this description does.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "An all-passing branch cannot buy iterations past its budget with a diff",
+      "acceptanceCriteria": [
+        "In `engine/agent.sh`, when every story passes at the start of an iteration, a product diff alone does not reset `stall`. Outside that state nothing changes: a tasklist with any story still `passes:false` scores a product diff as progress exactly as it does today.",
+        "The iteration says so, distinguishably: its line names the state — every story passes, the diff did not count — and is distinct from both the bare `no progress` and `BOOKKEEPING ONLY`. `live_set` publishes the same verdict, remembering that `live_set` silently drops keys it does not know (`LIVE_FIELDS`, `LIVE_NUMERIC` and the local list inside `live_set` are three edits, not one).",
+        "When the give-up arm fires in this state, `$STALL_FILE` carries a `stall_why` that says the branch was all-passing and its diffs did not count, followed by the agent's last words exactly as the existing arm writes them.",
+        "The notes state which version was built — the budget floor alone, or verdict-change progress as well — and, if the latter, which recorded verdict it reads and why that cannot be influenced by the agent's prose.",
+        "No prose matching is introduced, and no path, directory or file extension is exempted by name.",
+        "GATES: `bash -n` and `shellcheck -S error` clean on every edited shell file; `bash engine/quality.sh ratchet` clean; `chief verify` green."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "The incident is a test that reproduces first, the docs state the rule, and the version moves",
+      "acceptanceCriteria": [
+        "`test/bookkeeping-progress.sh` — already in `.chief/verify.sh`'s `CHIEF_BYSTANDER_TESTS`, `test/all.sh` and `.github/workflows/ci.yml` — gains a fixture for this shape: a re-engaged tasklist whose stories all pass, whose verify hook fails, and whose fake agent commits one tracked markdown file per turn and never emits the completion token. It stops at its budget, asserted as an exact turn count, instead of running to `HARD_MAX`.",
+        "IT REPRODUCES FIRST: the file demonstrates the same fixture running past its budget against the unfixed arm, neutered in a copy of the engine rather than recovered with `git show HEAD~N` (CI clones shallow), so the assertion cannot pass by restating behaviour that always worked.",
+        "The existing `bk-spin` and `bk-both` assertions pass unchanged.",
+        "`docs/reference/tasklist-schema.md` (near the existing `STALL_LIMIT` passage) and `docs/guides/monitoring.md` (near its `$STALL_LIMIT` passage) state the rule and quote the new line an operator will see.",
+        "`VERSION` is bumped, and the bold `**vX.Y.Z**` in `README.md` and `ROADMAP.md` match it (`test/version-bump.sh`, `test/doc-sync.sh`).",
+        "Nothing added or edited names a downstream repository, tasklist or path; the fixture and every prose change describe the incident by its shape.",
+        "GATES: `bash test/bookkeeping-progress.sh` green; `chief verify` green."
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
