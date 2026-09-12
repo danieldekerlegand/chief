@@ -23,6 +23,14 @@ set -uo pipefail
 
 BASE="${CHIEF_BASE_BRANCH:-main}"
 
+# --- roadmap truth guard ------------------------------------------------------
+# UNCONDITIONAL, and deliberately ABOVE the empty-diff early return: ROADMAP.md vs
+# tasks/chief/completed/ is a property of the TREE, not of the diff, so it rots on
+# branches that touch neither file. Three legs — every completed tasklist named by
+# its FULL stem, no OPEN row naming a MERGED tasklist, and a parked tasklist reading
+# as PARKED wherever it is named. Vendored byte-identical from the control plane.
+bash scripts/check-roadmap-truth.sh || { echo "verify: BLOCK — roadmap-truth guard (see above)"; exit 1; }
+
 changed="$(git diff --name-only "$BASE"...HEAD 2>/dev/null)"
 if [ -z "$changed" ]; then
   echo "verify: no diff vs $BASE — nothing to check (allowing merge)"
