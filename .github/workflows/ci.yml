@@ -215,6 +215,9 @@ jobs:
       - name: A zone says what WITHIN a watched path is load-bearing (a consumer merges, the declaration it calls is held; the old syntax is untouched)
         run: bash test/zone-surface.sh
 
+      - name: The friction, measured (a consumer merges unheld, the surface it calls is HELD; neutered, the consumer is held again)
+        run: bash test/zone-friction.sh
+
       - name: What a resolution DELETED (the incident flagged with its line, file and sibling; intent, a move, a clean rebase and a later commit are not)
         run: bash test/resolution-deletions.sh
 

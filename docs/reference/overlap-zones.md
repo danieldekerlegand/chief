@@ -1,6 +1,6 @@
 # Overlap zones — where a green gate is not enough authority to merge
 
-> **Status:** Current · **Updated:** 2026-08-17 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-09-12 · **Owner:** chief
 
 Chief's correctness guarantee is the **merge floor**: before anything reaches the base
 branch it is rebased onto the latest base, re-verified, and merged `--no-ff`. Textual
@@ -33,6 +33,8 @@ review     path:src/schema/       the data model two agents must not diverge on
 review     path:*/migrations/*    schema migrations, in any package
 review     touches:auth
 serialize  path:docs/             documented, scheduled apart, merged as usual
+
+review     surface:src/schema/*.ts:^export[ ]+(type|interface)   the declared shape, not its readers
 ```
 
 ### Policies
@@ -48,6 +50,7 @@ serialize  path:docs/             documented, scheduled apart, merged as usual
 |---|---|
 | `path:<glob>` | Each repo-relative path the branch actually changed — `git diff --name-only <base>...HEAD`, the same scope the verify hook uses. `*` crosses `/`, so `engine/*.sh` also covers `engine/x/y.sh`; a trailing `/` means "everything beneath this directory". |
 | `touches:<domain>` | An exact `touches` domain name from the tasklist JSON. |
+| `surface:<glob>:<ere>` | **The same glob, narrowed to what within those files is load-bearing.** It matches only when the branch's diff to a matching file *adds or removes* a line matching `<ere>` — so adding a routine consumer under a watched path does not hold, and rewriting the declaration it calls does. Split at the **first** colon, so a glob may not contain one. See [Narrowing a rule](#narrowing-a-rule-what-within-the-path-is-load-bearing). |
 
 **Path matchers are the load-bearing half, and that is deliberate.** A tasklist's
 `touches` entries are frequently *conceptual tags* — a real one declared
@@ -56,6 +59,82 @@ matches anything lexically. A registry keyed on tags alone is therefore invisibl
 exactly the case it exists for. Keying on the branch's real changed files is what makes
 a zone catch the tasklist that never named it. Use `touches:` only where your tags
 really are domains, as a second key on top.
+
+### Narrowing a rule: what within the path is load-bearing
+
+A `path:` glob is **file-level**, and a file is often the wrong unit for the question
+being asked. A zone that watches `engine/*.sh` because the scheduler's *contract* is
+where two agents' designs must not diverge also fires on a branch that added a routine
+consumer three directories down: same file set, entirely different risk. Every hold then
+looks alike, and a hold that looks like every other hold is approved unread — which is
+worse than no hold, because it manufactures a record of a review that did not happen.
+That is what happened on 2026-09-10, when every `review` rule in two downstream
+registries was rewritten to `serialize` in a single day.
+
+So a zone can say what **within** the watched path it cares about:
+
+```
+review  path:engine/*.sh                              # every change under the path
+review  surface:engine/*.sh:^[a-z_][a-z_0-9]*\(\)      # …only its function declarations
+review  surface:engine/driver.sh:^AGENT_RC_           # …only the contended exit-code namespace
+```
+
+- **It reads the diff, not the file.** Matching the ERE against the file as it now
+  stands would hold every branch that touched a file which *happens to contain* a
+  declaration — the file-level rule again, wearing a regex. The changed lines are the
+  only reading under which "added a consumer" and "changed the contract" differ.
+- **Both signs count.** A removal is a change to a surface exactly as an addition is;
+  deleting a declaration is the most consequential edit to one. A pure move therefore
+  holds, which is the right answer — the declaration's home changed.
+- **The whole matcher is one whitespace-free token**, for all three forms: the reason
+  begins at the next space. An ERE needing a literal space writes it as the bracket
+  expression `[ ]`. Spelled with a real space it still *compiles*, shorter than
+  intended, with the remainder read as prose — the one mistake in this format that is
+  not reported.
+- **It fails closed.** If the branch's diff cannot be read, or the module is not
+  sourced, the rule falls back to plain `path:<glob>` matching — the old, coarser rule,
+  never *no* rule. A review gate that silently stops holding has disarmed itself.
+- **A malformed `surface:` line is reported on stderr and skipped**, like any other
+  registry typo, and the run carries on.
+
+#### The old forms keep their meaning, exactly
+
+`surface:` is a **third matcher beside** `path:` and `touches:`, never a
+reinterpretation of either. A registry using only the old two evaluates today's rules
+against today's inputs and produces today's holds, byte for byte, and a repo with no
+`zones.conf` still behaves exactly as it did before any of this existed.
+
+**Re-arming stays a one-word edit.** A rule that was costing more than it caught became
+`serialize`; it re-arms by putting `review` back, with nothing else about the line
+changed. Narrowing it with `surface:` is a *separate, opt-in* edit you can make when you
+choose — and a disarmed registry can re-arm first and narrow later, or not at all.
+
+#### Choose the surface by measuring it, not by taste
+
+`scripts/zone-friction.sh` replays a before/after registry pair over a repo's
+first-parent merges and reports **both directions** — the holds that survive the
+narrowing, and the holds released — using the gate's own matcher, read-only:
+
+```
+bash scripts/zone-friction.sh before.conf after.conf --repo . --rev main
+```
+
+Both directions matter, because **a rule that holds nothing is ignored exactly as a rule
+that holds everything is.** Measured over chief's own 54 merges (2026-08-01 → 09-12):
+
+| zone | before | after | released |
+|---|---|---|---|
+| `path:engine/driver.sh` → `surface:engine/driver.sh:^AGENT_RC_` | 31 holds | 4 | **27 (87%)** |
+| `path:engine/*.sh` → `surface:engine/*.sh:^[a-z_][a-z_0-9]*\(\)` | 47 holds | 43 | 4 (8%) |
+
+The first is the shape to write: the agent exit-code namespace is a genuinely contended
+declaration — two parallel tasklists claiming the same number is a design collision no
+gate catches — and the four merges it still holds are exactly the four that claimed a
+code. The second is the shape to avoid: in a repo whose every tasklist authors engine
+functions, "any declaration" is the coarse glob spelled longer, and it still asks about
+79% of merges. **Name the contended declaration, not every declaration** — and check it
+against your own history before arming the rule, because which one you have written is
+not visible by reading it.
 
 For a `repo:<sub>` (submodule) tasklist the registry is still the project's
 `.chief/zones.conf`, and `path:` patterns are matched against paths as the *submodule*
@@ -207,6 +286,11 @@ that already-merged work would be undone.
   by real rebase, and none detects design divergence, which is what this page is about.
 - **Not a weakening of the floor.** Nothing here can let something merge that the floor
   would have stopped; the check runs strictly after it, and its only power is to withhold.
+- **Not a judgement about whether a design is right.** `surface:` targets holds more
+  precisely; it cannot tell a good contract change from a bad one. A branch a zone held
+  has cleared the whole floor and is being shown to a person because the surface it
+  changed is one this repo decided a person should look at. The reading is still the
+  person's work — narrowing only buys back the attention to do it.
 - **Not a scheduling change.** `touches` remains what it was: a hint the scheduler uses
   to avoid wasted rebase churn ([`../explanation/drivers-and-safety.md`](../explanation/drivers-and-safety.md)).
   A `serialize` zone changes nothing at all; a `review` zone changes only whether a

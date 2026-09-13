@@ -3821,8 +3821,7 @@ if [ -n "$inzone" ]; then
   echo "   ⏸ AWAITING APPROVAL — $(set -- $inzone; echo $#) tasklist(s) rebased + verified GREEN, held by the merge policy layer:$inzone"
   for n in $inzone; do
     printf '    · %-30s %s\n' "$n" "$(cat "$STATE/$n.status" 2>/dev/null || echo AWAITING-APPROVAL)"
-    zones_render "$(jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | @tsv' \
-                      "$(zones_request_file "$STATE" "$n")" 2>/dev/null || echo)"
+    zones_render "$(zones_request_tsv "$(zones_request_file "$STATE" "$n")")"
   done
   echo "    Approve what a gate cannot check (whether the designs agree, whether the size is warranted), then:  chief approve <name> && chief run"
 fi

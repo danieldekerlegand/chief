@@ -269,7 +269,20 @@ engine/
                      #   The old forms keep their meaning exactly and re-arming stays the
                      #   one-word `serialize` -> `review` edit; narrowing is separate and
                      #   opt-in. It targets holds more precisely — it does not judge whether a
-                     #   design is right
+                     #   design is right. MEASURED rather than asserted, in both directions:
+                     #   scripts/zone-friction.sh replays a before/after registry pair over a
+                     #   repo's first-parent merges and reports the holds that SURVIVE the
+                     #   narrowing beside the ones RELEASED, using the gate's own zones_match
+                     #   (a measurement with its own copy of the rule measures the copy). Over
+                     #   this repo's 54 merges, 2026-08-01..09-12: the contended exit-code
+                     #   namespace (`surface:engine/driver.sh:^AGENT_RC_`) falls 31 holds ->
+                     #   4, and the 4 are exactly the merges that claimed a code; "any
+                     #   declaration under engine/" (`^[a-z_][a-z_0-9]*\(\)`) falls 47 -> 43,
+                     #   which in a repo whose every tasklist authors engine functions is the
+                     #   coarse glob spelled longer. So the ERE must name the CONTENDED
+                     #   declaration, not every declaration — and the harness prints that
+                     #   verdict itself (a band, not `released > 0`), because a report whose
+                     #   conclusion has to be read out of two numbers is the unread hold again
   zones.sh           #   the OVERLAP ZONE REGISTRY, a policy layer ABOVE the merge floor. The floor
                      #   catches TEXTUAL interference (rebase conflict) and staleness (verify
                      #   failure); it says nothing about two branches whose DESIGNS disagree — both
@@ -502,6 +515,18 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   escapee was not named" can never read as "the sweep never ran".
                      #   PART B plants the entry the start-time check exists for — alive pid,
                      #   wrong start time — and pins that it is REPORTED and LEFT ALONE
+                     #   zone-friction.sh — the granularity distinction as an OUTCOME, through
+                     #   the real driver, where zone-surface.sh asserts the matcher's own
+                     #   output: "the rule did not match" and "the branch merged with nobody
+                     #   asked" are different claims and only the second is the feature. One
+                     #   registry, one run, two tasklists — the consumer merges unheld, the
+                     #   declaration it CALLS is held with both signs of its rename named in
+                     #   all four report sites, one approve releases it. REPRODUCES first:
+                     #   PART B neuters surface_match in a COPY of the engine (rc 2, the
+                     #   engine's own documented fall-back to the coarse rule = the pre-910
+                     #   rule) and the same consumer branch is held again. PART C runs the
+                     #   measurement over PART A's OWN merges and pins that the repo it
+                     #   measured is byte-identical afterwards
 docs/                # Diataxis, per the ecosystem documentation standard, and docs/README.md is
                      # the map: A DOCUMENT NOT LINKED THERE DOES NOT EXIST. guides/ (containers ·
                      # headless-invocation · local-inference-preset · monitoring · providers) ·
@@ -664,6 +689,18 @@ VERSION              # engine version — bump on any engine/bin/install change
   ci.yml is the third of the three gate lists and is the only one that **nothing
   local checks**. `bash -n` sees nothing here, exactly as it sees nothing in the
   heredoc case below.
+- **`jq -r … | @tsv` ESCAPES BACKSLASHES; `join("\t")` does not.** `@tsv` escapes `\t`,
+  `\n`, `\r` and `\\`, so a value round-tripped through a JSON record and back out as TSV
+  comes back a DIFFERENT string: an operator's `surface:lib/*.sh:^[a-z_]+\(\)` zone was
+  rendered `…^[a-z_]+\\(\\)` — a regex matching a literal backslash — in the run summary
+  and `chief approve --list`, the two of a hold's four report sites that read the request
+  file back, while the worker log (raw TSV) showed the real one. Copying the zone out of
+  `--list` into `zones.conf` therefore produced a rule that cannot fire. Use
+  `join("\t")` where the fields carry no tabs by construction, as `zones_request_tsv`
+  does. It stayed invisible for as long as it did because no `path:` glob contains a
+  backslash — generally, **giving a backslash-free value its first backslash exposes
+  every escaping layer it passes through at once**, which is the same bug as the
+  `awk -v` trap one layer out.
 - **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
   after one inside a `jq -n '…'` program parses as an expression and silently replaces the
   field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in

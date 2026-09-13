@@ -323,6 +323,25 @@ zones_render() {
   return 0
 }
 
+# zones_request_tsv REQ — the zones recorded in an approval request, back as the TSV
+# every reader of a hold renders. NOT `@tsv`, which is what this was: jq's @tsv ESCAPES
+# backslashes, and a `surface:<glob>:<ere>` matcher is made of them. The zone
+# `surface:lib/*.sh:^[a-z_]+\(\)` came back as `…^[a-z_]+\\(\\)` — a DIFFERENT
+# regex, one matching a literal backslash — in the run summary and `chief approve
+# --list`, the two sites that round-trip through the request file, while the worker log
+# (which renders the TSV directly) showed the real one. The same detail in all four
+# places is the property this layer claims; an operator copying the zone out of
+# `--list` back into zones.conf got a rule that cannot fire. Invisible until `surface:`
+# existed, because no `path:` glob contains a backslash.
+#
+# Joining on a literal tab is the faithful inverse of how the line was built: the
+# fields carry no tabs by construction — a matcher is one whitespace-free token, the
+# registry splitter treats a tab in the reason as a separator, and engine/surface.sh
+# squeezes tabs out of a hit line before it becomes one.
+zones_request_tsv() {
+  jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | join("\t")' "$1" 2>/dev/null || echo
+}
+
 # zones_merge_gate NAME BRANCH WORK_REPO BASE STATE TOUCHES [SCOPE_BASE] — the
 # decision the merge phase asks for, and the only entry point driver.sh calls.
 #
@@ -490,7 +509,7 @@ zones_show() {   # $1 = <state>/parallel, $2 = tasklist name
     "$(jq -r '.branch // "?"' "$req" 2>/dev/null || echo '?')" \
     "$(jq -r '(.files // []) | length' "$req" 2>/dev/null || echo '?')" \
     "$(jq -r '.base // "?"' "$req" 2>/dev/null || echo '?')"
-  zones_render "$(jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | @tsv' "$req" 2>/dev/null || echo)"
+  zones_render "$(zones_request_tsv "$req")"
   return 0
 }
 
