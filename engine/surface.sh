@@ -68,7 +68,14 @@ surface_scope() {
 # `surface:` — `<glob>:<ere>`, split at the FIRST colon, so a glob may not contain one
 # (paths that do are pathological; the registry says so).
 #
-#   0  MATCHED — SURFACE_HIT names the file and the changed line that matched
+#   0  MATCHED — SURFACE_HITS carries EVERY matching change, one `<file>: <±line>` per
+#      line, and SURFACE_HIT is the first of them. All of them, because "which surface
+#      did this branch touch" is the question the hold is read to answer, and the first
+#      hit alone is what made the old report unreadable: a branch that rewrites four
+#      declarations is a different thing from one that renames one, and reporting only
+#      `engine/a.sh: -alpha() {` cannot say which it is. The SIGN is carried with the
+#      text because a removed declaration and an added one are the two facts a reader
+#      needs kept apart. engine/zones.sh truncates the list for display with a count.
 #   1  did not match
 #   2  THE DIFF IS UNREADABLE — the caller must fall back to path-level matching
 #   3  MALFORMED — the caller reports it on stderr and skips the rule, never fatal
@@ -77,7 +84,7 @@ surface_scope() {
 # aborts awk mid-stream and a registry typo may not take down a run.
 surface_match() {
   local glob ere diff line f l
-  SURFACE_HIT=""
+  SURFACE_HIT=""; SURFACE_HITS=""
   case "${1:-}" in *:*) ;; *) return 3 ;; esac
   glob="${1%%:*}"; ere="${1#*:}"
   [ -n "$glob" ] && [ -n "$ere" ] || return 3
@@ -106,8 +113,9 @@ surface_match() {
     [ -n "$line" ] || continue
     f="${line%%$'\t'*}"; l="${line#*$'\t'}"
     zones_path_match "$glob" "$f" || continue
-    SURFACE_HIT="$f: $l"
-    return 0
+    [ -n "$SURFACE_HIT" ] || SURFACE_HIT="$f: $l"
+    SURFACE_HITS="$SURFACE_HITS$f: $l
+"
   done <<EOF
 $(printf '%s\n' "$diff" | SURFACE_ERE="$ere" LC_ALL=C awk '
     BEGIN { re = ENVIRON["SURFACE_ERE"] }
@@ -115,7 +123,7 @@ $(printf '%s\n' "$diff" | SURFACE_ERE="$ere" LC_ALL=C awk '
     # "-- a/foo" renders as "--- a/foo" and is indistinguishable from a file header out
     # of context, so ---/+++ are read only between `diff --git` and the first hunk, and
     # body lines only after one.
-    /^diff --git / { inhdr = 1; p = ""; q = ""; hit = 0; next }
+    /^diff --git / { inhdr = 1; p = ""; q = ""; next }
     inhdr && /^--- /    { q = substr($0, 5); next }
     inhdr && /^\+\+\+ / {
       p = substr($0, 5)
@@ -125,19 +133,24 @@ $(printf '%s\n' "$diff" | SURFACE_ERE="$ere" LC_ALL=C awk '
     }
     /^@@/  { inhdr = 0; next }
     inhdr  { next }
-    hit || p == "" { next }
+    p == "" { next }
+    # EVERY matching line, not the first one per file: the whole point of reporting a
+    # hold is to say what surface the branch touched, and one line out of four is a
+    # report a reader cannot act on. The caller bounds the list for display.
     /^[+-]/ {
       l = substr($0, 2)
       if (l !~ re) next
       # The line becomes one TSV field and then one JSON string: a tab in it would
       # shift every field after it, so tabs are squeezed and the line is trimmed and
-      # bounded rather than printed raw.
+      # bounded rather than printed raw. The +/- is re-attached AFTER the trim, so an
+      # indented declaration and a column-0 one read alike apart from their sign.
       gsub(/[\t\r]/, " ", l); sub(/^ +/, "", l); sub(/ +$/, "", l)
       if (length(l) > 100) l = substr(l, 1, 97) "..."
-      printf "%s\t%s\n", p, l
-      hit = 1
+      printf "%s\t%s%s\n", p, substr($0, 1, 1), l
     }
   ')
 EOF
-  return 1
+  SURFACE_HITS="${SURFACE_HITS%$'\n'}"
+  [ -n "$SURFACE_HITS" ] || return 1
+  return 0
 }

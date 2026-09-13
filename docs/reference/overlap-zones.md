@@ -85,6 +85,34 @@ chief park whose worktree is already gone: the merge phase removes the worktree 
 the branch for checkout, before any of this. Nothing is half-done; a resumed run
 rebuilds the worktree it needs.
 
+### What a hold says
+
+A hold is only worth its friction if it can be read, and the report it used to produce
+could not be: the glob that matched and the *first* file that hit it. "This branch
+changed something under `engine/`" is the same sentence whether the branch touched one
+file or thirty, so every hold looked alike and every hold was approved unread.
+
+A hold therefore names **everything the zone matched**, one line per hit:
+
+```
+!! 91-zones HELD BY THE MERGE POLICY LAYER — it is rebased onto main and its verify came back GREEN;
+   it is not merged because the merge policy layer matched what it changed:
+     review  path:src/schema/  (matched: src/schema/order.rs)  — the data model two agents must not diverge on
+     review  path:src/schema/  (matched: src/schema/user.rs)
+     review  budget:lines      (matched: US-3: 612 line(s), 9 file(s))  — the per-story diff-size budget …
+```
+
+- **The reason rides the zone's first line only.** It belongs to the zone, not to each
+  hit, and a sentence printed ten times is a sentence nobody reads.
+- **A long list is cut, and the cut says so.** Past `ZONES_HIT_LIMIT` (10) the list ends
+  with `… and 14 more changed file(s) (24 in total, set id 3279879893-116)`. Never a
+  list that simply stops: a report that lies about the size of what it describes is the
+  same defect one register up.
+- **The same detail reaches all four places a hold is reported** — the worker log, the
+  request file (`.chief/state/parallel/<name>.zone-request.json`), the run summary's
+  awaiting-approval block, and `chief approve --list`. All four render the one list, so
+  they cannot drift into three and one.
+
 `awaiting-approval` is **non-terminal and not a failure**. Dependents stay `pending`
 rather than cascading to `blocked`, the scheduler carries on with the siblings, the run
 summary reports it apart from the failures, and a headless run exits `7` (held), not a
@@ -120,6 +148,11 @@ Two consequences, both intended:
   again, the question is asked again.
 - Widening the registry onto a branch re-asks, even if that branch was approved for a
   narrower set of zones.
+- **Cutting a long list for display does not shorten what the approval covers.** The
+  truncation line carries a `set id` over the *whole* match, so two branches differing
+  only past the cut get different checksums. Bind to what survived truncation instead
+  and a later change that rewrote a different ten of the same thirty surfaces would
+  silently reuse the old yes.
 
 `chief approve` never pre-approves: it refuses a name with no request on disk, because
 until the floor has run there is nothing to approve.

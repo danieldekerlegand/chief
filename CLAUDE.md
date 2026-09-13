@@ -274,7 +274,20 @@ engine/
                      #   catches TEXTUAL interference (rebase conflict) and staleness (verify
                      #   failure); it says nothing about two branches whose DESIGNS disagree — both
                      #   rebase clean, both verify green, the result is still wrong. No automated
-                     #   gate detects that, so a declared domain holds the branch for `chief approve`
+                     #   gate detects that, so a declared domain holds the branch for `chief approve`.
+                     #   AND THE HOLD HAS TO BE READABLE, or it is approved unread: zones_emit
+                     #   reports EVERY hit a zone matched (zones_path_hits · SURFACE_HITS), one
+                     #   TSV line each, because "changed something under engine/" is the same
+                     #   sentence for one file and for thirty. The operator's reason rides the
+                     #   zone's FIRST line only. Past ZONES_HIT_LIMIT the list is CUT and the cut
+                     #   DECLARES itself — how many more, how many in total, and a `set id` over
+                     #   the WHOLE match, which is the load-bearing half: zones_digest binds the
+                     #   approval to the emitted lines, so binding to what survived truncation
+                     #   alone would let a later change rewriting a different ten of the same
+                     #   thirty surfaces reuse the old YES (resolution_holds' rule, same reason).
+                     #   All four report sites — worker log, request JSON, run summary,
+                     #   `chief approve --list` — render that ONE list, which is what keeps them
+                     #   from drifting into three and one
   resolution.sh      #   WHAT A CONFLICT RESOLUTION DELETED — the third shape, and the one the
                      #   floor is blind to BY CONSTRUCTION. The floor catches textual
                      #   interference and staleness; it never compares what a rebase REMOVED

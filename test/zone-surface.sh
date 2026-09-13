@@ -28,6 +28,12 @@
 #           completes and merges, with the note in the worker log. Plus the property
 #           test/overlap-zones.sh PART A guards at the other end — a repo with NO
 #           zones.conf merges with nothing asked and nothing written.
+#   PART E  WHAT THE HOLD SAYS. A zone reports EVERY surface it matched, not the first
+#           one — a rename is a declaration removed AND one added, and one line out of
+#           two can say neither. Past ZONES_HIT_LIMIT the list is CUT, and the cut is
+#           never silent and never weakens the binding: it declares how many more and
+#           how many in total, and carries a set id over the WHOLE list, so two
+#           branches differing only BEYOND the cut get different approval checksums.
 #
 # PARTS A-C source the two modules directly against a scratch repo: no driver, under a
 # second, and the assertion is the matcher's own output rather than a log line. PART D
@@ -106,7 +112,24 @@ beta() {
   echo two
 }
 A
-  git add -A && git commit -q -m "rename a declaration" )
+  git add -A && git commit -q -m "rename a declaration"
+
+  # PART E's fixture: MORE declarations than a hold will display, and a sibling that
+  # differs only in one BEYOND the cut — the exact shape a truncated report would lose.
+  for b in many many2; do
+    git checkout -q main; git checkout -q -b "$b"
+    { echo '#!/usr/bin/env bash'
+      i=1
+      while [ "$i" -le 14 ]; do
+        if [ "$b" = many2 ] && [ "$i" = 14 ]; then printf 'g%02d() {\n  echo %d\n}\n' "$i" "$i"
+        else                                       printf 'f%02d() {\n  echo %d\n}\n' "$i" "$i"
+        fi
+        i=$((i + 1))
+      done
+    } > engine/m.sh
+    git add -A && git commit -q -m "fourteen declarations ($b)"
+  done
+  git checkout -q main )
 
 CONF="$WORK/zones.conf"
 cat > "$CONF" <<'CONF'
@@ -138,15 +161,21 @@ note "   ok  consumer branch (new file + a body edit under engine/): not held"
 
 OUT="$(match contract)"
 [ -n "$OUT" ] || fail "the contract branch was NOT held — a rewritten declaration is the surface"
-HIT="$(printf '%s' "$OUT" | cut -f3)"
-case "$HIT" in
-  engine/a.sh:*alpha*) ;;
-  *) fail "the hit is '$HIT' — it must name the FILE and the LINE that matched, not just the glob" ;;
-esac
-[ "$(printf '%s' "$OUT" | cut -f2)" = 'surface:engine/*.sh:^[a-z_][a-z_0-9]*\(\)' ] \
-  || fail "the matched zone is reported as '$(printf '%s' "$OUT" | cut -f2)'"
-[ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 1 ] || fail "one rule matched more than once"
-note "   ok  contract branch (a renamed declaration): held, hit = $HIT"
+# ONE ZONE matched, and every line of the report belongs to it.
+[ "$(printf '%s\n' "$OUT" | cut -f2 | LC_ALL=C sort -u)" = 'surface:engine/*.sh:^[a-z_][a-z_0-9]*\(\)' ] \
+  || fail "the matched zone is reported as '$(printf '%s\n' "$OUT" | cut -f2 | LC_ALL=C sort -u | tr '\n' '/')'"
+# BOTH FACTS, NOT THE FIRST ONE. A rename is a declaration REMOVED and a declaration
+# ADDED; reporting one of them describes a different change from the one that happened.
+HITS="$(printf '%s\n' "$OUT" | cut -f3)"
+printf '%s\n' "$HITS" | grep -qx 'engine/a.sh: -alpha() {'  || fail "the removed declaration is not named: $HITS"
+printf '%s\n' "$HITS" | grep -qx 'engine/a.sh: +alpha2() {' || fail "the added declaration is not named: $HITS"
+[ "$(printf '%s\n' "$OUT" | grep -c .)" = 2 ] || fail "expected exactly the two changed declarations, got: $HITS"
+# The operator's reason belongs to the ZONE, so it rides the first line and is not
+# repeated per hit — a sentence printed ten times is a sentence nobody reads.
+[ "$(printf '%s\n' "$OUT" | sed -n 1p | cut -f4)" = 'the function contracts two agents must not diverge on' ] \
+  || fail "the first line does not carry the zone's reason"
+[ -z "$(printf '%s\n' "$OUT" | sed -n 2p | cut -f4)" ] || fail "the reason was repeated on a continuation line"
+note "   ok  contract branch (a renamed declaration): held, both signs named"
 
 # ══ PART B — the old syntax keeps its meaning ════════════════════════════════
 note "PART B — path: and touches: are byte-identical, and the one-word re-arm still works"
@@ -160,7 +189,10 @@ CONF
 # including which zone is named and what it says matched.
 surface_scope "$REPO" "main...consumer"
 GOT="$(zones_match review "$OLD" "$(changed consumer)" "engine render")"
-WANT="$(printf 'review\tpath:engine/*.sh\tengine/a.sh\tthe coarse rule\nreview\ttouches:engine\ttouches:engine\tthe tag rule')"
+# EVERY file the glob matched, in diff order, with the reason on the zone's first
+# line only: the MATCHING is unchanged by `surface:` existing, the REPORT is what 910
+# US-2 widened, uniformly for every matcher kind.
+WANT="$(printf 'review\tpath:engine/*.sh\tengine/a.sh\tthe coarse rule\nreview\tpath:engine/*.sh\tengine/c.sh\t\nreview\ttouches:engine\ttouches:engine\tthe tag rule')"
 [ "$GOT" = "$WANT" ] || { printf 'got:\n%s\nwant:\n%s\n' "$GOT" "$WANT" >&2
   fail "an old-syntax registry no longer produces the output it produced before surface: existed"; }
 # The same registry with NO scope set at all — the state every pre-feature caller was
@@ -203,8 +235,10 @@ surface_scope "$REPO" "main...contract"
 ERR="$WORK/bad.err"
 GOT="$(zones_match review "$BAD" "$(changed contract)" "" 2>"$ERR")" \
   || fail "a malformed registry made zones_match exit non-zero — a typo must never take down a run"
-[ "$(printf '%s\n' "$GOT" | grep -c .)" = 1 ] \
+[ "$(printf '%s\n' "$GOT" | cut -f2 | LC_ALL=C sort -u | grep -c .)" = 1 ] \
   || { cat "$ERR" >&2; fail "expected exactly the good rule to match, got: $GOT"; }
+[ "$(printf '%s\n' "$GOT" | grep -c .)" = 2 ] \
+  || { cat "$ERR" >&2; fail "the good rule reported $(printf '%s\n' "$GOT" | grep -c .) hit(s), want its 2 changed declarations"; }
 [ "$(grep -c '^zones: ' "$ERR")" = 5 ] || { cat "$ERR" >&2; fail "expected 5 notes on stderr, got $(grep -c '^zones: ' "$ERR")"; }
 grep -q 'surface:<glob>:<ere>' "$ERR" || { cat "$ERR" >&2; fail "the note never names the form the operator should have used"; }
 note "   ok  5 reported, 5 skipped, the good rule on the next line still held"
@@ -315,4 +349,47 @@ if grep -q '^zones: ' "$S/ok2.log"; then fail "a repo with no zones.conf said so
 if ls "$S"/ok2.zone-*.json >/dev/null 2>&1; then fail "a repo with no zones.conf wrote an approval artifact"; fi
 note "   ok  no zones.conf: merged with nothing read, nothing said, nothing written"
 
-note "OK — the narrowed matcher discriminates, the old syntax is untouched, a typo is survivable"
+# ══ PART E — what the hold says, and what the cut costs ══════════════════════
+# Back to the matcher directly: PARTS A-D are about WHICH branches are held, this one
+# is about whether a hold can be READ. The claim under repair is that holds were noise
+# — and "changed a file under engine/" is noise whether one file changed or thirty.
+note "PART E — every hit is named, a long list is cut with a count, and the cut still binds"
+
+MANY="$WORK/many.conf"
+printf 'review     surface:engine/%s.sh:^[a-z_][a-z_0-9]*\\(\\)   fourteen of them\n' '*' > "$MANY"
+surface_scope "$REPO" "main...many"
+E="$(zones_match review "$MANY" "$(changed many)" "")"
+LINES="$(printf '%s\n' "$E" | grep -c .)"
+[ "$LINES" = 11 ] \
+  || { printf '%s\n' "$E" >&2; fail "14 matched declarations rendered as $LINES line(s), want 10 hits + 1 cut"; }
+# The cut SAYS SO — how many more and how many in total. A list that just stops is a
+# report that lies about the size of what it is describing.
+CUT="$(printf '%s\n' "$E" | sed -n 11p | cut -f3)"
+case "$CUT" in
+  *"and 4 more surface line(s)"*"14 in total"*"set id "*) ;;
+  *) fail "the truncation line is '$CUT' — it must name the remainder, the total and the set id" ;;
+esac
+[ "$(printf '%s\n' "$E" | sed -n 1p | cut -f3)" = 'engine/m.sh: +f01() {' ] \
+  || fail "the first hit is '$(printf '%s\n' "$E" | sed -n 1p | cut -f3)'"
+[ "$(printf '%s\n' "$E" | sed -n 10p | cut -f3)" = 'engine/m.sh: +f10() {' ] \
+  || fail "the tenth hit is '$(printf '%s\n' "$E" | sed -n 10p | cut -f3)' — the cut is not at ZONES_HIT_LIMIT"
+note "   ok  10 of 14 named, then '$CUT'"
+
+# THE CUT MUST NOT WEAKEN THE BINDING. `many2` differs from `many` in exactly one
+# declaration, the FOURTEENTH — past the display limit, so no LINE of the report
+# differs. Bind the approval to what survived truncation and that branch reuses the
+# other's YES; bind it to the set id over the whole list and it re-asks. This is the
+# assertion that makes the cut safe, and it fails on any implementation that omits the
+# id (both digests are then computed over ten identical hits).
+F1="$(changed many)";  D1="$(zones_digest "$F1" "$E")"
+surface_scope "$REPO" "main...many2"
+F2="$(changed many2)"; E2="$(zones_match review "$MANY" "$F2" "")"
+[ "$F1" = "$F2" ] || fail "the two fixtures differ in their changed FILES — the digest would re-ask for the wrong reason"
+[ "$(printf '%s\n' "$E"  | sed -n '1,10p')" = "$(printf '%s\n' "$E2" | sed -n '1,10p')" ] \
+  || { diff <(printf '%s\n' "$E") <(printf '%s\n' "$E2") >&2 || true
+       fail "the fixtures differ WITHIN the displayed hits — this would prove nothing about the cut"; }
+D2="$(zones_digest "$F2" "$E2")"
+[ "$D1" != "$D2" ] || fail "two branches differing only PAST the cut share an approval checksum ($D1) — truncation lost the binding"
+note "   ok  same files, same ten displayed hits, different approval checksum ($D1 vs $D2)"
+
+note "OK — the narrowed matcher discriminates, the old syntax is untouched, a typo is survivable, and a hold names what it is asking about"

@@ -119,31 +119,89 @@ zones_path_match() {
   return 1
 }
 
-# zones_first_path_match PATTERN FILES — the first changed path PATTERN matches, into
-# ZONES_HIT. SET-A-GLOBAL rather than print, and shared by the `path:` matcher and by
-# `surface:`'s fail-closed fallback so the coarse rule has exactly one implementation:
-# a `$( )` here is a fork paid per zone, and the two arms drifting is the bug class.
-zones_first_path_match() {
+# zones_path_hits PATTERN FILES — EVERY changed path PATTERN matches, into ZONES_HITS
+# (one per line) with ZONES_HIT the first of them. SET-A-GLOBAL rather than print, and
+# shared by the `path:` matcher and by `surface:`'s fail-closed fallback so the coarse
+# rule has exactly one implementation: a `$( )` here is a fork paid per zone, and the
+# two arms drifting is the bug class.
+#
+# ALL of them and not the first, which is the report this used to produce: "changed a
+# file under path:engine/" is the same sentence whether the branch touched one file or
+# thirty, and a hold that cannot distinguish those is a hold nobody reads. No early
+# return, so the walk is the full changed-file list per zone — a bash loop with no
+# forks in it, against a list the caller already has in memory.
+zones_path_hits() {
   local pat="$1" f
-  ZONES_HIT=""
+  ZONES_HIT=""; ZONES_HITS=""
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    zones_path_match "$pat" "$f" && { ZONES_HIT="$f"; return 0; }
+    zones_path_match "$pat" "$f" || continue
+    [ -n "$ZONES_HIT" ] || ZONES_HIT="$f"
+    ZONES_HITS="$ZONES_HITS$f
+"
   done <<EOF
 $2
 EOF
-  return 1
+  ZONES_HITS="${ZONES_HITS%$'\n'}"
+  [ -n "$ZONES_HITS" ] || return 1
+  return 0
 }
 
-# zones_match POLICY CONF FILES TOUCHES -> one TAB-separated line per MATCHED zone:
-#     <policy> <TAB> <matcher> <TAB> <what matched it> <TAB> <reason>
+# ZONES_HIT_LIMIT — how many hits ONE zone reports before the list is cut. A hold is
+# read by a person, and a hundred file names is the same as none; ten is enough to see
+# the shape of what changed. The cut is never silent (see zones_emit) and never
+# weakens the binding.
+ZONES_HIT_LIMIT="${ZONES_HIT_LIMIT:-10}"
+
+# zones_emit POLICY MATCHER REASON HITS UNIT — one matched zone, as the TSV lines that
+# every reader of a hold shares. ONE LINE PER HIT rather than one per zone, because
+# all four places a hold is reported — the worker log, the request JSON, the run
+# summary's awaiting-approval block and `chief approve --list` — render this same TSV,
+# so the detail reaches all four by construction and cannot reach three of them. It is
+# the shape engine/resolution.sh already emits its erased lines in.
+#
+# THE REASON RIDES THE FIRST LINE ONLY. It belongs to the zone, not to each hit, and
+# repeating an operator's sentence ten times is exactly how a hold stops being read.
+#
+# TRUNCATION IS NEVER SILENT, AND NEVER WEAKENS THE BINDING. Past the limit the list
+# is cut and the cut says so — how many more, how many in total — and it carries an
+# `id` over the WHOLE set. That id is the load-bearing half: zones_digest binds an
+# approval to the emitted lines, so binding to what survived truncation alone would
+# let a later change that rewrote a different ten of the same thirty surfaces reuse
+# the old YES. Same rule, same reason, as resolution_holds' set id.
+zones_emit() {
+  local policy="$1" matcher="$2" reason="$3" hits="$4" unit="${5:-hit(s)}"
+  local h n=0 id
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    n=$((n + 1))
+    [ "$n" -le "$ZONES_HIT_LIMIT" ] || continue
+    if [ "$n" = 1 ]; then printf '%s\t%s\t%s\t%s\n' "$policy" "$matcher" "$h" "$reason"
+    else                  printf '%s\t%s\t%s\t\n'   "$policy" "$matcher" "$h"
+    fi
+  done <<EOF
+$hits
+EOF
+  [ "$n" -gt "$ZONES_HIT_LIMIT" ] || return 0
+  id="$(printf '%s\n' "$hits" | LC_ALL=C sort | cksum | tr -s ' ' '-' | tr -d ' \n')"
+  printf '%s\t%s\t… and %s more %s (%s in total, set id %s)\tcut for reading — the approval is bound to all %s\n' \
+    "$policy" "$matcher" "$((n - ZONES_HIT_LIMIT))" "$unit" "$n" "$id" "$n"
+  return 0
+}
+
+# zones_match POLICY CONF FILES TOUCHES -> TAB-separated lines, one per HIT:
+#     <policy> <TAB> <matcher> <TAB> <what matched it> <TAB> <reason, first line only>
+# A zone that matched several things reports each of them (zones_emit), bounded and
+# with the cut declared — "which surface, and what about the branch touched it" is
+# what the hold is read to answer, and the glob plus the first file that hit it could
+# not answer it.
 # POLICY filters ('review', 'serialize', or empty for every policy). FILES is the
 # branch's changed paths, one per line; TOUCHES is the tasklist's domains, space
 # separated. Silent on a malformed line — a registry typo must not take down a run —
 # except for a note on stderr, which lands in the worker log next to the decision.
 zones_match() {
   local want="$1" conf="$2" files="$3" touches="$4"
-  local line policy matcher reason kind pat t hit srg had_f=""
+  local line policy matcher reason kind pat t hits unit srg had_f=""
   [ -n "$conf" ] && [ -f "$conf" ] || return 0
   case "$-" in *f*) had_f=1 ;; esac
   while IFS= read -r line || [ -n "$line" ]; do
@@ -165,14 +223,15 @@ zones_match() {
     [ -n "$pat" ] && [ "$pat" != "$matcher" ] || {
       echo "zones: ignoring '$conf' matcher '${matcher}' ($ZONES_MATCHER_FORMS)" >&2; continue; }
     [ -z "$want" ] || [ "$want" = "$policy" ] || continue
-    hit=""
+    hits=""; unit=""
     case "$kind" in
       path)
-        if zones_first_path_match "$pat" "$files"; then hit="$ZONES_HIT"; fi
+        if zones_path_hits "$pat" "$files"; then hits="$ZONES_HITS"; unit="changed file(s)"; fi
         ;;
       touches)
+        # An exact tag: it matches once or not at all, so there is nothing to bound.
         for t in $touches; do
-          [ "$t" = "$pat" ] && { hit="touches:$t"; break; }
+          [ "$t" = "$pat" ] && { hits="touches:$t"; unit="domain"; break; }
         done
         ;;
       surface)
@@ -181,7 +240,7 @@ zones_match() {
         # mean different things about the same pattern.
         srg=0; surface_match "$pat" || srg=$?
         case "$srg" in
-          0) hit="$SURFACE_HIT" ;;
+          0) hits="$SURFACE_HITS"; unit="surface line(s)" ;;
           1) ;;
           3) echo "zones: ignoring '$conf' matcher '${matcher}' (expected surface:<glob>:<ere>, with a valid ERE)" >&2; continue ;;
           # FAIL CLOSED, and the CATCH-ALL is the fail-closed arm on purpose. 2 is "the
@@ -191,13 +250,13 @@ zones_match() {
           # quietly stops holding when git has a bad day has disarmed itself, which is
           # the failure this whole matcher exists to repair.
           *) echo "zones: '$conf' matcher '${matcher}' could not be evaluated; holding on the path half alone" >&2
-             if zones_first_path_match "${pat%%:*}" "$files"; then hit="$ZONES_HIT"; fi ;;
+             if zones_path_hits "${pat%%:*}" "$files"; then hits="$ZONES_HITS"; unit="changed file(s)"; fi ;;
         esac
         ;;
       *) echo "zones: ignoring '$conf' matcher '${matcher}' ($ZONES_MATCHER_FORMS)" >&2; continue ;;
     esac
-    [ -n "$hit" ] || continue
-    printf '%s\t%s\t%s\t%s\n' "$policy" "$matcher" "$hit" "$reason"
+    [ -n "$hits" ] || continue
+    zones_emit "$policy" "$matcher" "$reason" "$hits" "$unit"
   done < "$conf"
   return 0
 }
@@ -451,7 +510,9 @@ zones_approve() {  # $1 = <state>/parallel, $2 = name, $3 = note
   fi
   zones_record_approval "$app" "$req" "${USER:-$(id -un 2>/dev/null || echo unknown)}" "${3:-}" \
     || { echo "chief approve: could not write $app" >&2; return 1; }
-  echo "  ✓ $2 APPROVED for $change — $(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$req" 2>/dev/null || echo 'its overlap zones')"
+  # `unique`: one zone now contributes one entry per hit, and an operator does not
+  # need to be told the same zone's name ten times to be told what they approved.
+  echo "  ✓ $2 APPROVED for $change — $(jq -r '[(.zones // [])[] | .zone] | unique | join(", ")' "$req" 2>/dev/null || echo 'its overlap zones')"
   # Re-arm the scheduler state, the same way `chief resume` re-arms a park: the next
   # `chief run` re-dispatches it, finds the verdict on disk and merges without asking
   # again. Harmless when the run is still live — it re-pends every name at launch.

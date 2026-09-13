@@ -20,6 +20,15 @@
 #   PART D — THE DIFF-SIZE BUDGET, both enforcements: an oversized story under the
 #            default `warn` is REPORTED and merges anyway; the same story under
 #            `block` is WITHHELD through the very same one approval.
+#   PART F — ONE PROMPT, AND A HOLD THAT SAYS WHAT IT IS ASKING ABOUT. A branch that
+#            trips a declared zone AND an oversized story under `block` produces ONE
+#            request file, ONE checksum and ONE `chief approve`; the zone names EVERY
+#            file it matched rather than the first; and the same detail reaches all
+#            four places a hold is reported (worker log · request file · run summary ·
+#            `chief approve --list`). The command surface is pinned unchanged.
+#   PART G — THE APPROVAL IS BOUND TO THE CHANGE IT SAW. A branch approved and then
+#            changed is HELD again, under a different checksum — a yes never carries
+#            over to work nobody looked at.
 #
 # Hermetic: a scripted fake `claude` on PATH, temp prefixes ($CHIEF_PREFIX included),
 # never touches the real ~/.chief. Drives bin/chief straight out of this checkout, so
@@ -76,6 +85,9 @@ id="$(jq -r 'first(.userStories[]|select(.passes==false)).id // empty' "$PRD")"
 out="out/$name/$id.txt"
 mkdir -p "$(dirname "$out")"
 seq 1 "$(cat "$OZ_WORK/size.$name" 2>/dev/null || echo 3)" > "$out"
+# A SECOND artifact in the same zone when the fixture asks for one: "the hold names
+# every file it matched" is unprovable against a branch that changed exactly one.
+[ -f "$OZ_WORK/extra.$name" ] && seq 1 3 > "out/$name/$id.aux.txt"
 for f in "$PRD" "$TRACKED"; do
   [ -f "$f" ] || continue
   t="$(mktemp)"; jq --arg id "$id" '(.userStories[]|select(.id==$id)|.passes)=true
@@ -105,8 +117,10 @@ mkdir -p "$REPO"
 serialize  path:out/sz/    scheduled apart, merged as usual
 review     path:out/rz/    the shared design two branches must not diverge on
 review     path:out/ri/    the in-flight approval regression fixture
+review     path:out/zb/    the zone half of the both-rules-at-once fixture
+review     path:out/zr/    the binding fixture: approved, then changed
 CONF
-  for t in sz rz bw bb ri; do
+  for t in sz rz bw bb ri zb zr; do
     jq -n --arg n "$t" '
       { project:"oz", branchName:("chief/" + $n), description:("policy-layer fixture " + $n),
         iters:3, dependsOn:[], touches:["design-a-" + $n], warmup:[],
@@ -118,7 +132,7 @@ CONF
 
 # 450 lines is over the documented 400-line default and under nothing else: the two
 # budget tasklists differ only in the enforcement their run is given.
-echo 450 > "$WORK/size.bw"; echo 450 > "$WORK/size.bb"
+echo 450 > "$WORK/size.bw"; echo 450 > "$WORK/size.bb"; echo 450 > "$WORK/size.zb"
 
 # $OZ_BUDGET states the enforcement a run means to test, and UNSET means "whatever
 # the documented default is" — which is the only way PART D can assert that the
@@ -274,6 +288,82 @@ OZ_BUDGET=block run_chief "$LOG" bb || fail "the approved block-mode run exited 
 [ "$(state bb)" = "done" ] || fail "bb state is '$(state bb)', want done after approval"
 on_main "out/bb/US-1.txt" || fail "the approved over-budget branch did not merge"
 echo "   ok  block: withheld after a green floor, released by the same one approval, merged"
+
+# ══ PART F — one prompt, and a hold that can be read ═════════════════════════
+# The layer's second rule joined it by contributing hold lines in the ZONE shape, and
+# that is only worth anything if a branch tripping both is asked about ONCE. Everything
+# below is one branch that trips both: a declared zone (two files under out/zb/) and an
+# oversized story under CHIEF_DIFF_BUDGET=block.
+echo "overlap-zones: PART F — a zone hold and a budget hold on one branch: one request, one approval"
+: > "$WORK/extra.zb"
+LOG="$WORK/f-hold.log"
+OZ_BUDGET=block run_chief "$LOG" zb || fail "the both-rules run exited non-zero (a hold is not a failure)"
+[ "$(state zb)" = "awaiting-approval" ] || fail "zb state is '$(state zb)', want awaiting-approval"
+# ONE REQUEST FILE for this tasklist, and ONE checksum in it.
+[ "$(ls "$S"/zb.zone-*.json 2>/dev/null | grep -c .)" = 1 ] \
+  || { ls "$S"/zb.zone-*.json >&2 || true; fail "a branch tripping two rules wrote more than one approval artifact"; }
+RF="$(req zb)"; [ -s "$RF" ] || fail "no approval request at $RF"
+[ -n "$(jq -r '.change // empty' "$RF")" ] || fail "the request carries no checksum"
+# ONE PROMPT: the worker log says it was held exactly once, for both reasons.
+[ "$(grep -c 'HELD BY THE MERGE POLICY LAYER' "$S/zb.log")" = 1 ] \
+  || { tail -40 "$S/zb.log" >&2; fail "a branch tripping two rules was prompted more than once"; }
+[ "$(jq -r '[.zones[].zone] | unique | join(",")' "$RF")" = "budget:lines,path:out/zb/" ] \
+  || { jq -c '.zones' "$RF" >&2; fail "the one request does not carry both rules' holds"; }
+# THE ZONE NAMES EVERY FILE IT MATCHED, not the first one. This is the defect US-2
+# repairs: "changed something under out/zb/" is the same sentence for one file and for
+# thirty, and a hold a reader cannot size is a hold that gets approved unread.
+[ "$(jq -r '[.zones[]|select(.zone=="path:out/zb/")|.matched] | sort | join(",")' "$RF")" \
+  = "out/zb/US-1.aux.txt,out/zb/US-1.txt" ] \
+  || { jq -c '.zones' "$RF" >&2; fail "the zone reported only $(jq -r '[.zones[]|select(.zone=="path:out/zb/")] | length' "$RF") of its 2 matched file(s)"; }
+# ALL FOUR PLACES A HOLD IS REPORTED carry that same detail — they render the one TSV,
+# so this is the assertion that keeps them from drifting into three and one.
+approve --list > "$WORK/f-list.txt" 2>&1 || fail "chief approve --list exited non-zero"
+for where in "$S/zb.log:the worker log" "$LOG:the run summary" "$WORK/f-list.txt:chief approve --list"; do
+  f="${where%%:*}"; what="${where#*:}"
+  grep -q 'out/zb/US-1.aux.txt' "$f" || { cat "$f" >&2; fail "$what does not name the second matched file"; }
+  grep -q 'budget:lines'        "$f" || { cat "$f" >&2; fail "$what does not carry the budget hold"; }
+done
+[ "$(grep -c 'awaiting approval' "$WORK/f-list.txt")" = 1 ] \
+  || { cat "$WORK/f-list.txt" >&2; fail "the listing asks for more than one approval"; }
+# THE COMMAND SURFACE IS UNCHANGED: no new verb, no new flag, no new park state.
+if ( cd "$REPO" && "$CHIEF" approve --not-a-flag ) >"$WORK/f-usage.txt" 2>&1; then
+  fail "chief approve accepted an unknown flag"
+fi
+grep -q 'usage: chief approve \[--list\] \[-m NOTE\] \[names…\]' "$WORK/f-usage.txt" \
+  || { cat "$WORK/f-usage.txt" >&2; fail "the chief approve command surface changed"; }
+# ONE approve releases BOTH holds.
+approve zb -m "the size is warranted and the design agrees" >/dev/null 2>&1 || fail "chief approve zb failed"
+LOG="$WORK/f-merge.log"
+OZ_BUDGET=block run_chief "$LOG" zb || fail "the approved both-rules run exited non-zero"
+[ "$(state zb)" = "done" ] || fail "zb state is '$(state zb)', want done after one approval"
+on_main "out/zb/US-1.txt" || fail "one approval did not release both holds"
+echo "   ok  both rules, one request, one checksum, one approval — and the hold named all of what it matched"
+
+# ══ PART G — the approval is bound to the change it saw ══════════════════════
+# Truncation and a widened report both change what goes INTO the checksum, so the
+# property they could quietly break is this one: a yes is for one change, not for a
+# branch. Approve, then move the branch, then ask again.
+echo "overlap-zones: PART G — a branch changed after approval is held again"
+LOG="$WORK/g-hold.log"
+run_chief "$LOG" zr || fail "the binding-fixture run exited non-zero"
+[ "$(state zr)" = "awaiting-approval" ] || fail "zr state is '$(state zr)', want awaiting-approval"
+C1="$(jq -r '.change' "$(req zr)")"; [ -n "$C1" ] || fail "no checksum on the first request"
+approve zr -m "read it" >/dev/null 2>&1 || fail "chief approve zr failed"
+# The branch then moves, the way a re-engagement or a re-push moves it.
+git -C "$REPO" worktree prune 2>/dev/null || true
+git -C "$REPO" worktree add -q "$WORK/zrwt" chief/zr || fail "could not check the held branch out to change it"
+( cd "$WORK/zrwt" && mkdir -p out/zr && printf 'added after the approval\n' > out/zr/late.txt \
+    && git add -A && git commit -q -m "a late change inside the watched zone" ) \
+  || fail "could not commit the late change"
+git -C "$REPO" worktree remove --force "$WORK/zrwt" || true
+LOG="$WORK/g-reask.log"
+run_chief "$LOG" zr || fail "the re-asked run exited non-zero"
+[ "$(state zr)" = "awaiting-approval" ] \
+  || { tail -40 "$S/zr.log" >&2; fail "a yes carried over to a change nobody looked at (state $(state zr))"; }
+if on_main "out/zr/late.txt"; then fail "the unapproved late change merged on the strength of the old approval"; fi
+C2="$(jq -r '.change' "$(req zr)")"
+[ "$C1" != "$C2" ] || fail "the branch changed and the approval checksum did not ($C1)"
+echo "   ok  approved at $C1, changed, held again at $C2"
 
 # ══ PART E — stale records are not actionable ================================
 # Exercise the listing independently of a run: these are the three states that
