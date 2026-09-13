@@ -307,6 +307,38 @@ Notes:
   same stop within `STALL_LIMIT` iterations of the first churning turn. What was
   actually lost was the reasoning, buried at iteration 10 of a log nobody re-reads, so
   chief **quotes** those closing words in the summary and draws no conclusion from them.
+
+  **A branch whose every story already passes cannot buy iterations with a diff.** The
+  rule above scores a product diff as progress because a diff is evidence of progress
+  *toward completion* — and when there is no story left for it to complete, it is not
+  that evidence. Measured on 2026-09-12: a tasklist whose three stories all passed had
+  its merge-phase verify fail post-rebase for a reason it had not caused, was re-engaged
+  (the `## ⚠️ PRIOR VERIFICATION FAILED` block below), and then ran **18 iterations
+  against a budget of 10**, every header reading `3/3 passing`. Each turn committed one
+  more tracked note diagnosing an environmental failure it could not fix, and each was
+  scored `progress — <that file> changed`: with every story already passing no story
+  *can* flip, so the diff was the only scoring arm left and a note satisfied it every
+  time. So when every story passes at the **start** of an iteration, a product diff no
+  longer resets the stall counter, and the iteration says so in its own words:
+
+  ```
+  Iteration 3: no progress — ALL STORIES PASS (every story already passed when this
+  iteration began, so nothing it changed outside .chief/state/ can complete one; the
+  diff does not extend the budget) (stall 2/2).
+  ```
+
+  Distinct from both `BOOKKEEPING ONLY` (this diff is real product) and the bare `no
+  progress` (this iteration committed), and published on the liveliness record as
+  `allpass=1` so `chief ps` reads the same verdict. What is *lost* is only the ability
+  to spend past the budget: the give-up arm still requires `i >= iters`, so a branch
+  genuinely repairing a red gate keeps its whole budget, and the stop names itself —
+  `stalled: the branch is all-passing and its diffs did not count`, with the agent's
+  closing words under it. Nothing here reads the agent's prose or exempts a path,
+  directory or file extension by name; the state is the pass counts alone, which is
+  why a tasklist whose product *is* documentation is untouched while any story of it
+  is still `false`. Read the number in the header: `3/3 passing` beside an iteration
+  count that keeps climbing is this shape, and the honest responses are to fix the
+  gate, or to stop re-driving a branch that is finished.
 - **A tasklist that keeps re-answering one question is STOPPED and diagnosed.** The
   safety net for the case where nobody declared `terminalFalse` on the story that
   needed it — and the case it is measured on is the same one: cuneiform `283` recorded
