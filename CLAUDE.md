@@ -245,11 +245,62 @@ engine/
                      #   WARNS by default and blocks only on request, because a rename sweep, a
                      #   codemod and a real refactor are all legitimately big and a gate that
                      #   stops them is a gate that gets turned off
+  surface.sh         #   WHAT WITHIN A WATCHED PATH IS LOAD-BEARING — zones.sh's third matcher,
+                     #   `surface:<glob>:<ere>`. The defect it repairs is GRANULARITY, not the
+                     #   hold: a `path:` glob cannot tell "added a routine consumer under a
+                     #   watched path" from "changed the surface that path guards", so every
+                     #   hold read as noise and every hold was APPROVED UNREAD — and on
+                     #   2026-09-10 every `review` rule in two downstream registries was
+                     #   rewritten to `serialize` on one day. So a zone can say what within
+                     #   the path it cares about: the rule matches when the branch's DIFF to a
+                     #   matching file adds or removes a line matching the ERE. The diff and
+                     #   not the file's content, because matching a regex against the file as
+                     #   it now stands holds every branch that touched a file which HAPPENS to
+                     #   contain a declaration — the file-level rule again, wearing a regex.
+                     #   BOTH SIGNS: deleting a declaration is the most consequential edit to
+                     #   one. The REGEX REACHES AWK THROUGH ENVIRON, never `-v`, which
+                     #   escape-processes its value: `-v re='^[a-z_]+\(\)'` arrives as
+                     #   `^[a-z_]+()`, an empty group matching EVERY line, silently restoring
+                     #   the coarse rule it replaced. FAILS CLOSED — an unreadable diff (rc 2)
+                     #   or an unsourced module (rc 127) falls back to the coarse `path:` half
+                     #   rather than to no rule, so the catch-all arm in zones_match is the
+                     #   fail-closed one and only an explicit rc 3 skips the rule. Glob
+                     #   semantics stay zones.sh's (zones_path_match), never a second copy.
+                     #   The old forms keep their meaning exactly and re-arming stays the
+                     #   one-word `serialize` -> `review` edit; narrowing is separate and
+                     #   opt-in. It targets holds more precisely — it does not judge whether a
+                     #   design is right. MEASURED rather than asserted, in both directions:
+                     #   scripts/zone-friction.sh replays a before/after registry pair over a
+                     #   repo's first-parent merges and reports the holds that SURVIVE the
+                     #   narrowing beside the ones RELEASED, using the gate's own zones_match
+                     #   (a measurement with its own copy of the rule measures the copy). Over
+                     #   this repo's 54 merges, 2026-08-01..09-12: the contended exit-code
+                     #   namespace (`surface:engine/driver.sh:^AGENT_RC_`) falls 31 holds ->
+                     #   4, and the 4 are exactly the merges that claimed a code; "any
+                     #   declaration under engine/" (`^[a-z_][a-z_0-9]*\(\)`) falls 47 -> 43,
+                     #   which in a repo whose every tasklist authors engine functions is the
+                     #   coarse glob spelled longer. So the ERE must name the CONTENDED
+                     #   declaration, not every declaration — and the harness prints that
+                     #   verdict itself (a band, not `released > 0`), because a report whose
+                     #   conclusion has to be read out of two numbers is the unread hold again
   zones.sh           #   the OVERLAP ZONE REGISTRY, a policy layer ABOVE the merge floor. The floor
                      #   catches TEXTUAL interference (rebase conflict) and staleness (verify
                      #   failure); it says nothing about two branches whose DESIGNS disagree — both
                      #   rebase clean, both verify green, the result is still wrong. No automated
-                     #   gate detects that, so a declared domain holds the branch for `chief approve`
+                     #   gate detects that, so a declared domain holds the branch for `chief approve`.
+                     #   AND THE HOLD HAS TO BE READABLE, or it is approved unread: zones_emit
+                     #   reports EVERY hit a zone matched (zones_path_hits · SURFACE_HITS), one
+                     #   TSV line each, because "changed something under engine/" is the same
+                     #   sentence for one file and for thirty. The operator's reason rides the
+                     #   zone's FIRST line only. Past ZONES_HIT_LIMIT the list is CUT and the cut
+                     #   DECLARES itself — how many more, how many in total, and a `set id` over
+                     #   the WHOLE match, which is the load-bearing half: zones_digest binds the
+                     #   approval to the emitted lines, so binding to what survived truncation
+                     #   alone would let a later change rewriting a different ten of the same
+                     #   thirty surfaces reuse the old YES (resolution_holds' rule, same reason).
+                     #   All four report sites — worker log, request JSON, run summary,
+                     #   `chief approve --list` — render that ONE list, which is what keeps them
+                     #   from drifting into three and one
   resolution.sh      #   WHAT A CONFLICT RESOLUTION DELETED — the third shape, and the one the
                      #   floor is blind to BY CONSTRUCTION. The floor catches textual
                      #   interference and staleness; it never compares what a rebase REMOVED
@@ -464,6 +515,18 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   escapee was not named" can never read as "the sweep never ran".
                      #   PART B plants the entry the start-time check exists for — alive pid,
                      #   wrong start time — and pins that it is REPORTED and LEFT ALONE
+                     #   zone-friction.sh — the granularity distinction as an OUTCOME, through
+                     #   the real driver, where zone-surface.sh asserts the matcher's own
+                     #   output: "the rule did not match" and "the branch merged with nobody
+                     #   asked" are different claims and only the second is the feature. One
+                     #   registry, one run, two tasklists — the consumer merges unheld, the
+                     #   declaration it CALLS is held with both signs of its rename named in
+                     #   all four report sites, one approve releases it. REPRODUCES first:
+                     #   PART B neuters surface_match in a COPY of the engine (rc 2, the
+                     #   engine's own documented fall-back to the coarse rule = the pre-910
+                     #   rule) and the same consumer branch is held again. PART C runs the
+                     #   measurement over PART A's OWN merges and pins that the repo it
+                     #   measured is byte-identical afterwards
 docs/                # Diataxis, per the ecosystem documentation standard, and docs/README.md is
                      # the map: A DOCUMENT NOT LINKED THERE DOES NOT EXIST. guides/ (containers ·
                      # headless-invocation · local-inference-preset · monitoring · providers) ·
@@ -514,7 +577,16 @@ VERSION              # engine version — bump on any engine/bin/install change
   link that blocks the merge. Reference the module, not the doc that doesn't exist yet.
 - **A new `test/*.sh` is a gate only when it is in THREE lists**: `.chief/verify.sh`'s
   `CHIEF_BYSTANDER_TESTS` (the merge gate), `test/all.sh`'s `BASH_SUITE`, and
-  `.github/workflows/ci.yml`. Nothing derives one from another. Relatedly, a behavioural
+  `.github/workflows/ci.yml`. Nothing derives one from another. **And adding it to the
+  first list does not make it run in THAT BRANCH'S OWN gate**: `chief verify` resolves
+  the hook at `$CHIEF_PROJECT` — the project checkout — not inside the worktree, so a
+  worktree's edit to `.chief/verify.sh` only takes effect once it has merged. The
+  branch that ADDS a test therefore gets a green verdict that never executed it
+  (measured on `910`: the branch's list held 69 names, the hook that ran held 68, and
+  the new name appears nowhere in the log). Run the new file directly — `bash
+  test/<new>.sh` — and say so in the notes; a `chief verify` PASS is not evidence
+  about it. Same root cause as the `git rev-parse HEAD` note above, one level up:
+  the gate reads the project, not your working tree. Relatedly, a behavioural
   test must not assert on prompt text that a **doc quotes** — `templates/agent-context.md`
   quotes the engine's injected headings verbatim while explaining them, so grepping a
   prompt for one matches even when nothing was injected. Assert on a string only the
@@ -617,6 +689,18 @@ VERSION              # engine version — bump on any engine/bin/install change
   ci.yml is the third of the three gate lists and is the only one that **nothing
   local checks**. `bash -n` sees nothing here, exactly as it sees nothing in the
   heredoc case below.
+- **`jq -r … | @tsv` ESCAPES BACKSLASHES; `join("\t")` does not.** `@tsv` escapes `\t`,
+  `\n`, `\r` and `\\`, so a value round-tripped through a JSON record and back out as TSV
+  comes back a DIFFERENT string: an operator's `surface:lib/*.sh:^[a-z_]+\(\)` zone was
+  rendered `…^[a-z_]+\\(\\)` — a regex matching a literal backslash — in the run summary
+  and `chief approve --list`, the two of a hold's four report sites that read the request
+  file back, while the worker log (raw TSV) showed the real one. Copying the zone out of
+  `--list` into `zones.conf` therefore produced a rule that cannot fire. Use
+  `join("\t")` where the fields carry no tabs by construction, as `zones_request_tsv`
+  does. It stayed invisible for as long as it did because no `path:` glob contains a
+  backslash — generally, **giving a backslash-free value its first backslash exposes
+  every escaping layer it passes through at once**, which is the same bug as the
+  `awk -v` trap one layer out.
 - **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
   after one inside a `jq -n '…'` program parses as an expression and silently replaces the
   field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in

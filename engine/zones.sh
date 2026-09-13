@@ -53,8 +53,9 @@
 # REGISTRY FORMAT (docs/reference/overlap-zones.md). One zone per line, in
 # `.chief/zones.conf` (override with $CHIEF_ZONES); `#` starts a comment:
 #
-#     <policy>   <matcher>            [reason…]
-#     review     path:engine/*.sh     the scheduler is where a design split is fatal
+#     <policy>   <matcher>                          [reason…]
+#     review     path:engine/*.sh                   the scheduler is where a design split is fatal
+#     review     surface:engine/*.sh:^[a-z_]+\(\)   …but only its function contracts
 #     review     touches:engine
 #     serialize  path:docs/
 #
@@ -68,8 +69,32 @@
 #                               covers `engine/x/y.sh`); a trailing `/` means
 #                               "everything beneath this directory".
 #            `touches:<domain>` an exact tasklist `touches` domain name.
+#            `surface:<glob>:<ere>`
+#                               the same glob, NARROWED to what within those files is
+#                               load-bearing: it matches only when the branch's diff to
+#                               one of them adds or removes a line matching <ere>
+#                               (engine/surface.sh). Adding a caller does not rewrite a
+#                               declaration; changing the contract does. Split at the
+#                               FIRST colon, so a glob may not contain one.
+#
+# A MATCHER IS ONE WHITESPACE-FREE TOKEN, for all three forms — the splitter takes
+# field 2 and everything after it is the reason. An ERE needing a literal space writes
+# it as the bracket expression `[ ]`; spelled with a real space it still COMPILES, as a
+# shorter regex, with the remainder read as prose, which is the one mistake in this
+# format that is not reported. The template says so where a zone is authored.
+#
+# THE OLD FORMS KEEP THEIR MEANING, EXACTLY. `surface:` is a third matcher beside the
+# two, never a reinterpretation of either: a registry using only `path:` and `touches:`
+# evaluates today's rules against today's inputs and produces today's holds, and a repo
+# that disarmed by rewriting `review` to `serialize` still re-arms with the same
+# one-word edit back. Narrowing a rule is a SEPARATE, opt-in edit to its matcher.
 #
 # Bash 3.2 only: no associative arrays, no `declare -A`, no process substitution.
+
+# The legal matcher forms, named once: both "I do not understand this line" messages
+# below quote it, and an operator who mistypes a matcher deserves to be told the whole
+# vocabulary rather than the half the arm they missed happens to mention.
+ZONES_MATCHER_FORMS='expected path:<glob>, touches:<domain> or surface:<glob>:<ere>'
 
 # zones_file [REPO] -> the registry path, or nothing when the repo declares none.
 # Absence is the DEFAULT and is never an error: a repo with no zones.conf gets the
@@ -94,15 +119,89 @@ zones_path_match() {
   return 1
 }
 
-# zones_match POLICY CONF FILES TOUCHES -> one TAB-separated line per MATCHED zone:
-#     <policy> <TAB> <matcher> <TAB> <what matched it> <TAB> <reason>
+# zones_path_hits PATTERN FILES — EVERY changed path PATTERN matches, into ZONES_HITS
+# (one per line) with ZONES_HIT the first of them. SET-A-GLOBAL rather than print, and
+# shared by the `path:` matcher and by `surface:`'s fail-closed fallback so the coarse
+# rule has exactly one implementation: a `$( )` here is a fork paid per zone, and the
+# two arms drifting is the bug class.
+#
+# ALL of them and not the first, which is the report this used to produce: "changed a
+# file under path:engine/" is the same sentence whether the branch touched one file or
+# thirty, and a hold that cannot distinguish those is a hold nobody reads. No early
+# return, so the walk is the full changed-file list per zone — a bash loop with no
+# forks in it, against a list the caller already has in memory.
+zones_path_hits() {
+  local pat="$1" f
+  ZONES_HIT=""; ZONES_HITS=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    zones_path_match "$pat" "$f" || continue
+    [ -n "$ZONES_HIT" ] || ZONES_HIT="$f"
+    ZONES_HITS="$ZONES_HITS$f
+"
+  done <<EOF
+$2
+EOF
+  ZONES_HITS="${ZONES_HITS%$'\n'}"
+  [ -n "$ZONES_HITS" ] || return 1
+  return 0
+}
+
+# ZONES_HIT_LIMIT — how many hits ONE zone reports before the list is cut. A hold is
+# read by a person, and a hundred file names is the same as none; ten is enough to see
+# the shape of what changed. The cut is never silent (see zones_emit) and never
+# weakens the binding.
+ZONES_HIT_LIMIT="${ZONES_HIT_LIMIT:-10}"
+
+# zones_emit POLICY MATCHER REASON HITS UNIT — one matched zone, as the TSV lines that
+# every reader of a hold shares. ONE LINE PER HIT rather than one per zone, because
+# all four places a hold is reported — the worker log, the request JSON, the run
+# summary's awaiting-approval block and `chief approve --list` — render this same TSV,
+# so the detail reaches all four by construction and cannot reach three of them. It is
+# the shape engine/resolution.sh already emits its erased lines in.
+#
+# THE REASON RIDES THE FIRST LINE ONLY. It belongs to the zone, not to each hit, and
+# repeating an operator's sentence ten times is exactly how a hold stops being read.
+#
+# TRUNCATION IS NEVER SILENT, AND NEVER WEAKENS THE BINDING. Past the limit the list
+# is cut and the cut says so — how many more, how many in total — and it carries an
+# `id` over the WHOLE set. That id is the load-bearing half: zones_digest binds an
+# approval to the emitted lines, so binding to what survived truncation alone would
+# let a later change that rewrote a different ten of the same thirty surfaces reuse
+# the old YES. Same rule, same reason, as resolution_holds' set id.
+zones_emit() {
+  local policy="$1" matcher="$2" reason="$3" hits="$4" unit="${5:-hit(s)}"
+  local h n=0 id
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    n=$((n + 1))
+    [ "$n" -le "$ZONES_HIT_LIMIT" ] || continue
+    if [ "$n" = 1 ]; then printf '%s\t%s\t%s\t%s\n' "$policy" "$matcher" "$h" "$reason"
+    else                  printf '%s\t%s\t%s\t\n'   "$policy" "$matcher" "$h"
+    fi
+  done <<EOF
+$hits
+EOF
+  [ "$n" -gt "$ZONES_HIT_LIMIT" ] || return 0
+  id="$(printf '%s\n' "$hits" | LC_ALL=C sort | cksum | tr -s ' ' '-' | tr -d ' \n')"
+  printf '%s\t%s\t… and %s more %s (%s in total, set id %s)\tcut for reading — the approval is bound to all %s\n' \
+    "$policy" "$matcher" "$((n - ZONES_HIT_LIMIT))" "$unit" "$n" "$id" "$n"
+  return 0
+}
+
+# zones_match POLICY CONF FILES TOUCHES -> TAB-separated lines, one per HIT:
+#     <policy> <TAB> <matcher> <TAB> <what matched it> <TAB> <reason, first line only>
+# A zone that matched several things reports each of them (zones_emit), bounded and
+# with the cut declared — "which surface, and what about the branch touched it" is
+# what the hold is read to answer, and the glob plus the first file that hit it could
+# not answer it.
 # POLICY filters ('review', 'serialize', or empty for every policy). FILES is the
 # branch's changed paths, one per line; TOUCHES is the tasklist's domains, space
 # separated. Silent on a malformed line — a registry typo must not take down a run —
 # except for a note on stderr, which lands in the worker log next to the decision.
 zones_match() {
   local want="$1" conf="$2" files="$3" touches="$4"
-  local line policy matcher reason kind pat f t hit had_f=""
+  local line policy matcher reason kind pat t hits unit srg had_f=""
   [ -n "$conf" ] && [ -f "$conf" ] || return 0
   case "$-" in *f*) had_f=1 ;; esac
   while IFS= read -r line || [ -n "$line" ]; do
@@ -122,27 +221,42 @@ zones_match() {
     esac
     kind="${matcher%%:*}"; pat="${matcher#*:}"
     [ -n "$pat" ] && [ "$pat" != "$matcher" ] || {
-      echo "zones: ignoring '$conf' matcher '${matcher}' (expected path:<glob> or touches:<domain>)" >&2; continue; }
+      echo "zones: ignoring '$conf' matcher '${matcher}' ($ZONES_MATCHER_FORMS)" >&2; continue; }
     [ -z "$want" ] || [ "$want" = "$policy" ] || continue
-    hit=""
+    hits=""; unit=""
     case "$kind" in
       path)
-        while IFS= read -r f; do
-          [ -n "$f" ] || continue
-          zones_path_match "$pat" "$f" && { hit="$f"; break; }
-        done <<EOF
-$files
-EOF
+        if zones_path_hits "$pat" "$files"; then hits="$ZONES_HITS"; unit="changed file(s)"; fi
         ;;
       touches)
+        # An exact tag: it matches once or not at all, so there is nothing to bound.
         for t in $touches; do
-          [ "$t" = "$pat" ] && { hit="touches:$t"; break; }
+          [ "$t" = "$pat" ] && { hits="touches:$t"; unit="domain"; break; }
         done
         ;;
-      *) echo "zones: ignoring '$conf' matcher '${matcher}' (expected path:<glob> or touches:<domain>)" >&2; continue ;;
+      surface)
+        # engine/surface.sh owns what the DIFF says; the <glob> half comes back here to
+        # be filtered by zones_path_match, so `path:` and `surface:` can never come to
+        # mean different things about the same pattern.
+        srg=0; surface_match "$pat" || srg=$?
+        case "$srg" in
+          0) hits="$SURFACE_HITS"; unit="surface line(s)" ;;
+          1) ;;
+          3) echo "zones: ignoring '$conf' matcher '${matcher}' (expected surface:<glob>:<ere>, with a valid ERE)" >&2; continue ;;
+          # FAIL CLOSED, and the CATCH-ALL is the fail-closed arm on purpose. 2 is "the
+          # branch diff could not be read"; 127 is "engine/surface.sh was never sourced".
+          # Both mean the narrowing is unevaluable, and the answer to that is the coarse
+          # `path:` rule this one refines — never no rule at all. A review gate that
+          # quietly stops holding when git has a bad day has disarmed itself, which is
+          # the failure this whole matcher exists to repair.
+          *) echo "zones: '$conf' matcher '${matcher}' could not be evaluated; holding on the path half alone" >&2
+             if zones_path_hits "${pat%%:*}" "$files"; then hits="$ZONES_HITS"; unit="changed file(s)"; fi ;;
+        esac
+        ;;
+      *) echo "zones: ignoring '$conf' matcher '${matcher}' ($ZONES_MATCHER_FORMS)" >&2; continue ;;
     esac
-    [ -n "$hit" ] || continue
-    printf '%s\t%s\t%s\t%s\n' "$policy" "$matcher" "$hit" "$reason"
+    [ -n "$hits" ] || continue
+    zones_emit "$policy" "$matcher" "$reason" "$hits" "$unit"
   done < "$conf"
   return 0
 }
@@ -209,6 +323,25 @@ zones_render() {
   return 0
 }
 
+# zones_request_tsv REQ — the zones recorded in an approval request, back as the TSV
+# every reader of a hold renders. NOT `@tsv`, which is what this was: jq's @tsv ESCAPES
+# backslashes, and a `surface:<glob>:<ere>` matcher is made of them. The zone
+# `surface:lib/*.sh:^[a-z_]+\(\)` came back as `…^[a-z_]+\\(\\)` — a DIFFERENT
+# regex, one matching a literal backslash — in the run summary and `chief approve
+# --list`, the two sites that round-trip through the request file, while the worker log
+# (which renders the TSV directly) showed the real one. The same detail in all four
+# places is the property this layer claims; an operator copying the zone out of
+# `--list` back into zones.conf got a rule that cannot fire. Invisible until `surface:`
+# existed, because no `path:` glob contains a backslash.
+#
+# Joining on a literal tab is the faithful inverse of how the line was built: the
+# fields carry no tabs by construction — a matcher is one whitespace-free token, the
+# registry splitter treats a tab in the reason as a separator, and engine/surface.sh
+# squeezes tabs out of a hit line before it becomes one.
+zones_request_tsv() {
+  jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | join("\t")' "$1" 2>/dev/null || echo
+}
+
 # zones_merge_gate NAME BRANCH WORK_REPO BASE STATE TOUCHES [SCOPE_BASE] — the
 # decision the merge phase asks for, and the only entry point driver.sh calls.
 #
@@ -236,6 +369,11 @@ zones_merge_gate() {
   conf="${ZONES_CONF:-$(zones_file "${CHIEF_PROJECT:-.}")}"
   live_set "${live:-}" phase=zone-check
   files="$(git -C "$repo" diff --name-only "$scope"...HEAD 2>/dev/null)"
+  # The scope a `surface:` matcher reads (engine/surface.sh), set HERE in the parent
+  # because the match below runs in a `$( )` and a global written inside one is lost.
+  # The SAME range the file list came from, so the two halves of a narrowed rule can
+  # never be answered about different commits.
+  surface_scope "$repo" "$scope...HEAD"
   # THE POLICY LAYER'S SECOND RULE, evaluated here rather than beside here: the
   # per-story DIFF-SIZE BUDGET (engine/budget.sh, sourced by the driver alongside
   # this file). It measures every branch, records the sizes into the story records,
@@ -371,7 +509,7 @@ zones_show() {   # $1 = <state>/parallel, $2 = tasklist name
     "$(jq -r '.branch // "?"' "$req" 2>/dev/null || echo '?')" \
     "$(jq -r '(.files // []) | length' "$req" 2>/dev/null || echo '?')" \
     "$(jq -r '.base // "?"' "$req" 2>/dev/null || echo '?')"
-  zones_render "$(jq -r '(.zones // [])[] | [.policy, .zone, .matched, .reason] | @tsv' "$req" 2>/dev/null || echo)"
+  zones_render "$(zones_request_tsv "$req")"
   return 0
 }
 
@@ -391,7 +529,9 @@ zones_approve() {  # $1 = <state>/parallel, $2 = name, $3 = note
   fi
   zones_record_approval "$app" "$req" "${USER:-$(id -un 2>/dev/null || echo unknown)}" "${3:-}" \
     || { echo "chief approve: could not write $app" >&2; return 1; }
-  echo "  ✓ $2 APPROVED for $change — $(jq -r '[(.zones // [])[] | .zone] | join(", ")' "$req" 2>/dev/null || echo 'its overlap zones')"
+  # `unique`: one zone now contributes one entry per hit, and an operator does not
+  # need to be told the same zone's name ten times to be told what they approved.
+  echo "  ✓ $2 APPROVED for $change — $(jq -r '[(.zones // [])[] | .zone] | unique | join(", ")' "$req" 2>/dev/null || echo 'its overlap zones')"
   # Re-arm the scheduler state, the same way `chief resume` re-arms a park: the next
   # `chief run` re-dispatches it, finds the verdict on disk and merges without asking
   # again. Harmless when the run is still live — it re-pends every name at launch.
