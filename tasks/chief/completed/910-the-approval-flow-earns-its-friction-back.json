@@ -1,0 +1,120 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/910-the-approval-flow-earns-its-friction-back",
+  "dependsOn": [],
+  "crossRepo": [],
+  "touches": [
+    "engine",
+    "engine/zones.sh",
+    "engine/driver.sh",
+    "test",
+    "docs",
+    "VERSION",
+    "ROADMAP.md"
+  ],
+  "iters": 9,
+  "warmup": [
+    "sed -n '/^zones_match()/,/^}/p' engine/zones.sh",
+    "sed -n '/^zones_merge_gate()/,/^}/p' engine/zones.sh",
+    "grep -n '^[a-z_]*()' engine/zones.sh",
+    "sed -n '/^zones_write_request()/,/^}/p' engine/zones.sh",
+    "sed -n '/^zones_digest()/,/^}/p' engine/zones.sh",
+    "sed -n '/^budget_holds()/,/^}/p' engine/budget.sh",
+    "grep -n 'PART [A-Z]' test/overlap-zones.sh",
+    "sed -n '1,70p' docs/reference/overlap-zones.md",
+    "grep -n 'awaiting-approval' engine/driver.sh | head -15",
+    "sed -n '/^cmd_approve()/,/^}/p' bin/chief"
+  ],
+  "description": "THE MERGE-POLICY APPROVAL FLOW EARNS ITS FRICTION BACK. Asked for by the operator 2026-09-10, the same day the `review` zones were DISARMED across the fleet: every `review` rule in two downstream repositories' `.chief/zones.conf` became `serialize`, each file carrying a dated DISARMED banner saying why. The hold was costing more than it caught.\n\nTHE DEFECT IS GRANULARITY, NOT THE HOLD. A path-glob zone cannot tell 'added a routine adapter under a watched path' from 'changed the policy that path guards'. `zones_match` keys on `path:<glob>` against each changed file and on `touches:<domain>` as an exact tag — both are FILE-LEVEL or COARSER, so every branch that brushed a watched directory held, every hold read as noise, AND EVERY HOLD WAS APPROVED UNREAD. An approval nobody reads is worse than no approval, because it manufactures a record of review that did not happen.\n\nWHAT IS NOT LOST, AND MUST NOT BE TOUCHED. The merge floor is untouched by the disarm and by this work: rebase onto the latest base, re-verify, merge `--no-ff` still catches textual interference and staleness. What is lost until this lands is the HUMAN CHECKPOINT ON DESIGN-LEVEL OVERLAP — two branches whose code is individually correct and whose designs disagree, which is where a person has standing and a test does not. Do not weaken the floor to buy granularity, and do not turn chief into a conflict resolver: 'No AI auto-conflict-resolution' stays true.\n\nRE-ARMING MUST STAY A ONE-WORD EDIT. Today re-arming is `serialize` -> `review` per rule, and that property is worth keeping: a repo that disarmed should be able to re-arm without rewriting its registry. If a finer rule needs new syntax, the OLD SYNTAX MUST KEEP WORKING with its current meaning, and the new form must be opt-in.\n\nTHE MECHANISM TO REUSE, NEVER TO DUPLICATE. `zones_merge_gate` is the merge phase's one 'green is not enough authority' question, and `budget_holds` already shows how a second rule joins it: it contributes zone-shaped hold lines into the same match, so there is ONE checksum, ONE request file, ONE `chief approve`, whether a branch tripped a declared zone, an oversized story, or both at once. That no-double-prompting property is load-bearing. The surrounding pieces are `zones_digest` (a cksum over the sorted changed-file list plus the sorted matched zones, which BINDS an approval to exactly what it approved so a later change re-asks), `zones_write_request` / `zones_approved` / `zones_record_approval`, `zones_render`, `zones_show`, `zones_approve`, and `zones_clear_record`, which deletes the approval file on merge.\n\nMEASURE THE FRICTION RATHER THAN ASSERTING IT. The claim being fixed is that holds were noise. Prove the new rule is better by running it against real history: how many of the holds that actually fired would still fire, and how many of the changes the operator would have wanted held still hold. A rule that holds nothing is not an improvement over a rule that holds everything — both get ignored. Report both directions.\n\nKEEP IT OUT OF THE WORKER BODY. The quality ratchet counts raw line span and the merge phase already sits inside a very long function. New logic belongs in its own engine module, sourced the way `budget.sh` and `zones.sh` are, with a line in CLAUDE.md's layout.\n\nNOT IN SCOPE: the resolution-deletion hold, which is its own tasklist and its own always-armed rule. This tasklist changes how holds are TARGETED and PRESENTED; it does not remove any existing hold.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A zone can say what within a path is load-bearing, and the old syntax keeps its meaning",
+      "acceptanceCriteria": [
+        "The registry gains a way to distinguish a change to a watched surface from a change merely underneath a watched path. The chosen mechanism is stated in the notes with the alternatives that were rejected and why, and it is evaluated against the existing matcher set rather than bolted beside it — `zones_match` stays the one place a rule is evaluated.",
+        "BACKWARD COMPATIBILITY IS PINNED BY TEST: an existing `.chief/zones.conf` using only `path:<glob>` and `touches:<domain>` behaves exactly as it does today, `review` and `serialize` unchanged, and re-arming a disarmed rule stays a one-word `serialize` -> `review` edit. A test asserts both, and a test asserts a repo with NO zones.conf still behaves exactly as it did before the feature existed — the property `test/overlap-zones.sh` PART A already guards.",
+        "A malformed or unknown line is reported on stderr and IGNORED, never fatal — the existing rule that a registry typo never takes down a run. A test drives the new syntax misspelled and asserts the run completes with the rule skipped and reported.",
+        "The matcher is evaluated with the same NOGLOB discipline the current splitter uses, so a pattern survives word splitting as a literal and is never expanded against the worktree. A test pins a pattern that would expand if the guard were dropped.",
+        "`shellcheck -S error` and `bash -n` are clean on every changed script.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` green; `VERSION` bumped (`test/version-bump.sh`); `ROADMAP.md` names this stem (`test/doc-sync.sh`)."
+      ],
+      "passes": true,
+      "notes": "MECHANISM: a third matcher kind, `surface:<glob>:<ere>` (engine/surface.sh), dispatched from the same `case \"$kind\"` switch in zones_match that path:/touches: use — it matches only when the branch's DIFF to a file the glob covers adds or removes a line matching the ERE. REJECTED: (a) matching the ERE against the file as it now STANDS — that holds every branch touching a file which happens to contain a declaration, i.e. the file-level rule wearing a regex; (b) an optional third `when:<ere>` field on the existing path: line — the third field is free-prose reason, so a typo in `when:` becomes a reason and is unreportable; (c) a separate registry/evaluator beside zones_match — a second evaluator drifting from the first is the bug class CLAUDE.md already names. Additions AND removals count: deleting a declaration is the most consequential edit to one. FAILS CLOSED — rc 2 (unreadable diff) and rc 127 (module unsourced) fall back to the coarse path: half, so the catch-all arm is the fail-closed one and only an explicit rc 3 skips a rule; a review gate that silently stops holding has disarmed itself. Two real traps found and pinned: `awk -v re=...` ESCAPE-PROCESSES its value so `^[a-z_]+\\(\\)` would arrive as `^[a-z_]+()` — an empty group matching EVERY line — hence ENVIRON; and piping git diff straight into awk makes a bad ref indistinguishable from an empty diff (fail-open), hence the captured `|| return 2`. OBSERVED: test/zone-surface.sh green, 12 assertions across PART A (consumer branch not held / contract branch held, hit `engine/a.sh: alpha() {`), PART B (old-syntax TSV byte-identical with and without a diff scope; no zones.conf matches nothing; serialize->review is the whole re-arm), PART C (5 misspellings = 5 stderr notes, 5 skipped, good rule still fired; unreadable diff fell back and said so; a provably-expanding token survived the splitter), PART D (a run carrying the typo merged, note in the worker log; no-registry run merged silent), 9.5s. MUTATION-CHECKED twice in a COPY of the engine: neutering surface_match to rc 2 holds the consumer branch (FAIL), and swapping ENVIRON for `awk -v` holds it on `engine/c.sh: alpha` (FAIL). bash -n clean on all 5 changed scripts + the 2 new files; test/overlap-zones.sh green (PARTS A-E); smoke/ratelimit/noworkguard green; merge-batch green; test/doc-sync.sh PASS at v0.9.30; VERSION 0.9.29 -> 0.9.30 with README and ROADMAP bold strings bumped with it. shellcheck is not installed on this host and is enforced in CI.",
+      "diffSize": {
+        "files": 15,
+        "lines": 622,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
+    },
+    {
+      "id": "US-2",
+      "title": "The hold says what it is asking about, precisely enough to be read",
+      "acceptanceCriteria": [
+        "A hold names the specific surface that triggered it and what about the branch touched it — not merely the glob that matched and the first file that hit it. The same detail reaches all four places a hold is reported today: the worker log, the approval request file, the run summary's awaiting-approval block, and `chief approve --list`. A long list is truncated with a count, never silently.",
+        "The single-prompt property is preserved and proven: a branch that trips a declared zone AND an oversized story under a blocking diff budget still produces ONE checksum, ONE request file and ONE `chief approve`. A test drives both at once and asserts exactly one prompt.",
+        "The approval stays bound by checksum to exactly what it approved, so a re-push that changes the branch re-asks. A test changes the branch after approval and asserts the hold returns. The existing digest's inputs are updated only if the new rule changes what is being approved, and the notes justify any change to them.",
+        "Existing behaviour is preserved end to end: `test/overlap-zones.sh` stays green across PART A (a serialize zone is a no-op at merge), PART B (a review zone holds a rebased, GREEN branch and the scheduler is NOT blocked — the sibling still merges in the same run), PART C (the verdict survives a restart and an in-flight approval lands without a second run), PART D (the diff budget under warn and under block) and PART E (stale records are not actionable). Any fixture that had to change is named in the notes with the reason, and a fixture is never loosened to make a new rule pass.",
+        "`awaiting-approval` remains the state, `chief approve <name> -m <reason>` remains the override, and no new park state and no new approval command are introduced. A test asserts the state name and the command surface are unchanged.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` green; `VERSION` bumped (`test/version-bump.sh`); `ROADMAP.md` names this stem (`test/doc-sync.sh`)."
+      ],
+      "passes": true,
+      "notes": "MECHANISM: one TSV line per HIT instead of one per zone (zones_emit), so the detail reaches all four report sites by construction — the worker log, the request JSON, the run summary's awaiting-approval block and `chief approve --list` all render the same list. zones_path_hits collects every matching changed file (was: first-match-and-return) and surface_match every matching diff line with its +/- SIGN (was: first hit per file), because \"changed something under out/zb/\" is the same sentence for one file and for thirty. The operator reason rides the zone's FIRST line only; past ZONES_HIT_LIMIT (10) the list is cut and the cut declares itself. DIGEST INPUTS UNCHANGED (files + the matched-zone lines) — what is inside the second half got more precise, which only ever re-asks MORE; the one real hazard is truncation, handled by a `set id` cksum over the WHOLE hit list on the cut line (resolution_holds' rule, same reason), so two branches differing only past the cut cannot share a checksum. FIXTURES CHANGED, all TIGHTENED, never loosened: zone-surface PART A asserted `wc -l = 1` and now asserts BOTH signs of the rename by name (engine/a.sh: -alpha() { and +alpha2() {) plus one distinct zone plus reason-on-first-line-only; PART B's exact-output WANT gained the second file the coarse glob always matched (engine/c.sh) — the MATCHING decision is byte-identical, the REPORT is what US-2 widened; PART C's good-rule count 1 -> 2 for the same reason. OBSERVED: test/overlap-zones.sh green, PARTS A-G, 52s — PART F (new) drives a zone hold AND an over-budget story under CHIEF_DIFF_BUDGET=block on one branch and asserts 1 zone-*.json artifact, 1 `HELD BY THE MERGE POLICY LAYER` line, zones = budget:lines + path:out/zb/ in that one request, both matched files named (out/zb/US-1.aux.txt, out/zb/US-1.txt), all three of log/summary/--list carrying both, exactly 1 `awaiting approval` row, `chief approve --not-a-flag` still printing `usage: chief approve [--list] [-m NOTE] [names…]`, and ONE approve merging it; PART G (new) approves at 3279879893-116, commits a late change inside the zone, and is held again at 3465389207-169 with out/zr/late.txt not on main. test/zone-surface.sh green, PARTS A-E, 11s — PART E: 14 declarations render as 10 hits + `… and 4 more surface line(s) (14 in total, set id 122050433-308)`, and many/many2 (same changed files, same ten displayed hits, one declaration differing at position 14) get digests 2273211996-916 vs 637387193-917. MUTATION-CHECKED three ways in a COPY of the engine: surface_match first-hit-only -> PART A FAILS (\"the added declaration is not named\"); the set id computed over the DISPLAYED hits only -> PART E FAILS (\"truncation lost the binding\"); zones_path_hits first-file-only -> overlap-zones PART F FAILS (\"the zone reported only 1 of its 2 matched file(s)\"). smoke/ratelimit/noworkguard green; bash -n clean on all 4 changed scripts; quality ratchet OK (single_use_functions 69 -> 70, tol 2 — zones_emit has one call site; function_length_max unchanged at 618); doc-links 0 dead. VERSION 0.9.30 -> 0.9.31 with README and ROADMAP bold strings. shellcheck is not installed on this host; CI enforces it.",
+      "diffSize": {
+        "files": 10,
+        "lines": 387,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": false
+      }
+    },
+    {
+      "id": "US-3",
+      "title": "The friction is measured against real history, in both directions",
+      "acceptanceCriteria": [
+        "The new rule is run against recorded merge history and the result is reported BOTH ways: how many historically-fired holds would still fire under it, and how many would now pass unheld. The notes record the corpus that was measured (how many merges, over what span), the counts, and at least one concrete example from each direction. The measurement is read-only — it inspects history and changes nothing.",
+        "The result is judged rather than merely reported: the notes state whether the rule earns its friction, and if the measurement says it does not, what was changed in response. A rule that holds nothing gets ignored exactly like a rule that holds everything, and the notes address that directly.",
+        "A hermetic test drives the real driver with a scripted fake agent in a temp repo and proves the distinction the whole tasklist exists for: a branch that only adds a routine consumer under a watched path MERGES unheld, and a branch that changes the watched surface itself is HELD with the surface named. Both run against the same registry, and the notes record the observed output of each.",
+        "The test is mutation-checked: with the new discrimination neutered in a COPY of the engine (not `git show HEAD~N`, because CI clones shallow), the first branch is held again — so the test is shown to reproduce the defect rather than restate behaviour that always worked.",
+        "Any new test file is added to all three gate lists: `.chief/verify.sh`'s bystander tests, `test/all.sh`'s suite, and `.github/workflows/ci.yml`, which must still parse.",
+        "New logic lives in its own engine module sourced by the driver rather than added to the worker body, and CLAUDE.md's layout has a line for it. The quality ratchet stays green.",
+        "`docs/reference/overlap-zones.md` documents the new rule under its banner: the syntax, the backward-compatible meaning of the old forms, the one-word re-arm, and the rule's LIMIT — it targets holds more precisely, it does not judge whether a design is right. `ROADMAP.md`'s Planned row is updated from `(proposed — no tasklist authored yet)` to name this stem, and states that re-arming a disarmed registry is now a one-word edit per rule that a repo can make when it chooses. The disarmed repositories are referred to by role; this repo is public and names no downstream repository.",
+        "GATES: `bash -n` + `shellcheck -S error` clean; `test/{smoke,ratelimit,noworkguard}.sh` and `test/overlap-zones.sh` green; `bash test/doc-sync.sh` green; `VERSION` bumped (`test/version-bump.sh`); `chief lint` clean."
+      ],
+      "passes": true,
+      "notes": "MEASURED, both directions, read-only. CORPUS: this repo's own 54 first-parent merges on main, 2026-08-01..2026-09-12 (chief merges --no-ff, so one merge per tasklist and `<merge>^1..<merge>` is that tasklist's whole change — the same scope a zone matches on and a `surface:` rule diffs). scripts/zone-friction.sh replays a BEFORE/AFTER registry pair through the GATE'S OWN zones_match + surface_match; a measurement with its own copy of the rule measures the copy. Registries checked in at test/fixtures/zone-friction/. (a) `path:engine/driver.sh` -> `surface:engine/driver.sh:^AGENT_RC_` (the exit-code namespace CLAUDE.md already calls \"a contended namespace across parallel tasklists\"): 31 holds -> 4. RELEASED 27 (87%), STILL HELD 4, NEWLY HELD 0. The 4 kept are exactly the merges that claimed a code — 716c9e4 `113-a-story-may-terminate-false` (engine/driver.sh: +AGENT_RC_REPEAT=9), 2df23f9 `111-an-api-error-is-not-a-stall` (+AGENT_RC_UNAVAILABLE=8), 826a2dc `100-evidence-checked-at-the-iteration-boundary` (+AGENT_RC_UNVERIFIED=7); released example 0dade62 `123-a-resolution-that-erases-merged-work`, which held before on `path:engine/driver.sh` (matched: engine/driver.sh) and touches no exit code. (b) `path:engine/*.sh` -> `surface:engine/*.sh:^[a-z_][a-z_0-9]*\\(\\)`: 47 -> 43. RELEASED 4 (8%); released example 2e79e65 `117-the-agent-verify-records-but-never-tries` (before: engine/agent.sh), still-held example 0dade62 on `engine/resolution.sh: +resolution_record_file() {`. JUDGED: (a) earns its friction — it asks about 7% of merges instead of 57% and what it still asks about is the surface itself; (b) DOES NOT — in a repo whose every tasklist authors engine functions, \"any declaration\" is the coarse glob spelled longer and still holds 79% of merges. CHANGED IN RESPONSE: the harness judges in BANDS rather than `released > 0` — below 25% released it prints \"the narrowing barely moves ... Name the CONTENDED declaration, not every declaration\", and holds-nothing (still-held 0) and releases-nothing are named as the two failures they are, because a rule that holds nothing is ignored exactly as one that holds everything is; and the guidance in docs/reference/overlap-zones.md, CLAUDE.md and the ROADMAP row was written as \"name the contended declaration, measure before arming\" rather than \"narrow to the declarations\". DRIVER-LEVEL TEST: test/zone-friction.sh green, PARTS A-C, 23s — PART A, one registry (`review surface:lib/*.sh:^[a-z_][a-z_0-9]*\\(\\)`) and one `-p 2` run: `consumer` (a new caller under lib/ at column 0 + a function BODY edit in lib/helper.sh) -> `MERGED @b1825ee`, state done, NO zone-request file, no HELD line; `contract` (a rename in lib/api.sh) -> AWAITING-APPROVAL with both signs named — `lib/api.sh: -api_read() {` and `lib/api.sh: +api_fetch() {` — in the worker log, the request JSON's .zones[].matched, the run summary's awaiting-approval block and `chief approve --list`, released by ONE `chief approve`. PART C runs the harness over PART A's own 2 merges: held by BEFORE 2, AFTER 1, RELEASED 1, newly held 0, and `git rev-parse main` + `git status --porcelain` are identical afterwards. MUTATION-CHECKED (PART B, in a COPY of the engine — never `git show HEAD~N`, CI clones shallow): surface_match neutered to rc 2 (the engine's own documented fail-closed fall-back to the coarse `path:` half = the pre-910 rule) and the SAME consumer fixture is held — `AWAITING-APPROVAL 1/1`, matched lib/helper.sh + lib/use_US-1.sh, log carrying \"holding on the path half alone\". FOUND AND FIXED ON THE WAY: jq's `@tsv` ESCAPES backslashes, so the run summary and `chief approve --list` — the two sites that round-trip through the request file — rendered the zone as `surface:lib/*.sh:^[a-z_][a-z_0-9]*\\\\(\\\\)`, a DIFFERENT regex (one matching a literal backslash), while the worker log showed the real one; verified at the byte level (`jq -r '[.z]|@tsv'` turns `a\\b` into `a\\\\b`). zones_request_tsv (2 call sites) joins on a literal tab instead, and PART A now pins the matcher verbatim in both sites. Invisible until `surface:` existed: no `path:` glob contains a backslash. GATES: smoke/ratelimit/noworkguard green; overlap-zones PASS (PARTS A-G); zone-surface OK (PARTS A-E); doc-sync PASS at v0.9.32; version-bump PASS; check-roadmap-truth OK (49 completed, none stale); check-doc-links 0 dead; quality ratchet OK (single_use_functions 69->70 unchanged by this story, function_length_max 618); `chief lint` clean (2 tasklists); `bash -n` clean on all 6 changed/new scripts; ci.yml re-parses (yaml.safe_load -> jobs [test]). shellcheck is not installed on this host; CI enforces it. NOTE, per the US-1 addendum: test/zone-friction.sh is new, so the branch's own `chief verify` resolves the hook at $CHIEF_PROJECT and never runs it — the evidence above is the direct `bash test/zone-friction.sh` run plus PART B, not the gate's verdict.",
+      "diffSize": {
+        "files": 18,
+        "lines": 706,
+        "renames": 0,
+        "budget": {
+          "lines": 400,
+          "files": 20
+        },
+        "overBudget": true
+      }
+    }
+  ],
+  "mergedToMain": "f1e5685",
+  "gates": {
+    "local": {
+      "state": "passed",
+      "detail": "the project verify hook (verify.sh) ran and exited 0"
+    },
+    "ci": [
+      {
+        "workflow": "ci",
+        "state": "unknown",
+        "detail": "a push of main can start it; whether it RAN for f1e5685 is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+      }
+    ]
+  }
+}
