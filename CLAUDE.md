@@ -591,6 +591,25 @@ VERSION              # engine version — bump on any engine/bin/install change
   quotes the engine's injected headings verbatim while explaining them, so grepping a
   prompt for one matches even when nothing was injected. Assert on a string only the
   engine emits, plus a marker your own fixture planted.
+- **A WALL-CLOCK CEILING IS AN ASSERTION ABOUT THE HOST, and it must be measured
+  rather than chosen.** One agent iteration is some hundreds of forks (jq, git, sed),
+  and a fork is not free everywhere: ~80ms per `git` and ~28ms per `jq` on a macOS
+  host puts a no-wait iteration at ~6s against the ~0.5s it costs in CI. So
+  `test/provider-backoff.sh`'s `elapsed < 20` for a 4s wait was not a claim about the
+  4s at all — it was the host's own cost plus the wait, and on a slow machine it
+  failed while REPORTING that the provider's interval had been ignored, which sends
+  the reader into the engine after a defect that is not there. The fix is a CONTROL
+  measured in the same run on the same fixture (there, `PROVIDER_BACKOFF=0` — the
+  loop with every wait removed), and ceilings expressed as `iterations × that cost +
+  what this case may sleep + slack`. It stays discriminating: mutation-checked at
+  43s against a 37s ceiling on the slow host, and 32s against 13s on a fast one.
+  FLOORS need none of this — overhead only pushes a run further past them. The same
+  trap bites an ABSOLUTE instant even harder, and there it is correctness, not slack:
+  an `HTTP-date` stamped 5s ahead is already in the PAST by the time an agent startup
+  has been paid, so the engine reads it as ABSENT and the case silently tests the
+  fallback instead. Lead such a stamp by the measured cost, and clamp what it can
+  cost you with the cap.
+
 - **"The gate ran N times" is a RACY assertion, and the verify CACHE is why.**
   `verify_cache_try` (`engine/lib.sh`) serves a merge-phase verify from the verdict the
   AGENT boundary already recorded whenever tree + base + hook are unchanged — which for

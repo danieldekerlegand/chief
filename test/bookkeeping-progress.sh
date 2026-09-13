@@ -11,7 +11,7 @@
 # HEAD moved, the stall counter reset, and the budget extended. Five consecutive
 # commits whose entire content was a re-check stamp, and 1h32m of them.
 #
-# The shape, one fake agent, two tasklists:
+# The shape, one fake agent, three tasklists:
 #   bk-spin  every turn re-stamps `notes` in the RUNTIME prd.json, appends to
 #            progress.txt, force-adds both (chief init gitignores them, exactly as
 #            formant's were before they were tracked) and commits with a plausible
@@ -23,6 +23,29 @@
 #            the non-bookkeeping path in the diff — which is precisely the arm under
 #            test. "Ignore any commit touching .chief/state/" would score this exactly
 #            as it scores bk-spin, and would stall a tasklist that is working.
+#
+# THE SECOND SHAPE, and the one neither fixture above can reach — a branch that is
+# FINISHED. Measured on 2026-09-12 in another repository (named nowhere here, and its
+# figures are the run's own): a tasklist whose every story passed had its merge-phase
+# verify fail post-rebase for a reason it had not caused, was re-engaged with the
+# `## ⚠️ PRIOR VERIFICATION FAILED` block, and then ran 18 iterations against a budget
+# of 10. Every header read `3/3 passing`. Each turn committed one more tracked markdown
+# note diagnosing an environmental failure it could not fix, and each was scored
+# `progress — <that file> changed (outside .chief/state/)` — because with every story
+# already passing, no story CAN flip, so the product diff was the only scoring arm left
+# and a note satisfied it every single time.
+#
+# Both fixtures above miss it BY CONSTRUCTION: bk-spin's diff is entirely bookkeeping
+# and this one's is not, and bk-both is scored by the arm that is right to keep scoring
+# it — a story of its is still false. The distinguishing fact is the one in the header:
+# there is no story left for a diff to complete, so the diff is not evidence of progress
+# toward completion, and it stops resetting the stall counter.
+#
+#   bk-allpass  a THIRD tasklist in its OWN repo, because the shape needs a verify hook
+#               that FAILS (the two above share a repo whose hook passes, and must keep
+#               it). Turn 1 does real work, flips the story and claims completion; the
+#               gate says no; every turn after that commits one tracked markdown file
+#               outside .chief/state/ and never claims completion again.
 #
 # What is asserted:
 #   1. IT STOPS — at the stall threshold, in exactly $iters turns. Pre-change, HEAD
@@ -46,6 +69,11 @@
 #      not printable anywhere; the run SUMMARY says this tasklist STOPPED ADVANCING,
 #      names WHICH stall it was, keeps it apart from a failed gate and from an
 #      unreachable provider, and quotes the agent's own closing words underneath.
+#   8. A FINISHED BRANCH CANNOT BUY ITERATIONS PAST ITS BUDGET WITH A DIFF — bk-allpass
+#      stops in exactly 7 turns (3 + 2 + 2 across its three attempts) instead of running
+#      to the hard ceiling on every one of them, says ALL STORIES PASS rather than either
+#      of the other two verdicts, and REPRODUCES FIRST: the same fixture against a copy
+#      of the engine with that one condition restored to its pre-change form takes 18.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -54,11 +82,14 @@ trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=bk GIT_AUTHOR_EMAIL=bk@test GIT_COMMITTER_NAME=bk GIT_COMMITTER_EMAIL=bk@test
 export CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos" CHIEF_WORKTREE_ROOT="$WORK/wt"  # hermetic
 fail() { echo "BOOKKEEPING FAIL: $*" >&2
-         for l in bk-spin bk-both; do
-           [ -f "$WORK/repo/.chief/state/parallel/$l.log" ] || continue
-           echo "--- $l.log ---" >&2; tail -60 "$WORK/repo/.chief/state/parallel/$l.log" >&2
+         for l in "$WORK"/repo*/.chief/state/parallel/*.log; do
+           [ -f "$l" ] || continue
+           echo "--- ${l#"$WORK/"} ---" >&2; tail -60 "$l" >&2
          done
-         [ -f "$WORK/run.log" ] && tail -30 "$WORK/run.log" >&2
+         for r in "$WORK"/run*.log; do
+           [ -f "$r" ] || continue
+           echo "--- ${r#"$WORK/"} ---" >&2; tail -30 "$r" >&2
+         done
          exit 1; }
 command -v jq >/dev/null || fail "jq required"
 
@@ -78,7 +109,11 @@ W="@WORK@"
 cat > /dev/null                                  # the prompt; unread here
 PRD=".chief/state/prd.json"                      # cwd = the worktree
 name="$(jq -r '.branchName' "$PRD" | sed 's#^chief/##')"
-turn=$(( $(cat "$W/turns-$name" 2>/dev/null || echo 0) + 1 )); echo "$turn" > "$W/turns-$name"
+# $BKTAG namespaces the counter: bk-allpass below runs the SAME tasklist name twice
+# under one $WORK — once against this engine, once against a neutered copy of it —
+# and a shared counter would silently add the two runs together.
+C="$W/turns-${BKTAG:-}$name"
+turn=$(( $(cat "$C" 2>/dev/null || echo 0) + 1 )); echo "$turn" > "$C"
 
 # THE STAMP BOTH FIXTURES WRITE: a note on the story and a line in the progress log.
 # Identical in each — the only difference between them is whether anything ELSE moved.
@@ -121,6 +156,39 @@ bk-both)
   git commit -q -m "feat: US-1 - step $turn, and a note about it" >/dev/null 2>&1 || true
   [ "$(jq '[.userStories[]|select(.passes==false)]|length' "$PRD")" = "0" ] && echo "<promise>COMPLETE</promise>"
   echo "step $turn done"
+  ;;
+bk-allpass)
+  # THE FINISHED BRANCH. Two behaviours, selected by the state the turn BEGINS in —
+  # which is the same fact the scoring arm under test reads, and the reason this
+  # fixture needs no turn-number special cases.
+  if [ "$(jq '[.userStories[]|select(.passes==false)]|length' "$PRD")" != "0" ]; then
+    # (a) A REAL implementing turn: product, the flip, an observed value in `notes`,
+    # and a claim of completion. The gate then says no — which is where the incident
+    # starts, not where it ends.
+    mkdir -p src; printf 'the product\n' > src/product.txt
+    for f in "$PRD" "tasks/chief/$name.json"; do
+      [ -f "$f" ] || continue
+      t="$(mktemp)"
+      jq '(.userStories[]|select(.id=="US-1")) |= (.passes=true | .notes="built it; suite green, 0 failed")' \
+         "$f" > "$t" && mv "$t" "$f"
+    done
+    git add -A -f >/dev/null 2>&1 || true
+    git commit -q -m "feat: US-1 - build the product" >/dev/null 2>&1 || true
+    echo "<promise>COMPLETE</promise>"
+    exit 0
+  fi
+  # (b) EVERY TURN AFTER: one more tracked markdown file, outside .chief/state/,
+  # recording one more diagnosis of a gate failure this branch did not cause. Real
+  # product by every test chief has — a NEW tracked path, a moved HEAD, a plausible
+  # subject — and it completes nothing, because there is nothing left to complete.
+  # It never claims completion again, so the agent boundary's verify never re-runs
+  # and no recorded verdict ever changes: the stall counter is the only thing left.
+  mkdir -p notes
+  printf 'turn %s: the gate died inside the allocator again. Not caused by this branch.\n' "$turn" \
+    > "notes/diagnosis-$turn.md"
+  git add -A -f >/dev/null 2>&1 || true
+  git commit -q -m "docs: US-1 - diagnose the failing gate (turn $turn)" >/dev/null 2>&1 || true
+  echo "turn $turn: the gate failure is environmental — the OS killed the test binary. I cannot fix it from here."
   ;;
 esac
 exit 0
@@ -284,4 +352,145 @@ case "$head_line" in *stalled:*) ;;
 case "$sum" in *"re-parking it would be the honest call"*) ;;
   *) fail "the agent's closing words — the run's clearest signal that it should stop — are still only in the log" ;; esac
 
+# ══════════════════════════════════════════════════════════════════════════════
+# THE FINISHED BRANCH — a diff cannot buy iterations past the budget
+# ══════════════════════════════════════════════════════════════════════════════
+# Its own repo, because the hook must FAIL: everything above depends on a hook that
+# passes, and a re-engagement is what puts an all-passing branch back in front of the
+# agent in the first place. Same fake `claude`, third arm.
+#
+# HARD_MAX is pinned rather than left at its default max(3*iters,20)=20. The claim
+# being made is "stops at the budget instead of running to the ceiling", and both
+# halves must be measured against the SAME ceiling for the comparison to mean
+# anything; 6 makes the neutered half of this file cost ~1 minute instead of ~4.
+APITERS=2
+APCAP=6
+AP_EXPECT=7                  # 3 + 2 + 2 turns across the three attempts RETRY_MAX allows
+AP_PRE_EXPECT=$(( 3 * APCAP ))   # pre-change: every attempt runs to the ceiling instead
+
+# Scaffolds the fixture repo. Called twice — once for this engine, once for a copy of
+# it with the arm under test neutered — because a run leaves its branch, its state and
+# its registry entry behind, and reusing a repo would measure the second run against
+# the first one's leftovers rather than against the same starting point.
+ap_scaffold() {
+  local dir="$1" ch="$2"
+  mkdir -p "$dir"; ( cd "$dir" || exit 1
+    git init -q -b main 2>/dev/null || { git init -q && git checkout -q -b main; }
+    git commit -q --allow-empty -m init
+    "$ch" init >/dev/null
+    rm -f tasks/chief/example.json
+    jq -n --argjson it "$APITERS" \
+      '{project:"bk",branchName:"chief/bk-allpass",
+        description:"a branch that finishes and then sits behind a gate it did not break",
+        iters:$it,dependsOn:[],touches:["src"],warmup:[],
+        userStories:[{id:"US-1",title:"build the product",description:"",
+          acceptanceCriteria:["src/ carries the product"],passes:false,notes:""}]}' \
+      > tasks/chief/bk-allpass.json
+    # The gate that says no for a reason the branch did not cause. Deterministic here;
+    # in the field it was one test binary killed by the OS under host memory pressure.
+    printf '#!/usr/bin/env bash\nset -eu\necho "verify: the test binary was killed by the OS (SIGTRAP inside the allocator)"\nexit 1\n' \
+      > .chief/verify.sh
+    chmod +x .chief/verify.sh
+    git add -A && git commit -q -m "allpass setup" )
+}
+
+# ── A. this engine: it stops at the budget ───────────────────────────────────
+APREPO="$WORK/repo-ap"
+ap_scaffold "$APREPO" "$CHIEF" || fail "could not scaffold the all-pass fixture"
+( cd "$APREPO" && PATH="$WORK/fakebin:$PATH" BKTAG="ap-" HARD_MAX="$APCAP" \
+    "$CHIEF" run >"$WORK/run-ap.log" 2>&1 ) || true    # a stall exits non-zero
+APLOG="$APREPO/.chief/state/parallel/bk-allpass.log"
+[ -f "$APLOG" ] || fail "no worker log at $APLOG — the all-pass fixture never ran"
+ap="$(cat "$WORK/turns-ap-bk-allpass" 2>/dev/null || echo 0)"
+
+# 8a. THE FIXTURE IS THE SHAPE IT CLAIMS TO BE. Without these four, a green run below
+# proves only that something stopped — not that it stopped the thing this file is about.
+grep -q 'FAILED verify last run — re-engaging' "$APLOG" \
+  || fail "the branch was never re-engaged after a failed gate — this is not the shape under test"
+APBR="$(git -C "$APREPO" rev-parse --verify chief/bk-allpass 2>/dev/null || echo '')"
+[ -n "$APBR" ] || fail "the all-pass work branch was never created"
+apbase="$(git -C "$APREPO" merge-base main "$APBR")"
+aptouched="$(git -C "$APREPO" diff --name-only "$apbase" "$APBR")"
+case "$aptouched" in *notes/diagnosis-*) ;;
+  *) fail "the spinning turns committed no tracked file outside .chief/state/ — the fixture is not exercising the arm: $aptouched" ;; esac
+# …and it really was ALL-PASSING while it spun, which is the distinguishing fact. Read
+# off the header chief itself prints, not off the fixture's own bookkeeping.
+grep -q 'Chief Iteration 2 .*1/1 passing' "$APLOG" \
+  || fail "the iteration after the flip did not begin with every story passing"
+
+# 8b. THE ASSERTION: an exact turn count, at the budget, and the ceiling never reached.
+[ "$ap" = "$AP_EXPECT" ] \
+  || fail "the all-pass branch took $ap turns, expected $AP_EXPECT ($APITERS-iter budget, ceiling $APCAP, 3 attempts) — a diff is still extending the budget of a branch with no story left to complete"
+! grep -q 'hard iteration ceiling' "$APLOG" \
+  || fail "the all-pass branch ran all the way to the hard ceiling ($APCAP) instead of stopping at its $APITERS-iter budget"
+
+# 8c. SAID OUT LOUD, and as none of the other two verdicts. Its diff is real product, so
+# BOOKKEEPING ONLY would be false; it committed on every turn, so the bare `no progress`
+# would read to an operator with `git log` open as chief having lost the commit.
+grep -q 'ALL STORIES PASS' "$APLOG" \
+  || fail "the log does not name the state — a finished branch whose diff did not count reads like any other stall"
+grep -q 'the diff does not extend the budget' "$APLOG" \
+  || fail "the line does not say what the diff did NOT buy"
+! grep -q 'BOOKKEEPING ONLY' "$APLOG" \
+  || fail "an iteration that committed a tracked file outside .chief/state/ was reported as bookkeeping"
+! LC_ALL=C grep -qE 'Iteration [0-9]+: no progress \(stall' "$APLOG" \
+  || fail "an iteration that committed real product was scored with the bare no-progress line"
+
+# 8d. THE GIVE-UP ARM NAMES WHICH STALL THIS WAS — the record the driver and the summary
+# read, not a different sentence assembled for the log.
+grep -q 'stalled: the branch is all-passing and its diffs did not count' "$APLOG" \
+  || fail "the give-up arm does not report that the branch was all-passing and its diffs did not count"
+
+# 8e. NOTHING MERGED. The gate is still red, and a stop is not a pass.
+case "$(cat "$APREPO/.chief/state/parallel/bk-allpass.status" 2>/dev/null || echo MISSING)" in
+  VERIFY-FAILED*) ;;
+  *) fail "expected VERIFY-FAILED for the all-pass fixture, got: '$(cat "$APREPO/.chief/state/parallel/bk-allpass.status" 2>/dev/null || echo MISSING)'" ;;
+esac
+[ ! -f "$APREPO/tasks/chief/completed/bk-allpass.json" ] || fail "a branch behind a red gate was retired"
+git -C "$APREPO" show "main:src/product.txt" >/dev/null 2>&1 \
+  && fail "the all-pass branch merged despite a failing gate"
+
+# ── B. IT REPRODUCES FIRST ───────────────────────────────────────────────────
+# The same fixture against the arm as it stood BEFORE this change, so 8b cannot pass by
+# restating behaviour that always worked. The pre-change form is restored in a COPY of
+# the installed engine — not recovered with `git show HEAD~N` (CI clones shallow), and
+# not pinned with CHIEF_VERSION either: install.sh clones `file://$ROOT` and a
+# `--branch <sha>` that fails falls back to cloning the checkout's own branch, so a
+# "pre-fix" install that way silently measures THIS code.
+PRE_PREFIX="$WORK/ch-pre"; PRE_BIN="$WORK/bin-pre"
+CHIEF_REPO="file://$ROOT" CHIEF_VERSION="$(git -C "$ROOT" rev-parse HEAD)" \
+  CHIEF_PREFIX="$PRE_PREFIX" CHIEF_BINDIR="$PRE_BIN" sh "$ROOT/install.sh" >/dev/null \
+  || fail "the pre-change install failed"
+PRECHIEF="$PRE_BIN/chief"
+PREAGENT="$PRE_PREFIX/src/engine/agent.sh"
+# Through ENVIRON, never `awk -v`, which escape-processes its value. Exactly one line
+# must match: a zero here means the condition was refactored and this half is measuring
+# the fixed engine while claiming to measure the old one, so it is a hard failure.
+NEUTERED_LINE='  if [ "$now_pass" -gt "$prev_pass" ] || [ "$prod" = 1 ]; then'
+export NEUTERED_LINE
+LC_ALL=C awk '
+  index($0, "[ \"$prod\" = 1 ] && [ \"$allpass\" = 0 ]") { print ENVIRON["NEUTERED_LINE"]; n++; next }
+  { print }
+  END { if (n != 1) exit 3 }
+' "$PREAGENT" > "$PREAGENT.pre" \
+  || fail "could not neuter the scoring arm in the installed copy — the condition this test pins no longer exists in engine/agent.sh"
+mv "$PREAGENT.pre" "$PREAGENT"; chmod +x "$PREAGENT"
+
+PREREPO="$WORK/repo-pre"
+ap_scaffold "$PREREPO" "$PRECHIEF" || fail "could not scaffold the pre-change fixture"
+( cd "$PREREPO" && PATH="$WORK/fakebin:$PATH" BKTAG="pre-" HARD_MAX="$APCAP" \
+    "$PRECHIEF" run >"$WORK/run-pre.log" 2>&1 ) || true
+PRELOG="$PREREPO/.chief/state/parallel/bk-allpass.log"
+[ -f "$PRELOG" ] || fail "no worker log at $PRELOG — the pre-change fixture never ran"
+pre="$(cat "$WORK/turns-pre-bk-allpass" 2>/dev/null || echo 0)"
+
+[ "$pre" = "$AP_PRE_EXPECT" ] \
+  || fail "the pre-change engine took $pre turns on this fixture, expected $AP_PRE_EXPECT — the neutered arm does not reproduce the incident, so the $AP_EXPECT above is not evidence of a fix"
+grep -q 'hard iteration ceiling' "$PRELOG" \
+  || fail "the pre-change engine did not run to the ceiling — the fixture does not reproduce"
+! grep -q 'ALL STORIES PASS' "$PRELOG" \
+  || fail "the neutered engine still printed the new verdict — the neuter did not take"
+[ "$pre" -gt "$ap" ] || fail "pre-change ($pre) did not exceed post-change ($ap) — nothing was demonstrated"
+
 echo "BOOKKEEPING PASS — $ITERS turns of state-only commits scored as stalls and stopped at the budget (pre-change: 20), reported as BOOKKEEPING ONLY, nothing merged; the work+notes pairing ran $both turns to COMPLETE with its notes intact on main"
+echo "ALL-PASS PASS — a re-engaged branch with every story passing stopped in $ap turns against a $APITERS-iter budget, scored ALL STORIES PASS, nothing merged; the same fixture on the pre-change arm took $pre (ceiling $APCAP, three attempts)"

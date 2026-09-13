@@ -114,6 +114,25 @@ acting on:
   reading before writing spends one. The number in parentheses is the budget
   (`$STALL_LIMIT`), so `2/2` is one iteration from the end of the run and `1/5` is a
   shrug. The run is **working** while this shows.
+
+  One reading of that counter is *not* a shrug: when the row also shows every story
+  passing (`3/3`), the iterations are being counted against a branch that is already
+  finished. A product diff on such a branch completes nothing — there is no story left
+  for it to complete — so it no longer resets the counter, and the worker log says which
+  stall it is:
+
+  ```
+  Iteration 3: no progress — ALL STORIES PASS (every story already passed when this
+  iteration began, so nothing it changed outside .chief/state/ can complete one; the
+  diff does not extend the budget) (stall 2/2).
+  ```
+
+  The liveliness record carries the same verdict as `allpass=1`, so the row and the log
+  cannot disagree. This is normally a branch behind a gate it cannot fix — the driver
+  re-engaged it because its verify failed post-rebase — and the counter will now reach
+  the give-up arm at the budget rather than running to the hard ceiling three times
+  over. Fix the gate, or stop re-driving it; raising `iters` is the one response that
+  makes it worse.
 - **`⚠ stalled in <phase> — no activity for …`** — this run has not made a *sound* for
   longer than its current phase is allowed. That is the one worth stopping.
 

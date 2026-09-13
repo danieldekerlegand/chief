@@ -12,6 +12,17 @@
 # the assertions are `date +%s` before and after and the knobs are turned down to
 # single-digit seconds so that costs the suite ~10s rather than minutes.
 #
+# AND A REAL CLOCK MEASURES THE HOST TOO, which is why section 0 below runs FIRST. An
+# agent iteration is some hundreds of forks (jq, git, sed), and a fork is not free
+# everywhere: measured 2026-09-13 on a macOS host, ~80ms per `git` and ~28ms per `jq`,
+# putting ONE no-wait iteration at ~6s against the ~0.5s it costs on CI. Every ceiling
+# here used to be an absolute number chosen on a fast host — `elapsed < 20` for a 4s
+# wait — so on a slow one the test failed on the host's own cost while reporting that
+# the provider's interval had been ignored. The cost is now MEASURED, by the zero-wait
+# control that section 6 used to be, and every ceiling is that cost plus what the case
+# itself allows (`ceiling`). The floors are untouched: overhead only ever pushes a run
+# further past them, so they mean on any host what they always meant.
+#
 # FOUR STUBS, one per row of the acceptance criterion:
 #   529 + Retry-After   the provider names its own interval -> honoured verbatim,
 #                       in BOTH RFC 9110 forms (delta-seconds and HTTP-date)
@@ -82,6 +93,36 @@ drive() {
   ELAPSED=$(( t1 - t0 )); CALLS="$(wc -l < "$PB_CALLS" | tr -d ' ')"
 }
 
+# ══ 0 — THE HOST'S OWN COST, AND THAT 0 DISABLES WAITING ═════════════════════
+# Two things at once, because they are the same run. PROVIDER_BACKOFF=0 is the
+# pre-fix behaviour kept reachable for debugging — the retries fire back to back —
+# so a run of it is a stopwatch on an agent loop that sleeps NOTHING, and that is
+# exactly the baseline every ceiling below needs. It goes first for that reason: a
+# control measured after the cases it calibrates would be calibrating them with a
+# number nobody had yet.
+echo "provider-backoff: PROVIDER_BACKOFF=0 disables waiting — and measures the host"
+drive 1 'API Error: 529 Overloaded. This is a server-side issue, usually temporary' \
+      PROVIDER_NOTURN_LIMIT=3 PROVIDER_BACKOFF=0 PROVIDER_BACKOFF_CAP=60
+[ "$RC" = 8 ] || fail "PROVIDER_BACKOFF=0: want exit 8, got $RC"
+[ "$CALLS" = 3 ] || fail "PROVIDER_BACKOFF=0: want 3 calls, got $CALLS"
+grep -q 'Waiting ' "$LOG" && fail "PROVIDER_BACKOFF=0 still printed a wait"
+grep -q 'never reached the model' "$LOG" || fail "the refusals are no longer named"
+
+# OH — one iteration of this loop with every wait removed, rounded UP, and never 0
+# (a host fast enough to round to nothing still owes the arithmetic a unit).
+OH=$(( (ELAPSED + CALLS - 1) / CALLS )); [ "$OH" -ge 1 ] || OH=1
+# SLACK absorbs what a single number cannot: the run-to-run spread of that overhead
+# (measured at ~±1.5s idle on the slow host above, more under the parallel load this
+# suite runs in). Scaled to the host, because a fixed 5s is a third of the budget on
+# CI and a rounding error on a machine where a fork costs 80ms.
+SLACK=$(( OH * 2 + 5 ))
+# ceiling ITERS ALLOWED -> the most this case may take: the host's cost for the
+# iterations it runs, plus the seconds the case is allowed to SLEEP, plus slack.
+# Still a discriminating bound — on the numbers above, case 1's is ~33s against the
+# ~42s an implementation that ignored Retry-After for its 30s cap would take.
+ceiling() { echo $(( $1 * OH + $2 + SLACK )); }
+echo "   ok  3 calls in ${ELAPSED}s, no wait — this host costs ~${OH}s per iteration (slack ${SLACK}s)"
+
 # ══ 1 — 529 WITH Retry-After: the provider's own interval, honoured ════════════
 # "the provider naming its own interval is better information than any backoff
 # computed here" — so the wait is the header's value, not $PROVIDER_BACKOFF (set to 1
@@ -93,25 +134,39 @@ Retry-After: 4' PROVIDER_NOTURN_LIMIT=2 PROVIDER_BACKOFF=1 PROVIDER_BACKOFF_CAP=
 [ "$CALLS" = 2 ] || fail "want 2 provider calls (1 wait between them), got $CALLS"
 [ "$ELAPSED" -ge 4 ] || { tail -20 "$LOG" >&2
   fail "MEASURED elapsed ${ELAPSED}s — Retry-After: 4 was not waited out"; }
-[ "$ELAPSED" -lt 20 ] || fail "MEASURED elapsed ${ELAPSED}s — far past the 4s the provider asked for"
+[ "$ELAPSED" -le "$(ceiling 2 4)" ] \
+  || fail "MEASURED elapsed ${ELAPSED}s — far past the 4s the provider asked for (2 iterations on this host plus slack is $(ceiling 2 4)s)"
 grep -q 'Waiting 4s before attempt 2/2 — the provider asked for it (Retry-After)' "$LOG" \
   || { grep -n Waiting "$LOG" >&2; fail "the log does not name the delay, the attempt or the source"; }
 echo "   ok  waited ${ELAPSED}s (>= the 4s asked for), 2 calls, exit 8"
 
 # THE SECOND RFC 9110 FORM. An HTTP-date is the same instruction written differently
 # and providers send both; a client that reads only the integer form silently ignores
-# half of them. Stamped ~5s ahead of NOW so the assertion is on a real interval.
+# half of them.
+#
+# THE LEAD IS RELATIVE TO THE HOST, and this is the one case where that is a
+# CORRECTNESS matter rather than a slack one: a date is an ABSOLUTE instant, it is
+# stamped here, and the engine reads it one whole agent startup later. "A date
+# already in the PAST reads as ABSENT" (_provider_wait_seconds) — so a fixed ~5s
+# lead on a host where startup costs ~6s does not test the date form at all, it
+# tests the fallback, and the failure it prints is "an HTTP-date Retry-After was not
+# read as one". The lead is therefore the measured cost of getting there, twice
+# over, plus the interval being asserted; the CAP keeps the bill for that small,
+# since a clamped Retry-After is still a Retry-After and prints the same source.
 echo "provider-backoff: 529 + Retry-After (HTTP-date)"
-when="$(date -u -d '+5 seconds' '+%a, %d %b %Y %H:%M:%S GMT' 2>/dev/null \
-        || date -u -v+5S '+%a, %d %b %Y %H:%M:%S GMT')"
+lead=$(( OH * 2 + 15 ))
+when="$(date -u -d "+${lead} seconds" '+%a, %d %b %Y %H:%M:%S GMT' 2>/dev/null \
+        || date -u -v+"${lead}"S '+%a, %d %b %Y %H:%M:%S GMT')"
 drive 1 'API Error: 529 Overloaded
-Retry-After: '"$when" PROVIDER_NOTURN_LIMIT=2 PROVIDER_BACKOFF=1 PROVIDER_BACKOFF_CAP=30
+Retry-After: '"$when" PROVIDER_NOTURN_LIMIT=2 PROVIDER_BACKOFF=1 PROVIDER_BACKOFF_CAP=4
 [ "$RC" = 8 ] || fail "HTTP-date form: want exit 8, got $RC"
 [ "$ELAPSED" -ge 3 ] || { grep -n Waiting "$LOG" >&2
   fail "HTTP-date form: MEASURED elapsed ${ELAPSED}s — the date was not parsed into a wait"; }
-grep -q 'the provider asked for it (Retry-After)' "$LOG" \
+[ "$ELAPSED" -le "$(ceiling 2 4)" ] \
+  || fail "HTTP-date form: MEASURED elapsed ${ELAPSED}s — past the 4s cap (ceiling $(ceiling 2 4)s)"
+grep -q 'Waiting 4s before attempt 2/2 — the provider asked for it (Retry-After)' "$LOG" \
   || { grep -n Waiting "$LOG" >&2; fail "an HTTP-date Retry-After was not read as one"; }
-echo "   ok  an HTTP-date Retry-After produced a ${ELAPSED}s measured wait"
+echo "   ok  an HTTP-date ${lead}s ahead was read as one and waited (${ELAPSED}s measured)"
 
 # THE CAP CLAMPS IT. The worst case is only a stated number if no single wait can
 # exceed the cap, whatever interval the far end names.
@@ -119,7 +174,8 @@ echo "provider-backoff: an absurd Retry-After is clamped to the cap"
 drive 1 'API Error: 529 Overloaded
 Retry-After: 86400' PROVIDER_NOTURN_LIMIT=2 PROVIDER_BACKOFF=1 PROVIDER_BACKOFF_CAP=3
 [ "$RC" = 8 ] || fail "clamp: want exit 8, got $RC"
-[ "$ELAPSED" -lt 30 ] || fail "a 86400s Retry-After was NOT clamped (elapsed ${ELAPSED}s)"
+[ "$ELAPSED" -le "$(ceiling 2 3)" ] \
+  || fail "a 86400s Retry-After was NOT clamped (elapsed ${ELAPSED}s, ceiling $(ceiling 2 3)s)"
 grep -q 'Waiting 3s before attempt 2/2' "$LOG" || { grep -n Waiting "$LOG" >&2
   fail "the clamped wait is not the cap"; }
 echo "   ok  86400s clamped to the 3s cap"
@@ -134,7 +190,8 @@ drive 1 'API Error: 529 Overloaded. This is a server-side issue, usually tempora
 [ "$CALLS" = 3 ] || fail "want 3 provider calls, got $CALLS"
 [ "$ELAPSED" -ge 3 ] || { grep -n Waiting "$LOG" >&2
   fail "MEASURED elapsed ${ELAPSED}s — two backoffs of 2s and 4s (jittered) cannot be that fast"; }
-[ "$ELAPSED" -le 25 ] || fail "MEASURED elapsed ${ELAPSED}s — far past the 2s+4s the backoff allows"
+[ "$ELAPSED" -le "$(ceiling 3 6)" ] \
+  || fail "MEASURED elapsed ${ELAPSED}s — far past the 2s+4s the backoff allows (ceiling $(ceiling 3 6)s)"
 grep -q 'exponential backoff + jitter from 2s, capped at 30s' "$LOG" \
   || { grep -n Waiting "$LOG" >&2; fail "the log does not name the backoff rule"; }
 # THE DELAY GROWS. Firing at a fixed interval is not backoff, and the second wait
@@ -207,24 +264,13 @@ drive 1 'API Error: 401 {"type":"error","error":{"type":"authentication_error","
       PROVIDER_NOTURN_LIMIT=3 PROVIDER_BACKOFF=30 PROVIDER_BACKOFF_CAP=30
 [ "$RC" = 8 ] || { tail -20 "$LOG" >&2; fail "401: want exit 8, got $RC"; }
 [ "$CALLS" = 1 ] || fail "401: the provider was called $CALLS time(s) — a permanent refusal is not retried"
-[ "$ELAPSED" -lt 10 ] || fail "401: slept ${ELAPSED}s on a refusal no delay can fix"
+[ "$ELAPSED" -le "$(ceiling 1 0)" ] \
+  || fail "401: slept ${ELAPSED}s on a refusal no delay can fix (ceiling $(ceiling 1 0)s)"
 grep -q 'PERMANENT refusal, not retried' "$REPO/.chief/state/.provider-unavailable" \
   || fail "the reason handed to the driver does not say the refusal was permanent"
 grep -q 'That refusal is PERMANENT' "$LOG" || { tail -20 "$LOG" >&2
   fail "the log does not give the reason it failed fast"; }
 grep -q 'Waiting ' "$LOG" && fail "401: it waited"
 echo "   ok  1 call, ${ELAPSED}s, stopped with its reason"
-
-# ══ 6 — 0 DISABLES WAITING ═══════════════════════════════════════════════════
-# The pre-fix behaviour, kept reachable for debugging: the retries fire back to back.
-echo "provider-backoff: PROVIDER_BACKOFF=0 disables waiting"
-drive 1 'API Error: 529 Overloaded. This is a server-side issue, usually temporary' \
-      PROVIDER_NOTURN_LIMIT=3 PROVIDER_BACKOFF=0 PROVIDER_BACKOFF_CAP=60
-[ "$RC" = 8 ] || fail "PROVIDER_BACKOFF=0: want exit 8, got $RC"
-[ "$CALLS" = 3 ] || fail "PROVIDER_BACKOFF=0: want 3 calls, got $CALLS"
-[ "$ELAPSED" -le 5 ] || fail "PROVIDER_BACKOFF=0 still waited ${ELAPSED}s"
-grep -q 'Waiting ' "$LOG" && fail "PROVIDER_BACKOFF=0 still printed a wait"
-grep -q 'never reached the model' "$LOG" || fail "the refusals are no longer named"
-echo "   ok  3 calls in ${ELAPSED}s, no wait"
 
 echo "PROVIDER-BACKOFF PASS — a transient refusal is waited out; a permanent one is not"

@@ -1867,6 +1867,11 @@ i=0; stall=0; waits=0; noturn=0
 # name WHICH kind of stall this was — the formant shape (a blocked agent re-stamping
 # its notes) or an agent that produced nothing at all.
 bk=0
+# $ap is the same accounting for the OTHER shape a diff can fail to be progress in:
+# the iterations, within the current stall streak, that committed work outside the
+# bookkeeping directory on a branch where every story ALREADY passed. $bk's diff was
+# not product; this one's was, and still could not complete anything.
+ap=0
 
 # --- RESEARCH PHASE (engine/research.sh) --------------------------------------
 # ONCE per tasklist, BEFORE the first story: map the code into a structured document
@@ -2061,7 +2066,7 @@ fi
 # WHICH story flipped. Not PASSED_IDS: that global belongs to the event stream and is
 # advanced the moment the provider returns, which is before _measure_boundary has had
 # its say — this one moves only with the count it explains.
-prev_pass=$(_passes); prev_head=$(_head); prev_ids=" $(_passed_ids) "
+prev_pass=$(_passes); prev_head=$(_head); prev_ids=" $(_passed_ids) "; prev_total="$(_total)"
 while :; do
   # DRAIN CHECKPOINT (see OPERATOR PAUSE above). Asked here and nowhere else: the
   # previous iteration is fully accounted for (its commits are on the branch, its
@@ -2267,8 +2272,8 @@ while :; do
       stall=0
       # Re-baseline: a plan turn is not a code turn, and the next iteration's progress
       # check must not read anything it happened to touch as implementation progress.
-      prev_pass=$(_passes); prev_head=$(_head); prev_ids=" $(_passed_ids) "
-      bk=0
+      prev_pass=$(_passes); prev_head=$(_head); prev_ids=" $(_passed_ids) "; prev_total="$(_total)"
+      bk=0; ap=0
       continue
     fi
     echo ""
@@ -2314,10 +2319,41 @@ while :; do
   # its verdict is cheap (one `git diff --name-only`) and its side effects — the
   # $PRODUCT_COUNT / $PRODUCT_FIRST evidence the line below prints — must be current
   # even on the iteration where a story flip already settled the verdict.
-  now_pass=$(_passes); now_head=$(_head); now_ids=" $(_passed_ids) "
+  now_pass=$(_passes); now_head=$(_head); now_ids=" $(_passed_ids) "; now_total="$(_total)"
   prod=0; _product_changed "$prev_head" "$now_head" && prod=1
-  if [ "$now_pass" -gt "$prev_pass" ] || [ "$prod" = 1 ]; then
-    stall=0; bk=0
+
+  # A FINISHED BRANCH CANNOT BUY ITERATIONS WITH A DIFF.
+  #
+  # The diff arm above is the ONLY arm left once every story passes — no story can
+  # flip a second time — so on such a branch any commit outside the bookkeeping
+  # directory resets the stall counter, every iteration, forever. Measured: a
+  # tasklist whose three stories all passed, re-engaged after a merge-phase gate
+  # failure it had not caused, ran 18 iterations against a budget of 10, each one
+  # committing one more tracked markdown note about an environmental failure it
+  # could not fix, each one scored `progress — <that file> changed`, every header
+  # reading `3/3 passing`.
+  #
+  # The rule: a product diff is evidence of progress TOWARD COMPLETION, and when
+  # there is no story left for it to complete it is not that evidence. The only
+  # thing that can still advance on such a branch is the gate verdict, which this
+  # loop does not read here. So the diff stops RESETTING the stall counter — and
+  # nothing else changes, because the give-up arm below still requires
+  # `i >= MAX_ITERATIONS`: an agent genuinely repairing a red gate keeps its whole
+  # budget and loses only the ability to spend past it.
+  #
+  # Read off the state at the START of the iteration ($prev_*), not the end: the
+  # question is whether the turn had a story left to complete when it began. A
+  # tasklist with any story still false is untouched — $allpass is 0 and the
+  # condition below is the one it has always been. An unreadable count ('?' from
+  # _total) leaves $allpass 0, which is the fail-open side: the old behaviour.
+  allpass=0
+  case "$prev_total" in
+    ''|*[!0-9]*) ;;
+    *) if [ "$prev_total" -gt 0 ] && [ "$prev_pass" -ge "$prev_total" ]; then allpass=1; fi ;;
+  esac
+
+  if [ "$now_pass" -gt "$prev_pass" ] || { [ "$prod" = 1 ] && [ "$allpass" = 0 ]; }; then
+    stall=0; bk=0; ap=0
     # WHAT ADVANCED, IN THE LINE ITSELF. `progress (0/2 passing). Continuing...` is the
     # sentence formant's run printed eleven times: it asserts progress and zero passing
     # in the same breath and names nothing, so there is nothing in it for a reader to
@@ -2341,16 +2377,23 @@ while :; do
     # it kept the pre-2026-08-26 behaviour and called it progress. A reader is owed the
     # fact that chief did not actually see anything.
     : "${advanced:=HEAD moved but the diff could not be read — counted as progress}"
-    echo "Iteration $i: progress — $advanced ($now_pass/$(_total) passing). Continuing..."
-    live_set "$LIVE" phase=agent-turn stall=0 stall_limit="$STALL_LIMIT" \
-      passing="$now_pass" total="$(_total)" story="$(_story)"
+    echo "Iteration $i: progress — $advanced ($now_pass/$now_total passing). Continuing..."
+    live_set "$LIVE" phase=agent-turn stall=0 stall_limit="$STALL_LIMIT" allpass="$allpass" \
+      passing="$now_pass" total="$now_total" story="$(_story)"
   else
     stall=$((stall+1))
     # A commit that moved HEAD and changed nothing but chief's own state is scored
     # here, with the iterations that produced no commit at all — and it says which of
     # the two it was, because "no progress" beside a commit the operator can see in
     # `git log` reads like chief lost it.
-    if [ "$now_head" != "$prev_head" ]; then
+    if [ "$allpass" = 1 ] && [ "$prod" = 1 ]; then
+      # THE THIRD KIND, and it must not read as either of the other two: this
+      # iteration committed real product — `BOOKKEEPING ONLY` would be false — and it
+      # is not the silence of `no progress` either. What it was is a change with no
+      # story left to complete, so the line says that, and says what it cost.
+      ap=$(( ap + 1 ))
+      echo "Iteration $i: no progress — ALL STORIES PASS (every story already passed when this iteration began, so nothing it changed outside ${BOOKKEEPING_REL} can complete one; the diff does not extend the budget) (stall $stall/$STALL_LIMIT)."
+    elif [ "$now_head" != "$prev_head" ]; then
       bk=$(( bk + 1 ))
       echo "Iteration $i: no progress — BOOKKEEPING ONLY (this iteration's commits touch nothing outside ${BOOKKEEPING_REL}) (stall $stall/$STALL_LIMIT)."
       # Not silently reclassified: a tasklist that declared the state directory in its
@@ -2365,9 +2408,9 @@ while :; do
     # reached, and the next iteration's first write (top of the loop) takes it back.
     # The budget travels with the count so a reader can tell "1 of 2" from "2 of 2"
     # without knowing this run's $STALL_LIMIT.
-    live_set "$LIVE" phase=stalled stall="$stall" stall_limit="$STALL_LIMIT"
+    live_set "$LIVE" phase=stalled stall="$stall" stall_limit="$STALL_LIMIT" allpass="$allpass"
   fi
-  prev_pass=$now_pass; prev_head=$now_head; prev_ids="$now_ids"
+  prev_pass=$now_pass; prev_head=$now_head; prev_ids="$now_ids"; prev_total="$now_total"
 
   # ITERATION-BOUNDARY HOOK. $CHIEF_ITER_HOOK is a command the driver wants run
   # BETWEEN iterations — today, re-integrating the base branch that sibling merges
@@ -2390,7 +2433,9 @@ while :; do
   # Give up only after spending the budget AND stalling, or at the hard ceiling.
   if [ "$stall" -ge "$STALL_LIMIT" ] && [ "$i" -ge "$MAX_ITERATIONS" ]; then
     echo ""
-    if [ "$bk" -gt 0 ]; then
+    if [ "$ap" -gt 0 ]; then
+      stall_why="stalled: the branch is all-passing and its diffs did not count — every story already passed, so the $ap of the last $stall iteration(s) that committed work outside ${BOOKKEEPING_REL} could complete no story and did not extend the budget"
+    elif [ "$bk" -gt 0 ]; then
       stall_why="stalled: $bk of the last $stall iteration(s) committed nothing outside ${BOOKKEEPING_REL} — bookkeeping, not progress"
     else
       stall_why="stalled: the last $stall iteration(s) produced no commit at all"

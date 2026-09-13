@@ -98,8 +98,14 @@
 # agreed; leaving it out of both says the tasklist is unfinished. It is a field because
 # a reader cannot re-derive it — this record is the jq-free path, and `283` rendered as
 # unfinished work for three days. 0 for every tasklist that never declares one.
-LIVE_FIELDS='name state phase story iter passing negative total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat'
-LIVE_NUMERIC=' iter passing negative total stall stall_limit waits noturn noturn_limit retry_at phase_since heartbeat '
+# `allpass` is the progress loop's verdict on the state a stall was scored in: 1 when
+# every story of this tasklist already passed at the START of the iteration, which is
+# the state in which a product diff can complete nothing and therefore cannot reset the
+# stall counter (engine/agent.sh). Written at every iteration boundary, so it falls back
+# to 0 the moment a story is demoted and the branch has work to do again — a flag only
+# ever set would be a claim about the past wearing the present tense.
+LIVE_FIELDS='name state phase story iter passing negative total stall stall_limit allpass waits noturn noturn_limit retry_at phase_since heartbeat'
+LIVE_NUMERIC=' iter passing negative total stall stall_limit allpass waits noturn noturn_limit retry_at phase_since heartbeat '
 
 # live_get FILE KEY -> the raw value ('' when the file or key is absent).
 # The writer's format is rigid (one `  "key": value,` per line), so a sed reader is
@@ -138,8 +144,8 @@ live_set() {
   # Listed explicitly (not `eval local`) so the per-field scratch vars stay OUT of
   # the caller's globals — driver.sh and agent.sh both source this file.
   local _lv_name _lv_state _lv_phase _lv_story _lv_iter _lv_passing _lv_negative \
-        _lv_total _lv_stall _lv_stall_limit _lv_waits _lv_noturn _lv_noturn_limit \
-        _lv_retry_at _lv_phase_since _lv_heartbeat
+        _lv_total _lv_stall _lv_stall_limit _lv_allpass _lv_waits _lv_noturn \
+        _lv_noturn_limit _lv_retry_at _lv_phase_since _lv_heartbeat
   dir="$(dirname "$f")"
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
   now="$(date +%s)"
