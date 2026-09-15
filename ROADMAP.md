@@ -334,6 +334,7 @@ row that names a tasklist is authored and live in [`tasks/chief/`](tasks/chief/)
 |---|---|---|
 | ✅ | **The merge-policy approval flow earns its friction back** — asked for by the operator 2026-09-10. That day `91`'s `review` zones were **disarmed ecosystem-wide**: every `review` rule in two downstream repositories' `.chief/zones.conf` became `serialize`, and each file carries a `DISARMED 2026-09-10` banner saying why — the awaiting-approval hold was costing more than it caught. The defect is granularity, not the hold. A path-glob zone cannot tell *added a routine adapter* from *changed the policy it guards*, so every hold read as noise and was approved unread. The merge floor is untouched by the disarm (rebase → re-verify → `--no-ff` still catches textual interference and staleness); what is lost until this lands is the human checkpoint on design-level overlap. The fix narrows the rule rather than removing it: a zone can now name the **surface** within a watched path that is load-bearing (`surface:<glob>:<ere>` — it matches only when the branch's diff *adds or removes* a line matching the regex), and a hold reports every surface it matched rather than the glob plus the first file that hit it. Measured over this repo's own 54 merges, narrowing the driver's contended exit-code namespace takes 31 holds to 4 while keeping every merge that claimed a code; narrowing to *any* declaration under `engine/` takes 47 to 43, which is the coarse glob spelled longer — so the ERE has to name the contended declaration, and `scripts/zone-friction.sh` replays a before/after pair over real history to say which one you wrote. **Re-arming a disarmed registry is a one-word edit per rule (`serialize` → `review`), available now and taken when a repo chooses**: the old `path:`/`touches:` forms keep their meaning exactly, and narrowing is a separate, opt-in edit | `chief/910-the-approval-flow-earns-its-friction-back` · `f1e5685` |
 | ✅ | **A conflict resolution can erase merged work** — found in a downstream repository. A branch about eight days behind its base conflicted on rebase. The resolution kept the branch's stale copy of two whole files and silently deleted what seven already-merged tasklists had added to them: a module declaration, about two dozen command registrations, a validation check, a UI warning and several tests. The verify gate went green (a deleted test cannot fail, an undeclared module is not compiled, and nothing checks a command registered by string name), and chief merged. The merge floor catches textual interference and staleness, but nothing compared what a rebase *removed* against what landed on the base while the branch was in flight. The fix records each branch's fork point and pre-rebase tip. It flags any line the rebased branch removes that its own pre-rebase diff did not remove and that the base still carries. It holds such a merge through the existing policy layer, with one recorded `chief approve` override, naming the lines and the base commits whose work would be lost. And the resolution instruction stops saying "keep both sides" without showing what the base changed | `chief/123-a-resolution-that-erases-merged-work` · `0dade62` |
+| ✅ | **A branch whose stories all pass cannot buy iterations with notes** — found in a downstream repository. A tasklist's stories all passed, its merge verify then failed for a reason outside the branch, and the driver re-engaged it. Every turn after that committed one tracked markdown file recording another diagnosis and never claimed completion, and every turn was scored as progress: progress was *a story flipped, or a diff outside `.chief/state/`*, and with every story already passing only the diff was left to move. It ran 18 iterations against a budget of 10. The two neighbouring nets miss this shape by construction — the bookkeeping rule stops a diff made entirely of chief's own state, and the repeat rule judges a story still recording `passes:false`. The fix is a **budget floor**: when every story passes at the start of an iteration, a diff alone no longer resets the stall counter, so the give-up arm — which still requires the whole budget to be spent — can fire. Counting a change in the recorded verify verdict as progress was considered and rejected on evidence: the agent boundary records a verdict only on an iteration that claims completion, which is exactly what this shape never does. Reproduced first in `test/bookkeeping-progress.sh` (`bk-allpass`), which stops in 7 turns across three attempts against a 2-iteration budget and never reaches the hard ceiling | `chief/124-a-finished-branch-cannot-extend-its-budget` · `24885e6` |
 
 ### Open threads — ⬜ parked, with conditions
 
@@ -351,21 +352,22 @@ it is chief-cloud's, not a chief convenience).
 
 ## Chief Tasklist Status
 
-- **48/48 authored tasklists merged** (`77`–`122`, `900`, `901`). Records live in
-  [`tasks/chief/completed/`](tasks/chief/completed/), each stamped with a `mergedToMain` sha; all 48
-  were re-checked against git on 2026-09-11 (`git merge-base --is-ancestor <sha> main`) and none is
-  missing one or unreachable. **0 retired or superseded.** The band runs `bd030a6` (2026-08-01) →
-  `6bd1f28` (2026-09-11).
+- **51/51 authored tasklists merged** (`77`–`124`, `900`, `901`, `910`). Records live in
+  [`tasks/chief/completed/`](tasks/chief/completed/), each stamped with a `mergedToMain` sha; the 48
+  on record then were re-checked against git on 2026-09-11 (`git merge-base --is-ancestor <sha> main`)
+  and none was missing one or unreachable, and `123` (`0dade62`), `910` (`f1e5685`) and `124`
+  (`24885e6`) merged after that count, each checked the same way. **0 retired or superseded.** The
+  band runs `bd030a6` (2026-08-01) → 2026-09-13.
 - The merged program reads as **seven bands**, and the last five are named phases above rather than
   runs of numbers: `77`–`87` hardening & the embeddable engine · `88`–`92` agent-output quality then
   merge throughput · `93`–`103` operating the fleet (merge safety, durability, the evidence rule) ·
   `104`–`109` **operator ergonomics** · `110`–`113` + `117`/`118`/`120`/`121` **iteration-outcome
   honesty** · `114`–`116` + `119` + `122` **checked outcomes** · `900`/`901` **maintenance paydown**.
-- **1 live tasklist** — `910-the-approval-flow-earns-its-friction-back` (authored 2026-09-11,
-  *Planned* above) is the only active JSON in [`tasks/chief/`](tasks/chief/). The three the
-  2026-08-26 count named as live (`114`, `115`, `116`) merged that day and are rowed under *Checked
-  outcomes* above, with `119` and `122`; `123`, named live by the 2026-09-11 count, merged
-  2026-09-12. **No planned row is now without a tasklist.**
+- **0 live tasklists** — [`tasks/chief/`](tasks/chief/) holds no active JSON. `910`, named live by
+  the 2026-09-11 count, merged 2026-09-13 and is rowed under *Planned* above beside `123` (merged
+  2026-09-12) and `124` (merged 2026-09-13). The three the 2026-08-26 count named as live (`114`,
+  `115`, `116`) merged that day and are rowed under *Checked outcomes* above, with `119` and `122`.
+  **No planned row is now without a tasklist.**
 - The two ongoing bars (provider breadth, bash-3.2 upkeep) are continuous upkeep, not discrete
   tasklists, and the two **open threads** (conflict-predictor binding, desktop GUI) are decided-and-
   parked with reversal conditions in [`docs/decisions/`](docs/decisions/) — not unscoped wishes.
