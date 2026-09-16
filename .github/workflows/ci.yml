@@ -149,6 +149,9 @@ jobs:
       - name: A spent account is its own verdict, never a bad credential
         run: bash test/provider-credit.sh
 
+      - name: A refused row names the reason chief already wrote down (both views)
+        run: bash test/unavailnote.sh
+
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 
