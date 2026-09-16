@@ -1,0 +1,59 @@
+{
+  "project": "chief",
+  "category": "feature",
+  "branchName": "chief/126-a-row-says-what-the-agent-is-doing",
+  "dependsOn": [],
+  "touches": ["engine/agent.sh", "engine/monitor.sh", "engine/live.sh", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "iters": 10,
+  "warmup": [
+    "sed -n '1787,1800p' engine/agent.sh",
+    "sed -n '1818,1856p' engine/agent.sh",
+    "grep -n '_beat_start()' -A 18 engine/agent.sh",
+    "sed -n '1262,1300p' engine/agent.sh",
+    "grep -n 'activity_of()' -A 25 engine/monitor.sh",
+    "sed -n '945,960p' engine/monitor.sh",
+    "grep -n 'PHASE VOCABULARY' -A 30 engine/live.sh",
+    "sed -n '54,110p' docs/guides/monitoring.md"
+  ],
+  "description": "A ROW CANNOT SAY WHAT THE AGENT IS DOING, BECAUSE CHIEF DOES NOT KNOW UNTIL THE TURN ENDS.\n\nMEASURED 2026-09-15, on a live run. A tasklist sat at `provider-waiting for 16m · iter 1` with its per-iteration log untouched for seventeen minutes, and an operator could not tell work from a hang. It was working: the provider CLI's own session transcript showed a `Bash` tool call 8 seconds earlier, and the process had accumulated 18s of CPU. Chief had none of that, and neither did `chief ps`, `chief monitor`, `chief logs -f` or `chief events`.\n\nWHY, precisely. `_provider_exec` invokes `claude --print --output-format json`, which emits ONE object when the whole turn finishes. `_capture_provider_output` (engine/agent.sh:1787) redirects that to `$STATE_DIR/.provider-output` and reads it only after the provider returns. So during a turn there is genuinely nothing to display — the silence is not a rendering choice, it is an absence of data. `chief ps` is `monitor.sh once` and `chief monitor` is `monitor.sh watch`, so one renderer serves both and one fix reaches both.\n\nWHAT ALREADY EXISTS AND IS NOT TO BE REBUILT. `_beat_start` (agent.sh) already runs a background observer for the whole turn: it polls HEAD every `$LIVE_BEAT_SECONDS`, flips the phase to `writing` when a commit lands, and stamps the heartbeat the monitor reads. That is the seam — a live writer already exists, it simply has nothing to say about the turn's interior. `live_set` already carries arbitrary fields into the record, and the row already renders `phase · elapsed · story · iter` from it.\n\nTHE SECOND DEFECT, SMALLER AND INDEPENDENT. The dim third line of a running row comes from `activity_of \"$wt/$n/$staterel/progress.txt\"` (engine/monitor.sh:954). progress.txt is MARKDOWN written by the agent, so that line can render a bare ``` fence — observed on the same run. An activity line that shows a code fence is worse than none: it occupies the one line an operator scans and says nothing.\n\nTHE CLI CAN STREAM. `claude --print --output-format stream-json` (with `--verbose`) emits events as they happen; `--output-format` is documented as `text|json|stream-json`. The other four providers on the roster (`devin`, `opencode`, `amp`, `codex`) have their own arms in `_provider_exec` and their own answers, and this tasklist does not speak for them.\n\n⛔ REFUSALS.\n(1) DO NOT READ THE PROVIDER'S PRIVATE FILES. The Claude Code transcript under the user's home directory is how this was diagnosed by hand; it is another tool's internal format, undocumented and free to change, and a monitor built on it breaks silently. What chief displays must come from the provider's own declared output.\n(2) DO NOT MAKE STREAMING THE ONLY PATH. A provider without a streaming mode, or an operator who turns it off, keeps exactly today's behaviour. The capability is CHECKED, never assumed — the same shape as the existing research-phase capability check.\n(3) THE STREAM IS NOT THE SOURCE OF TRUTH FOR MONEY OR LIMITS. `_parse_usage` and `_is_rate_limit` read the CAPTURED OUTPUT and must go on doing so; a turn's cost and a usage limit are not allowed to depend on a display feature being enabled. Note `_parse_usage` already greps the LAST line carrying cost/token keys, so a stream whose final line is the result object is compatible by construction — verify that rather than assuming it.\n(4) NO AGENT PROSE IN THE ROW. Display tool names, counts and timings — never the model's text. A row is scanned in a terminal beside other people; it is not a transcript.\n(5) NO SECOND POLLING LOOP AND NO SECOND WRITER. One writer records, the monitor renders verbatim — the discipline the phase field and the pending-work line already keep.\n\nENGINE DISCIPLINE. Editing `engine/`/`bin/` means bumping `VERSION` with README's and ROADMAP's bold version (test/version-bump.sh, test/doc-sync.sh), and ROADMAP must name this tasklist when it merges (scripts/check-roadmap-truth.sh).",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "The activity line is one readable line, or it is absent",
+      "passes": false,
+      "acceptanceCriteria": [
+        "`activity_of` never renders a line that carries no information: a code fence, a bare heading marker, a horizontal rule, an empty or whitespace-only line, or a line of pure punctuation. It reaches back for the most recent line that does carry information, or renders nothing at all.",
+        "What it does render is plain one-line text: markdown emphasis and inline-code markers stripped, whitespace collapsed, truncated to a width that does not wrap the row, with the truncation visible rather than silent.",
+        "A fixture progress.txt in the style of a real one — fenced blocks, headings, blank lines, a trailing fence — is rendered in a test, asserting the chosen line. Two-sided: a file whose last informative line is ordinary prose renders that prose, and a file containing ONLY uninformative lines renders nothing rather than a fence.",
+        "The assertion is on a whole rendered line, not a fragment another surface also emits.",
+        "`bash test/all.sh` passes (or the documented subset, named in the notes with what was run)."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "A streaming provider publishes what it is doing, and nothing else changes",
+      "passes": false,
+      "acceptanceCriteria": [
+        "A provider capability decides whether the turn is invoked in a streaming mode. For `claude` that is `--output-format stream-json` with `--verbose`; the other four arms of `_provider_exec` are untouched. An operator knob disables it, and disabled means the current invocation exactly.",
+        "While a streaming turn runs, the existing background observer publishes the turn's interior into the live record: what the agent is doing right now (the tool it most recently invoked), when that happened, and how many tool calls this turn has made. Field names are chosen to fit the record's existing convention and documented in engine/live.sh's vocabulary block.",
+        "The captured output is still written and still complete: `_parse_usage` reports the same cost and token figures for a streamed turn as for a non-streamed one over the same work, and `_is_rate_limit` still classifies a limit message that arrives in a stream. Prove the usage claim by measuring both modes, not by reading the code.",
+        "A provider that does not stream, and a turn with streaming disabled, behave exactly as today — same capture, same events, same phases. Shown by running the suite with the capability off.",
+        "A malformed or truncated stream line never breaks the turn: it is ignored for display purposes and the turn's success still rests on the provider's exit status and the captured output.",
+        "`bash test/all.sh` passes, and `VERSION` + README + ROADMAP move together."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "The row shows it, in ps and monitor alike",
+      "passes": false,
+      "acceptanceCriteria": [
+        "A running row whose record carries turn activity renders it beside the phase — what the agent last did, how long ago, and the count so far — so a long `provider-waiting` reads as work in progress rather than silence. A record without those fields renders exactly as today, which is what an older engine's record and a non-streaming provider both produce.",
+        "The staleness rule is re-read against the new information: activity that has genuinely stopped advancing must still be flagged, and the flag must not be defeated merely because a stream is open. State in the code which fact the flag now rests on.",
+        "Both surfaces are asserted, from a STAGED live record rather than a live provider: one assertion for `chief ps` (`once`) and one for `chief monitor` (`watch`), since only the first is cheap and a shared renderer is not a shared assertion.",
+        "Sabotage control: removing the activity fields from the record reddens exactly the new assertions and leaves every existing row assertion green — proving the addition did not rewrite the old rows.",
+        "`docs/guides/monitoring.md` gains the fields, the rendered example verbatim, and one sentence an operator can act on: what a long `provider-waiting` with fresh activity means versus one without. Its 'Is it working, or is it hung?' section is the place, and the answer it gives today is now measurably better.",
+        "`bash test/all.sh` passes, `VERSION` + README + ROADMAP move together, and `scripts/check-roadmap-truth.sh` is green."
+      ]
+    }
+  ]
+}

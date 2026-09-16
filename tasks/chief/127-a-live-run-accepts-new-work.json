@@ -1,0 +1,58 @@
+{
+  "project": "chief",
+  "category": "feature",
+  "branchName": "chief/127-a-live-run-accepts-new-work",
+  "dependsOn": [],
+  "touches": ["engine/driver.sh", "bin/chief", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "iters": 12,
+  "warmup": [
+    "sed -n '1700,1745p' engine/driver.sh",
+    "sed -n '3186,3225p' engine/driver.sh",
+    "grep -n 'pending_names()\\|running_names()\\|limit_retryable()' -A 4 engine/driver.sh",
+    "grep -n 'DRIVER_LOCK' -B 4 -A 12 engine/driver.sh | head -30",
+    "grep -n 'wave_names\\|progressed=1' -B 6 -A 12 engine/driver.sh | head -40",
+    "sed -n '1,60p' test/concurrency.sh",
+    "grep -n 'chief lint' -A 6 bin/chief | head -20"
+  ],
+  "description": "A RUN'S WORK SET IS FROZEN AT LAUNCH, SO NEW WORK COSTS AN OPERATOR THE RUN THEY HAVE.\n\nREPORTED BY AN OPERATOR 2026-09-16, and the sequence is the point: a run was working through seven tasklists; four more were authored while it ran; there was no way to add them, and `driver.lock` is one driver per repo, so a second `chief run` is refused. The operator killed a live run — discarding an in-flight agent turn — purely to widen the set. That is a bad trade offered by the tool, not a mistake.\n\nMEASURED IN THIS ENGINE. `REQUESTED` is the names passed on the command line, or a scan of `$SRC/*.json` skipping parked ones; `NAMES` is derived from it once at `engine/driver.sh:1720-1727`, dropping anything already recorded done or missing. EVERYTHING downstream iterates that frozen list: the per-tasklist state initialisation and the unmet-dependency pre-check (`:3188` and `:3202`), `pending_names()`, `running_names()`, `limit_retryable()`, the wave loop, the end-of-run summary and the outcome that becomes the exit code. So admitting a tasklist mid-run means widening `NAMES` AND giving the newcomer the same launch treatment the others got — not just appending a string.\n\nWHAT THIS IS NOT. It is not a second driver: `driver.lock` stays one-per-repo, because the merge phase serialises against a moving base branch and two drivers would race it. It is not a filesystem watcher: a run that silently absorbs whatever appears in `tasks/chief/` would make a named run (`chief run 310 311`) mean something different from what the operator typed. The request is EXPLICIT, and the operator's original set is never widened without one.\n\nTHE ADMISSION RULES ARE THE WHOLE FEATURE. A tasklist may join only if it would have been legal at launch: the file exists, it is not parked (unless named the way `--parked` already allows), it is not already in this run, it is not already recorded done, it passes the same lint `chief lint` applies, and its dependencies can be satisfied — by something merged, or by something in the widened run. Everything else is refused with the reason, at the moment of the request, before anything is scheduled.\n\nTIMING. Admission happens at a WAVE BOUNDARY — the point the scheduler already decides what to launch — never inside the merge phase and never while a worker is mid-iteration. In-flight work is untouched by construction.\n\n⛔ REFUSED.\n(1) No second driver, and no relaxing of `driver.lock`.\n(2) No silent auto-scan; a named run stays the operator's set.\n(3) No reordering or re-prioritising of work already scheduled — a newcomer takes its place under the existing dependency and conflict-domain rules, and never jumps a wave.\n(4) No admission once the run has begun computing its outcome; a request arriving then is refused with that reason rather than half-joining a finished run.\n(5) The machine budget and `-p N` still bound concurrency; admitting work never raises a ceiling.\n\nENGINE DISCIPLINE. Editing `engine/`/`bin/` means bumping `VERSION` with README's and ROADMAP's bold version (test/version-bump.sh, test/doc-sync.sh), and README's command table must cover every `bin/chief` subcommand — so a new subcommand needs its row in the same commit. ROADMAP must name this tasklist when it merges (scripts/check-roadmap-truth.sh).",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "An operator can offer a tasklist to a live run, and be told yes or why not",
+      "passes": false,
+      "acceptanceCriteria": [
+        "A subcommand offers one or more named tasklists to the run holding this repo's driver lock, and reports per name: admitted, or refused with the reason (no such file, parked, already in this run, already merged, failed lint, dependency unsatisfiable).",
+        "It is refused, with that reason, when no run is live — and refusing is cheap: nothing is written, no state is touched.",
+        "The request is durable across the gap between asking and the next wave boundary: an admitted name is re-checked at admission, because the tasklist file can change in between. A tasklist that became parked, or was merged, in that window is refused at admission and the operator is told.",
+        "It emits an event a subscriber can act on, distinct from the merge queue's existing `tasklist.queued`, and `docs/reference/events.md` carries it.",
+        "README's command table gains its row and `bash test/doc-sync.sh` passes.",
+        "`bash test/all.sh` passes (or the documented subset, named in the notes with what was run), and `VERSION` + README + ROADMAP move together."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "An admitted tasklist is indistinguishable from one named at launch",
+      "passes": false,
+      "acceptanceCriteria": [
+        "At the next wave boundary the newcomer joins `NAMES` and receives the same launch treatment the others got: its per-run state is initialised and stale per-run files cleared exactly as `:3188` does, and it goes through the same unmet-dependency pre-check so an impossible one is `blocked` with a stated reason rather than pending forever.",
+        "It is scheduled under the unchanged rules — dependencies, conflict domains/touches, `-p N` and the machine budget — and cannot start ahead of work already waiting on the same constraints.",
+        "The run's accounting includes it everywhere the launch set appears: the end-of-run summary, the outcome word and exit code, the headless JSON summary, and `chief ps` / `chief monitor` rows.",
+        "In-flight workers are demonstrably untouched: a test with a worker mid-iteration admits a tasklist and asserts the running one's branch, worktree and iteration counter are unchanged.",
+        "A hermetic test in the style of `test/concurrency.sh` (scripted fake provider, real driver) proves the end-to-end: a run starts with two tasklists, a third is offered mid-run, and it runs and merges and appears in the summary. Two-sided: the same fixture with the offer never made ends with two.",
+        "`bash test/all.sh` passes, and `VERSION` + README + ROADMAP move together."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "Every refusal is proven, including the ones that protect the run",
+      "passes": false,
+      "acceptanceCriteria": [
+        "Tests cover each refusal with its own case: parked, unknown name, already in the run, already merged, lint failure, a dependency that can never be satisfied in the widened run, and a request arriving after the run began computing its outcome.",
+        "A sabotage control proves the admission check is load-bearing: disabling it lets a parked or already-merged tasklist join, and exactly the refusal cases redden while the accept cases stay green.",
+        "The dependency rule is tested in BOTH directions — a newcomer whose dependency is another tasklist in the same run is admitted and waits for it; one whose dependency can never complete is admitted-and-blocked (or refused) with the reason stated, and the test asserts which of the two chief does rather than accepting either.",
+        "`docs/guides/monitoring.md` and whichever explanation page owns the driver's lifecycle state that a run's set can now widen, and what still cannot change mid-run (the base branch, the provider, `-p N`, the machine budget).",
+        "`bash test/all.sh` passes, `VERSION` + README + ROADMAP move together, and `scripts/check-roadmap-truth.sh` is green."
+      ]
+    }
+  ]
+}
