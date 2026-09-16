@@ -9,9 +9,11 @@
 # rendering choice; it was an absence of data. `stream-json` is where the data is.
 #
 # WHAT IS ASSERTED, AND WHY EACH PART EXISTS:
-#   PART A  THE INVOCATION, and the capability that decides it. Streaming is asked
-#           for only when the CLI's own help says it exists; the operator's knob and
-#           a CLI that never heard of it both produce BYTE-FOR-BYTE today's argv.
+#   PART A  THE INVOCATION, and the capability that decides it. The operator's knob
+#           gives BYTE-FOR-BYTE today's argv, and a CLI that never heard of the flag
+#           is recovered by OBSERVATION — the refusal is recognised and the SAME turn
+#           re-runs on the old transport — because chief never asks the CLI in
+#           advance. The invocation COUNT is asserted for that reason.
 #   PART B  USAGE PARITY, MEASURED. The tasklist's third refusal: a turn's cost may
 #           not depend on a display feature. Both modes are RUN over the same result
 #           object and the two `agent.turn` events' `usage` must be identical — a
@@ -54,10 +56,11 @@ chmod +x "$WORK/hook.sh"
 # ONE binary, four behaviours, all chosen by env — so every part below is compared
 # against the same program and a difference in the log is a difference in the ENGINE.
 #
-# It answers `--help` because the capability probe asks it: that IS the seam under
-# test, and $FAKE_HELP_STREAM is how PART A withdraws the capability. Note the probe
-# must not be able to hang on a provider that reads stdin — the help arm returns
-# before the `cat`, and the engine redirects the probe's stdin from /dev/null.
+# Nothing here answers `--help`, and that absence is load-bearing: the engine takes
+# no capability probe at all, so a fixture that could answer one would let a probe
+# creep back in unnoticed. A CLI too old for the flag is played by $FAKE_OLD_CLI
+# instead — it refuses the OPTION, in milliseconds, with no result envelope, which is
+# exactly the event _stream_refused recognises.
 #
 # THE RESULT OBJECT IS ONE STRING, shared verbatim by both modes. That is what makes
 # PART B a parity measurement rather than two unrelated runs: in streaming mode it is
@@ -150,6 +153,12 @@ JSON
 # `env -u` every CHIEF_* the engine reads and this harness does not set: the suite is
 # routinely run from INSIDE a chief worktree whose driver exports a dozen of them, and
 # inheriting one would point this run at the real repository (verify-cache.sh's rule).
+# $CHIEF_STREAM_ACTIVITY is STATED rather than inherited for the same reason, one
+# register in: this file is the test OF that knob, so a run under an ambient
+# `CHIEF_STREAM_ACTIVITY=0` — which is exactly how an operator checks that the knob
+# gives back today's engine — would otherwise have PART A assert the streaming argv of
+# a deliberately non-streaming run and fail at the fixture. Each part names the mode it
+# means via $SA_STREAM_ENV; the default is the engine's own default.
 run_agent() { # run_agent LABEL REPO ENGINE_DIR ; sets $LAST_OUT/$LAST_LIVE/$LAST_EV, returns agent rc
   local label="$1" repo="$2" engine="$3" rc=0
   LAST_OUT="$WORK/$label.out"; LAST_LIVE="$WORK/$label.live"; LAST_EV="$WORK/$label.events"
@@ -159,7 +168,7 @@ run_agent() { # run_agent LABEL REPO ENGINE_DIR ; sets $LAST_OUT/$LAST_LIVE/$LAS
       -u CHIEF_PAUSE_FILE -u CHIEF_ITER_HOOK -u CHIEF_PRD_SNAPSHOT -u CHIEF_UNVERIFIED_FILE \
       -u CHIEF_RESEARCH -u CHIEF_RESEARCH_FILE -u CHIEF_REVIEW -u CHIEF_TASKS_DIR \
       -u NO_VERIFY -u STRICT_VERIFY -u CHIEF_VERIFY_CACHE \
-      ${SA_STREAM_ENV:+CHIEF_STREAM_ACTIVITY="$SA_STREAM_ENV"} \
+      CHIEF_STREAM_ACTIVITY="${SA_STREAM_ENV:-1}" \
       FAKE_TOKEN="$label" FAKE_MID1="${SA_MID1:-}" FAKE_MID2="${SA_MID2:-}" \
       FAKE_MALFORMED="${SA_MALFORMED:-0}" FAKE_LIMIT="${SA_LIMIT:-0}" \
       FAKE_OLD_CLI="${SA_OLD_CLI:-0}" FAKE_SLEEP="${SA_SLEEP:-3}" \
@@ -179,7 +188,7 @@ run_agent() { # run_agent LABEL REPO ENGINE_DIR ; sets $LAST_OUT/$LAST_LIVE/$LAS
 # shape; a record must only ever be read the way live_get reads it).
 live_field() { sed -n "s/^[[:space:]]*\"$2\":[[:space:]]*//p" "$1" 2>/dev/null | head -1 | sed 's/,$//; s/^"//; s/"$//'; }
 turn_usage() { jq -c 'select(.event=="agent.turn") | .usage' "$1" | tail -1; }
-argv_last()  { grep -v '^--help$' "$ARGV_LOG" | tail -1; }
+argv_last()  { tail -1 "$ARGV_LOG"; }
 
 # ═══ PART A — the invocation, and the capability that decides it ═════════════
 # The count matters as much as the argv. An engine that ASKED the CLI whether it

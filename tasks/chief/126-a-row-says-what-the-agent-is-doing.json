@@ -42,7 +42,7 @@
     {
       "id": "US-2",
       "title": "A streaming provider publishes what it is doing, and nothing else changes",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "A provider capability decides whether the turn is invoked in a streaming mode. For `claude` that is `--output-format stream-json` with `--verbose`; the other four arms of `_provider_exec` are untouched. An operator knob disables it, and disabled means the current invocation exactly.",
         "While a streaming turn runs, the existing background observer publishes the turn's interior into the live record: what the agent is doing right now (the tool it most recently invoked), when that happened, and how many tool calls this turn has made. Field names are chosen to fit the record's existing convention and documented in engine/live.sh's vocabulary block.",
@@ -50,7 +50,8 @@
         "A provider that does not stream, and a turn with streaming disabled, behave exactly as today — same capture, same events, same phases. Shown by running the suite with the capability off.",
         "A malformed or truncated stream line never breaks the turn: it is ignored for display purposes and the turn's success still rests on the provider's exit status and the captured output.",
         "`bash test/all.sh` passes, and `VERSION` + README + ROADMAP move together."
-      ]
+      ],
+      "notes": "streaming transport landed in 46e12de; this iteration verified it end to end and repaired two fixtures that pinned ONE mode. MEASURED: test/stream-activity.sh PASS, run directly (A1 argv `--print --output-format stream-json --verbose`, one invocation; A2 knob=0 gives byte-identical today's argv; A3 a CLI refusing the flag recovers on the old transport in one extra call; B usage parity MEASURED identical both modes {input_tokens:1200,output_tokens:340,cost_usd:0.0421,duration_ms:1234,turns:3}; C a limit inside a stream still exits 2; D mid-turn record tool=Bash tools=2 tool_since set, cleared at turn end; E malformed+truncated lines counted nothing and the truncated one counted ONCE on completion; F knob off = today; G neutered engine publishes nothing, so D discriminates). CAPABILITY-OFF SUITE (criterion 4) run literally, CHIEF_STREAM_ACTIVITY=0: smoke PASS, provider-conformance PASS, ratelimit PASS, noworkguard PASS, events PASS, liveliness PASS, stall-flag PASS, stream-activity PASS. It was RED before this iteration: provider-conformance pinned the streaming argv unconditionally and stream-activity INHERITED the ambient knob, so both failed at the fixture with the engine correct — the roster now selects its claude row off the same expression agent.sh resolves $STREAM_ON from and states which transport it asserted, and stream-activity states the knob instead of inheriting it. Also corrected three comment blocks (test header, fixture preamble) that still described a `claude --help` capability probe the shipped engine deliberately does not make. VERSION 0.9.39 = README = ROADMAP (doc-sync PASS, 52 merged tasklists named; version-bump PASS). bash -n clean on both edited tests. Full test/all.sh NOT run this iteration; `chief verify` verdict: %VERDICT%."
     },
     {
       "id": "US-3",
