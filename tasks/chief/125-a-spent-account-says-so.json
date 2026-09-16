@@ -1,0 +1,59 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/125-a-spent-account-says-so",
+  "dependsOn": [],
+  "touches": ["engine/agent.sh", "engine/monitor.sh", "engine/driver.sh", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "iters": 10,
+  "warmup": [
+    "sed -n '549,580p' engine/agent.sh",
+    "sed -n '1655,1700p' engine/agent.sh",
+    "sed -n '491,512p' engine/monitor.sh",
+    "sed -n '551,575p' engine/monitor.sh",
+    "sed -n '925,945p' engine/monitor.sh",
+    "grep -n 'unavailable' engine/driver.sh | head -20",
+    "sed -n '226,275p' docs/guides/providers.md",
+    "sed -n '100,130p' docs/reference/provider-unavailability.md",
+    "sed -n '1,45p' test/limitstate.sh"
+  ],
+  "description": "AN ACCOUNT WITH NOTHING LEFT TO SPEND DOES NOT SAY SO ON THE LIVE SURFACES. Reported by an operator 2026-09-15: a tasklist stopped because the provider account was out of usage, and neither `chief ps` nor `chief monitor` said that was what happened.\n\nWHAT ALREADY WORKS, and is not to be rebuilt. A Claude usage limit is detected (`_is_rate_limit`), the scheduler waits the window out and re-dispatches, the coarse state is `rate-limited`, and `limit_note()` (engine/monitor.sh:551) renders a genuinely good row: `paused: usage limit — retry at 15:10 (28m) · re-dispatch 1/3 · paused 32m`. `chief usage` already reports `limit_incidents` per provider. `chief ps` is `monitor.sh once` and `chief monitor` is `monitor.sh watch` (bin/chief cmd_ps/cmd_monitor), so ONE renderer serves both and a fix lands on both at once.\n\nTHREE MEASURED GAPS, all on the path an exhausted account actually takes.\n\n1. DETECTION IS CLAUDE-PHRASED, AND THE DOC SAYS WHAT THAT COSTS. `RATE_LIMIT_PATTERN` / `RATE_LIMIT_STATUS_PATTERN` (engine/agent.sh:571-577) were written against the Claude Code CLI's wordings. `docs/guides/providers.md` §Usage-limit detection states the consequence in its own words: a provider that says it differently \"matches nothing, and its limit stop is demoted to a no-progress iteration: the loop burns its budget and exits 1 as a stall, indistinguishable to the driver from a genuinely failed tasklist.\" The roster is five — `claude`, `devin`, `opencode`, `amp`, `codex` — and four of them have never been verified against that pattern. That is exactly the operator's report: not a display bug, a tasklist that died looking like a failure.\n\n2. A SPENT QUOTA IS RENDERED AS A BAD KEY. `_provider_unavailable` classifies `401 402 403` + `authentication_error` + `permission_error` as one `permanent` bucket and prints one sentence for all of them: \"bad or revoked credentials, or a quota that will not replenish\". But `402` (and an `insufficient_quota`-shaped error type) means the account is OUT OF CREDIT, which is an operator action — top up — while `401`/`403` mean the credential is wrong. The monitor's own glyph comment (engine/monitor.sh:499-503) says the `no-api` label deliberately does NOT mean \"the account is out of quota\" — so today nothing anywhere says that sentence.\n\n3. THE REASON IS ON DISK AND THE LIVE SURFACES DO NOT READ IT. `engine/driver.sh:2871` writes the why (`HTTP 402 (…)`) to `$STATE/<name>.unavailable`, and the ONLY reader is the end-of-run summary at `:3745`. In the row renderer, `hold_kind`, `rate-limited`, `paused` and the `awaiting-*` states each get a dedicated note; `provider-unavailable` falls through to the generic phase/agent-note branch (engine/monitor.sh:930-945), so a live row reads `⏸ no-api` + `provider-unavailable for 4m` and never names the HTTP code chief already recorded. An operator watching the run sees less than the summary they get after it ends.\n\nSCOPE AND REFUSALS.\n⛔ Do NOT widen `RATE_LIMIT_PATTERN` by guesswork. The pattern is shared and provider-agnostic, and the doc's own warning stands: a pattern that matches ordinary agent prose turns every iteration into a sleep. A phrasing is added only with a recorded observation (provider, CLI version, date, verbatim line) — the same discipline `PROVIDER_TRANSPORT_PATTERN`'s dated list already keeps.\n⛔ Do NOT introduce a second ledger. `chief usage` owns incident history; anything this adds is read back out of what the engine already writes.\n⛔ Do NOT collapse `rate-limited` and `provider-unavailable`. A window that reopens and an account that needs topping up are different operator actions, and engine/live.sh:78 already forbids conflating them.\n⛔ A public repository: name no downstream repo, tasklist or path in code, tests or docs.\n\nENGINE DISCIPLINE. Editing `engine/`/`bin/` means bumping `VERSION` and README's and ROADMAP's bold version together (test/version-bump.sh, test/doc-sync.sh), and a merged tasklist must be named in ROADMAP.md (scripts/check-roadmap-truth.sh).",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A limit no pattern recognises is reported as a suspected limit, not as a stall",
+      "passes": false,
+      "acceptanceCriteria": [
+        "When a worker stops with no progress AND the provider's last output carries a limit-shaped signal that the patterns did not match, the stop is reported as a SUSPECTED usage limit — naming the provider, quoting the line, and saying which pattern would have to be extended — rather than as an ordinary stall. The existing `rate-limited` path is unchanged when a pattern DOES match.",
+        "Design the suspicion narrowly and say what it rests on: the provider exited non-zero, nothing was committed, and the output carries a limit-shaped token. State the false-positive cost in the code, as the transport-pattern list already does. A suspected limit must NOT silently start sleeping or re-dispatching — it stops and reports, because acting on a guess is what the pattern discipline exists to prevent.",
+        "Both live surfaces show it, through the one renderer: a distinct label and a note saying what chief suspects and what the operator should check. `chief ps` and `chief monitor` are asserted separately in the test, because one is `once` and the other `watch` and only the first is cheap to assert.",
+        "A hermetic test in the style of `test/limitstate.sh` (fake provider binary on PATH, behaviour keyed by branch name) covers BOTH directions: a recognised limit still reaches `rate-limited`, and an unrecognised limit-shaped stop reaches the new reporting rather than a bare stall. Add the no-regression case that ordinary agent prose with no limit signal is still an ordinary stall — without it, 'report everything as a suspected limit' passes the suite.",
+        "`bash test/all.sh` passes (or the suite's documented subset, named in the notes with what was run), and `VERSION` + README + ROADMAP move together."
+      ]
+    },
+    {
+      "id": "US-2",
+      "title": "Out of credit is its own verdict, separate from a bad credential",
+      "passes": false,
+      "acceptanceCriteria": [
+        "`402`, and an error type that names an exhausted quota, are classified as a distinct permanent kind from `401`/`403`/`authentication_error`/`permission_error`. Both remain permanent — neither is slept on — but they are no longer described by one sentence.",
+        "The wording is the operator's next action, not the HTTP fact: an exhausted account says the account has no usage left and what lifts it; a bad credential says the credential is wrong. The classification is read off the provider's own status code or error envelope, never off prose — the rule `docs/reference/provider-unavailability.md` already states.",
+        "The distinction reaches the live row label, the run's end-of-run summary block, and the emitted event, so a subscriber can act on it. `docs/reference/provider-unavailability.md`'s permanent table and `docs/reference/status.md` are updated in the same commit; a doc that still shows one bucket is drift the doc-sync gate should catch.",
+        "Tests drive a fake provider emitting each of `401`, `402` and `403` and assert three outcomes: all three stop without sleeping, and the two verdicts are distinguishable in what the operator is shown. Sabotage control: collapsing the new kind back into the old one reddens exactly the credit cases and leaves the credential cases green.",
+        "`bash test/all.sh` passes, and `VERSION` + README + ROADMAP move together."
+      ]
+    },
+    {
+      "id": "US-3",
+      "title": "A held row names who is holding it, using the reason chief already wrote down",
+      "passes": false,
+      "acceptanceCriteria": [
+        "A `provider-unavailable` row in `chief ps` / `chief monitor` gets its own note, beside the existing `limit_note` / `op_note` / `hold_note` family, that reports the recorded reason — the HTTP code and error type chief already writes to `$STATE/<name>.unavailable` and to the live record — plus the retry accounting already carried in `noturn`/`noturn_limit`, and the phase age.",
+        "The note reads from what the engine already records; it does not re-derive a reason and does not re-classify. When no reason was recorded, it says the provider refused the request and nothing more — an absent reason must not render as an empty or misleading line.",
+        "A permanently-refused row (US-2's two kinds) is visibly distinct from one still retrying a transient refusal, because the operator action differs: one is wait, one is fix the credential, one is top up the account.",
+        "`test/limitmonitor.sh` (or a sibling in its style) asserts the rendered row for each case against a staged state directory, so the assertion is about the RENDERER and not about a live provider. Assert one whole output line, not a fragment that the run summary also prints — a needle both surfaces emit cannot tell them apart.",
+        "`docs/guides/monitoring.md`'s phase/label tables gain the new rows, and its worked examples show the new notes verbatim, so the documented output matches what the renderer produces.",
+        "`bash test/all.sh` passes, `VERSION` + README + ROADMAP move together, and `scripts/check-roadmap-truth.sh` is green."
+      ]
+    }
+  ]
+}
