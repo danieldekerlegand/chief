@@ -60,12 +60,13 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 
 | Field | Shown as | Written by |
 |---|---|---|
-| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-backoff`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
+| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-unavailable`, `provider-backoff`, `stalled`, `suspected-limit`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
 | `phase_since` | `verifying for 41m` — elapsed **in this phase** | bumped only when the phase actually changes |
 | `story` / `iter` | `US-3 · iter 5` | the agent loop, each iteration |
 | `stall` / `stall_limit` | `no progress last iter (1/2)` | the agent loop's no-progress counter and the budget it is spent against |
 | `waits` | the limit-wait count | the agent loop's usage-limit sleeps |
-| `noturn` / `noturn_limit` | `provider attempt 2/3` | consecutive requests the provider **refused before any turn was taken**, and the budget they are counted against. Deliberately not `stall`: one counts iterations the agent ran and got nowhere in, the other counts iterations it was never given |
+| `noturn` / `noturn_limit` | `provider attempt 2/3` while it is still retrying, `refusal 1/3` once it has stopped | consecutive requests the provider **refused before any turn was taken**, and the budget they are counted against. Deliberately not `stall`: one counts iterations the agent ran and got nowhere in, the other counts iterations it was never given |
+| `refusal` | the row label on a refused tasklist — `no-credit` · `bad-key` · `no-api` — and the sentence its note says next | the verdict on the last request the provider would not serve: `exhausted` · `credential` · `transient` (the label table below) |
 | `passing` / `total` | the progress column, when no `prd.json` is readable | agent + driver |
 | `retry_at` | the retry ETA on a paused row | the driver's usage-limit self-heal |
 | `heartbeat` | `12s ago` — time since the run last did *anything* | **every** write; an in-turn ticker keeps it moving through a long `claude` call |
@@ -258,6 +259,84 @@ my-api  (pid 12345 · -p2 · claude · 41m · →main)
   limit's `paused`) and its note carries what was kept and the command that picks it
   back up, not an ETA — Chief will never lift this one by itself.
 - Neither pause ever borrows a failure glyph, and neither is flagged stalled.
+
+### …and a third thing that looks like neither: `limit?`
+
+Both pauses above are holds Chief **knows** about. There is a third row, and it is a
+stop rather than a hold: the loop gave up exactly as a stall does, *and* the
+provider's own last output carried a limit-shaped line that neither of Chief's
+usage-limit patterns matched (see
+[Usage-limit detection](providers.md#usage-limit-detection) — the defaults were
+written against one CLI's phrasings).
+
+```text
+   ? unknown-limit          limit?    1/4     chief/unknown-limit
+       ↳ suspected usage limit — the provider exited non-zero and committed nothing · Error: your workspace has used all of its included usage for this billing period. · chief neither waited nor re-dispatched — check the account's remaining usage, then engine/agent.sh's limit patterns · stopped 4m ago
+```
+
+- **`?` and `limit?`, not `✗ failed`.** The row an operator scans is the whole
+  reason this state exists: an account that is simply out of usage used to read as a
+  failed tasklist, and the response to those two is not the same.
+- **It is a suspicion, and it says so.** Chief recognises a usage limit only by
+  those patterns, so it quotes the line it saw and names the pattern that would have
+  to grow. It does not claim the account is spent.
+- **Nothing was acted on.** No sleep, no re-dispatch, and dependents behave exactly
+  as they do behind a stall — acting on a guess is what the pattern discipline
+  exists to prevent. Only the report differs.
+
+The same report is printed in the run summary (`SUSPECTED USAGE LIMIT`) and
+recorded at `.chief/state/parallel/<name>.suspected-limit`.
+
+### …and when chief *does* know: `no-credit` vs `bad-key`
+
+A row the API **refused** is a hold too (state `provider-unavailable`, glyph `⏸`).
+One state, three labels — because the operator action is different for each, and
+`no-api` deliberately does not mean "the account is out of quota":
+
+```text
+   ⏸ billing-run             no-credit 2/4     chief/billing-run
+       ↳ the provider refused the request — HTTP 402 (billing_error) · refusal 1/3 · the account has no usage left to spend · PERMANENT — not retried, because no delay lifts it · add credit, raise the plan limit, or point the run at an account that has usage · branch + worktree kept · held 4m
+   ⏸ stale-key               bad-key   0/3     chief/stale-key
+       ↳ the provider refused the request — HTTP 401 (authentication_error) · refusal 1/3 · the credential is wrong, revoked, or not entitled to this model · PERMANENT — not retried, because no delay lifts it · fix or replace the credential · branch + worktree kept · held 1h02m
+   ⏸ overloaded              no-api    1/5     chief/overloaded
+       ↳ the provider refused the request — HTTP 503 · refusal 3/3 · each refusal was waited out first and the budget is spent · re-run once the provider answers again · branch + worktree kept · held 12m
+```
+
+| label | what the provider said | what lifts it |
+|---|---|---|
+| `no-credit` | `402`, or an error type naming the quota/credit/billing | add credit, raise the plan limit, or run against an account that has usage left — the credential is fine |
+| `bad-key` | `401` / `403` · `authentication_error` · `permission_error` | fix or replace the credential; topping an account up cannot lift it |
+| `no-api` | anything else it refused — an outage that outlasted `PROVIDER_NOTURN_LIMIT`, a dropped connection, a refusal with no code | the reason line, verbatim, and a re-run |
+
+The verdict is read off the status code and the error envelope, never off the prose,
+and it rides the liveliness record's `refusal` field (`transient` · `exhausted` ·
+`credential`) — the same value the event stream carries, so a subscriber sees the
+distinction the row does. Full rules:
+[provider-unavailability.md](../reference/provider-unavailability.md).
+
+**The note reads back what Chief already wrote down**, and nothing else: the HTTP code
+and error type come off `.chief/state/parallel/<name>.unavailable` (what the driver
+copied out of the worktree when the worker parked) and the verdict off the record —
+the row never re-classifies, so it cannot disagree with the run summary that prints
+the same refusal in full. Three things follow:
+
+- **`PERMANENT` appears only when it is one.** The two permanent verdicts say that no
+  delay lifts them and name the fix; a transient refusal that spent its budget says it
+  was waited out and that a re-run is the whole remedy.
+- **A row still retrying is not one of these at all.** It is still `running`, phase
+  `provider-backoff`, and its line carries the ETA and `provider attempt 2/3` — the
+  operator action there is to wait, and a note claiming otherwise would be worse than
+  no note.
+- **An unrecorded reason invents nothing.** With no reason on disk and no verdict on
+  the record the note is exactly `the provider refused the request · branch + worktree
+  kept · held 4m` — no code, no verdict, and no `0/3` accounting that never happened.
+
+```text
+   ● retrying-run            running   1/4     chief/retrying-run
+       ↳ provider-backoff for 21s · US-3 · iter 3 · retry at 22:21 (in 29s) · provider attempt 2/3 · 6s ago
+   ⏸ silent-refusal          no-api    1/4     chief/silent-refusal
+       ↳ the provider refused the request · branch + worktree kept · held 4m
+```
 
 Raise the threshold when your verify hook is legitimately slow — a driver phase has
 no ticker, so a `npm ci` + `cargo build` verify can go quiet for minutes:

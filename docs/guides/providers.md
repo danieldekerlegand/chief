@@ -269,9 +269,34 @@ from a genuinely failed tasklist. So when onboarding:
 4. If the phrasing includes a reset time, check `_seconds_until_reset` parses it;
    otherwise chief falls back to its default wait.
 
-Until step 2 is done, document the gap — an undetected limit is a *silent* failure
-mode, and the operator's only clue is a tasklist that stalls at the same hour every
-day.
+### Until step 2 is done: `SUSPECTED-LIMIT`
+
+An undetected limit used to be a *silent* failure mode, whose only clue was a
+tasklist that stalled at the same hour every day. It is no longer silent, and it is
+still not detected — those are different claims and Chief makes only the second.
+
+When the loop gives up (budget spent, stall counter full) **and** the provider exited
+non-zero, committed nothing, and printed a limit-shaped line, the stop is reported as
+a **suspected** usage limit: agent exit **10**, status `SUSPECTED-LIMIT`, live phase
+`suspected-limit`, and a `? limit?` row in `chief ps` / `chief monitor`
+([Monitoring](monitoring.md#and-a-third-thing-that-looks-like-neither-limit)) quoting
+the provider's own line and naming the pattern that would have to grow.
+
+Two properties make it safe to be broad where the acting patterns may not be:
+
+- **It never makes Chief act.** No sleep, no re-dispatch; dependents behave exactly
+  as they do behind a stall. `$RATE_LIMIT_PATTERN` decides whether to sleep, so a
+  false positive there costs an hour of nothing — the warning in step 2 stands
+  untouched. `$SUSPECT_LIMIT_PATTERN` decides only what an already-finished stop is
+  *called*, so a false positive costs one wrong sentence and a false negative costs
+  an operator's afternoon.
+- **It is fenced by facts read off the run, not off the prose.** An agent that merely
+  *wrote* about a quota exited 0; one that did any work moved `HEAD`. Both are
+  excluded before the regex is consulted.
+
+Steps 1–4 above are still the fix. This only makes the gap visible while they are
+outstanding — and the report names the pattern to extend, so the fix starts where the
+operator is already looking.
 
 ## Current roster
 

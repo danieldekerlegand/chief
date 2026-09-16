@@ -72,6 +72,13 @@ _event_num() {
 #   state   the coarse state it lands in    (scheduler word, or the run outcome)
 #   detail  free text for a HUMAN reading the stream — a sha, a git refusal, a
 #           reason. Nullable and NOT part of the machine contract: never parse it.
+#   refusal the VERDICT on a request the provider would not serve, on the
+#           tasklist.provider-unavailable / tasklist.provider-backoff events only:
+#           `transient` (waited out, retried) · `exhausted` (the account has no usage
+#           left) · `credential` (the key is wrong, revoked, or not entitled). Null
+#           everywhere else. Unlike `detail` this IS machine contract — a subscriber
+#           acts differently on each, and the three were one sentence in `detail` until
+#           0.9.36, which no consumer could act on.
 #
 # Usage keys (folded into the `usage` object; omitted/empty -> that field is null,
 # and an all-null object is emitted as `usage: null` rather than a hollow shell):
@@ -87,7 +94,7 @@ event_emit() {
   command -v jq >/dev/null 2>&1 || return 0
   shift
   local kv k v dir line
-  local e_name="" e_story="" e_state="" e_detail=""
+  local e_name="" e_story="" e_state="" e_detail="" e_refusal=""
   local u_in="" u_out="" u_total="" u_cost="" u_dur="" u_turns="" u_model=""
   local l_hit="" l_retry="" l_waits="" l_max=""
   for kv in "$@"; do
@@ -97,6 +104,7 @@ event_emit() {
       story)  e_story="$v" ;;
       state)  e_state="$v" ;;
       detail) e_detail="$v" ;;
+      refusal) e_refusal="$v" ;;
       in_tokens)    u_in="$(_event_num "$v")" ;;
       out_tokens)   u_out="$(_event_num "$v")" ;;
       total_tokens) u_total="$(_event_num "$v")" ;;
@@ -125,6 +133,7 @@ event_emit() {
       --arg runId "${CHIEF_RUN_ID:-}" --arg repo "${CHIEF_EVENT_REPO:-}" \
       --arg event "$ev" --arg name "$e_name" --arg story "$e_story" \
       --arg state "$e_state" --arg detail "$e_detail" \
+      --arg refusal "$e_refusal" \
       --arg uin "$u_in" --arg uout "$u_out" --arg utot "$u_total" \
       --arg ucost "$u_cost" --arg udur "$u_dur" --arg uturns "$u_turns" \
       --arg umodel "$u_model" \
@@ -138,6 +147,7 @@ event_emit() {
         story:  str($story),
         state:  str($state),
         detail: str($detail),
+        refusal: str($refusal),
         usage:  obj({input_tokens:  num($uin),   output_tokens: num($uout),
                      total_tokens:  num($utot),  cost_usd:      num($ucost),
                      duration_ms:   num($udur),  turns:         num($uturns),

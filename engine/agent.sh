@@ -80,6 +80,18 @@
 #      wrong verdict on finished work. The stop names the story, quotes the repeated
 #      finding, and names the two actions that resolve it: amend the criterion, or
 #      declare the negative terminal ("terminalFalse", engine/terminal.sh).
+#  10  A SUSPECTED USAGE LIMIT — the loop gave up exactly as in 1, AND the
+#      provider's own last output carries a limit-shaped line that neither
+#      $RATE_LIMIT_PATTERN nor $RATE_LIMIT_STATUS_PATTERN matched. This is NOT a
+#      claim that the account is spent: recognising a limit is precisely what
+#      those two patterns are for, and chief will not pretend to a verdict it
+#      has no rule for. It is the SAME stop as 1, carrying the evidence that
+#      makes it worth checking the account before re-scoping the tasklist —
+#      which provider, which line, which pattern would have to grow. Nothing is
+#      slept on and nothing is re-dispatched (see SUSPECTED USAGE LIMIT below):
+#      acting on a guess is the exact cost the pattern discipline exists to
+#      avoid, so the driver schedules this the way it schedules 1 — dependents
+#      included — and ONLY the report differs.
 # A usage limit is detected BEFORE the progress/stall accounting (see
 # _is_rate_limit below), so a limit-blocked turn can never be misread as a
 # no-progress iteration that trips STALL_LIMIT and exits 1. A request the provider
@@ -218,6 +230,13 @@ rm -f "$NOTURN_FILE"
 # reported identically is what sends an operator to re-scope work that was fine.
 # Line 1 is the reason; the lines after it are the agent's own closing words.
 STALL_FILE="$STATE_DIR/.stalled"
+# Written ONLY on an exit-10 stop, and never beside $STALL_FILE: the same giving-up
+# moment, but with a limit-shaped line the acting patterns did not match (see
+# SUSPECTED USAGE LIMIT beside $SUSPECT_LIMIT_PATTERN). Its own file rather than a
+# first line in the stall report because the driver has to be able to choose between
+# two reports without parsing either one.
+SUSPECT_FILE="$STATE_DIR/.suspected-limit"
+rm -f "$SUSPECT_FILE"
 rm -f "$STALL_FILE"
 # THE CANNOT-COMPLETE REPORT (engine/repeat.sh), on the same terms as the two files
 # above: written only when the repeat rule stops the loop, read by the driver's exit-9
@@ -574,6 +593,39 @@ RATE_LIMIT_MAX_WAITS="${RATE_LIMIT_MAX_WAITS:-8}"
 RATE_LIMIT_PATTERN="${RATE_LIMIT_PATTERN:-(usage limit reached|session limit reached|((5|five)[ -]hour|weekly|daily|monthly|hourly|plan|account|output|token)[ -]limit reached|(hit|reached|exceeded) (your|the) ([a-z0-9-]+ )?(session|usage|rate|weekly|daily|monthly|plan|output|token) limit|(your|the) limit will reset (at|in)|rate limit exceeded|rate_limit_error|too many requests|upgrade to increase your usage limit)}"
 RATE_LIMIT_STATUS_PATTERN="${RATE_LIMIT_STATUS_PATTERN:-(429|rate[_ -]?limit|usage limit|session limit)}"
 
+# --- SUSPECTED USAGE LIMIT (the stop the two patterns above did NOT recognise) -
+# The block above states what a missed limit costs: the loop burns its budget and
+# exits 1 as a stall, indistinguishable to the driver from a genuinely failed
+# tasklist. Reported by an operator 2026-09-15 — the account was simply out of
+# usage, and neither `chief ps` nor `chief monitor` said so. It is the DEFAULT case
+# rather than an edge: four of the five providers in the roster have never been
+# verified against those patterns (docs/guides/providers.md, Usage-limit detection).
+#
+# THIS PATTERN NEVER MAKES CHIEF ACT, and that is the entire design.
+# $RATE_LIMIT_PATTERN decides whether to SLEEP, so a false positive there turns
+# every iteration into an hour of nothing and the doc's warning against widening it
+# stands untouched. This one decides only what a stop that HAS ALREADY HAPPENED is
+# called. Its false-positive cost is one wrong sentence on a report about a run that
+# was ending either way; its false-NEGATIVE cost is an operator reading `stalled` and
+# re-scoping a tasklist that was never the problem. So it is allowed to be broad
+# where the acting pattern may not be.
+#
+# It is still fenced, and by facts read off the RUN rather than off the prose
+# (_suspected_limit): the provider exited NON-ZERO and the iteration committed
+# NOTHING AT ALL. An agent that merely WROTE about quotas exits 0, and one that did
+# any work moves HEAD — both are excluded before this regex is consulted at all.
+# TWO STEPS, not the `"${VAR:-…}"` one-liner every other knob here uses, and it has
+# to be: bash ends a `${VAR:-word}` expansion at the first UNESCAPED `}` inside
+# `word`, so a regex INTERVAL in a default is silently cut in half. `[^.]{0,24}`
+# arrives as `[^.]{0,24` with a stray `}` pasted onto the end of the whole pattern,
+# every grep against it dies `invalid repetition count(s)` on stderr, the caller
+# discards the failure — and the suspicion simply never fires, with nothing saying
+# why. `bash -n` sees nothing, and neither does any pattern in this file that happens
+# to contain no interval. Same shape as the backtick-in-a-heredoc trap below: giving
+# a construct its first `}` exposes the expansion it was passing through.
+SUSPECT_LIMIT_PATTERN="${SUSPECT_LIMIT_PATTERN:-}"
+[ -n "$SUSPECT_LIMIT_PATTERN" ] || SUSPECT_LIMIT_PATTERN='(quota|out of (credit|credits|tokens|usage)|credit balance|insufficient[_ ](funds|credit|quota|balance)|billing|payment required|too many requests|throttl(ed|ing)|(limit|allowance|balance|credits?)[^.]{0,24}(exceed|exhaust|reach|spent|depleted|used up|run out)|(exceed|exhaust|reach|spent|depleted|used up|run out)[^.]{0,24}(limit|allowance|quota|balance|credits?)|upgrade (your|to) )'
+
 # --- PROVIDER UNAVAILABILITY (an iteration that never reached the model) ------
 # A 529, a 503, a dropped connection, a refused key: the API declined the REQUEST.
 # No turn was taken, no tool was called, nothing was attempted — so counting it as a
@@ -636,9 +688,13 @@ PROVIDER_NOTURN_LIMIT="${PROVIDER_NOTURN_LIMIT:-3}"
 #              COST, not from likelihood: waiting on a permanent error wastes minutes,
 #              failing fast on an outage loses the tasklist. So ambiguity waits, and
 #              the log SAYS it could not tell rather than implying it knew.
-#   permanent  401/402/403 · authentication_error · permission_error — a bad key, a
-#              revoked one, a quota that will not replenish. No amount of sleeping
-#              fixes any of those, so the loop stops on the FIRST one, with its
+#   permanent  Two verdicts, never one sentence for both, because the operator action
+#              differs. `exhausted` — 402, or an error type naming the quota, the
+#              credit or the billing that ran out — is an account with nothing left to
+#              spend, lifted by topping it up or running against another account.
+#              `credential` — 401/403 · authentication_error · permission_error — is
+#              the key itself, and topping anything up will not lift it. No amount of
+#              sleeping fixes either, so the loop stops on the FIRST one, with its
 #              reason, instead of sleeping through a budget it cannot satisfy.
 #
 # THE PROVIDER'S OWN INTERVAL WINS. `Retry-After` is the server naming the moment it
@@ -1462,6 +1518,41 @@ _is_rate_limit() {
   return 1
 }
 
+# _suspected_limit OUTPUT STATUS -> 0 when this iteration looks like a usage limit
+# that neither acting pattern recognised. Sets $SUSPECT_LINE to the verbatim line
+# that raised it and $SUSPECT_PATTERN to the pattern that would have to grow to
+# match it — SET-A-GLOBAL rather than PRINT-IT, because the caller is on the
+# iteration boundary and a `$( )` per iteration buys a fork for a string it
+# usually throws away.
+#
+# THREE FACTS, and only the third is a guess:
+#   1. the provider exited NON-ZERO — a turn that returned 0 produced a turn,
+#      whatever its text says (the condition _is_no_turn opens with, for the
+#      same reason: it is what keeps an agent WRITING about a limit out of here);
+#   2. the iteration committed NOTHING AT ALL — checked by the caller, which has
+#      both heads in hand, so "it got nowhere" is read off the branch;
+#   3. the output carries a limit-shaped token (see $SUSPECT_LIMIT_PATTERN).
+# Fact 3 on its own would be worthless. It is only worth printing because 1 and 2
+# have already narrowed it to a stop that produced nothing whatsoever.
+#
+# WHICH PATTERN to name is read off the provider's own structured facts, never off
+# the prose: an envelope that states a status code or an error type is a terse,
+# machine-readable stop and belongs in $RATE_LIMIT_STATUS_PATTERN (which only
+# counts on a non-zero exit — and this one is); anything else is prose and belongs
+# in $RATE_LIMIT_PATTERN.
+_suspected_limit() {
+  local out="$1" status="$2"
+  SUSPECT_LINE=""; SUSPECT_PATTERN=RATE_LIMIT_PATTERN
+  [ "$status" = "0" ] && return 1
+  _is_rate_limit "$out" "$status" && return 1
+  SUSPECT_LINE="$(printf '%s\n' "$out" | LC_ALL=C grep -iE "$SUSPECT_LIMIT_PATTERN" \
+    | LC_ALL=C grep -v '^[[:space:]]*$' | tail -1 | cut -c1-200)" || SUSPECT_LINE=""
+  [ -n "$SUSPECT_LINE" ] || return 1
+  [ -n "$(_provider_status_code "$out")$(_provider_error_type "$out")" ] \
+    && SUSPECT_PATTERN=RATE_LIMIT_STATUS_PATTERN
+  return 0
+}
+
 # _rate_limit_wait OUTPUT — what to DO about a turn that _is_rate_limit said yes to.
 #   returns 0  slept until the window reopens; the caller should re-run the same turn
 #              (and must NOT charge it to any budget — a blocked turn is free)
@@ -1641,7 +1732,7 @@ _is_no_turn() {
 # THE WAIT LIVES HERE because this is the single decision point — retry or stop — and
 # a backoff written at the call site would be a second place that knows the rule.
 _provider_unavailable() {
-  local out="$1" iter="$2" n="$3" code type why kind ws secs src wake how
+  local out="$1" iter="$2" n="$3" code type why kind verdict act ws secs src wake how
   # The REASON, in one line: what the provider refused with, and whether waiting can
   # help. Goes in the log, the live record and the file the driver reports from;
   # nothing ever parses it back.
@@ -1656,30 +1747,59 @@ _provider_unavailable() {
   # cost argument beside $PROVIDER_BACKOFF), and the 5xx arm is tested ahead of the
   # permanent one so an envelope carrying both a server-side status and a stray
   # auth-shaped type resolves on the status — the fact the server actually stated.
+  # TWO PERMANENT VERDICTS, not one. Both stop on the FIRST refusal and neither is
+  # ever slept on; what differs is the only thing a report is for — what the operator
+  # has to DO. `exhausted` is an account with nothing left to spend (top it up, raise
+  # the plan, or point the run at an account that has some) and its credential is
+  # perfectly good; `credential` is the key itself — wrong, revoked, or not entitled
+  # to this model — which no amount of topping up fixes. Chief said both of those in
+  # one sentence until 0.9.36, so an account that was simply spent read as a key that
+  # had been revoked. Read off the status code and the error TYPE only, never the
+  # prose: the type is the provider's machine contract and the sentence beside it is
+  # not (the rule the classifier above already keeps). The type arm is a token glob
+  # rather than a list because vendors spell the same fact differently
+  # (`billing_error`, `credit_balance_error`, `quota_exceeded_error`) while all of
+  # them NAME the thing that ran out; it is tested ahead of the credential types so an
+  # envelope carrying both resolves on the more specific one. Its reach is bounded by
+  # _provider_error_type, which yields only the Anthropic-shaped `*_error` tokens: a
+  # type that names a quota WITHOUT that suffix is never extracted, so it never
+  # reaches here and is not silently mis-bucketed either. Widening that extractor is a
+  # change to the shared classifier and needs a recorded observation of its own — the
+  # discipline the pattern lists above already keep.
   kind=transient
   case "$code" in
-    401|402|403) kind=permanent ;;
+    402) kind=exhausted ;;
+    401|403) kind=credential ;;
     500|502|503|504|529) ;;
-    *) case "$type" in authentication_error|permission_error) kind=permanent ;; esac ;;
+    *) case "$type" in
+         *quota*|*credit*|*billing*) kind=exhausted ;;
+         authentication_error|permission_error) kind=credential ;;
+       esac ;;
   esac
   echo ""
 
-  # PERMANENT — a bad key, a revoked one, a quota that will not replenish. Stopping on
-  # the FIRST one is the point: every second spent sleeping on this is a second spent
-  # on a condition no amount of time changes, which is the mirror image of the bug the
-  # rest of this module fixes.
-  if [ "$kind" = permanent ]; then
-    printf '%s — PERMANENT refusal, not retried — %s\n' "$why" "$(date '+%Y-%m-%d %H:%M:%S')" \
-      > "$NOTURN_FILE" 2>/dev/null || true
+  # PERMANENT — either verdict. Stopping on the FIRST one is the point: every second
+  # spent sleeping on this is a second spent on a condition no amount of time changes,
+  # which is the mirror image of the bug the rest of this module fixes. The WORDING is
+  # the operator's next action, not the HTTP fact — the code is already in $why.
+  if [ "$kind" = exhausted ] || [ "$kind" = credential ]; then
+    case "$kind" in
+      exhausted) verdict='the account has no usage left to spend'
+                 act='add credit or raise the plan limit on this account, or point the run at one that has usage left — the credential itself is fine' ;;
+      *)         verdict='the credential is wrong, revoked, or not entitled to this model'
+                 act='fix or replace the credential — topping an account up cannot lift this one' ;;
+    esac
+    printf '%s — PERMANENT refusal, not retried: %s (%s) — %s\n' "$why" "$verdict" "$act" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" > "$NOTURN_FILE" 2>/dev/null || true
     echo "Iteration $iter never reached the model — the provider REFUSED the request: $why."
-    echo "That refusal is PERMANENT (bad or revoked credentials, or a quota that will not replenish), so chief is not waiting on it: no delay makes an unusable key usable."
+    echo "That refusal is PERMANENT — $verdict — so chief is not waiting on it: no delay changes it."
     echo "$(_passes)/$(_total) stories pass; everything committed so far is kept on the branch, and so is the worktree."
-    echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. Fix the credential, then re-run to resume from the committed passes state."
+    echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. What lifts it: $act. Then re-run to resume from the committed passes state."
     live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
       passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0 refusal="$kind"
     event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=provider-unavailable \
-      detail="$why — permanent refusal, failed fast without retrying"
+      refusal="$kind" detail="$why — permanent refusal ($verdict), failed fast without retrying"
     return 1
   fi
 
@@ -1694,7 +1814,7 @@ _provider_unavailable() {
       echo "No status code and no error envelope, so transient vs permanent could not be told apart — treating it as transient, because waiting on a permanent error costs minutes and failing fast on an outage costs the tasklist."
     live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
       passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0 refusal=transient
     event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=running \
       detail="$why — attempt $n/$PROVIDER_NOTURN_LIMIT; no turn was taken, so the iteration is not charged"
     ws="$(_provider_wait_seconds "$n" "$out")"; secs="${ws%% *}"; src="${ws##* }"
@@ -1711,9 +1831,9 @@ _provider_unavailable() {
       # the hang it looks like — and never as work, either.
       live_set "$LIVE" phase=provider-backoff iter="$iter" story="$(_story)" \
         passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-        noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at="$wake"
+        noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at="$wake" refusal=transient
       event_emit tasklist.provider-backoff name="${CHIEF_TASKLIST:-}" state=running \
-        retry_at="$wake" \
+        retry_at="$wake" refusal=transient \
         detail="$why — waiting ${secs}s before attempt $(( n + 1 ))/$PROVIDER_NOTURN_LIMIT ($src)"
       sleep "$secs"
     fi
@@ -1724,9 +1844,9 @@ _provider_unavailable() {
   echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. Re-run to resume from the committed passes state."
   live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
     passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-    noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+    noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0 refusal=transient
   event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=provider-unavailable \
-    detail="$why — $n consecutive requests refused before any turn was taken"
+    refusal=transient detail="$why — $n consecutive requests refused before any turn was taken"
   return 1
 }
 
@@ -1861,7 +1981,7 @@ echo "Starting Chief — Provider: $PROVIDER${MODEL:+ (model: $MODEL)} — budge
 # hit during research goes through the same _rate_limit_wait as a story turn, and
 # that helper reads and advances $waits. Resetting the counters after research would
 # hand the story loop a fresh wait budget it has already partly spent.
-i=0; stall=0; waits=0; noturn=0
+i=0; stall=0; waits=0; noturn=0; susp=""; susp_pat=""
 # $bk counts, within the CURRENT stall streak, the iterations that committed and
 # changed nothing but chief's own bookkeeping. It is what lets the give-up arm below
 # name WHICH kind of stall this was — the formant shape (a blocked agent re-stamping
@@ -2353,7 +2473,7 @@ while :; do
   esac
 
   if [ "$now_pass" -gt "$prev_pass" ] || { [ "$prod" = 1 ] && [ "$allpass" = 0 ]; }; then
-    stall=0; bk=0; ap=0
+    stall=0; bk=0; ap=0; susp=""
     # WHAT ADVANCED, IN THE LINE ITSELF. `progress (0/2 passing). Continuing...` is the
     # sentence formant's run printed eleven times: it asserts progress and zero passing
     # in the same breath and names nothing, so there is nothing in it for a reader to
@@ -2404,6 +2524,16 @@ while :; do
     else
       echo "Iteration $i: no progress (stall $stall/$STALL_LIMIT)."
     fi
+    # A LIMIT-SHAPED STOP NOBODY RECOGNISED. Latched across the CURRENT stall streak
+    # (the progress arm above clears it with the counter), so what it finally reports
+    # is "at least one of the iterations that got nowhere carried the signal" rather
+    # than resting on whichever turn happened to be last. `$now_head = $prev_head` is
+    # fact 2 of _suspected_limit's three — the iteration committed nothing at all,
+    # which is the narrowest of this arm's three kinds and deliberately excludes the
+    # bookkeeping-only and all-pass ones: those committed, so the provider answered.
+    if [ "$now_head" = "$prev_head" ] && _suspected_limit "$OUTPUT" "$TOOL_RC"; then
+      susp="$SUSPECT_LINE"; susp_pat="$SUSPECT_PATTERN"
+    fi
     # BETWEEN iterations, and only here: the phase is the verdict on the boundary just
     # reached, and the next iteration's first write (top of the loop) takes it back.
     # The budget travels with the count so a reader can tell "1 of 2" from "2 of 2"
@@ -2433,6 +2563,29 @@ while :; do
   # Give up only after spending the budget AND stalling, or at the hard ceiling.
   if [ "$stall" -ge "$STALL_LIMIT" ] && [ "$i" -ge "$MAX_ITERATIONS" ]; then
     echo ""
+    # THE SAME GIVING-UP MOMENT, REPORTED DIFFERENTLY. Not a different decision: the
+    # budget is spent and the loop stops here either way, nothing is slept on and
+    # nothing is re-dispatched, and the driver schedules this exactly as it schedules
+    # the stall below. What changes is that the report names a provider, quotes the
+    # line, and says which pattern would have to grow — because `stalled: the last 2
+    # iteration(s) produced no commit at all` sends an operator to re-scope a tasklist
+    # that was never the problem. Chief says SUSPECTS, in those words, and says what
+    # the suspicion rests on; it does not say the account is spent, because the rule
+    # that could say so is the one that did not match.
+    if [ -n "$susp" ]; then
+      { printf 'SUSPECTED USAGE LIMIT (not a verdict): the %s CLI exited non-zero, committed nothing, and printed a limit-shaped line that neither RATE_LIMIT_PATTERN nor RATE_LIMIT_STATUS_PATTERN matches.\n' "$PROVIDER"
+        printf 'the line, verbatim: %s\n' "$susp"
+        printf 'check the %s account for remaining usage. If that line means the quota is spent, extend %s (engine/agent.sh) so the next one is recognised — docs/guides/providers.md, Usage-limit detection.\n' "$PROVIDER" "$susp_pat"
+        printf 'chief slept on nothing and re-dispatched nothing: it recognises a usage limit only by those patterns, and acting on a guess is what that discipline exists to prevent.\n'
+      } > "$SUSPECT_FILE" 2>/dev/null || true
+      echo "Chief stopped after $stall no-progress iteration(s) and SUSPECTS an unrecognised usage limit."
+      cat "$SUSPECT_FILE" 2>/dev/null || true
+      echo "Check $PROGRESS_FILE for status."
+      echo "Exit 10 = SUSPECTED-LIMIT — the branch, its commits and its worktree are all kept; re-running resumes from the committed passes state."
+      live_set "$LIVE" phase=suspected-limit iter="$i" stall="$stall" stall_limit="$STALL_LIMIT" \
+        passing="$(_passes)" total="$(_total)"
+      exit 10
+    fi
     if [ "$ap" -gt 0 ]; then
       stall_why="stalled: the branch is all-passing and its diffs did not count — every story already passed, so the $ap of the last $stall iteration(s) that committed work outside ${BOOKKEEPING_REL} could complete no story and did not extend the budget"
     elif [ "$bk" -gt 0 ]; then

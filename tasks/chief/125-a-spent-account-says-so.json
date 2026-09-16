@@ -3,7 +3,16 @@
   "category": "fix",
   "branchName": "chief/125-a-spent-account-says-so",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/monitor.sh", "engine/driver.sh", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/monitor.sh",
+    "engine/driver.sh",
+    "docs",
+    "test",
+    "VERSION",
+    "README.md",
+    "ROADMAP.md"
+  ],
   "iters": 10,
   "warmup": [
     "sed -n '549,580p' engine/agent.sh",
@@ -21,31 +30,33 @@
     {
       "id": "US-1",
       "title": "A limit no pattern recognises is reported as a suspected limit, not as a stall",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "When a worker stops with no progress AND the provider's last output carries a limit-shaped signal that the patterns did not match, the stop is reported as a SUSPECTED usage limit — naming the provider, quoting the line, and saying which pattern would have to be extended — rather than as an ordinary stall. The existing `rate-limited` path is unchanged when a pattern DOES match.",
         "Design the suspicion narrowly and say what it rests on: the provider exited non-zero, nothing was committed, and the output carries a limit-shaped token. State the false-positive cost in the code, as the transport-pattern list already does. A suspected limit must NOT silently start sleeping or re-dispatching — it stops and reports, because acting on a guess is what the pattern discipline exists to prevent.",
         "Both live surfaces show it, through the one renderer: a distinct label and a note saying what chief suspects and what the operator should check. `chief ps` and `chief monitor` are asserted separately in the test, because one is `once` and the other `watch` and only the first is cheap to assert.",
         "A hermetic test in the style of `test/limitstate.sh` (fake provider binary on PATH, behaviour keyed by branch name) covers BOTH directions: a recognised limit still reaches `rate-limited`, and an unrecognised limit-shaped stop reaches the new reporting rather than a bare stall. Add the no-regression case that ordinary agent prose with no limit signal is still an ordinary stall — without it, 'report everything as a suspected limit' passes the suite.",
         "`bash test/all.sh` passes (or the suite's documented subset, named in the notes with what was run), and `VERSION` + README + ROADMAP move together."
-      ]
+      ],
+      "notes": "test/suspectlimit.sh (new): PASS — 4 tasklists through the real driver, known-limit -> RATE-LIMITED (unchanged), unknown-limit -> SUSPECTED-LIMIT, and both sabotage controls (non-zero exit with ordinary prose; exit-0 prose ABOUT a quota) still ordinary stalls; `? limit?` + note asserted as a whole line in chief ps AND chief monitor separately. Mutation-checked: before the ${VAR:-} brace fix the same file failed at exactly `want SUSPECTED-LIMIT*`. Ran directly with `bash test/suspectlimit.sh` because a worktree edit to .chief/verify.sh does not run in that branch own gate. Subset run green (not all.sh): doc-sync, version-bump, stall-flag, limitstate, ratelimit, limitmonitor, provider-unavailable, noworkguard, five-cases = 9 passed, 0 failed. quality ratchet: OK, function_length_max +13/tol 15, single_use_functions +2/tol 2. VERSION 0.9.34 -> 0.9.35 with README and ROADMAP bold **v0.9.35**."
     },
     {
       "id": "US-2",
       "title": "Out of credit is its own verdict, separate from a bad credential",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "`402`, and an error type that names an exhausted quota, are classified as a distinct permanent kind from `401`/`403`/`authentication_error`/`permission_error`. Both remain permanent — neither is slept on — but they are no longer described by one sentence.",
         "The wording is the operator's next action, not the HTTP fact: an exhausted account says the account has no usage left and what lifts it; a bad credential says the credential is wrong. The classification is read off the provider's own status code or error envelope, never off prose — the rule `docs/reference/provider-unavailability.md` already states.",
         "The distinction reaches the live row label, the run's end-of-run summary block, and the emitted event, so a subscriber can act on it. `docs/reference/provider-unavailability.md`'s permanent table and `docs/reference/status.md` are updated in the same commit; a doc that still shows one bucket is drift the doc-sync gate should catch.",
         "Tests drive a fake provider emitting each of `401`, `402` and `403` and assert three outcomes: all three stop without sleeping, and the two verdicts are distinguishable in what the operator is shown. Sabotage control: collapsing the new kind back into the old one reddens exactly the credit cases and leaves the credential cases green.",
         "`bash test/all.sh` passes, and `VERSION` + README + ROADMAP move together."
-      ]
+      ],
+      "notes": "test/provider-credit.sh (new): PASS — all four parts. PART A, three codes through the real agent loop: 402 -> exhausted, 401/403 -> credential, all three exit 8 after exactly ONE provider call with no wait announced and no backoff event; the 529 control on the same knobs was called 3x and waited twice, so 'not slept on' is not vacuous. PART B, staged render: `no-credit` / `bad-key` / `no-api` / `no-api` across four provider-unavailable rows, all four keeping the hold glyph. PART C, real driver: both summary lines name their verdict and the fix, and refusal survives worker_park (exhausted / credential read back off the parked live.json). PART D sabotage: with 402 collapsed back into the credential bucket in a copy of the engine, exactly the credit assertions go red and the credential ones stay green. Subset also green: liveliness, events, provider-unavailable, provider-backoff, limitmonitor, stall-flag, suspectlimit = 7 passed, 0 failed. quality ratchet: OK — function_length_max +13/tol 15, single_use_functions +2/tol 2 (no new function added), mean +0.38/tol 5. doc-sync PASS at v0.9.36; VERSION 0.9.35 -> 0.9.36 with README and ROADMAP bold **v0.9.36**. ALLSH"
     },
     {
       "id": "US-3",
       "title": "A held row names who is holding it, using the reason chief already wrote down",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "A `provider-unavailable` row in `chief ps` / `chief monitor` gets its own note, beside the existing `limit_note` / `op_note` / `hold_note` family, that reports the recorded reason — the HTTP code and error type chief already writes to `$STATE/<name>.unavailable` and to the live record — plus the retry accounting already carried in `noturn`/`noturn_limit`, and the phase age.",
         "The note reads from what the engine already records; it does not re-derive a reason and does not re-classify. When no reason was recorded, it says the provider refused the request and nothing more — an absent reason must not render as an empty or misleading line.",
@@ -53,7 +64,8 @@
         "`test/limitmonitor.sh` (or a sibling in its style) asserts the rendered row for each case against a staged state directory, so the assertion is about the RENDERER and not about a live provider. Assert one whole output line, not a fragment that the run summary also prints — a needle both surfaces emit cannot tell them apart.",
         "`docs/guides/monitoring.md`'s phase/label tables gain the new rows, and its worked examples show the new notes verbatim, so the documented output matches what the renderer produces.",
         "`bash test/all.sh` passes, `VERSION` + README + ROADMAP move together, and `scripts/check-roadmap-truth.sh` is green."
-      ]
+      ],
+      "notes": "test/unavailnote.sh (new): PASS — all three parts. PART A `chief ps` and PART B `chief monitor`, against a staged state dir: four refused rows asserted as WHOLE lines — exhausted (`HTTP 402 (billing_error) · refusal 1/3 · the account has no usage left to spend · PERMANENT … add credit …`), credential (`HTTP 401 (authentication_error) … fix or replace the credential`), transient-spent (`HTTP 503 · refusal 3/3 · each refusal was waited out first …`) and NOTHING recorded (`the provider refused the request · branch + worktree kept · held 4m` — no code, no verdict, no 0/3). The still-retrying control (state running, phase provider-backoff) keeps `provider attempt 2/3` and never says PERMANENT. PART C REPRODUCES: with the new elif neutered in a copy of the engine the same records render `provider-unavailable for 4m` and name no reason; a one-word mutation of the expected note also reddens it. Subset green: unavailnote, suspectlimit, provider-credit, provider-unavailable, limitmonitor, stall-flag, liveliness = 7 passed, 0 failed; doc-sync PASS at v0.9.37, check-doc-links PASS, scripts/check-roadmap-truth.sh PASS. quality ratchet OK — single_use_functions 59 -> 60 (+1 of tol 2, DOWN from +2: suspect_note and the new note became one two-call-site provider_note), function_length_max +13/tol 15, mean +0.58/tol 5. VERSION 0.9.36 -> 0.9.37 with README and ROADMAP bold **v0.9.37**. FULL-GATE OBSERVATION (final iteration, tree a452f14): `chief verify` exit 0 — bystander [70/70] green, verify: OK (allowing merge), verdict RECORDED. The three tests this tasklist ADDED are not among those 70 — they appear 0 times in the gate log, because `chief verify` resolves the hook at $CHIEF_PROJECT and a worktree's edit to .chief/verify.sh only takes effect once merged — so they were run DIRECTLY: test/suspectlimit.sh, test/provider-credit.sh, test/unavailnote.sh each exit 0. 70 gate + 3 direct = the coverage all.sh would run. quality ratchet OK (function_length_max +13/tol 15, function_length_mean +0.58/tol 5, single_use_functions +1/tol 2, duplicates 0); scripts/check-roadmap-truth.sh green (51 completed named, none stale, no parks); .github/workflows/ci.yml parses under yaml.safe_load; all three new tests confirmed present in all three gate lists. VERSION 0.9.37 == README **v0.9.37** == ROADMAP **v0.9.37**."
     }
   ]
 }

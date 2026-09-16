@@ -500,6 +500,9 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     # in its worktree used to appear here as '✗ failed · no progress last iter'.
     # Its own label, because the row's one job is to say WHO is holding the work,
     # and 'the provider would not answer' is not 'the account is out of quota'.
+    # `no-credit` and `bad-key` are the same state wearing the verdict the record
+    # carries (the row loop's override below) — this is the one that is left when the
+    # API refused and chief could not say why.
     provider-unavailable) printf '%s⏸%s|no-api' "$CYN" "$RST" ;;
     # The OPERATOR pause. Same ⏸ (it is a pause, not a fault — never a failure
     # glyph), a distinct label so `chief ps | grep` can tell the two apart, and a
@@ -634,6 +637,79 @@ op_note() {   # $1 name  $2 stateroot -> one line
   [ -n "$pa" ] && note="$note · parked $pa"
   age="$(live_age "$(live_file "$n" "$2")")"
   [ -n "$age" ] && note="$note · $(dur "$age") ago"
+  printf '%s' "$note"
+}
+
+# The detail line for a row the PROVIDER is responsible for — both shapes of it, in
+# one function because they are one shape: read the report the engine already wrote,
+# say what it means for the OPERATOR, and date it. Beside limit_note/op_note rather
+# than folded into either: those two report a hold chief KNOWS it will lift itself
+# and can give an ETA for, and neither of these will be lifted by waiting.
+#
+#   suspected  a stop chief SUSPECTS was a usage limit no pattern recognised
+#              (agent.sh exit 10) — a GUESS about a run that is already over. Saying
+#              it in limit_note's words would claim the account is spent, which is
+#              exactly what the unmatched pattern means chief cannot say. It reads
+#              the report the WORKER wrote (<name>.suspected-limit, copied out of the
+#              worktree by run_worker) and re-derives nothing: a second place deciding
+#              what looks like a limit is a second place to drift. Line 2 of that
+#              report is the provider's own words — the thing an operator actually
+#              needs on the row — and it is TRUNCATED, because a CLI error line can be
+#              paragraphs and a row that wraps ten times is a row nobody reads.
+#   refused    the API refused the request outright (agent.sh exit 8). Until 0.9.37
+#              this row fell through to the generic phase line and read
+#              `provider-unavailable for 4m` — less than the END-OF-RUN summary says
+#              about the same tasklist, while the operator is still watching. The
+#              reason is not re-derived here either: the HTTP code and error type come
+#              off <name>.unavailable (what driver.sh copied out of the worktree at
+#              exit 8) and the VERDICT comes off the liveliness record's `refusal`
+#              field, the same one the label above is keyed on. Rendering is all this
+#              does — it never re-classifies, so a row and the summary cannot disagree.
+#
+# An absent report still renders the conclusion rather than an empty line: the label
+# already said `limit?` / `no-api`, and a blank note beneath it says nothing. With no
+# reason recorded at all the refused arm says the provider refused the request and
+# invents nothing to put after it.
+provider_note() {  # $1 name  $2 stateroot  $3 suspected|refused -> one line
+  local n="$1" sd="$2/parallel" lf note line why nt ntl pa
+  if [ "$3" = suspected ]; then
+    note='suspected usage limit — the provider exited non-zero and committed nothing'
+    line="$(sed -n '2p' "$sd/$n.suspected-limit" 2>/dev/null | cut -c1-110 || true)"
+    [ -n "$line" ] && note="$note · ${line#the line, verbatim: }"
+    note="$note · chief neither waited nor re-dispatched — check the account's remaining usage, then engine/agent.sh's limit patterns"
+  else
+    # The recorded line is `<why> — <verdict sentence> — <timestamp>`; the row takes
+    # the HEAD (the code and type) because the verdict sentence is already printed in
+    # full by the run summary, and says the operator's next action in one clause below
+    # instead of wrapping the same paragraph across a terminal.
+    why="$(head -1 "$sd/$n.unavailable" 2>/dev/null || true)"; why="${why%% — *}"
+    note='the provider refused the request'
+    [ -n "$why" ] && note="$note — $why"
+    # The refusal accounting, for every kind and not just the retried one: `1/3` is
+    # how a permanent verdict SHOWS that it stopped on the first refusal, and `3/3` is
+    # a transient one that spent the whole budget. Both numbers are the agent's
+    # (noturn / noturn_limit), carried on the record.
+    lf="$(live_file "$n" "$2")"
+    nt="$(live_get "$lf" noturn)"; ntl="$(live_get "$lf" noturn_limit)"
+    case "$nt" in ''|0|*[!0-9]*) ;; *)
+      case "$ntl" in
+        ''|0|*[!0-9]*) note="$note · refusal $nt" ;;
+        *)             note="$note · refusal $nt/$ntl" ;;
+      esac ;;
+    esac
+    case "$(live_get "$lf" refusal)" in
+      exhausted)  note="$note · the account has no usage left to spend · PERMANENT — not retried, because no delay lifts it · add credit, raise the plan limit, or point the run at an account that has usage" ;;
+      credential) note="$note · the credential is wrong, revoked, or not entitled to this model · PERMANENT — not retried, because no delay lifts it · fix or replace the credential" ;;
+      transient)  note="$note · each refusal was waited out first and the budget is spent · re-run once the provider answers again" ;;
+    esac
+    note="$note · branch + worktree kept"
+  fi
+  pa="$(live_phase_age "$n" "$2")"
+  if [ -n "$pa" ]; then
+    # A guess about a run that ENDED dates itself from the stop; a hold is dated by
+    # how long it has been held — the word the other hold notes already use.
+    if [ "$3" = suspected ]; then note="$note · stopped $pa ago"; else note="$note · held $pa"; fi
+  fi
   printf '%s' "$note"
 }
 
@@ -913,6 +989,28 @@ render() {
       [ "$lph" = gate-budget-waiting ] && hold_kind=gate
       [ "$hold_kind" = launch ] && { gl="${CYN}⏸${RST}"; lbl=budget-hold; }
       [ "$hold_kind" = gate ]   && { gl="${CYN}⏸${RST}"; lbl=gate-hold; }
+      # A SUSPECTED usage limit (agent.sh exit 10). Keyed off the PHASE and not off
+      # the coarse state, because the coarse state is deliberately the stall's own
+      # `failed` — chief suspects the account and does not know it, so nothing about
+      # scheduling may move on the guess. The label is the one thing that must: `✗
+      # failed` on a row whose provider said it was out of credit is the entire
+      # defect. `?` and `limit?` say a suspicion in the two columns an operator
+      # scans, and the note below says what it rests on.
+      [ "$lph" = suspected-limit ] && { gl="${YEL}?${RST}"; lbl='limit?'; }
+      # WHICH refusal is holding it (engine/agent.sh's `refusal` verdict, carried on
+      # the record). `no-api` says the provider would not answer and deliberately does
+      # NOT say the account is spent — so the two verdicts chief actually KNOWS get
+      # their own word, because the operator action is different for each: top the
+      # account up, or fix the credential. A transient refusal that spent its retries
+      # keeps `no-api`, which is what it is: the API never answered and chief does not
+      # know why. Read only on a row the scheduler already calls provider-unavailable,
+      # so a verdict left on the record by an earlier refusal cannot label a live row.
+      if [ "$st" = provider-unavailable ]; then
+        case "$(live_get "$lf" refusal)" in
+          exhausted)  lbl='no-credit' ;;
+          credential) lbl='bad-key' ;;
+        esac
+      fi
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
       [ "$stale" = 1 ] && gl="${RED}⚠${RST}"
@@ -938,6 +1036,17 @@ render() {
         printf '       %s↳ %s%s\n' "$YEL" "$(op_note "$n" "$state")" "$RST"
       elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-decision ] || [ "$st" = awaiting-approval ]; then
         hold_note "$n" "$state" "$st"
+      elif [ "$lph" = suspected-limit ]; then
+        # Its own arm rather than the generic live_note below, for the same reason
+        # the operator pause has one: the phase there would only repeat the label.
+        printf '       %s↳ %s%s\n' "$YEL" "$(provider_note "$n" "$state" suspected)" "$RST"
+      elif [ "$st" = provider-unavailable ]; then
+        # THE REFUSAL, in the words chief already wrote down. Without this arm the row
+        # fell to live_note and said `provider-unavailable for 4m` — the coarse phase
+        # and nothing else, while the reason (`HTTP 402 (billing_error)`) sat on disk
+        # and was read out only by the end-of-run summary. An operator WATCHING a run
+        # saw strictly less than one reading its epilogue, which is backwards.
+        printf '       %s↳ %s%s\n' "$CYN" "$(provider_note "$n" "$state" refused)" "$RST"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)
         # above the note the agent last wrote. Both are optional; neither line prints

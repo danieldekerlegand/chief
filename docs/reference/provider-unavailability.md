@@ -109,7 +109,8 @@ retry, and the fork is transient vs permanent:
 | kind | what it is | what chief does |
 |---|---|---|
 | **transient** | `500 502 503 504 529` · `overloaded_error` · `api_error` · any transport failure · **anything unrecognised** | wait, then re-run the same turn |
-| **permanent** | `401 402 403` · `authentication_error` · `permission_error` | **stop on the first one**, with the reason |
+| **exhausted** | `402` · an error type naming the quota, the credit or the billing (`billing_error`, `credit_balance_error`, …) | **stop on the first one**: the account has no usage left |
+| **credential** | `401 403` · `authentication_error` · `permission_error` | **stop on the first one**: the credential is wrong, revoked, or not entitled |
 
 Read off the same two structured facts the classifier uses — a status code or an
 error type out of the provider's own envelope — never off the prose.
@@ -123,7 +124,37 @@ implying chief knew which it was.
 **A permanent refusal is not slept on.** No delay makes a revoked key usable, so
 sleeping through a budget it cannot satisfy is the mirror image of the bug the rest of
 this page is about. The stop names the reason and the driver reports it — `HTTP 401
-(authentication_error) — PERMANENT refusal, not retried`.
+(authentication_error) — PERMANENT refusal, not retried: the credential is wrong,
+revoked, or not entitled to this model (fix or replace the credential — topping an
+account up cannot lift this one)`.
+
+### Two permanent verdicts, because the fix is not the same
+
+`401 402 403` were **one** bucket until v0.9.36, described by one sentence — *"bad or
+revoked credentials, or a quota that will not replenish"* — and an account that was
+simply spent therefore read as a key that had been revoked. They are separated
+because what the operator has to **do** differs, which is the only thing a report is
+for:
+
+| verdict | what it means | what lifts it | row label |
+|---|---|---|---|
+| **exhausted** | the account has no usage left to spend; the credential is fine | add credit, raise the plan limit, or point the run at an account that has usage left | `no-credit` |
+| **credential** | the key is wrong, revoked, or not entitled to this model | fix or replace the credential — topping an account up cannot lift it | `bad-key` |
+| *(neither)* | the API refused and chief could not say which | the reason line, verbatim, and a re-run | `no-api` |
+
+Both remain **permanent**: neither is waited on, and the fork changes nothing about
+scheduling. What it changes is the wording of the reason chief records, the label on
+the live row (`chief ps` / `chief monitor`), the per-tasklist line in the run summary,
+and a machine-readable `refusal` field on the emitted event
+(`transient` · `exhausted` · `credential`, see [events.md](events.md)) so a subscriber
+can act on the difference too.
+
+The verdict is read off the **status code and the error type only**, never off the
+prose — the same rule the classifier above keeps. The type arm's reach is bounded by
+the extractor, which yields only the Anthropic-shaped `*_error` tokens: a type that
+names a quota without that suffix is never extracted, so it is never mis-bucketed
+either, and widening the extractor is a change to the shared classifier that needs a
+recorded observation of its own.
 
 ### How long
 
