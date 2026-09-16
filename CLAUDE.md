@@ -679,7 +679,13 @@ VERSION              # engine version — bump on any engine/bin/install change
   perfectly healthy and lands nothing. Relatedly, `stories()` and `live_prog` in
   `engine/monitor.sh` render the SAME progress number from two different sources; a
   change to one is a change to both, or which reader a caller happens to reach decides
-  what the operator sees.
+  what the operator sees. And `live_get` is the matching LINE-WISE sed reader
+  (`^  "key": value`, one key per line), so a record must only ever be written by
+  `live_set`: re-dumping one with a compact JSON writer (`json.dump`, `jq -c`) leaves a
+  file that is valid JSON, passes `jq -e .`, and reads back EMPTY for every field — the
+  row then renders its no-record fallback and a fixture built that way "proves" a
+  defect that is already fixed. Age a staged record with a line-wise `sed` on
+  `phase_since`/`heartbeat` (`test/unavailnote.sh`'s `age_rec`).
 - **A failed `git checkout <base>` is a merge that SUCCEEDS.** The merge phase ends
   `work_checkout <base>` then `git merge --no-ff <branch>`. If the checkout fails, HEAD
   is still on the BRANCH, and merging a branch into itself prints `Already up to date.`
