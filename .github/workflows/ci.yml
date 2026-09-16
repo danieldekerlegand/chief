@@ -80,6 +80,9 @@ jobs:
       - name: A running row's activity line is informative or absent (never a bare markdown fence)
         run: bash test/activity-line.sh
 
+      - name: A running row says what the agent is doing, in `chief ps` and `chief monitor` alike
+        run: bash test/turn-activity-row.sh
+
       - name: Operator pause drains at a safe checkpoint, parks, and resumes from committed state
         run: bash test/pause.sh
 
