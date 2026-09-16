@@ -720,6 +720,19 @@ VERSION              # engine version — bump on any engine/bin/install change
   backslash — generally, **giving a backslash-free value its first backslash exposes
   every escaping layer it passes through at once**, which is the same bug as the
   `awk -v` trap one layer out.
+- **`${VAR:-default}` ENDS ITS DEFAULT AT THE FIRST `}`, so a regex INTERVAL cannot
+  live in one.** Every tunable in `engine/agent.sh` is `X="${X:-…}"`, and that held
+  for years because no pattern in the file contained `{n,m}`. The first one that did
+  (`[^.]{0,24}` in `SUSPECT_LIMIT_PATTERN`) came out as `…[^.]{0,24` with a stray `}`
+  pasted onto the END of the whole pattern — bash closed the expansion on the
+  interval's own brace. `bash -n` is clean, the assignment reads perfectly, and every
+  `grep -E` against it dies `invalid repetition count(s)` on stderr, which a
+  `VAR="$( … )" || VAR=""` caller discards: the feature simply never fires and nothing
+  says why. Assign in TWO steps instead — `X="${X:-}"` then
+  `[ -n "$X" ] || X='<literal>'` — which keeps the env override and performs no
+  parameter expansion on the pattern at all. Same family as the `awk -v` and
+  backtick-in-a-heredoc traps above: **giving a value its first metacharacter exposes
+  every layer it passes through at once.**
 - **A jq comment is `#`, never `//`.** `//` is jq's ALTERNATIVE operator, so a line of prose
   after one inside a `jq -n '…'` program parses as an expression and silently replaces the
   field it follows — valid jq, wrong document, and `bash -n` sees nothing. The JSONC in

@@ -3,7 +3,16 @@
   "category": "fix",
   "branchName": "chief/125-a-spent-account-says-so",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/monitor.sh", "engine/driver.sh", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/monitor.sh",
+    "engine/driver.sh",
+    "docs",
+    "test",
+    "VERSION",
+    "README.md",
+    "ROADMAP.md"
+  ],
   "iters": 10,
   "warmup": [
     "sed -n '549,580p' engine/agent.sh",
@@ -21,14 +30,15 @@
     {
       "id": "US-1",
       "title": "A limit no pattern recognises is reported as a suspected limit, not as a stall",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "When a worker stops with no progress AND the provider's last output carries a limit-shaped signal that the patterns did not match, the stop is reported as a SUSPECTED usage limit — naming the provider, quoting the line, and saying which pattern would have to be extended — rather than as an ordinary stall. The existing `rate-limited` path is unchanged when a pattern DOES match.",
         "Design the suspicion narrowly and say what it rests on: the provider exited non-zero, nothing was committed, and the output carries a limit-shaped token. State the false-positive cost in the code, as the transport-pattern list already does. A suspected limit must NOT silently start sleeping or re-dispatching — it stops and reports, because acting on a guess is what the pattern discipline exists to prevent.",
         "Both live surfaces show it, through the one renderer: a distinct label and a note saying what chief suspects and what the operator should check. `chief ps` and `chief monitor` are asserted separately in the test, because one is `once` and the other `watch` and only the first is cheap to assert.",
         "A hermetic test in the style of `test/limitstate.sh` (fake provider binary on PATH, behaviour keyed by branch name) covers BOTH directions: a recognised limit still reaches `rate-limited`, and an unrecognised limit-shaped stop reaches the new reporting rather than a bare stall. Add the no-regression case that ordinary agent prose with no limit signal is still an ordinary stall — without it, 'report everything as a suspected limit' passes the suite.",
         "`bash test/all.sh` passes (or the suite's documented subset, named in the notes with what was run), and `VERSION` + README + ROADMAP move together."
-      ]
+      ],
+      "notes": "test/suspectlimit.sh (new): PASS — 4 tasklists through the real driver, known-limit -> RATE-LIMITED (unchanged), unknown-limit -> SUSPECTED-LIMIT, and both sabotage controls (non-zero exit with ordinary prose; exit-0 prose ABOUT a quota) still ordinary stalls; `? limit?` + note asserted as a whole line in chief ps AND chief monitor separately. Mutation-checked: before the ${VAR:-} brace fix the same file failed at exactly `want SUSPECTED-LIMIT*`. Ran directly with `bash test/suspectlimit.sh` because a worktree edit to .chief/verify.sh does not run in that branch own gate. Subset run green (not all.sh): doc-sync, version-bump, stall-flag, limitstate, ratelimit, limitmonitor, provider-unavailable, noworkguard, five-cases = 9 passed, 0 failed. quality ratchet: OK, function_length_max +13/tol 15, single_use_functions +2/tol 2. VERSION 0.9.34 -> 0.9.35 with README and ROADMAP bold **v0.9.35**."
     },
     {
       "id": "US-2",
