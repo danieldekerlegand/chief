@@ -373,6 +373,7 @@ tasklist_outcome() {
     PLAN-INVALID*)                    printf 'plan-invalid' ;;
     RESEARCH-FAILED*)                 printf 'research-failed' ;;
     CANNOT-COMPLETE*)                 printf 'cannot-complete' ;;
+    SUSPECTED-LIMIT*)                 printf 'suspected-limit' ;;
     AWAITING-REVIEW*)                 printf 'awaiting-review' ;;
     AWAITING-DECISION*)               printf 'awaiting-decision' ;;
     DECISION-DECLINED*)               printf 'decision-declined' ;;
@@ -467,6 +468,16 @@ AGENT_RC_UNAVAILABLE=8
 # own outcome so the operator is sent to the two things that resolve it — amend the
 # criterion, or declare the negative terminal — instead of to `iters`.
 AGENT_RC_REPEAT=9
+# 10 IS 1 WITH EVIDENCE. The loop gave up exactly as it does for 1 — budget spent,
+# stall counter full — but the provider's last output carried a limit-shaped line
+# that neither of agent.sh's two acting patterns matched, and those patterns were
+# written against ONE CLI's phrasings. A missed limit is demoted to a no-progress
+# iteration, so what an operator is shown is `stalled` on a tasklist that was never
+# the problem (reported 2026-09-15: the account was simply out of usage and no live
+# surface said so). Scheduled IDENTICALLY to 1, dependents included — chief neither
+# sleeps on it nor re-dispatches it, because the rule that could have justified
+# either is the rule that did not match. Only the REPORT differs.
+AGENT_RC_SUSPECT=10
 # Driver-level usage-limit self-heal (see SCHEDULER STATES above). Deliberately a
 # separate family from agent.sh's RATE_LIMIT_* per-worker knobs: those govern how
 # long ONE agent loop sleeps mid-story, these govern how many times the SCHEDULER
@@ -2484,6 +2495,12 @@ worker_park() {
     # phase there WAS a story in hand, and which one the outage caught is the first
     # thing a re-run wants.
     provider-unavailable) phase=provider-unavailable; status=PROVIDER-UNAVAILABLE; ev=tasklist.provider-unavailable; state=provider-unavailable ;;
+    # A limit-shaped stop no pattern recognised (agent.sh exit 10). A FAILURE, and
+    # deliberately the same one a stall is: chief suspects the account, it does not
+    # know, and a coarse state that said otherwise would be chief acting on a guess —
+    # dependents would go schedulable on a hunch. It names its story, because which
+    # one the suspected limit caught is what a re-run wants.
+    suspected-limit) phase=suspected-limit; status=SUSPECTED-LIMIT; ev=tasklist.suspected-limit; state=failed ;;
     # Budget spent with stories still open. Not a park — the run is over — but the
     # same five surfaces, written the same way, and hand-rolling them here is how the
     # <name>.status line and the event drifted apart in the first place.
@@ -2893,6 +2910,19 @@ run_worker() {
       cannot_complete_stop "$wtstate/.cannot-complete.md"
       return 0
     fi
+    # SUSPECTED USAGE LIMIT — agent.sh exit 10; the why is beside $AGENT_RC_SUSPECT.
+    # Above the no-work guard for the reason the parks are (this stop can land on the
+    # first turn and legitimately leave zero commits), and the report is copied OUT of
+    # the worktree because every surface that renders it reads it after the worker is
+    # gone — the run summary, `chief ps`, `chief monitor`.
+    if [ "$agent_rc" = "$AGENT_RC_SUSPECT" ]; then
+      cp "$wtstate/.suspected-limit" "$STATE/$name.suspected-limit" 2>/dev/null || true
+      local suspect_why; suspect_why="$(head -1 "$STATE/$name.suspected-limit" 2>/dev/null || true)"
+      : "${suspect_why:=a limit-shaped stop no pattern recognised}"
+      worker_park suspected-limit "$suspect_why" \
+        "!! $name stopped as a SUSPECTED USAGE LIMIT — $suspect_why Branch $branch and its worktree are kept; re-run to resume."
+      return 0
+    fi
     # NO-WORK GUARD: an all-"pass" branch with zero diff vs base never did the work.
     # Fail it (dependents stay blocked) instead of silently merging an empty branch.
     if [ -z "$has_work" ]; then
@@ -3157,7 +3187,7 @@ rm -f "$LIMIT_PAUSE_FILE"
 rm -f "$STATE/.cosched"     # the co-scheduling relation is per-run, not cumulative
 for n in $NAMES; do
   set_state "$n" pending
-  rm -f "$STATE/$n.stalled" "$STATE/$n.cannot-complete" \
+  rm -f "$STATE/$n.stalled" "$STATE/$n.cannot-complete" "$STATE/$n.suspected-limit" \
         "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
         "$STATE/$n.files" "$STATE/$n.touches" "$STATE/$n.decision-hold"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
@@ -3406,6 +3436,13 @@ reap() {   # collect any finished workers, update state
           set_state "$n" awaiting-approval
         fi
         ;;
+      # A limit-shaped stop no pattern recognised (agent.sh exit 10). Deliberately
+      # the SAME `failed` the catch-all below would have given it, spelled out so a
+      # later edit cannot promote it by accident: chief suspects the account and does
+      # not know, so dependents must behave exactly as they do behind a stall. It is
+      # not in retryable_status() either — a re-dispatch on a hunch is the acting this
+      # whole stop exists to refuse.
+      SUSPECTED-LIMIT*) set_state "$n" failed ;;
       *) set_state "$n" failed ;;
     esac
     echo "  ● $n finished → $st"
@@ -3560,7 +3597,7 @@ reap   # final sweep
 # ---------------------------------------------------------------------------
 echo; echo "==================================================================="
 echo "  Parallel run summary"
-ran=""; paused=""; parked=""; inreview=""; indecision=""; dechold=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""; noway=""
+ran=""; paused=""; parked=""; inreview=""; indecision=""; dechold=""; inzone=""; refused=""; stashed=""; unserved=""; workleft=""; stalled=""; noway=""; suspected=""
 for n in $NAMES; do
   printf '   - %-32s %s%s\n' "$n" "$(get_state "$n")$( [ -f "$STATE/$n.status" ] && printf '  [%s]' "$(cat "$STATE/$n.status")" )" \
     "$( [ "$(attempts_used "$n")" -gt 1 ] && printf '  (attempt %s/%s)' "$(attempts_used "$n")" "$RETRY_MAX" )"
@@ -3595,6 +3632,7 @@ for n in $NAMES; do
   # Collected off the FILE, not the status: INCOMPLETE is one status covering two very
   # different stops, and only agent.sh knows which one this was.
   [ -s "$STATE/$n.stalled" ] && stalled="$stalled $n"
+  [ -s "$STATE/$n.suspected-limit" ] && suspected="$suspected $n"
   # And the OTHER end of "it did not finish": a tasklist that kept re-answering one
   # question (engine/repeat.sh). Collected off the FILE for the same reason as the line
   # above — the status alone cannot carry which story, or what it kept finding.
@@ -3718,6 +3756,23 @@ if [ -n "$stalled" ]; then
   echo "    Raising \`iters\` does NOT fix these — the budget was not the binding constraint."
   echo "    Read the words above and the branch: the usual causes are a blocker only a human can"
   echo "    clear, and a story whose acceptance criteria cannot be met from this worktree."
+fi
+# …AND THE ONE THAT MAY NOT HAVE BEEN THE AGENT'S FAULT AT ALL. Same stop as the block
+# above — budget spent, nothing advancing — but the provider's own last words carry a
+# limit-shaped line that neither acting pattern matched (agent.sh exit 10). Its own
+# block for the reason every block here has one: `STOPPED ADVANCING … raising iters
+# does NOT fix these` is advice about the WORK, and if the account is simply out of
+# usage it is advice about the wrong thing entirely. Chief does not claim it is —
+# saying so is what the unmatched pattern means it cannot do — so the block prints the
+# provider's line and names the pattern that would have to grow, and stops there.
+if [ -n "$suspected" ]; then
+  echo "   ? SUSPECTED USAGE LIMIT — $(set -- $suspected; echo $#) tasklist(s) stopped with a limit-shaped line chief could not recognise. NOT a verdict, and nothing was slept on or re-dispatched:"
+  for n in $suspected; do
+    printf '    · %-30s\n' "$n"
+    sed 's/^/         /' "$STATE/$n.suspected-limit" 2>/dev/null || true
+  done
+  echo "    Check the account's remaining usage FIRST. These rows are scheduled exactly as a stall is,"
+  echo "    so a real limit here looks like failed work until somebody looks."
 fi
 # AND THE ONE THAT KEPT ADVANCING AND STILL COULD NOT FINISH (engine/repeat.sh). Its
 # own block precisely because it is the OPPOSITE shape from the one above and would be

@@ -143,6 +143,9 @@ jobs:
       - name: Stall flag is run-state aware (a quiet-by-design phase is not also called stalled)
         run: bash test/stall-flag.sh
 
+      - name: A limit no pattern recognised is reported as a suspected limit, not a stall
+        run: bash test/suspectlimit.sh
+
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 

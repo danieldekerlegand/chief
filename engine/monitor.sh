@@ -637,6 +637,30 @@ op_note() {   # $1 name  $2 stateroot -> one line
   printf '%s' "$note"
 }
 
+# The detail line for a stop chief SUSPECTS was a usage limit no pattern recognised
+# (agent.sh exit 10). Beside limit_note/op_note rather than folded into either: those
+# two report a hold chief KNOWS about and can date, and this one reports a guess about
+# a run that is already over. Saying it in their words would claim the account is
+# spent, which is exactly what the unmatched pattern means chief cannot say.
+#
+# It reads the report the WORKER wrote (<name>.suspected-limit, copied out of the
+# worktree by run_worker) and re-derives nothing: a second place deciding what looks
+# like a limit is a second place to drift. Line 2 of that report is the provider's own
+# words — the thing an operator actually needs on the row — and it is TRUNCATED here,
+# because a CLI error line can be paragraphs and a row that wraps ten times is a row
+# nobody reads. An absent report still renders the conclusion rather than an empty
+# line: the label already said `limit?` and a blank note beneath it says nothing.
+suspect_note() {  # $1 name  $2 stateroot -> one line
+  local n="$1" f="$2/parallel/$1.suspected-limit" note line pa
+  note='suspected usage limit — the provider exited non-zero and committed nothing'
+  line="$(sed -n '2p' "$f" 2>/dev/null | cut -c1-110 || true)"
+  [ -n "$line" ] && note="$note · ${line#the line, verbatim: }"
+  note="$note · chief neither waited nor re-dispatched — check the account's remaining usage, then engine/agent.sh's limit patterns"
+  pa="$(live_phase_age "$n" "$2")"
+  [ -n "$pa" ] && note="$note · stopped $pa ago"
+  printf '%s' "$note"
+}
+
 # The HUMAN-VERDICT holds' detail lines — the plan-review park, the decision park and
 # the overlap-zone park. Unlike the usage-limit and operator holds there is no per-tasklist ETA or budget
 # to read: the whole answer is WHICH person has not looked yet, and how to unblock it.
@@ -913,6 +937,14 @@ render() {
       [ "$lph" = gate-budget-waiting ] && hold_kind=gate
       [ "$hold_kind" = launch ] && { gl="${CYN}⏸${RST}"; lbl=budget-hold; }
       [ "$hold_kind" = gate ]   && { gl="${CYN}⏸${RST}"; lbl=gate-hold; }
+      # A SUSPECTED usage limit (agent.sh exit 10). Keyed off the PHASE and not off
+      # the coarse state, because the coarse state is deliberately the stall's own
+      # `failed` — chief suspects the account and does not know it, so nothing about
+      # scheduling may move on the guess. The label is the one thing that must: `✗
+      # failed` on a row whose provider said it was out of credit is the entire
+      # defect. `?` and `limit?` say a suspicion in the two columns an operator
+      # scans, and the note below says what it rests on.
+      [ "$lph" = suspected-limit ] && { gl="${YEL}?${RST}"; lbl='limit?'; }
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
       [ "$stale" = 1 ] && gl="${RED}⚠${RST}"
@@ -938,6 +970,10 @@ render() {
         printf '       %s↳ %s%s\n' "$YEL" "$(op_note "$n" "$state")" "$RST"
       elif [ "$st" = awaiting-review ] || [ "$st" = awaiting-decision ] || [ "$st" = awaiting-approval ]; then
         hold_note "$n" "$state" "$st"
+      elif [ "$lph" = suspected-limit ]; then
+        # Its own arm rather than the generic live_note below, for the same reason
+        # the operator pause has one: the phase there would only repeat the label.
+        printf '       %s↳ %s%s\n' "$YEL" "$(suspect_note "$n" "$state")" "$RST"
       else
         # What it's doing right now (phase · elapsed-in-phase · story · iter · age)
         # above the note the agent last wrote. Both are optional; neither line prints

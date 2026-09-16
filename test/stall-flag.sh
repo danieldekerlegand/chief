@@ -108,7 +108,8 @@ FLAGGED_PHASES='provider-waiting provider-backoff agent-turn writing integrating
   approved worktree re-engaging seeded warmup reconcile merge-wait merge-queued
   batch-stacking rebasing rebase-conflict rebase-refused verifying verify-failed
   zone-check merging merged done checkout-failed merge-conflict re-dispatch
-  empty-no-work incomplete complete-unmerged unsatisfiable'
+  empty-no-work incomplete complete-unmerged unsatisfiable
+  suspected-limit'
 
 STATE="$WORK/mon"; PAR="$STATE/parallel"
 mkdir -p "$PAR"

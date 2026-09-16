@@ -60,7 +60,7 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 
 | Field | Shown as | Written by |
 |---|---|---|
-| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-backoff`, `stalled`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
+| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-backoff`, `stalled`, `suspected-limit`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
 | `phase_since` | `verifying for 41m` — elapsed **in this phase** | bumped only when the phase actually changes |
 | `story` / `iter` | `US-3 · iter 5` | the agent loop, each iteration |
 | `stall` / `stall_limit` | `no progress last iter (1/2)` | the agent loop's no-progress counter and the budget it is spent against |
@@ -258,6 +258,33 @@ my-api  (pid 12345 · -p2 · claude · 41m · →main)
   limit's `paused`) and its note carries what was kept and the command that picks it
   back up, not an ETA — Chief will never lift this one by itself.
 - Neither pause ever borrows a failure glyph, and neither is flagged stalled.
+
+### …and a third thing that looks like neither: `limit?`
+
+Both pauses above are holds Chief **knows** about. There is a third row, and it is a
+stop rather than a hold: the loop gave up exactly as a stall does, *and* the
+provider's own last output carried a limit-shaped line that neither of Chief's
+usage-limit patterns matched (see
+[Usage-limit detection](providers.md#usage-limit-detection) — the defaults were
+written against one CLI's phrasings).
+
+```text
+   ? unknown-limit          limit?    1/4     chief/unknown-limit
+       ↳ suspected usage limit — the provider exited non-zero and committed nothing · Error: your workspace has used all of its included usage for this billing period. · chief neither waited nor re-dispatched — check the account's remaining usage, then engine/agent.sh's limit patterns · stopped 4m ago
+```
+
+- **`?` and `limit?`, not `✗ failed`.** The row an operator scans is the whole
+  reason this state exists: an account that is simply out of usage used to read as a
+  failed tasklist, and the response to those two is not the same.
+- **It is a suspicion, and it says so.** Chief recognises a usage limit only by
+  those patterns, so it quotes the line it saw and names the pattern that would have
+  to grow. It does not claim the account is spent.
+- **Nothing was acted on.** No sleep, no re-dispatch, and dependents behave exactly
+  as they do behind a stall — acting on a guess is what the pattern discipline
+  exists to prevent. Only the report differs.
+
+The same report is printed in the run summary (`SUSPECTED USAGE LIMIT`) and
+recorded at `.chief/state/parallel/<name>.suspected-limit`.
 
 Raise the threshold when your verify hook is legitimately slow — a driver phase has
 no ticker, so a `npm ci` + `cargo build` verify can go quiet for minutes:
