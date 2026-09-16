@@ -223,6 +223,59 @@ layers because there are two entry points:
 Register the stance as `unwired` in the conformance `ROSTER` (item 10) and the
 harness proves the value never reaches argv.
 
+## Streaming the turn's interior
+
+`claude --print --output-format json` emits **one object when the whole turn
+finishes**. That is the entire reason a row could only ever say `provider-waiting`:
+during a turn there is genuinely nothing to display, and a working turn and a hung
+one look identical. Measured 2026-09-15 — a tasklist read `provider-waiting for 16m
+· iter 1` while its provider had run a `Bash` tool call 8 seconds earlier.
+
+`--output-format stream-json --verbose` emits the same events as they happen and
+**ends with the same result object**, so it is a different transport for the same
+request, not a different request. Everything downstream is unchanged by
+construction: `_humanize_provider_output` already takes the *last*
+`"type":"result"` line and `_parse_usage` already greps the *last* line carrying
+cost/token keys, so both read the same object either way — a turn's cost and a
+usage-limit stop never depend on this being on (`test/stream-activity.sh` PART B
+measures both modes and requires the usage to be identical).
+
+While a streaming turn runs, the heartbeat ticker that was already polling
+(`_beat_start` in [`engine/agent.sh`](../../engine/agent.sh)) reads the capture as
+it is written and publishes three fields into the liveliness record — `tool`,
+`tool_since`, `tools` (see [`engine/live.sh`](../../engine/live.sh)'s vocabulary
+block). **Names, counts and timings only, never the model's prose**: a row is
+scanned in a terminal beside other people.
+
+**It is checked, never assumed.** Three conditions, and any one of them means the
+invocation is byte-for-byte the one chief has always made:
+
+| Condition | Why it can be false |
+|---|---|
+| `CHIEF_STREAM_ACTIVITY` is not `0` | the operator turned it off |
+| the provider is `claude` | the other four arms have their own formats and their own answers; this feature does not speak for them |
+| `jq` is present | a stream is NDJSON, and without `jq` the result text cannot be lifted out of it |
+
+Those are all questions about **chief's own capability** — the same shape as the
+research phase's `command -v research_validate` check. What is deliberately *not*
+here is a version check on the CLI. The obvious probe, `claude --help | grep
+stream-json`, is a second invocation of the provider before the run has taken a
+single turn: it costs a process per run against a CLI that has supported the flag
+for its whole life, and it makes the mere act of asking observable to anything
+counting invocations — measured against `test/provider-backoff.sh`, which went from
+3 provider calls to 4.
+
+A CLI too old for the flag is answered by **observation** instead. It refuses the
+*option*, before the request, in milliseconds, with nothing spent and no result
+envelope — so `_capture_provider_output` recognises that (non-zero exit, no
+envelope, and the output names what it would not take), re-runs the **same prompt**
+on the old transport, and leaves streaming off for the rest of the run, saying so in
+the log. That costs nothing on a CLI that works and one sub-second invocation on one
+that does not (`test/stream-activity.sh` PART A3).
+
+Adding a fifth provider to this list means answering the same question for its own
+output format — not reusing this one.
+
 ## Usage-limit detection
 
 Chief distinguishes "the account hit a usage limit" from "the agent made no

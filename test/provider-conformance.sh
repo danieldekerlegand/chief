@@ -72,7 +72,13 @@ CHIEF="$ROOT/bin/chief"
 # tasklist 85 — docs/guides/providers.md#model-overrides). Section 4 below asserts that
 # refusal for every `unwired` entry, so the stance stays a decision, not a drop.
 ROSTER=(
-"claude|stdin|wired|--dangerously-skip-permissions --print --output-format json --model %MODEL%|--dangerously-skip-permissions --print --output-format json"
+# claude's transport is `stream-json --verbose` because chief READS the stream to
+# say what the agent is doing mid-turn (docs/guides/providers.md#streaming-the-turns-interior).
+# That is a transport change, not a request change — the stream ends with the same
+# result object — and CHIEF_STREAM_ACTIVITY=0 restores the `json` form exactly
+# (test/stream-activity.sh PART A2). Recorded here rather than left to drift: this
+# table IS the argv contract.
+"claude|stdin|wired|--dangerously-skip-permissions --print --output-format stream-json --verbose --model %MODEL%|--dangerously-skip-permissions --print --output-format stream-json --verbose"
 "devin|prompt-file|wired|--permission-mode bypass --respect-workspace-trust false --print --model %MODEL% --prompt-file %PROMPT_FILE%|--permission-mode bypass --respect-workspace-trust false --print --prompt-file %PROMPT_FILE%"
 "opencode|stdin|wired|run --model %MODEL%|run"
 "amp|stdin|unwired|--dangerously-allow-all|--dangerously-allow-all"

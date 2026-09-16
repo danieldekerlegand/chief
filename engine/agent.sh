@@ -207,6 +207,11 @@ fi
 STATE_DIR="$CHIEF_PROJECT/${CHIEF_STATE_DIR:-.chief/state}"
 mkdir -p "$STATE_DIR"
 PRD_FILE="$STATE_DIR/prd.json"
+# The provider's captured stdout+stderr for the CURRENT turn. Named here rather than
+# inside _capture_provider_output because the heartbeat ticker is forked BEFORE that
+# function runs and has to read the same file while it is still being written — one
+# path, one writer (the provider), two readers.
+RAW_OUTPUT_FILE="$STATE_DIR/.provider-output"
 PROGRESS_FILE="$STATE_DIR/progress.txt"
 ARCHIVE_DIR="$STATE_DIR/archive"
 LAST_BRANCH_FILE="$STATE_DIR/.last-branch"
@@ -1416,17 +1421,98 @@ LIVE_BEAT_SECONDS="${LIVE_BEAT_SECONDS:-15}"
 # flag back where the incident found it. The check is a read of the record rather than a
 # flag in this shell because the two are different processes: the ticker is a fork, and
 # whoever set the phase may have done so after it started.
+# _stream_activity -> ` tool=… tool_since=… tools=…` for the ticker's live_set, read
+# off the provider's stream-json capture as it is being written. Empty output is not
+# a possibility: a stream with no tool call yet is `tool= tool_since=0 tools=0`, which
+# is a STATEMENT ("nothing yet") and not an absence. Called only from the ticker's
+# subshell, where its five state globals live and die with the turn.
+#
+# ONLY THE NAME, NEVER THE PROSE. A row is scanned in a terminal beside other people;
+# `Bash` is an operator's answer to "is it working", the model's sentence is not. The
+# match is therefore anchored to the tool_use envelope's own `name` and restricted to
+# a name-shaped charset, so a tool INPUT containing the word "name" cannot surface.
+#
+# THE OFFSET IS THE COST ARGUMENT. A turn's stream carries every tool RESULT too, so
+# the capture reaches tens of MB on a long turn; re-scanning it whole every
+# $LIVE_BEAT_SECONDS would spend more I/O watching the turn than taking it. `tail -c
+# +N` SEEKS on a regular file, so each tick reads only what arrived since the last one
+# and the whole turn costs about one pass over the capture rather than one per tick.
+#
+# AND THE LAST RECORD IS READ BUT NOT CONSUMED — the subtlety this function exists
+# around. The provider is writing the file right now, so its final record may be half
+# a line, and consuming a half line would corrupt the offset forever. But refusing to
+# LOOK at it would defeat the whole feature: a long tool call emits its `tool_use`
+# line and then nothing until the result, so the one line that says what is happening
+# is the trailing line for the entire minutes it is happening — exactly the silence
+# the 16-minute incident was made of. So the scan reports TWO counts over one pass:
+# `confirmed`, over the records a newline proves are whole, which is what advances the
+# offset and the running total; and the total INCLUDING the trailing record, which is
+# only ever DISPLAYED. The trailing record is re-read (and its contribution
+# recomputed, never accumulated) on every tick until a later line makes it confirmed,
+# so the same tool call can be shown immediately and counted exactly once.
+#
+# A malformed line therefore cannot invent a tool call — it carries no tool_use
+# envelope with a name-shaped name — and a truncated one cannot either, until the
+# bytes that complete it arrive. Neither can affect the turn at all: success rests on
+# the provider's exit status and the captured output, which this never touches.
+_stream_activity() {
+  local raw c cn tn nm rest show
+  if [ -f "$RAW_OUTPUT_FILE" ]; then
+    raw="$(LC_ALL=C tail -c "+$(( STREAM_OFF + 1 ))" "$RAW_OUTPUT_FILE" 2>/dev/null | LC_ALL=C awk '
+      function scan(rec,   s, nm) {
+        s = rec
+        while (match(s, /"type"[ \t]*:[ \t]*"tool_use"/)) {
+          s = substr(s, RSTART + RLENGTH)
+          if (match(s, /"name"[ \t]*:[ \t]*"[A-Za-z0-9_.:-]+"/)) {
+            nm = substr(s, RSTART, RLENGTH)
+            sub(/^"name"[ \t]*:[ \t]*"/, "", nm); sub(/"$/, "", nm)
+            n++; last = nm
+          }
+        }
+      }
+      NR > 1 { scan(prev); c += length(prev) + 1; cn = n }
+      { prev = $0 }
+      END { if (NR > 0) scan(prev); printf "%d\t%d\t%d\t%s\n", c + 0, cn + 0, n + 0, last }
+    ')" || raw=""
+    c="${raw%%	*}"; rest="${raw#*	}"
+    cn="${rest%%	*}"; rest="${rest#*	}"
+    tn="${rest%%	*}"; nm="${rest#*	}"
+    for rest in c cn tn; do eval "case \"\$$rest\" in ''|*[!0-9]*) $rest=0 ;; esac"; done
+    STREAM_OFF=$(( STREAM_OFF + c ))
+    STREAM_N=$(( STREAM_N + cn ))
+    [ -n "$nm" ] && STREAM_TOOL="$nm"
+  fi
+  show=$(( STREAM_N + tn - cn ))
+  if [ "$show" != "$STREAM_SHOWN" ]; then
+    # OUR clock, not the provider's: this is when chief FIRST SAW the call, which is
+    # accurate to one tick and is a fact chief can stand behind. A timestamp lifted
+    # out of the stream would be the provider's notion of now, subtracted from the
+    # monitor's — two clocks, one subtraction, and a negative age on a bad day.
+    STREAM_SINCE="$(date +%s)"; STREAM_SHOWN="$show"
+  fi
+  printf ' tool=%s tool_since=%s tools=%s' "$STREAM_TOOL" "$STREAM_SINCE" "$STREAM_SHOWN"
+  return 0
+}
 _beat_start() {
   [ -n "$LIVE" ] || return 0
-  ( last="$(_head)"; moved=""
+  # STREAM_* are the ticker's per-turn accumulators, initialised INSIDE the subshell:
+  # the capture is truncated at the top of every _capture_provider_output, so an
+  # offset carried over from a previous turn would point into the wrong file.
+  ( last="$(_head)"; moved=""; act=""
+    STREAM_OFF=0; STREAM_N=0; STREAM_SHOWN=0; STREAM_TOOL=""; STREAM_SINCE=0
     while :; do
       sleep "$LIVE_BEAT_SECONDS"
+      # ONE WRITER. The turn's interior rides on the heartbeat write that was already
+      # happening rather than on a second polling loop of its own — the discipline the
+      # phase field and the pending-work line already keep.
+      [ "${STREAM_ON:-0}" = 1 ] && act="$(_stream_activity)"
       now_h="$(_head)"
+      # shellcheck disable=SC2086  # $act is a deliberate word-split KEY=VALUE list
       if [ "$now_h" != "$last" ]; then
-        if [ "$(live_get "$LIVE" phase)" = verifying ]; then live_set "$LIVE"
-        else live_set "$LIVE" phase=writing; fi
+        if [ "$(live_get "$LIVE" phase)" = verifying ]; then live_set "$LIVE" $act
+        else live_set "$LIVE" phase=writing $act; fi
         last="$now_h"; moved=1
-      else live_set "$LIVE"; fi
+      else live_set "$LIVE" $act; fi
       [ -n "$moved" ] && _prd_promote
     done ) 2>/dev/null &
   BEAT_PID=$!
@@ -1437,6 +1523,13 @@ _beat_stop() {
   kill "$BEAT_PID" 2>/dev/null || true
   wait "$BEAT_PID" 2>/dev/null || true
   BEAT_PID=""
+  # THE TURN'S INTERIOR ENDS WITH THE TURN. `tool`/`tools` describe what the agent is
+  # doing RIGHT NOW, so carrying them past the turn that produced them would make the
+  # row claim an activity nobody is performing — the same present-tense lie the
+  # `stalled` phase was corrected for (engine/live.sh). Cleared only when there was
+  # something to clear: a non-streaming run must not pay an extra heartbeat write per
+  # turn for a field it never sets.
+  [ "${STREAM_ON:-0}" = 1 ] && live_set "$LIVE" tool= tool_since=0 tools=0
   return 0
 }
 trap '_beat_stop' EXIT
@@ -1902,15 +1995,48 @@ _apply_account_env() {
   return 0
 }
 
+# _stream_refused -> 0 when the capture is a CLI REFUSING THE FLAG rather than a turn
+# that went wrong. A result envelope means the request was served, whatever it then
+# said, so its presence alone disqualifies this; what remains has to NAME the option
+# it would not take. Narrow on purpose: a false positive here re-runs a turn the
+# provider already charged for, which is the one mistake this must not make.
+_stream_refused() {
+  [ -s "$RAW_OUTPUT_FILE" ] || return 1
+  LC_ALL=C grep -q '"type"[[:space:]]*:[[:space:]]*"result"' "$RAW_OUTPUT_FILE" && return 1
+  LC_ALL=C grep -qiE -- '(unknown|unrecogni[sz]ed|invalid|unsupported|unexpected|bad)[^.]{0,40}(option|argument|flag|value|choice|format)' \
+    "$RAW_OUTPUT_FILE" || return 1
+  LC_ALL=C grep -qF -- 'stream-json' "$RAW_OUTPUT_FILE" \
+    || LC_ALL=C grep -qF -- '--output-format' "$RAW_OUTPUT_FILE" \
+    || LC_ALL=C grep -qF -- '--verbose' "$RAW_OUTPUT_FILE"
+}
+
 # Capture provider output once, retaining the raw envelope for usage parsing while
 # exposing the human-readable result to the log and completion detector.
 _capture_provider_output() {
-  RAW_OUTPUT_FILE="${STATE_DIR}/.provider-output"
   : > "$RAW_OUTPUT_FILE"
   if _run_provider < "$1" >"$RAW_OUTPUT_FILE" 2>&1; then
     TOOL_RC=0
   else
     TOOL_RC=$?
+  fi
+  # THE CAPABILITY CHECK THAT COSTS NOTHING WHEN IT PASSES. A CLI too old for
+  # `--output-format stream-json` refuses the FLAG, before the request: it exits
+  # non-zero, in milliseconds, having spent no tokens and produced no result
+  # envelope. That is a distinguishable event, so chief does not need to ask in
+  # advance — it attempts the turn, recognises the refusal, and re-runs the SAME
+  # prompt on the transport that has always worked, with streaming off for the rest
+  # of the run. Three conditions have to hold together, because every one of them
+  # alone is something an ordinary failed turn can also do; what no ordinary failure
+  # does is fail while naming the option and producing no envelope at all.
+  if [ "$STREAM_ON" = 1 ] && [ "$TOOL_RC" != 0 ] && _stream_refused; then
+    STREAM_ON=0
+    echo ">> the provider refused --output-format stream-json (it is older than the flag) — retrying this turn without it; turn activity is off for the rest of this run." >&2
+    : > "$RAW_OUTPUT_FILE"
+    if _run_provider < "$1" >"$RAW_OUTPUT_FILE" 2>&1; then
+      TOOL_RC=0
+    else
+      TOOL_RC=$?
+    fi
   fi
   RAW_OUTPUT="$(cat "$RAW_OUTPUT_FILE")"
   OUTPUT="$(_humanize_provider_output "$RAW_OUTPUT")"
@@ -1938,7 +2064,20 @@ _run_provider() {
 _provider_exec() {
   case "$PROVIDER" in
     claude)
-      if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --output-format json --model "$MODEL"
+      # STREAMING IS A TRANSPORT, NOT A DIFFERENT REQUEST. `--output-format json` emits
+      # ONE object when the whole turn finishes, so during a turn there is genuinely
+      # nothing to display and the row can only say `provider-waiting`. `stream-json`
+      # emits the same events as they happen and ENDS with the same result object —
+      # which is why $STREAM_ON changes nothing downstream: _humanize_provider_output
+      # already takes the LAST `"type":"result"` line, and _parse_usage already greps
+      # the LAST line carrying cost/token keys, so both read the same object either
+      # way. `--verbose` is not optional here; the CLI refuses stream-json under
+      # --print without it.
+      if [ "${STREAM_ON:-0}" = 1 ]; then
+        if [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --output-format stream-json --verbose --model "$MODEL"
+        else claude --dangerously-skip-permissions --print --output-format stream-json --verbose
+        fi
+      elif [ -n "$MODEL" ]; then claude --dangerously-skip-permissions --print --output-format json --model "$MODEL"
       else claude --dangerously-skip-permissions --print --output-format json
       fi
       ;;
@@ -1974,6 +2113,50 @@ _provider_exec() {
       ;;
   esac
 }
+
+# --- STREAMING TURN CAPABILITY ------------------------------------------------
+# Answered ONCE per run, here: $STREAM_ON is read by _provider_exec (which transport
+# to ask for) and by the heartbeat ticker (whether there is anything to read). It is
+# a MODULE-SCOPE answer rather than a per-turn function because _provider_exec may run
+# inside the account-env subshell, where a value computed there would be discarded.
+#
+# WHAT IS CHECKED HERE IS CHIEF'S OWN CAPABILITY, which is the same shape as
+# _compose_prompt's research check (`command -v research_validate`) — a presence test
+# for the thing this install needs, not an interrogation of somebody else's binary:
+#   1. the operator's knob. CHIEF_STREAM_ACTIVITY=0 means the invocation is
+#      byte-for-byte the one chief has always made — not a stream that is captured
+#      and ignored, which would be a different code path wearing the same name.
+#   2. the provider arm. `claude` is the only one whose streaming format chief knows
+#      how to read; devin/opencode/amp/codex have their own answers and this does not
+#      speak for them.
+#   3. jq. A stream is NDJSON, and without jq _humanize_provider_output cannot lift
+#      the result text out of it — the whole envelope would land in the log AND in the
+#      completion check, whose token regex is anchored to a whole line. So "no jq" is
+#      a genuine incapability here, not a degradation.
+#
+# WHAT IS NOT CHECKED HERE IS THE CLI'S VERSION, and that is deliberate. The obvious
+# probe — `claude --help | grep stream-json` — is a SECOND INVOCATION of the provider
+# before the run has taken a single turn, and a capability question does not justify
+# one: it costs a process per run against a CLI that has supported the flag for its
+# whole life, and it makes the mere act of asking observable to anything counting
+# invocations (measured: it took test/provider-backoff.sh from 3 provider calls to 4).
+# A CLI too old for the flag is answered by OBSERVATION instead, in
+# _capture_provider_output below — the turn is attempted, a refusal of the flag is
+# recognised, and the same turn is re-run on the old transport with streaming off for
+# the rest of the run. That costs nothing on a CLI that works and one sub-second
+# invocation on one that does not.
+STREAM_ON=0
+if [ "${CHIEF_STREAM_ACTIVITY:-1}" != 0 ] && [ "$PROVIDER" = claude ] \
+   && command -v jq >/dev/null 2>&1; then
+  STREAM_ON=1
+fi
+if [ -n "${CHIEF_VERBOSE:-}" ]; then
+  if [ "$STREAM_ON" = 1 ]; then
+    printf '>> [verbose] turn activity: streaming — tool calls are published to the live record\n' >&2
+  else
+    printf '>> [verbose] turn activity: not streaming — the row can only say provider-waiting\n' >&2
+  fi
+fi
 
 echo "Starting Chief — Provider: $PROVIDER${MODEL:+ (model: $MODEL)} — budget $MAX_ITERATIONS iters (extends while progressing; hard cap $HARD_MAX; stall limit $STALL_LIMIT)"
 
