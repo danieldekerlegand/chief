@@ -3806,8 +3806,11 @@ if [ -n "$unserved" ]; then
   echo "     TRANSIENT one is waited out first — Retry-After when the provider sends one, else"
   echo "     backoff from ${PROVIDER_BACKOFF:-5}s doubling to a ${PROVIDER_BACKOFF_CAP:-60}s cap — so the worst case before this"
   echo "     report is bounded by (PROVIDER_NOTURN_LIMIT-1) x PROVIDER_BACKOFF_CAP. A PERMANENT"
-  echo "     refusal — a bad or revoked key, a quota that will not replenish — is not waited on"
-  echo "     at all and says so above.)"
+  echo "     refusal is not waited on at all, and there are TWO of them because the fix is not"
+  echo "     the same: an account with NO USAGE LEFT is lifted by topping it up, raising its"
+  echo "     plan, or running against another account — its credential is fine; a CREDENTIAL"
+  echo "     that is wrong, revoked or not entitled to the model is lifted by replacing it, and"
+  echo "     no amount of topping up touches it. Each line above says which one it was.)"
 fi
 # An OPERATOR pause is a DECISION, not a fault, and the summary is where that has to
 # be unmistakable: parked tasklists are listed here, never among the failures. Say

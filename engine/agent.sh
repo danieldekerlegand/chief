@@ -688,9 +688,13 @@ PROVIDER_NOTURN_LIMIT="${PROVIDER_NOTURN_LIMIT:-3}"
 #              COST, not from likelihood: waiting on a permanent error wastes minutes,
 #              failing fast on an outage loses the tasklist. So ambiguity waits, and
 #              the log SAYS it could not tell rather than implying it knew.
-#   permanent  401/402/403 · authentication_error · permission_error — a bad key, a
-#              revoked one, a quota that will not replenish. No amount of sleeping
-#              fixes any of those, so the loop stops on the FIRST one, with its
+#   permanent  Two verdicts, never one sentence for both, because the operator action
+#              differs. `exhausted` — 402, or an error type naming the quota, the
+#              credit or the billing that ran out — is an account with nothing left to
+#              spend, lifted by topping it up or running against another account.
+#              `credential` — 401/403 · authentication_error · permission_error — is
+#              the key itself, and topping anything up will not lift it. No amount of
+#              sleeping fixes either, so the loop stops on the FIRST one, with its
 #              reason, instead of sleeping through a budget it cannot satisfy.
 #
 # THE PROVIDER'S OWN INTERVAL WINS. `Retry-After` is the server naming the moment it
@@ -1728,7 +1732,7 @@ _is_no_turn() {
 # THE WAIT LIVES HERE because this is the single decision point — retry or stop — and
 # a backoff written at the call site would be a second place that knows the rule.
 _provider_unavailable() {
-  local out="$1" iter="$2" n="$3" code type why kind ws secs src wake how
+  local out="$1" iter="$2" n="$3" code type why kind verdict act ws secs src wake how
   # The REASON, in one line: what the provider refused with, and whether waiting can
   # help. Goes in the log, the live record and the file the driver reports from;
   # nothing ever parses it back.
@@ -1743,30 +1747,59 @@ _provider_unavailable() {
   # cost argument beside $PROVIDER_BACKOFF), and the 5xx arm is tested ahead of the
   # permanent one so an envelope carrying both a server-side status and a stray
   # auth-shaped type resolves on the status — the fact the server actually stated.
+  # TWO PERMANENT VERDICTS, not one. Both stop on the FIRST refusal and neither is
+  # ever slept on; what differs is the only thing a report is for — what the operator
+  # has to DO. `exhausted` is an account with nothing left to spend (top it up, raise
+  # the plan, or point the run at an account that has some) and its credential is
+  # perfectly good; `credential` is the key itself — wrong, revoked, or not entitled
+  # to this model — which no amount of topping up fixes. Chief said both of those in
+  # one sentence until 0.9.36, so an account that was simply spent read as a key that
+  # had been revoked. Read off the status code and the error TYPE only, never the
+  # prose: the type is the provider's machine contract and the sentence beside it is
+  # not (the rule the classifier above already keeps). The type arm is a token glob
+  # rather than a list because vendors spell the same fact differently
+  # (`billing_error`, `credit_balance_error`, `quota_exceeded_error`) while all of
+  # them NAME the thing that ran out; it is tested ahead of the credential types so an
+  # envelope carrying both resolves on the more specific one. Its reach is bounded by
+  # _provider_error_type, which yields only the Anthropic-shaped `*_error` tokens: a
+  # type that names a quota WITHOUT that suffix is never extracted, so it never
+  # reaches here and is not silently mis-bucketed either. Widening that extractor is a
+  # change to the shared classifier and needs a recorded observation of its own — the
+  # discipline the pattern lists above already keep.
   kind=transient
   case "$code" in
-    401|402|403) kind=permanent ;;
+    402) kind=exhausted ;;
+    401|403) kind=credential ;;
     500|502|503|504|529) ;;
-    *) case "$type" in authentication_error|permission_error) kind=permanent ;; esac ;;
+    *) case "$type" in
+         *quota*|*credit*|*billing*) kind=exhausted ;;
+         authentication_error|permission_error) kind=credential ;;
+       esac ;;
   esac
   echo ""
 
-  # PERMANENT — a bad key, a revoked one, a quota that will not replenish. Stopping on
-  # the FIRST one is the point: every second spent sleeping on this is a second spent
-  # on a condition no amount of time changes, which is the mirror image of the bug the
-  # rest of this module fixes.
-  if [ "$kind" = permanent ]; then
-    printf '%s — PERMANENT refusal, not retried — %s\n' "$why" "$(date '+%Y-%m-%d %H:%M:%S')" \
-      > "$NOTURN_FILE" 2>/dev/null || true
+  # PERMANENT — either verdict. Stopping on the FIRST one is the point: every second
+  # spent sleeping on this is a second spent on a condition no amount of time changes,
+  # which is the mirror image of the bug the rest of this module fixes. The WORDING is
+  # the operator's next action, not the HTTP fact — the code is already in $why.
+  if [ "$kind" = exhausted ] || [ "$kind" = credential ]; then
+    case "$kind" in
+      exhausted) verdict='the account has no usage left to spend'
+                 act='add credit or raise the plan limit on this account, or point the run at one that has usage left — the credential itself is fine' ;;
+      *)         verdict='the credential is wrong, revoked, or not entitled to this model'
+                 act='fix or replace the credential — topping an account up cannot lift this one' ;;
+    esac
+    printf '%s — PERMANENT refusal, not retried: %s (%s) — %s\n' "$why" "$verdict" "$act" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" > "$NOTURN_FILE" 2>/dev/null || true
     echo "Iteration $iter never reached the model — the provider REFUSED the request: $why."
-    echo "That refusal is PERMANENT (bad or revoked credentials, or a quota that will not replenish), so chief is not waiting on it: no delay makes an unusable key usable."
+    echo "That refusal is PERMANENT — $verdict — so chief is not waiting on it: no delay changes it."
     echo "$(_passes)/$(_total) stories pass; everything committed so far is kept on the branch, and so is the worktree."
-    echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. Fix the credential, then re-run to resume from the committed passes state."
+    echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. What lifts it: $act. Then re-run to resume from the committed passes state."
     live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
       passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0 refusal="$kind"
     event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=provider-unavailable \
-      detail="$why — permanent refusal, failed fast without retrying"
+      refusal="$kind" detail="$why — permanent refusal ($verdict), failed fast without retrying"
     return 1
   fi
 
@@ -1781,7 +1814,7 @@ _provider_unavailable() {
       echo "No status code and no error envelope, so transient vs permanent could not be told apart — treating it as transient, because waiting on a permanent error costs minutes and failing fast on an outage costs the tasklist."
     live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
       passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+      noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0 refusal=transient
     event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=running \
       detail="$why — attempt $n/$PROVIDER_NOTURN_LIMIT; no turn was taken, so the iteration is not charged"
     ws="$(_provider_wait_seconds "$n" "$out")"; secs="${ws%% *}"; src="${ws##* }"
@@ -1798,9 +1831,9 @@ _provider_unavailable() {
       # the hang it looks like — and never as work, either.
       live_set "$LIVE" phase=provider-backoff iter="$iter" story="$(_story)" \
         passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-        noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at="$wake"
+        noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at="$wake" refusal=transient
       event_emit tasklist.provider-backoff name="${CHIEF_TASKLIST:-}" state=running \
-        retry_at="$wake" \
+        retry_at="$wake" refusal=transient \
         detail="$why — waiting ${secs}s before attempt $(( n + 1 ))/$PROVIDER_NOTURN_LIMIT ($src)"
       sleep "$secs"
     fi
@@ -1811,9 +1844,9 @@ _provider_unavailable() {
   echo "Exit 8 = PROVIDER-UNAVAILABLE — the API never served us, NOT a stall and NOT a failed tasklist. Re-run to resume from the committed passes state."
   live_set "$LIVE" phase=provider-unavailable iter="$iter" story="$(_story)" \
     passing="$(_passes)" total="$(_total)" stall="$stall" waits="$waits" \
-    noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0
+    noturn="$n" noturn_limit="$PROVIDER_NOTURN_LIMIT" retry_at=0 refusal=transient
   event_emit tasklist.provider-unavailable name="${CHIEF_TASKLIST:-}" state=provider-unavailable \
-    detail="$why — $n consecutive requests refused before any turn was taken"
+    refusal=transient detail="$why — $n consecutive requests refused before any turn was taken"
   return 1
 }
 

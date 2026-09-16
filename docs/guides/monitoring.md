@@ -60,12 +60,13 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 
 | Field | Shown as | Written by |
 |---|---|---|
-| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-backoff`, `stalled`, `suspected-limit`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
+| `phase` | the fine-grained sub-phase, verbatim | agent: `agent-turn`, `provider-waiting`, `writing`, `integrating`, `rate-limited-waiting`, `provider-unavailable`, `provider-backoff`, `stalled`, `suspected-limit`, `operator-paused`, `complete` · driver: `worktree`, `re-engaging`, `warmup`, `merge-wait`, `rebasing`, `verifying`, `merging`, `merged`, `rate-limited`, `operator-paused`, … |
 | `phase_since` | `verifying for 41m` — elapsed **in this phase** | bumped only when the phase actually changes |
 | `story` / `iter` | `US-3 · iter 5` | the agent loop, each iteration |
 | `stall` / `stall_limit` | `no progress last iter (1/2)` | the agent loop's no-progress counter and the budget it is spent against |
 | `waits` | the limit-wait count | the agent loop's usage-limit sleeps |
 | `noturn` / `noturn_limit` | `provider attempt 2/3` | consecutive requests the provider **refused before any turn was taken**, and the budget they are counted against. Deliberately not `stall`: one counts iterations the agent ran and got nowhere in, the other counts iterations it was never given |
+| `refusal` | the row label on a refused tasklist — `no-credit` · `bad-key` · `no-api` | the verdict on the last request the provider would not serve: `exhausted` · `credential` · `transient` (the label table below) |
 | `passing` / `total` | the progress column, when no `prd.json` is readable | agent + driver |
 | `retry_at` | the retry ETA on a paused row | the driver's usage-limit self-heal |
 | `heartbeat` | `12s ago` — time since the run last did *anything* | **every** write; an in-turn ticker keeps it moving through a long `claude` call |
@@ -285,6 +286,30 @@ written against one CLI's phrasings).
 
 The same report is printed in the run summary (`SUSPECTED USAGE LIMIT`) and
 recorded at `.chief/state/parallel/<name>.suspected-limit`.
+
+### …and when chief *does* know: `no-credit` vs `bad-key`
+
+A row the API **refused** is a hold too (state `provider-unavailable`, glyph `⏸`).
+One state, three labels — because the operator action is different for each, and
+`no-api` deliberately does not mean "the account is out of quota":
+
+```text
+   ⏸ billing-run             no-credit 2/4     chief/billing-run
+   ⏸ stale-key               bad-key   0/3     chief/stale-key
+   ⏸ overloaded              no-api    1/5     chief/overloaded
+```
+
+| label | what the provider said | what lifts it |
+|---|---|---|
+| `no-credit` | `402`, or an error type naming the quota/credit/billing | add credit, raise the plan limit, or run against an account that has usage left — the credential is fine |
+| `bad-key` | `401` / `403` · `authentication_error` · `permission_error` | fix or replace the credential; topping an account up cannot lift it |
+| `no-api` | anything else it refused — an outage that outlasted `PROVIDER_NOTURN_LIMIT`, a dropped connection, a refusal with no code | the reason line, verbatim, and a re-run |
+
+The verdict is read off the status code and the error envelope, never off the prose,
+and it rides the liveliness record's `refusal` field (`transient` · `exhausted` ·
+`credential`) — the same value the event stream carries, so a subscriber sees the
+distinction the row does. Full rules:
+[provider-unavailability.md](../reference/provider-unavailability.md).
 
 Raise the threshold when your verify hook is legitimately slow — a driver phase has
 no ticker, so a `npm ci` + `cargo build` verify can go quiet for minutes:

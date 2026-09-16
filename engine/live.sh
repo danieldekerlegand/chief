@@ -104,7 +104,15 @@
 # stall counter (engine/agent.sh). Written at every iteration boundary, so it falls back
 # to 0 the moment a story is demoted and the branch has work to do again — a flag only
 # ever set would be a claim about the past wearing the present tense.
-LIVE_FIELDS='name state phase story iter passing negative total stall stall_limit allpass waits noturn noturn_limit retry_at phase_since heartbeat'
+# `refusal` is the VERDICT on the last request the provider would not serve, and it is
+# a field rather than a phase because the phase is `provider-unavailable` for all three
+# of them: `transient` (waited out and retried), `exhausted` (the account has nothing
+# left to spend) and `credential` (the key is wrong, revoked, or not entitled). What
+# the operator does about each differs — wait, top up, fix the key — so the row label
+# is keyed off this, and every write on that path sets it so a stale permanent verdict
+# can never outlive the refusal that produced it. Empty for a tasklist the provider
+# never refused.
+LIVE_FIELDS='name state phase story iter passing negative total stall stall_limit allpass waits noturn noturn_limit refusal retry_at phase_since heartbeat'
 LIVE_NUMERIC=' iter passing negative total stall stall_limit allpass waits noturn noturn_limit retry_at phase_since heartbeat '
 
 # live_get FILE KEY -> the raw value ('' when the file or key is absent).
@@ -145,7 +153,7 @@ live_set() {
   # the caller's globals — driver.sh and agent.sh both source this file.
   local _lv_name _lv_state _lv_phase _lv_story _lv_iter _lv_passing _lv_negative \
         _lv_total _lv_stall _lv_stall_limit _lv_allpass _lv_waits _lv_noturn \
-        _lv_noturn_limit _lv_retry_at _lv_phase_since _lv_heartbeat
+        _lv_noturn_limit _lv_refusal _lv_retry_at _lv_phase_since _lv_heartbeat
   dir="$(dirname "$f")"
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
   now="$(date +%s)"

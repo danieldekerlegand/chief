@@ -500,6 +500,9 @@ glyph_for() { # $1 = state -> "<color><glyph><reset>|<label>"
     # in its worktree used to appear here as '✗ failed · no progress last iter'.
     # Its own label, because the row's one job is to say WHO is holding the work,
     # and 'the provider would not answer' is not 'the account is out of quota'.
+    # `no-credit` and `bad-key` are the same state wearing the verdict the record
+    # carries (the row loop's override below) — this is the one that is left when the
+    # API refused and chief could not say why.
     provider-unavailable) printf '%s⏸%s|no-api' "$CYN" "$RST" ;;
     # The OPERATOR pause. Same ⏸ (it is a pause, not a fault — never a failure
     # glyph), a distinct label so `chief ps | grep` can tell the two apart, and a
@@ -945,6 +948,20 @@ render() {
       # defect. `?` and `limit?` say a suspicion in the two columns an operator
       # scans, and the note below says what it rests on.
       [ "$lph" = suspected-limit ] && { gl="${YEL}?${RST}"; lbl='limit?'; }
+      # WHICH refusal is holding it (engine/agent.sh's `refusal` verdict, carried on
+      # the record). `no-api` says the provider would not answer and deliberately does
+      # NOT say the account is spent — so the two verdicts chief actually KNOWS get
+      # their own word, because the operator action is different for each: top the
+      # account up, or fix the credential. A transient refusal that spent its retries
+      # keeps `no-api`, which is what it is: the API never answered and chief does not
+      # know why. Read only on a row the scheduler already calls provider-unavailable,
+      # so a verdict left on the record by an earlier refusal cannot label a live row.
+      if [ "$st" = provider-unavailable ]; then
+        case "$(live_get "$lf" refusal)" in
+          exhausted)  lbl='no-credit' ;;
+          credential) lbl='bad-key' ;;
+        esac
+      fi
       # Braced: an unbraced $RED before a multibyte glyph is parsed as part of the
       # variable NAME by bash 3.2 ("RED⚠: unbound variable").
       [ "$stale" = 1 ] && gl="${RED}⚠${RST}"

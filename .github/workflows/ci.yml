@@ -146,6 +146,9 @@ jobs:
       - name: A limit no pattern recognised is reported as a suspected limit, not a stall
         run: bash test/suspectlimit.sh
 
+      - name: A spent account is its own verdict, never a bad credential
+        run: bash test/provider-credit.sh
+
       - name: Headless embedding contract (run-id line, exit-code table, JSON summary)
         run: bash test/headless.sh
 
