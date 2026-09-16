@@ -51,6 +51,15 @@ Beneath a live tasklist come up to two dim `↳` lines: **what it is doing right
 now** (the liveliness record, below) and the latest note the agent appended to its
 `progress.txt`.
 
+That second line is chosen for its **shape**, because a progress note is markdown
+and the row gets exactly one line of it. Fences, heading markers, horizontal rules,
+blank lines and lines of pure punctuation are skipped — the row reaches back for the
+most recent line that actually says something, and prints **nothing at all** if
+there is none. What it does print is plain one-line text (inline-code and emphasis
+markers stripped, whitespace collapsed) truncated with a visible `…`. A row that
+renders a bare ``` ``` ``` is worse than a row with no second line: it spends the
+one line you scan and tells you nothing.
+
 ## Is it working, or is it hung?
 
 The coarse word `running` can't answer that — it says a worker exists, not that it

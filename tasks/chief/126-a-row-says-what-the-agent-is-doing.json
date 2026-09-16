@@ -3,7 +3,16 @@
   "category": "feature",
   "branchName": "chief/126-a-row-says-what-the-agent-is-doing",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/monitor.sh", "engine/live.sh", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/monitor.sh",
+    "engine/live.sh",
+    "docs",
+    "test",
+    "VERSION",
+    "README.md",
+    "ROADMAP.md"
+  ],
   "iters": 10,
   "warmup": [
     "sed -n '1787,1800p' engine/agent.sh",
@@ -20,14 +29,15 @@
     {
       "id": "US-1",
       "title": "The activity line is one readable line, or it is absent",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "`activity_of` never renders a line that carries no information: a code fence, a bare heading marker, a horizontal rule, an empty or whitespace-only line, or a line of pure punctuation. It reaches back for the most recent line that does carry information, or renders nothing at all.",
         "What it does render is plain one-line text: markdown emphasis and inline-code markers stripped, whitespace collapsed, truncated to a width that does not wrap the row, with the truncation visible rather than silent.",
         "A fixture progress.txt in the style of a real one — fenced blocks, headings, blank lines, a trailing fence — is rendered in a test, asserting the chosen line. Two-sided: a file whose last informative line is ordinary prose renders that prose, and a file containing ONLY uninformative lines renders nothing rather than a fence.",
         "The assertion is on a whole rendered line, not a fragment another surface also emits.",
         "`bash test/all.sh` passes (or the documented subset, named in the notes with what was run)."
-      ]
+      ],
+      "notes": "activity_of rewritten (shape-based filter); test/activity-line.sh added and run directly: PASS (A reproduce: old rule picks ``` · B1-B5 shape · C rendered row). Registered in all THREE gate lists (.chief/verify.sh, test/all.sh, ci.yml); ci.yml re-parsed clean with yaml.safe_load. Subset run green: activity-line PASS, limitmonitor PASS, stall-flag PASS, liveliness PASS, ps-all PASS, monitor PASS, stall-flag PASS, doc-sync PASS (README+ROADMAP v0.9.38), check-doc-links 0 dead references, bash -n clean on engine/monitor.sh + test/activity-line.sh. Full test/all.sh NOT run for this story (it is the tasklist's 10-iteration budget); the named subset is what was run."
     },
     {
       "id": "US-2",

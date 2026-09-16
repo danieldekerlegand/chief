@@ -444,9 +444,48 @@ branch_of() { # $1 name $2 tasks
   if [ -n "$b" ] && [ "$b" != "null" ]; then printf '%s' "$b"; else printf 'chief/%s' "$1"; fi
 }
 
-activity_of() { # $1 = progress.txt path -> latest meaningful line (truncated)
+# A progress note is MARKDOWN and the row gets exactly ONE line of it, so the line
+# has to be chosen by SHAPE and not merely by "the last non-empty one". The old rule
+# (`NF && !/^#/ && !/^---/`) skipped blanks, headings and the seed rule and nothing
+# else, which is why a live run rendered ``` as its activity line for seventeen
+# minutes: the agent's note ended in a fenced block, the fence is non-empty, and a
+# row that says ``` is worse than a row that says nothing — it spends the one line
+# an operator scans and carries no information.
+#
+# So structure is skipped (fences either way, headings, horizontal rules) and what
+# survives must still hold an alphanumeric character AFTER the markdown markers come
+# off — which is what disqualifies a whitespace-only line and a line of pure
+# punctuation in one rule rather than three. `_` is deliberately NOT stripped as an
+# emphasis marker: this codebase's prose is full of snake_case, and `live_set` must
+# not reach the row as `liveset`. A rule is only a rule when the line is NOTHING but
+# its marker, so `--- the base moved` is prose and renders.
+#
+# Truncation is VISIBLE (a trailing …), and backs off to a word boundary when one is
+# near enough — which also keeps a byte-wise cut away from the middle of a multi-byte
+# character, since LC_ALL=C is mandatory here (BSD awk aborts on the em-dashes the
+# agent writes, see CLAUDE.md) and makes length()/substr() count bytes.
+activity_of() { # $1 = progress.txt path -> latest INFORMATIVE line, one line, truncated
   [ -f "$1" ] || return 0
-  awk 'NF && $0 !~ /^#/ && $0 !~ /^---/ {last=$0} END{if(last)print last}' "$1" 2>/dev/null | cut -c1-76
+  LC_ALL=C awk -v max=76 '
+    /^[[:space:]]*(```|~~~)/ { next }                              # a fence, open or close
+    /^[[:space:]]*#/         { next }                              # a heading marker
+    /^[[:space:]]*(-{3,}|\*{3,}|_{3,}|={3,})[[:space:]]*$/ { next } # a horizontal rule
+    {
+      line = $0
+      sub(/^[[:space:]]*([-+>][[:space:]]+|[0-9]+[.)][[:space:]]+)/, "", line)  # list / quote marker
+      gsub(/[`*]/, "", line)                                       # inline-code + emphasis markers
+      gsub(/[[:space:]]+/, " ", line); sub(/^ /, "", line); sub(/ $/, "", line)
+      if (line ~ /[[:alnum:]]/) last = line                        # ... and it has to SAY something
+    }
+    END {
+      if (last == "") exit 0
+      if (length(last) > max) {
+        cut = substr(last, 1, max - 1); sub(/[^ ]*$/, "", cut); sub(/ +$/, "", cut)
+        if (length(cut) < max / 2) cut = substr(last, 1, max - 1)  # no boundary worth backing off to
+        last = cut "…"
+      }
+      print last
+    }' "$1" 2>/dev/null
 }
 
 # `ps -a` is a repo-scoped aggregate view. The verdicts and reasons come directly

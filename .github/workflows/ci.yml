@@ -77,6 +77,9 @@ jobs:
       - name: Usage-limit pause is legible in `chief ps` (paused + retry ETA, not failed/hung)
         run: bash test/limitmonitor.sh
 
+      - name: A running row's activity line is informative or absent (never a bare markdown fence)
+        run: bash test/activity-line.sh
+
       - name: Operator pause drains at a safe checkpoint, parks, and resumes from committed state
         run: bash test/pause.sh
 
