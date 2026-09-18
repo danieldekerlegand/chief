@@ -44,6 +44,19 @@ note() { echo "bystander: $*"; }
 alive() { ps -o pid=,stat= -p "${1:-0}" 2>/dev/null | awk '$2 !~ /^Z/ {f=1} END{exit !f}'; }
 gone()  { local p="${1:-0}" i; for i in 1 2 3 4 5 6 7 8 9 10; do alive "$p" || return 0; sleep 0.3; done; return 1; }
 
+# WHAT A DEAD DECOY LOOKS LIKE, in facts rather than in the accusation alone. The
+# accusation is severe — it blocks a merge and sends the reader into the engine — so it
+# has to carry enough for a reader to check it against the host: how far into the block
+# we are (the decoys are bounded by this shell, not by a clock, so elapsed time is
+# context and never a cause), and what the process table says now. A fully reaped pid
+# prints nothing at all, which reads as a broken `ps` unless it is said out loud.
+T0="$(date +%s)"
+decoy_forensics() {
+  local ps_line; ps_line="$(ps -o pid=,stat=,command= -p "${1:-0}" 2>/dev/null | sed 's/^ *//')"
+  [ -n "$ps_line" ] || ps_line="no such process — it was reaped, not merely signalled"
+  printf '%ss into the block; ps now: %s' "$(( $(date +%s) - T0 ))" "$ps_line"
+}
+
 # The fixture namespace: every run id this file mints starts with it, and the one real
 # sweep it runs is scoped to it. No repo on this host is named `bystander-*`.
 NS="bystander-"
@@ -59,19 +72,42 @@ mkdir -p "$DECOY/runs" "$DECOY/repo" "$DECOY/worktrees"
 CKD="$(printf '%s' "$DECOY/repo" | cksum | awk '{print $1}')"
 mkdir -p "$DECOY/worktrees/${NS}sibling-$CKD/tl-x"
 
+# THE DECOY'S LIFETIME IS ITS PARENT'S, NEVER A CLOCK — and that is not tidiness, it
+# is the difference between this file reporting a defect and inventing one. Both decoys
+# used to `sleep 3600`, which is a wall-clock ceiling on the WHOLE BLOCK, chosen rather
+# than measured; and when the block outruns it the decoy simply EXITS, which `alive`
+# cannot tell apart from the kill it exists to catch. Measured on 2026-09-18:
+# `.chief/verify.sh`'s 78-test block on a host at load 27/14 cores reached test 34 six
+# hours in, the decoys had expired somewhere inside it, and the run failed with
+# "test/suspectlimit.sh KILLED the bystander driver" — naming a file that had just
+# printed SUSPECTLIMIT PASS and whose own fixtures are scoped nowhere near the decoy.
+# A test that accuses an innocent file is worse than no test: it blocks a merge and
+# sends the reader into an engine that is behaving correctly.
+#
+# So a decoy waits on the PID OF THE SHELL THAT STARTED IT — `chief monitor watch`'s own
+# rule, one register down (engine/monitor.sh: a looping process must not outlive the
+# thing that asked for it). It cannot expire early however slow the host is, and it
+# cannot leak, because the moment this shell is gone it has nothing left to wait for.
+cat > "$DECOY/keepalive.sh" <<'EOS'
+#!/usr/bin/env bash
+# Stay alive exactly as long as pid $1 does. No clock, so nothing to outrun.
+while kill -0 "$1" 2>/dev/null; do sleep 2; done
+EOS
+
 cat > "$DECOY/driver.sh" <<'EOS'
 #!/usr/bin/env bash
 # A stand-in for engine/driver.sh doing the one thing that matters here: stamping its
 # OWN pid into the run marker it wears on argv (the real driver re-execs to place it),
 # and registering itself in ITS OWN $CHIEF_RUNS — which is not the suite's, which is
-# the entire point. argv is then as boring as the real thing: an exec'd `sleep`.
+# the entire point. argv is then as boring as the real thing, and it still wears the
+# marker: `exec -a` renames the process whatever it goes on to run.
 id="$1-$$"
 printf 'runid=%s\npid=%s\nrepo=%s\nnames=tl-x\nstatus=running\n' "$id" "$$" "$2" > "$3/$$.run"
 printf '%s\n' "$id" > "$4"
-exec -a "bash $0 --chief-run=$id" sleep 3600
+exec -a "bash $0 --chief-run=$id" bash "$5" "$6"
 EOS
 
-( cd "$DECOY/repo" && exec bash "$DECOY/driver.sh" "${NS}sibling-$CKD-1700" "$DECOY/repo" "$DECOY/runs" "$WORK/decoy.id" ) &
+( cd "$DECOY/repo" && exec bash "$DECOY/driver.sh" "${NS}sibling-$CKD-1700" "$DECOY/repo" "$DECOY/runs" "$WORK/decoy.id" "$DECOY/keepalive.sh" "$$" ) &
 decoy_drv=$!; DECOYS="$DECOYS $decoy_drv"; disown "$decoy_drv" 2>/dev/null || true
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/decoy.id" ] && break; sleep 0.2; done
 decoy_id="$(cat "$WORK/decoy.id" 2>/dev/null || echo)"
@@ -81,7 +117,7 @@ decoy_id="$(cat "$WORK/decoy.id" 2>/dev/null || echo)"
 # Its agent tree: cwd inside the decoy's worktree root, a boring argv, and the run id
 # inherited through the environment — keys 1 and 3, both pointed somewhere the suite
 # cannot resolve either.
-( cd "$DECOY/worktrees/${NS}sibling-$CKD/tl-x" && export CHIEF_RUN_ID="$decoy_id" && exec -a sleep sleep 3600 ) &
+( cd "$DECOY/worktrees/${NS}sibling-$CKD/tl-x" && export CHIEF_RUN_ID="$decoy_id" && exec -a sleep bash "$DECOY/keepalive.sh" "$$" ) &
 decoy_agent=$!; DECOYS="$DECOYS $decoy_agent"; disown "$decoy_agent" 2>/dev/null || true
 sleep 0.5
 alive "$decoy_drv"   || fail "the decoy driver did not start"
@@ -110,9 +146,11 @@ for t in $TESTS; do
   [ "${PIPESTATUS[0]}" = 0 ] || fail "test/$t.sh failed (its output is above)"
   alive "$decoy_drv" || fail "test/$t.sh KILLED the bystander driver (pid $decoy_drv, run $decoy_id).
 This is the 2026-08-17 incident: a run in another repo, registered in a registry the
-suite cannot read, destroyed by a sweep that read that absence as death."
+suite cannot read, destroyed by a sweep that read that absence as death.
+It did not time out: the decoy lives exactly as long as this shell does ($(decoy_forensics "$decoy_drv"))."
   alive "$decoy_agent" || fail "test/$t.sh KILLED the bystander's agent process (pid $decoy_agent, run $decoy_id).
-Its cwd and its inherited \$CHIEF_RUN_ID both belong to an install the suite cannot see."
+Its cwd and its inherited \$CHIEF_RUN_ID both belong to an install the suite cannot see.
+It did not time out: the decoy lives exactly as long as this shell does ($(decoy_forensics "$decoy_agent"))."
 done
 note "the whole block ran; the bystander is still alive"
 

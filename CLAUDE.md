@@ -648,6 +648,23 @@ VERSION              # engine version — bump on any engine/bin/install change
   fallback instead. Lead such a stamp by the measured cost, and clamp what it can
   cost you with the cap.
 
+- **A LONG-LIVED FIXTURE'S OWN `sleep N` IS A WALL-CLOCK CEILING TOO — on the whole
+  block, hidden inside the fixture.** `test/bystander.sh` stands a decoy run up and
+  asserts after EVERY test in the behavioural block that it is still breathing. Both
+  decoys were a `sleep 3600`, so that assertion silently also said "this block finishes
+  within an hour" — and when it does not, the decoy simply EXITS, which `alive` cannot
+  tell apart from the kill the whole file exists to catch. Measured 2026-09-18: the
+  78-test block on a host at load 27 / 14 cores reached test 34 six hours in, and the
+  run failed `test/suspectlimit.sh KILLED the bystander driver` — naming a file that
+  had just printed SUSPECTLIMIT PASS and whose fixtures are scoped nowhere near the
+  decoy. A false accusation is worse than no test: it blocks a merge and sends the
+  reader into an engine that is behaving correctly. A fixture that must outlive an
+  UNBOUNDED block is therefore bounded by the PROCESS that started it, never by a
+  clock — `while kill -0 "$parent"; do sleep 2; done`, `monitor.sh watch`'s own rule
+  one register down — which also cuts the leak a SIGKILLed suite can strand from an
+  hour to two seconds. `exec -a` keeps the marker on argv whatever the process goes
+  on to run, so process discovery is unaffected by what it waits with.
+
 - **"The gate ran N times" is a RACY assertion, and the verify CACHE is why.**
   `verify_cache_try` (`engine/lib.sh`) serves a merge-phase verify from the verdict the
   AGENT boundary already recorded whenever tree + base + hook are unchanged — which for
