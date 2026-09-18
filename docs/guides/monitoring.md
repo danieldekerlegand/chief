@@ -51,6 +51,15 @@ Beneath a live tasklist come up to two dim `↳` lines: **what it is doing right
 now** (the liveliness record, below) and the latest note the agent appended to its
 `progress.txt`.
 
+That second line is chosen for its **shape**, because a progress note is markdown
+and the row gets exactly one line of it. Fences, heading markers, horizontal rules,
+blank lines and lines of pure punctuation are skipped — the row reaches back for the
+most recent line that actually says something, and prints **nothing at all** if
+there is none. What it does print is plain one-line text (inline-code and emphasis
+markers stripped, whitespace collapsed) truncated with a visible `…`. A row that
+renders a bare ``` ``` ``` is worse than a row with no second line: it spends the
+one line you scan and tells you nothing.
+
 ## Is it working, or is it hung?
 
 The coarse word `running` can't answer that — it says a worker exists, not that it
@@ -70,6 +79,7 @@ committed) that `chief ps`/`chief monitor` render as the first `↳` line:
 | `passing` / `total` | the progress column, when no `prd.json` is readable | agent + driver |
 | `retry_at` | the retry ETA on a paused row | the driver's usage-limit self-heal |
 | `heartbeat` | `12s ago` — time since the run last did *anything* | **every** write; an in-turn ticker keeps it moving through a long `claude` call |
+| `tool` / `tool_since` / `tools` | `⚙ Bash 8s ago · 12 tools` — **the turn's interior**: the tool the agent most recently invoked, when chief first saw that call, and how many calls this turn has made | the in-turn ticker, from a **streaming** provider's own output (`--output-format stream-json`). Empty for a provider with no streaming mode, for `CHIEF_STREAM_ACTIVITY=0`, and for a record written by an older engine — the segment is simply absent and the row reads as it always did. A tool **name** only, never the model's prose |
 
 That gives three buckets you can tell apart at a glance, straight down the glyph
 column:
@@ -104,6 +114,34 @@ render clock or from the heartbeat would show every row as instantaneous. That i
 why it is not the same number as the trailing `12s ago`: the heartbeat says when the
 run last did *anything*, the phase age says how long it has been doing *this*. A row
 can legitimately read `provider-waiting for 40m · 12s ago` — a long turn, ticking.
+
+### What the agent is doing *inside* the turn
+
+Both of those durations are about **chief**. `provider-waiting for 40m` says the turn
+is long; `12s ago` says chief's own in-turn ticker is alive. Neither says the *agent*
+did anything — which is why, on 2026-09-15, a tasklist that was working (its provider
+had run a `Bash` call 8 seconds earlier) was indistinguishable from a hang for
+seventeen minutes.
+
+When the provider streams, the row says it:
+
+```
+   ● 126-a-row-says-wh…     running   2/3     chief/126-a-row-says-what-the-agent-is-doing
+       ↳ provider-waiting for 16m · US-3 · iter 1 · ⚙ Bash 8s ago · 12 tools · 2s ago
+```
+
+**So: a long `provider-waiting` with a *fresh* `⚙` age is work in progress — leave it
+alone. A long `provider-waiting` with a `⚙` age as old as the phase itself (`⚙ Bash
+39m ago`), or with no `⚙` segment at all on a run you know is streaming, is the one to
+go and look at** — `chief logs -f <name>`, then the worker's process tree.
+
+The `⚙` segment is **display only**. The `⚠` stalled flag rests on the **heartbeat**
+and on nothing else, in both directions: an open stream never buys a quiet run extra
+patience (a 40m-silent row flags exactly as it always did, with its last-known tool
+rendered *beside* the flag as corroboration), and a stream that stops advancing never
+raises the flag on its own — a tool call that takes forty minutes and a provider that
+died after starting one are the same record from outside, so chief shows you the age
+and does not reach a verdict it cannot stand behind.
 
 ### "No progress last iteration" is not "stalled"
 

@@ -112,8 +112,22 @@
 # is keyed off this, and every write on that path sets it so a stale permanent verdict
 # can never outlive the refusal that produced it. Empty for a tasklist the provider
 # never refused.
-LIVE_FIELDS='name state phase story iter passing negative total stall stall_limit allpass waits noturn noturn_limit refusal retry_at phase_since heartbeat'
-LIVE_NUMERIC=' iter passing negative total stall stall_limit allpass waits noturn noturn_limit retry_at phase_since heartbeat '
+# `tool` / `tool_since` / `tools` are THE TURN'S INTERIOR — the one thing this record
+# could never say. Everything else here is observable from OUTSIDE the provider (a
+# phase chief chose, a commit chief saw land); these three come from the provider's
+# own streamed output while the turn is still running, and they exist because
+# `provider-waiting for 16m` and a hang render identically (measured 2026-09-15: a
+# tasklist looked dead for seventeen minutes while its provider was running a Bash
+# tool call 8 seconds earlier). `tool` is the NAME of the most recent tool the agent
+# invoked — a name only, never the model's prose; `tool_since` is the epoch chief
+# first OBSERVED that call (chief's clock, not the provider's, so it is accurate to
+# one `$LIVE_BEAT_SECONDS` tick); `tools` is how many tool calls this turn has made.
+# Empty/0 for every turn chief cannot see inside — a provider with no streaming mode,
+# an operator who set CHIEF_STREAM_ACTIVITY=0, or an older engine's record — and
+# cleared at both ends of every turn, because a tool name from the PREVIOUS turn is
+# the same lie `stalled` was: a statement about the past wearing the present tense.
+LIVE_FIELDS='name state phase story iter passing negative total stall stall_limit allpass waits noturn noturn_limit refusal retry_at tool tool_since tools phase_since heartbeat'
+LIVE_NUMERIC=' iter passing negative total stall stall_limit allpass waits noturn noturn_limit retry_at tool_since tools phase_since heartbeat '
 
 # live_get FILE KEY -> the raw value ('' when the file or key is absent).
 # The writer's format is rigid (one `  "key": value,` per line), so a sed reader is
@@ -153,7 +167,8 @@ live_set() {
   # the caller's globals — driver.sh and agent.sh both source this file.
   local _lv_name _lv_state _lv_phase _lv_story _lv_iter _lv_passing _lv_negative \
         _lv_total _lv_stall _lv_stall_limit _lv_allpass _lv_waits _lv_noturn \
-        _lv_noturn_limit _lv_refusal _lv_retry_at _lv_phase_since _lv_heartbeat
+        _lv_noturn_limit _lv_refusal _lv_retry_at _lv_tool _lv_tool_since _lv_tools \
+        _lv_phase_since _lv_heartbeat
   dir="$(dirname "$f")"
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 0
   now="$(date +%s)"

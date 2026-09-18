@@ -71,13 +71,33 @@ CHIEF="$ROOT/bin/chief"
 # chief REFUSES an explicit --model for it rather than ignoring it (settled by
 # tasklist 85 — docs/guides/providers.md#model-overrides). Section 4 below asserts that
 # refusal for every `unwired` entry, so the stance stays a decision, not a drop.
+#
+# claude has TWO recorded forms, and the knob picks which one this run asserts.
+# Its transport is `stream-json --verbose` by default because chief READS the stream
+# to say what the agent is doing mid-turn
+# (docs/guides/providers.md#streaming-the-turns-interior); that is a transport change,
+# not a request change — the stream ends with the same result object — and
+# CHIEF_STREAM_ACTIVITY=0 restores the `json` form EXACTLY. Both are contract, so both
+# are recorded: pinning only the default would make `CHIEF_STREAM_ACTIVITY=0
+# bash test/all.sh` — the way an operator checks that the knob really does give back
+# today's engine — fail on the harness rather than on the engine, and a red suite that
+# is red at the fixture is how a real regression goes unread. The row is chosen off the
+# SAME expression engine/agent.sh resolves $STREAM_ON from, so the two cannot drift
+# apart silently.
+if [ "${CHIEF_STREAM_ACTIVITY:-1}" != 0 ] && command -v jq >/dev/null 2>&1; then
+  CLAUDE_FLAGS="--output-format stream-json --verbose"
+else
+  CLAUDE_FLAGS="--output-format json"
+fi
 ROSTER=(
-"claude|stdin|wired|--dangerously-skip-permissions --print --output-format json --model %MODEL%|--dangerously-skip-permissions --print --output-format json"
+"claude|stdin|wired|--dangerously-skip-permissions --print $CLAUDE_FLAGS --model %MODEL%|--dangerously-skip-permissions --print $CLAUDE_FLAGS"
 "devin|prompt-file|wired|--permission-mode bypass --respect-workspace-trust false --print --model %MODEL% --prompt-file %PROMPT_FILE%|--permission-mode bypass --respect-workspace-trust false --print --prompt-file %PROMPT_FILE%"
 "opencode|stdin|wired|run --model %MODEL%|run"
 "amp|stdin|unwired|--dangerously-allow-all|--dangerously-allow-all"
 "codex|stdin|wired|exec --dangerously-bypass-approvals-and-sandbox --color never --model %MODEL% -|exec --dangerously-bypass-approvals-and-sandbox --color never -"
 )
+
+note "claude transport under assertion: $CLAUDE_FLAGS (CHIEF_STREAM_ACTIVITY=${CHIEF_STREAM_ACTIVITY:-1})"
 
 roster_names() { for r in "${ROSTER[@]}"; do printf '%s\n' "${r%%|*}"; done | sort -u; }
 

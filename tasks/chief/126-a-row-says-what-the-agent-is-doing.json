@@ -3,7 +3,16 @@
   "category": "feature",
   "branchName": "chief/126-a-row-says-what-the-agent-is-doing",
   "dependsOn": [],
-  "touches": ["engine/agent.sh", "engine/monitor.sh", "engine/live.sh", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "touches": [
+    "engine/agent.sh",
+    "engine/monitor.sh",
+    "engine/live.sh",
+    "docs",
+    "test",
+    "VERSION",
+    "README.md",
+    "ROADMAP.md"
+  ],
   "iters": 10,
   "warmup": [
     "sed -n '1787,1800p' engine/agent.sh",
@@ -20,19 +29,20 @@
     {
       "id": "US-1",
       "title": "The activity line is one readable line, or it is absent",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "`activity_of` never renders a line that carries no information: a code fence, a bare heading marker, a horizontal rule, an empty or whitespace-only line, or a line of pure punctuation. It reaches back for the most recent line that does carry information, or renders nothing at all.",
         "What it does render is plain one-line text: markdown emphasis and inline-code markers stripped, whitespace collapsed, truncated to a width that does not wrap the row, with the truncation visible rather than silent.",
         "A fixture progress.txt in the style of a real one — fenced blocks, headings, blank lines, a trailing fence — is rendered in a test, asserting the chosen line. Two-sided: a file whose last informative line is ordinary prose renders that prose, and a file containing ONLY uninformative lines renders nothing rather than a fence.",
         "The assertion is on a whole rendered line, not a fragment another surface also emits.",
         "`bash test/all.sh` passes (or the documented subset, named in the notes with what was run)."
-      ]
+      ],
+      "notes": "activity_of rewritten (shape-based filter); test/activity-line.sh added and run directly: PASS (A reproduce: old rule picks ``` · B1-B5 shape · C rendered row). Registered in all THREE gate lists (.chief/verify.sh, test/all.sh, ci.yml); ci.yml re-parsed clean with yaml.safe_load. Subset run green: activity-line PASS, limitmonitor PASS, stall-flag PASS, liveliness PASS, ps-all PASS, monitor PASS, stall-flag PASS, doc-sync PASS (README+ROADMAP v0.9.38), check-doc-links 0 dead references, bash -n clean on engine/monitor.sh + test/activity-line.sh. Full test/all.sh NOT run for this story (it is the tasklist's 10-iteration budget); the named subset is what was run."
     },
     {
       "id": "US-2",
       "title": "A streaming provider publishes what it is doing, and nothing else changes",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "A provider capability decides whether the turn is invoked in a streaming mode. For `claude` that is `--output-format stream-json` with `--verbose`; the other four arms of `_provider_exec` are untouched. An operator knob disables it, and disabled means the current invocation exactly.",
         "While a streaming turn runs, the existing background observer publishes the turn's interior into the live record: what the agent is doing right now (the tool it most recently invoked), when that happened, and how many tool calls this turn has made. Field names are chosen to fit the record's existing convention and documented in engine/live.sh's vocabulary block.",
@@ -40,12 +50,13 @@
         "A provider that does not stream, and a turn with streaming disabled, behave exactly as today — same capture, same events, same phases. Shown by running the suite with the capability off.",
         "A malformed or truncated stream line never breaks the turn: it is ignored for display purposes and the turn's success still rests on the provider's exit status and the captured output.",
         "`bash test/all.sh` passes, and `VERSION` + README + ROADMAP move together."
-      ]
+      ],
+      "notes": "streaming transport landed in 46e12de; this iteration verified it end to end and repaired two fixtures that pinned ONE mode. MEASURED: test/stream-activity.sh PASS, run directly (A1 argv `--print --output-format stream-json --verbose`, one invocation; A2 knob=0 gives byte-identical today's argv; A3 a CLI refusing the flag recovers on the old transport in one extra call; B usage parity MEASURED identical both modes {input_tokens:1200,output_tokens:340,cost_usd:0.0421,duration_ms:1234,turns:3}; C a limit inside a stream still exits 2; D mid-turn record tool=Bash tools=2 tool_since set, cleared at turn end; E malformed+truncated lines counted nothing and the truncated one counted ONCE on completion; F knob off = today; G neutered engine publishes nothing, so D discriminates). CAPABILITY-OFF SUITE (criterion 4) run literally, CHIEF_STREAM_ACTIVITY=0: smoke PASS, provider-conformance PASS, ratelimit PASS, noworkguard PASS, events PASS, liveliness PASS, stall-flag PASS, stream-activity PASS. It was RED before this iteration: provider-conformance pinned the streaming argv unconditionally and stream-activity INHERITED the ambient knob, so both failed at the fixture with the engine correct — the roster now selects its claude row off the same expression agent.sh resolves $STREAM_ON from and states which transport it asserted, and stream-activity states the knob instead of inheriting it. Also corrected three comment blocks (test header, fixture preamble) that still described a `claude --help` capability probe the shipped engine deliberately does not make. VERSION 0.9.39 = README = ROADMAP (doc-sync PASS, 52 merged tasklists named; version-bump PASS). bash -n clean on both edited tests. Full test/all.sh NOT run this iteration; `chief verify` verdict: FULL GATE GREEN — verify: OK (allowing merge), exit 0 recorded for tree 300457ad1c2cb46d4aec1b4d916cd62183f6670b (73-test bystander block PASS, doc-sync PASS at v0.9.40, tasklist-categories OK). Note the gate resolves .chief/verify.sh at the PROJECT checkout, so this branch's own new tests did not execute in it — they were run directly, as recorded above."
     },
     {
       "id": "US-3",
       "title": "The row shows it, in ps and monitor alike",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "A running row whose record carries turn activity renders it beside the phase — what the agent last did, how long ago, and the count so far — so a long `provider-waiting` reads as work in progress rather than silence. A record without those fields renders exactly as today, which is what an older engine's record and a non-streaming provider both produce.",
         "The staleness rule is re-read against the new information: activity that has genuinely stopped advancing must still be flagged, and the flag must not be defeated merely because a stream is open. State in the code which fact the flag now rests on.",
@@ -53,7 +64,8 @@
         "Sabotage control: removing the activity fields from the record reddens exactly the new assertions and leaves every existing row assertion green — proving the addition did not rewrite the old rows.",
         "`docs/guides/monitoring.md` gains the fields, the rendered example verbatim, and one sentence an operator can act on: what a long `provider-waiting` with fresh activity means versus one without. Its 'Is it working, or is it hung?' section is the place, and the answer it gives today is now measurably better.",
         "`bash test/all.sh` passes, `VERSION` + README + ROADMAP move together, and `scripts/check-roadmap-truth.sh` is green."
-      ]
+      ],
+      "notes": "live_note gained the turn-interior segment (`⚙ <tool> <age> ago · N tools`), rendered verbatim from the record and absent unless it names a tool — so an older engine's record, a non-streaming provider and CHIEF_STREAM_ACTIVITY=0 all render the line they always did. STALENESS RE-READ and stated at is_stale: the flag rests on the HEARTBEAT (chief's own in-turn ticker) and never on tool_since, in EITHER direction — suppressing would let an open stream defeat the flag, raising would manufacture an alarm chief cannot stand behind (a 40m Bash call and a provider that died after starting one are the same record from outside). MEASURED, test/turn-activity-row.sh run directly: PASS. Whole-line equality on both surfaces — chief ps AND chief monitor (watch) — over a STAGED registry: healthy row `provider-waiting for 16m · US-3 · iter 1 · ⚙ Bash Ns ago · 12 tools · Ns ago`; a record with no fields `provider-waiting for 16m · US-3 · iter 1 · Ns ago`; a 40m-silent row with the stream open STILL flagged `⚙ Bash 39m ago · 12 tools · ⚠ stalled in provider-waiting — no activity for 40m, past its 15m limit` and still wearing ⚠. SABOTAGE CONTROL green: fields removed from the same records reddens exactly the new assertions (activity_check fails, no ⚙ anywhere), base_check stays green on all three rows, and the with-fields line minus the appended segment equals the without-fields line byte for byte. MUTATION-CHECKED: with `tname=\"\"` forced in a copy of engine/monitor.sh the test fails at the first new assertion (`[provider-waiting for 16m · US-3 · iter 1 · Ns ago]`) and passes again restored. Registered in all THREE gate lists (.chief/verify.sh, test/all.sh, ci.yml; ci.yml re-parsed clean with yaml.safe_load) — and run DIRECTLY, since a branch's own gate resolves .chief/verify.sh at the project checkout and cannot execute a test this branch adds. docs/guides/monitoring.md: fields in the record table, the rendered row verbatim, and the operator sentence (fresh ⚙ age = work in progress, leave it alone; a ⚙ age as old as the phase = go look) plus the display-only rule. Subset green: turn-activity-row PASS, activity-line PASS, stall-flag PASS, liveliness PASS, limitmonitor PASS, unavailnote PASS, suspectlimit PASS, concurrency-monitor PASS, ps-all PASS, monitor PASS, stream-activity PASS; doc-sync PASS (v0.9.40 in VERSION = README = ROADMAP, 52 merged tasklists named); check-roadmap-truth green (coverage/stale/park OK); check-doc-links 0 dead references; quality ratchet OK; bash -n clean. Full test/all.sh NOT run this iteration; `chief verify` verdict: FULL GATE GREEN — verify: OK (allowing merge), exit 0 recorded for tree 300457ad1c2cb46d4aec1b4d916cd62183f6670b (73-test bystander block PASS, doc-sync PASS at v0.9.40, tasklist-categories OK). Note the gate resolves .chief/verify.sh at the PROJECT checkout, so this branch's own new tests did not execute in it — they were run directly, as recorded above."
     }
   ]
 }

@@ -322,6 +322,28 @@ stale_threshold_for_phase() { # $1 phase ('' = unknown) -> seconds
 # Is this heartbeat age past the staleness threshold FOR THIS PHASE? Unknown age (no
 # record, no heartbeat) is NEVER stale — absent evidence must not manufacture an alarm.
 # An unknown PHASE takes the default threshold, which is the pre-existing behaviour.
+#
+# WHICH FACT THE FLAG RESTS ON, now that the record can also say what the agent is
+# doing. It rests on the HEARTBEAT and on nothing else: the age of the last write
+# chief's OWN in-turn ticker made (`_beat_start`, engine/agent.sh). `tool`/
+# `tool_since`/`tools` are rendered beside the phase and are NEVER read here, in
+# EITHER direction, and both directions are mistakes worth naming:
+#
+#   Feeding them in to SUPPRESS — "there is a stream, so the row is alive" — is how
+#   the flag gets defeated by exactly the runs it exists for. The ticker's cadence is
+#   unchanged by streaming (the activity rides on the heartbeat write that was already
+#   happening — one writer, no second loop), so a record that stops ticking stops
+#   ticking whether or not a stream was open, and it flags at the same threshold it
+#   always did, with its last-known tool name and that name's age rendered beside the
+#   flag — corroboration, not contradiction.
+#
+#   Feeding them in to RAISE one — "the stream stopped advancing, so the turn is
+#   wedged" — would manufacture an alarm chief cannot stand behind. A tool call that
+#   takes forty minutes and a provider that died after starting one are the same
+#   record from out here (a downstream repository ran a block-buffered gate 36m while working,
+#   and an agent turn can run that same gate through Bash). So the AGE is displayed
+#   and left to the operator: `provider-waiting for 43m · ⚙ Bash 42m ago` is a fact
+#   worth reading, and it is not a verdict chief is entitled to reach.
 is_stale() { # $1 age in seconds [$2 phase]
   case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
   [ "$1" -ge "$(stale_threshold_for_phase "${2:-}")" ]
@@ -371,7 +393,7 @@ flag_fallback() { # $1 dead-flag $2 age $3 elapsed-in-phase ('' unknown) -> the 
 # last activity. Empty when there is no record or no phase, which is what makes the
 # fallback automatic. With $3=stale the trailing age becomes the at-risk flag instead.
 live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to add)
-  local lf note phase story iter stall slimit age pa at left nt ntl
+  local lf note phase story iter stall slimit age pa at left nt ntl tname tsince tcount
   lf="$(live_file "$1" "$2")"
   [ -f "$lf" ] || return 0
   phase="$(live_get "$lf" phase)"
@@ -384,6 +406,37 @@ live_note() { # $1 name $2 stateroot [$3 stale] -> one line ('' when nothing to 
   [ -n "$pa" ] && note="$note for $pa"
   [ -n "$story" ] && note="$note · $story"
   case "$iter"  in ''|0|*[!0-9]*) ;; *) note="$note · iter $iter"   ;; esac
+  # THE TURN'S INTERIOR, beside the phase — `tool`/`tool_since`/`tools`
+  # (engine/live.sh), the three fields a streaming provider publishes while the turn
+  # is still running. Without them `provider-waiting for 16m · 2s ago` and a hang
+  # render identically: the trailing age is CHIEF'S ticker, which says only that
+  # chief is alive, and the phase age says only that the turn is long. Neither says
+  # the AGENT did anything. `⚙ Bash 8s ago · 12 tools` does, and that is the whole
+  # row-level point of the feature (measured 2026-09-15: a tasklist looked dead for
+  # seventeen minutes while its provider was running a Bash call 8 seconds earlier).
+  #
+  # The name only — never the model's prose. A row is scanned in a terminal beside
+  # other people; it is not a transcript.
+  #
+  # Every part is OPTIONAL and the segment is absent unless the record names a tool,
+  # so a record from an older engine, from a provider with no streaming mode, and
+  # from an operator who set CHIEF_STREAM_ACTIVITY=0 all render exactly as they did
+  # before — which is the same `if the record carries it` discipline the backoff
+  # numbers below keep.
+  tname="$(live_get "$lf" tool)"
+  if [ -n "$tname" ]; then
+    tsince="$(live_get "$lf" tool_since)"; tcount="$(live_get "$lf" tools)"
+    note="$note · ⚙ $tname"
+    # chief's own clock, stamped when chief FIRST SAW the call (agent.sh's
+    # `_stream_activity`), so this is an age the monitor can subtract without
+    # borrowing the provider's notion of now.
+    case "$tsince" in ''|0|*[!0-9]*) ;; *) note="$note $(elapsed "$tsince") ago" ;; esac
+    case "$tcount" in
+      ''|0|*[!0-9]*) ;;
+      1) note="$note · 1 tool" ;;
+      *) note="$note · $tcount tools" ;;
+    esac
+  fi
   # NO PROGRESS LAST ITERATION vs NOT DOING ANYTHING — two findings an operator acts
   # on differently, and until now both wore the word 'stall'. This is the first: the
   # agent loop's budget counter, a fact about the boundary that has already passed. It
@@ -444,9 +497,48 @@ branch_of() { # $1 name $2 tasks
   if [ -n "$b" ] && [ "$b" != "null" ]; then printf '%s' "$b"; else printf 'chief/%s' "$1"; fi
 }
 
-activity_of() { # $1 = progress.txt path -> latest meaningful line (truncated)
+# A progress note is MARKDOWN and the row gets exactly ONE line of it, so the line
+# has to be chosen by SHAPE and not merely by "the last non-empty one". The old rule
+# (`NF && !/^#/ && !/^---/`) skipped blanks, headings and the seed rule and nothing
+# else, which is why a live run rendered ``` as its activity line for seventeen
+# minutes: the agent's note ended in a fenced block, the fence is non-empty, and a
+# row that says ``` is worse than a row that says nothing — it spends the one line
+# an operator scans and carries no information.
+#
+# So structure is skipped (fences either way, headings, horizontal rules) and what
+# survives must still hold an alphanumeric character AFTER the markdown markers come
+# off — which is what disqualifies a whitespace-only line and a line of pure
+# punctuation in one rule rather than three. `_` is deliberately NOT stripped as an
+# emphasis marker: this codebase's prose is full of snake_case, and `live_set` must
+# not reach the row as `liveset`. A rule is only a rule when the line is NOTHING but
+# its marker, so `--- the base moved` is prose and renders.
+#
+# Truncation is VISIBLE (a trailing …), and backs off to a word boundary when one is
+# near enough — which also keeps a byte-wise cut away from the middle of a multi-byte
+# character, since LC_ALL=C is mandatory here (BSD awk aborts on the em-dashes the
+# agent writes, see CLAUDE.md) and makes length()/substr() count bytes.
+activity_of() { # $1 = progress.txt path -> latest INFORMATIVE line, one line, truncated
   [ -f "$1" ] || return 0
-  awk 'NF && $0 !~ /^#/ && $0 !~ /^---/ {last=$0} END{if(last)print last}' "$1" 2>/dev/null | cut -c1-76
+  LC_ALL=C awk -v max=76 '
+    /^[[:space:]]*(```|~~~)/ { next }                              # a fence, open or close
+    /^[[:space:]]*#/         { next }                              # a heading marker
+    /^[[:space:]]*(-{3,}|\*{3,}|_{3,}|={3,})[[:space:]]*$/ { next } # a horizontal rule
+    {
+      line = $0
+      sub(/^[[:space:]]*([-+>][[:space:]]+|[0-9]+[.)][[:space:]]+)/, "", line)  # list / quote marker
+      gsub(/[`*]/, "", line)                                       # inline-code + emphasis markers
+      gsub(/[[:space:]]+/, " ", line); sub(/^ /, "", line); sub(/ $/, "", line)
+      if (line ~ /[[:alnum:]]/) last = line                        # ... and it has to SAY something
+    }
+    END {
+      if (last == "") exit 0
+      if (length(last) > max) {
+        cut = substr(last, 1, max - 1); sub(/[^ ]*$/, "", cut); sub(/ +$/, "", cut)
+        if (length(cut) < max / 2) cut = substr(last, 1, max - 1)  # no boundary worth backing off to
+        last = cut "…"
+      }
+      print last
+    }' "$1" 2>/dev/null
 }
 
 # `ps -a` is a repo-scoped aggregate view. The verdicts and reasons come directly
