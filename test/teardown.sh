@@ -143,6 +143,51 @@ waitdead() {   # PID SECONDS
   return 1
 }
 
+# SETTLE — never sample once. Both "nothing from this is left running" checks below
+# fire moments after a tree was stranded and swept, and a reaper's completeness is
+# bounded by its own snapshots BY CONSTRUCTION (engine/ledger.sh: "anything spawned,
+# orphaned and left behind between two snapshots was never recorded"). THIS FIXTURE
+# FORKS ONCE A SECOND, FOREVER: the fake tool above ends `while :; do sleep 1; done`,
+# in the worktree, with TERM trapped away. So the sweep can kill the whole tree and
+# still leave a `sleep 1` that was forked microseconds earlier, re-parented to init,
+# with a cwd under the worktree root — which is key 1, so the very next scan reports
+# it. It exits on its own about a second later; the one-shot `sleep 1` + single scan
+# that used to end each part simply read the process table inside that window and
+# called it work THIS TEST LEFT BEHIND. Observed 2026-09-18 inside `.chief/verify.sh`'s
+# block at load 39 / 14 physical cores: part 4 ended `left chief work running: 9785`,
+# a pid some 8,000 above the driver it supposedly belonged to — forked long after that
+# driver was killed — while the same file passed standalone, and in-block, on the same
+# host minutes later.
+#
+# What these two checks claim is an END STATE — nothing of this test is running when it
+# returns — so they are asserted as one: poll it out, and sweep ONCE more (what an
+# operator does, and what the run's next scheduler poll would have done) before giving
+# up on the longer-lived shapes the same race can strand, like the fixture's 900s
+# grandchild. The reaper's own completeness is asserted by the explicit gates above
+# each of these two, never here. Something the sweep genuinely cannot stop still fails,
+# now carrying its argv instead of a bare pid.
+settle_orphans() {   # SECONDS WT MARKER — 0 when the scope is empty
+  local n="$1" wt="$2" marker="$3" i=0 swept=0
+  while :; do
+    chief_protected_reset          # re-derive; the protected set only ever GROWS
+    chief_find_orphans "$wt" "$marker"
+    [ -z "$CHIEF_ORPHANS" ] && return 0
+    [ "$i" -lt "$n" ] || return 1
+    if [ "$i" -ge 3 ] && [ "$swept" = 0 ]; then
+      swept=1
+      chief_reap_orphans "$wt" "$marker" "the settle pass" 3 >/dev/null 2>&1 || true
+    fi
+    sleep 1; i=$(( i + 1 ))
+  done
+}
+orphan_forensics() {   # what is still standing, in enough detail to place it
+  local p
+  for p in $CHIEF_ORPHANS; do
+    printf '     pid %s (ppid %s): %s\n' "$p" \
+      "$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')" "$(cmd_of "$p")"
+  done
+}
+
 # ── install chief from THIS checkout, into a private prefix ───────────────────
 PREFIX="$WORK/ch"; BIN="$WORK/bin"; SIG="$WORK/sig"
 export CHIEF_PREFIX="$PREFIX" CHIEF_RUNS="$PREFIX/runs" CHIEF_REPOS="$PREFIX/repos"
@@ -484,8 +529,8 @@ grep -q "reaping the worker tree" "$WORK/c.log" || fail "SIGTERM did not reap th
 ps_out="$("$CHIEF" ps 2>&1 || true)"
 case "$ps_out" in *"no active runs"*) ;; *) fail "after every teardown, chief ps still reports a run:
 $ps_out" ;; esac
-chief_find_orphans "$DRV_WT" "$DRV_MARKER"
-[ -z "$CHIEF_ORPHANS" ] || fail "this test left chief work running: $CHIEF_ORPHANS"
+settle_orphans 20 "$DRV_WT" "$DRV_MARKER" || fail "this test left chief work running: $CHIEF_ORPHANS
+$(orphan_forensics)"
 echo "   ok  unregistered driver named with its repo + in-flight tasklist; a second driver refused; SIGTERM reaped the tree"
 
 # ══ PART 4 — the descendant that escaped BOTH markers ════════════════════════
@@ -617,9 +662,8 @@ alive "$esc_shell" || fail "an operator's shell (pid $esc_shell) was reaped by a
 exec 9>&-
 kill -9 "$twin" "$esc_shell" 2>/dev/null || true
 sleep 1
-chief_protected_reset
-chief_find_orphans "$DRV_WT" "$DRV_MARKER"
-[ -z "$CHIEF_ORPHANS" ] || fail "this part left chief work running: $CHIEF_ORPHANS"
+settle_orphans 20 "$DRV_WT" "$DRV_MARKER" || fail "this part left chief work running: $CHIEF_ORPHANS
+$(orphan_forensics)"
 echo "   ok  escaped descendant found by \$CHIEF_RUN_ID alone and stopped; its unmarked twin and an operator's shell untouched"
 
 echo "TEARDOWN PASS — Ctrl-C reaps the tree before releasing the records (never the reverse); a SIGKILLed run's boring-argv tree is still found and stopped; a live driver with no run file is reported, not hidden; and the descendant that walked out of the worktree is reaped by the marker it inherited"
