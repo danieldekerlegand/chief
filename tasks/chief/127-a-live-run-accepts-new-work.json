@@ -55,14 +55,15 @@
     {
       "id": "US-3",
       "title": "Every refusal is proven, including the ones that protect the run",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "Tests cover each refusal with its own case: parked, unknown name, already in the run, already merged, lint failure, a dependency that can never be satisfied in the widened run, and a request arriving after the run began computing its outcome.",
         "A sabotage control proves the admission check is load-bearing: disabling it lets a parked or already-merged tasklist join, and exactly the refusal cases redden while the accept cases stay green.",
         "The dependency rule is tested in BOTH directions — a newcomer whose dependency is another tasklist in the same run is admitted and waits for it; one whose dependency can never complete is admitted-and-blocked (or refused) with the reason stated, and the test asserts which of the two chief does rather than accepting either.",
         "`docs/guides/monitoring.md` and whichever explanation page owns the driver's lifecycle state that a run's set can now widen, and what still cannot change mid-run (the base branch, the provider, `-p N`, the machine budget).",
         "`bash test/all.sh` passes, `VERSION` + README + ROADMAP move together, and `scripts/check-roadmap-truth.sh` is green."
-      ]
+      ],
+      "notes": "PLACEHOLDER"
     }
   ]
 }

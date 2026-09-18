@@ -56,6 +56,12 @@ in the run is refused with the fix rather than the classification: offer both.
 Every refusal names its reason, at the moment of the request, before anything is
 scheduled. The command exits non-zero if any name was refused.
 
+`test/admission-refusals.sh` exercises each of those refusals as its own case — plus
+the one the table cannot show, a request arriving once the run has stopped scheduling
+— and proves the rules are load-bearing rather than decorative: against a copy of the
+engine with `admit_check` neutered, every one of them is accepted instead, and the
+parked tasklist a real run refuses is admitted, runs and merges.
+
 ## What an admitted tasklist gets
 
 The same thing a name typed on the command line gets, and that is three things rather

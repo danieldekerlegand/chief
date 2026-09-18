@@ -538,6 +538,21 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   escapee was not named" can never read as "the sweep never ran".
                      #   PART B plants the entry the start-time check exists for — alive pid,
                      #   wrong start time — and pins that it is REPORTED and LEFT ALONE
+                     #   admission-refusals.sh — mid-run admission's NOs, where
+                     #   mid-run-admission.sh has its YES: each refusal as its own
+                     #   case (parked · unknown · already in the run · already
+                     #   merged · lint · a dependency neither merged nor in the
+                     #   widened set · a request arriving once the run stopped
+                     #   scheduling), asserted by its REASON and by the QUEUE —
+                     #   a name told no at the keyboard that is recorded anyway
+                     #   is answered again at the run's next boundary. The window
+                     #   case shuts the window while the pid STAYS ALIVE, which
+                     #   is the discrimination the timing rule actually makes and
+                     #   one a test that killed the driver cannot make. SABOTAGE
+                     #   CONTROL in both registers: with admit_check neutered in
+                     #   a copy of the engine every refusal is accepted and
+                     #   queued, and through the real driver the parked tasklist
+                     #   joins and MERGES
                      #   zone-friction.sh — the granularity distinction as an OUTCOME, through
                      #   the real driver, where zone-surface.sh asserts the matcher's own
                      #   output: "the rule did not match" and "the branch merged with nobody
