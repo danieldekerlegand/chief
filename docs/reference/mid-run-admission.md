@@ -56,12 +56,39 @@ in the run is refused with the fix rather than the classification: offer both.
 Every refusal names its reason, at the moment of the request, before anything is
 scheduled. The command exits non-zero if any name was refused.
 
+## What an admitted tasklist gets
+
+The same thing a name typed on the command line gets, and that is three things rather
+than one:
+
+- **The launch treatment.** Its scheduler state is initialised and its stale per-run
+  files are cleared — the stall flag, the retry and attempt counters, the `.why` from a
+  previous run, the worker log. A newcomer merely appended to the run's set inherits
+  every one of them, and the run then reads a retry budget that is already spent and
+  prints, in its own summary, the reason for a block that never happened in it.
+- **The unmet-dependency pre-check.** The same one every launch name goes through. Its
+  verdict can be `blocked`, which is a real outcome and not a contradiction: admission
+  asks whether the dependency is merged or in the widened set, and this asks whether
+  what is in the set can still *complete* — a dependency that has already failed, been
+  blocked or been declined passes the first and fails this. Blocked (not left pending)
+  so the reason is stated and cascades, exactly as at launch.
+- **The accounting.** It appears everywhere the launch set appears: the end-of-run
+  summary, the outcome word and exit code, the headless JSON summary, and the run's
+  registry entry — which is where `chief ps` and `chief monitor` draw every row from,
+  so a tasklist admitted but absent there would run and merge invisibly.
+
+It is **appended** to the set, so the launch loop — which reads that set in order —
+considers it last: a newcomer takes its place under the existing dependency and
+conflict-domain rules and never jumps a wave.
+
 ## Timing, and what is never touched
 
 Admission happens at a wave boundary — never inside the merge phase, never while a
 worker is mid-iteration. In-flight work is untouched by construction: nothing in the
 admission path reads or writes a running tasklist's branch, worktree or iteration
-counter.
+counter. `test/mid-run-admission.sh` asserts that from the worker's own side: it
+offers a tasklist from *inside* a live agent turn and compares the running tasklist's
+branch, worktree and iteration counter either side of the admission.
 
 The window **opens** when the scheduler enters its loop and **shuts** when it leaves
 it. Those two points are not decoration:

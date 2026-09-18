@@ -2306,6 +2306,26 @@ mkdir -p "$CHIEF_RUNS" 2>/dev/null || true
   echo "pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
   echo "names=$NAMES"
 } > "$RUN_FILE" 2>/dev/null || true
+
+# run_file_set_names NAMES — keep the registry entry's `names=` equal to the run's
+# CURRENT set, which mid-run admission can widen (engine/admit.sh). Every row
+# `chief ps` and `chief monitor` draw comes from this one field — they iterate it and
+# read each name's state file — so a tasklist admitted into $NAMES but absent here is
+# running, merging and being counted in the run's own summary while the two commands
+# an operator watches a run with show nothing at all. Rewritten whole and moved into
+# place, on the run file's own convention: a reader that caught a half-written entry
+# would read a live run as having no tasklists, which is indistinguishable from a run
+# that scheduled none.
+run_file_set_names() {
+  [ -f "$RUN_FILE" ] || return 0
+  local tmp="$RUN_FILE.tmp.$$"
+  if { grep -v '^names=' "$RUN_FILE"; echo "names=$1"; } > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$RUN_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  return 0
+}
 # The DESCENDANT LEDGER opens with the registry entry (engine/ledger.sh). Nothing is
 # below us yet, so this first snapshot is a header — but it is what makes the file
 # exist, and every later poll replaces it. A tree can only be recorded while it is
@@ -3187,13 +3207,49 @@ run_worker() {
 # pause — Chief never revokes a human's hold, `chief resume` does (see the header).
 rm -f "$LIMIT_PAUSE_FILE"
 rm -f "$STATE/.cosched"     # the co-scheduling relation is per-run, not cumulative
-for n in $NAMES; do
+
+# launch_init NAME — THE LAUNCH TREATMENT: everything a tasklist receives for joining
+# this run's set, and the only place it is spelled. A tasklist ADMITTED mid-run
+# (engine/admit.sh) gets exactly this and nothing of its own, because a newcomer that
+# is merely appended to $NAMES inherits the LAST run's leftovers — a `.stalled` flag, a
+# spent `.attempts` counter, a `.why` explaining a block that no longer applies, a
+# `.log` whose first line is from another day. Every one of those is read by this run
+# as if it had happened in it: the retry budget starts already spent, and the summary
+# prints a reason for a state the run never entered.
+launch_init() {
+  local n="$1"
   set_state "$n" pending
   rm -f "$STATE/$n.stalled" "$STATE/$n.cannot-complete" "$STATE/$n.suspected-limit" \
         "$STATE/$n.why" "$STATE/$n.retry-at" "$STATE/$n.retries" "$STATE/$n.attempts" \
         "$STATE/$n.files" "$STATE/$n.touches" "$STATE/$n.decision-hold"
   : > "$STATE/$n.log"     # run_worker APPENDS (it may be dispatched more than once)
-done
+}
+
+# launch_precheck NAME — the unmet-dependency pre-check, for one tasklist. 0 = it can
+# start in this run; 1 = it can NEVER start, in which case it is left 'blocked' (not
+# 'pending', so dep_broken() cascades the reason downstream) with the reason written to
+# $STATE/<name>.why for the caller to print. Extracted for the same reason as
+# launch_init: an admitted tasklist that skipped this would sit 'pending' for the whole
+# run, never launch, never block, and be reported as `not-launched` with no reason — the
+# one outcome this check exists to prevent. Note that this is NOT admit_check's
+# dependency rule restated: that one asks whether the dep is merged or in the widened
+# set, and this one asks whether what is in the set can still COMPLETE (a dep already
+# failed, blocked or declined in this run passes the first and fails this).
+launch_precheck() {
+  local n="$1" why="" d r
+  for d in $(deps_of "$n"); do
+    is_recorded_done "$d" && continue
+    r="$(dep_why "$d")"; [ "$r" = "scheduled" ] && continue
+    why="$why
+needs \"$d\", which cannot complete in this run: $r"
+  done
+  [ -z "$why" ] && return 0
+  set_state "$n" blocked
+  printf '%s\n' "${why#?}" > "$STATE/$n.why"
+  return 1
+}
+
+for n in $NAMES; do launch_init "$n"; done
 echo "Chief PARALLEL run — tool=$TOOL  max-parallel=$PARALLEL  auto-merge=$AUTO_MERGE_MAIN  verify=$([ "$NO_VERIFY" = 1 ] && echo off || echo on)$(mq_enabled && printf '  merge-batch=%s' "$(mq_batch_max)")"
 echo "Pending:$NAMES"; echo
 
@@ -3202,16 +3258,7 @@ echo "Pending:$NAMES"; echo
 # also lets dep_broken() cascade the reason to everything downstream.
 any_blocked=""
 for n in $NAMES; do
-  why=""
-  for d in $(deps_of "$n"); do
-    is_recorded_done "$d" && continue
-    r="$(dep_why "$d")"; [ "$r" = "scheduled" ] && continue
-    why="$why
-needs \"$d\", which cannot complete in this run: $r"
-  done
-  [ -z "$why" ] && continue
-  set_state "$n" blocked
-  printf '%s\n' "${why#?}" > "$STATE/$n.why"
+  launch_precheck "$n" && continue
   [ -z "$any_blocked" ] && echo "  ⤬ Some tasklists can never start in this run:"
   any_blocked=1
   echo "  ⤬ $n BLOCKED"
@@ -3499,10 +3546,28 @@ while :; do
     ADMIT_PARKED_OK="$apark"
     if admit_check "$an" "$NAMES"; then
       NAMES="$NAMES $an"
-      set_state "$an" pending
+      # INDISTINGUISHABLE FROM A NAME GIVEN AT LAUNCH, and that is three things, not
+      # one: the launch treatment (state + the stale per-run files), the registry entry
+      # every `chief ps` / `chief monitor` row is drawn from, and the unmet-dependency
+      # pre-check. APPENDED, so the launch loop below — which reads this same $NAMES in
+      # order — considers it last: a newcomer takes its place under the existing
+      # dependency and conflict-domain rules and never jumps a wave.
+      launch_init "$an"
       admit_open "$NAMES"        # the published set is what the NEXT request is checked against
+      run_file_set_names "$NAMES"
       echo "  ＋ ADMITTED $an — offered by $aby; it joins this run's set and is scheduled under the unchanged rules"
-      event_emit tasklist.admitted name="$an" state=pending detail="offered by $aby at $aat"
+      if launch_precheck "$an"; then
+        event_emit tasklist.admitted name="$an" state=pending detail="offered by $aby at $aat"
+      else
+        # Admitted and BLOCKED, which is a real outcome and not a contradiction: its
+        # dependency is in this run (that is why admission allowed it) and has already
+        # failed, blocked or been declined, so it can never start. Blocked here rather
+        # than left pending, for the reason the up-front pass blocks: 'pending' forever
+        # is reported as `not-launched` with no reason, and dep_broken() cannot cascade
+        # what was never marked.
+        echo "  ⤬ $an BLOCKED"; sed 's/^/       /' "$STATE/$an.why"
+        event_emit tasklist.admitted name="$an" state=blocked detail="offered by $aby at $aat; $(tr '\n' ';' < "$STATE/$an.why" 2>/dev/null)"
+      fi
     else
       echo "  ⤬ REFUSED $an — $ADMIT_REASON  (offered by $aby)"
       # No `state`: a refused tasklist lands in no scheduler state at all — it was
