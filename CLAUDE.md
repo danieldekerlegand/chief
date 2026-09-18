@@ -74,7 +74,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [--merge-batch[=N]] [--headless] [--parked] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · events · usage · models · reap · quality · verify · cigate · retire · approve · decide · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [--merge-batch[=N]] [--headless] [--parked] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · events · usage · models · reap · quality · verify · cigate · retire · offer [--parked] · approve · decide · pause · resume · version · update
                      #   (2026-09-04: the seven arms this line had never grown — events · usage ·
                      #   quality · cigate · retire · approve · decide. test/doc-sync.sh gates the
                      #   README's command table against this dispatch and nothing gates THIS line,
@@ -154,6 +154,29 @@ engine/
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
                      #   UNSATISFIABLE before the first agent turn unless "crossRepo" declares it
+  admit.sh           #   MID-RUN ADMISSION: the only way a LIVE run's work set may widen
+                     #   (`chief offer`). A run's set was frozen at launch, so work authored
+                     #   while it ran could only be added by KILLING the run — an operator did
+                     #   exactly that on 2026-09-16, discarding an in-flight agent turn, because
+                     #   driver.lock refuses a second driver. THE RULES ARE THE FEATURE: a
+                     #   tasklist may join only if it would have been legal AT LAUNCH (exists ·
+                     #   not parked · not already in the run · not already merged · passes the
+                     #   same `chief lint` · deps satisfiable by something merged or something in
+                     #   the WIDENED run), and everything else is refused with the reason.
+                     #   CHECKED TWICE, and both askings call ONE function: at the keyboard so
+                     #   the operator hears no immediately, and again at admission because the
+                     #   gap between them is a gap in which the tasklist can be parked, edited or
+                     #   merged by a sibling run. MERGED IS ASKED BEFORE EXISTS, or every
+                     #   already-merged name refuses as "no such tasklist" — a merged tasklist
+                     #   has no live JSON left, it IS the completed/ record. The window OPENS
+                     #   when the scheduler enters its loop and SHUTS when it leaves: outside it
+                     #   there is no set to widen, only an outcome being computed, and a request
+                     #   arriving then is refused with that reason rather than half-joining a
+                     #   finished run. A request is addressed to ONE run by pid, so one made of a
+                     #   run that has since ended is dropped and REPORTED — absorbing it would be
+                     #   the silent auto-scan this refuses to be. Not a second driver, not a
+                     #   watcher, not a reordering, and never a raised ceiling.
+                     #   docs/reference/mid-run-admission.md
   deps.sh            #   DEPENDENCY RESOLUTION, extracted from driver.sh so there is exactly ONE
                      #   answer to "is this tasklist's dependsOn satisfied": deps_of · dep_record ·
                      #   is_recorded_done · the cross-repo <repo>:<stem> resolution. Functions over

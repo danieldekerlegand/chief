@@ -176,6 +176,19 @@ Usage:
                               OFFLINE-SAFE: no gh, no remote or no network is UNKNOWN — stated as
                               unknown, never rounded to a pass.
                               -a all known repos · -v also the healthy · always exits 0
+  chief offer [--parked]      WIDEN A LIVE RUN'S WORK SET: offer the named tasklists to the run
+       NAME […]               scheduling this repo. Each joins at that run's next WAVE BOUNDARY and is
+                              then indistinguishable from one named at launch — same dependency,
+                              conflict-domain, -p N and machine-budget rules, and no wave jumped. A name
+                              may join only if it would have been legal AT LAUNCH: the file exists, it is
+                              not parked (--parked waives it, as on \`chief run\`), not already in the run,
+                              not already merged, it passes \`chief lint\`, and its dependencies can be
+                              satisfied — by something merged, or by something in the widened run. Every
+                              refusal names its reason. The check runs TWICE, here and again at
+                              admission, because the tasklist can be parked, edited or merged in between.
+                              Refusing when no run is scheduling writes nothing. It is not a second
+                              driver, not a filesystem watcher and not a raised ceiling.
+                              See docs/reference/mid-run-admission.md
   chief approve [names…]      release a branch HELD AT AN OVERLAP ZONE — a domain this repo
        [--list] [-m NOTE]     declared in .chief/zones.conf as one where a green gate is not
                               sufficient authority to merge. The branch is already rebased onto
@@ -1270,6 +1283,74 @@ cmd_retire()  { load_project; bash "$ENGINE/retire.sh" "$@" ; }
 # guarantee, and it is blind to exactly one thing: two parallel branches whose code
 # does not collide and whose DESIGNS disagree. Both rebase clean, both verify green.
 # A repo names the domains where that is unacceptable in .chief/zones.conf with
+# chief offer — WIDEN A LIVE RUN'S WORK SET (engine/admit.sh).
+#
+# The thing this exists to stop being true: a run's set was frozen at launch, so work
+# authored while it ran could only be added by KILLING the run — discarding an
+# in-flight agent turn — because driver.lock refuses a second driver. The trade was
+# the tool's fault, not the operator's.
+#
+# It offers; the run admits. The check runs HERE so the answer arrives at the
+# keyboard, and again at the run's next wave boundary, because the gap between the
+# two is a gap in which the tasklist can be parked, edited or merged by a sibling run
+# — so what this command promises is that the name was legal WHEN ASKED and that the
+# request is durably recorded, never that it has already joined.
+#
+# Refusing is CHEAP: with no run scheduling, nothing is written and no state is
+# touched. That is the commonest answer this command gives and it must not leave
+# litter behind to give it.
+cmd_offer() {
+  local parked=0 names=() n rc=0 widened
+  while [ "$#" -gt 0 ]; do case "$1" in
+    --parked)  parked=1; shift ;;
+    -h|--help) echo "usage: chief offer [--parked] <tasklist> […]"; return 0 ;;
+    -*)        echo "unknown flag: $1  (usage: chief offer [--parked] <tasklist> […])" >&2; exit 2 ;;
+    *)         names+=("${1%.json}"); shift ;;
+  esac; done
+  [ "${#names[@]}" -gt 0 ] || {
+    echo "chief offer needs at least one tasklist name  (usage: chief offer [--parked] <tasklist> […])" >&2; exit 2; }
+  load_project
+  # deps.sh for the dependency half of the rules (and dep_key), reap.sh's namespace +
+  # liveness predicates through it — admit.sh names both as its contract and defines
+  # neither, so the operator and the scheduler ask the identical questions.
+  # shellcheck disable=SC1091
+  . "$ENGINE/deps.sh"
+  # shellcheck disable=SC1091
+  . "$ENGINE/reap.sh"
+  # shellcheck disable=SC1091
+  . "$ENGINE/events.sh"
+  # shellcheck disable=SC1091
+  . "$ENGINE/admit.sh"
+  REPO="$CHIEF_PROJECT"; TASKS_REL="$CHIEF_TASKS_DIR"
+  SRC="$REPO/$TASKS_REL"; COMPLETED="$SRC/completed"
+  STATE_ROOT="$CHIEF_PROJECT/$CHIEF_STATE_DIR"
+  if ! admit_run_read; then
+    echo "chief offer: nothing to offer work to — $ADMIT_REASON" >&2
+    echo "  Nothing was written. Start a run with the work in it instead:  chief run ${names[*]}" >&2
+    exit 1
+  fi
+  # The event goes into the RUN'S OWN log, so a subscriber watching one run sees the
+  # offer in the same stream as the admission it leads to (docs/reference/events.md).
+  CHIEF_EVENTS_FILE="$ADMIT_RUN_EVENTS"; CHIEF_RUN_ID="$ADMIT_RUN_ID"; CHIEF_EVENT_REPO="$REPO"
+  echo "chief offer — run pid $ADMIT_RUN_PID in $(basename "$CHIEF_PROJECT") is carrying:$ADMIT_RUN_NAMES"
+  widened="$ADMIT_RUN_NAMES"
+  for n in "${names[@]}"; do
+    # Each accepted name joins the set the NEXT one is checked against, so an offer of
+    # a tasklist and its dependency in one breath is legal in that order.
+    ADMIT_PARKED_OK="$parked"
+    if admit_check "$n" "$widened" && admit_request "$n"; then
+      widened="$widened $n"
+      echo "  ✓ $n — offered; it joins at the run's next wave boundary, where the check is re-run"
+      event_emit tasklist.offered name="$n" \
+        detail="offered by ${USER:-unknown}$( [ "$parked" = 1 ] && printf ' (--parked)' )"
+    else
+      echo "  ✗ $n — $ADMIT_REASON" >&2
+      rc=1
+    fi
+  done
+  exit "$rc"
+}
+
 # policy `review` (engine/zones.sh · docs/reference/overlap-zones.md); a branch that
 # changed one is held AFTER the floor ran, in state 'awaiting-approval', and this is
 # the command that releases it.
@@ -1649,6 +1730,7 @@ case "$cmd" in
   verify)               cmd_verify "$@" ;;
   cigate)               cmd_cigate "$@" ;;
   retire)               cmd_retire "$@" ;;
+  offer)                cmd_offer "$@" ;;
   approve)              cmd_approve "$@" ;;
   decide)               cmd_decide "$@" ;;
   pause)                cmd_pause_resume pause "$@" ;;

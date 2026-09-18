@@ -1640,6 +1640,14 @@ touches_of() { jq -r '(.touches // [])[]' "$SRC/$1.json" 2>/dev/null; }
 # shellcheck source=engine/deps.sh
 source "$ENGINE/deps.sh"
 
+# MID-RUN ADMISSION (engine/admit.sh) — the one way a live run's work set may widen,
+# and the rules that decide whether it may. Sourced immediately after deps.sh because
+# it is a layer on top of it: an offered tasklist's dependencies are resolved by the
+# same deps_of/is_recorded_done/dep_key the scheduler launches on, so a newcomer can
+# never be admitted on a dependency verdict the run would then disagree with.
+# shellcheck source=engine/admit.sh
+source "$ENGINE/admit.sh"
+
 # Per-tasklist scheduler state lives in files so no associative array is needed.
 # Every lifecycle transition also lands in the liveliness record (and stamps its
 # heartbeat), so the two views can never drift apart.
@@ -1656,13 +1664,6 @@ set_state() {
   esac
 }
 get_state() { cat "$STATE/$1.state" 2>/dev/null || printf 'pending'; }
-dep_key() {   # scheduler key for a dep: one qualified with THIS repo is just a local dep,
-              # so it can still be satisfied by a tasklist finishing in this run.
-  local d="$1" rr; rr="$(dep_repo "$d")"
-  [ -n "$rr" ] && rr="$(resolve_repo "$rr")" && [ "$rr" = "$REPO" ] && { dep_task "$d"; return 0; }
-  printf '%s' "$d"
-}
-
 # ---------------------------------------------------------------------------
 # Build the program: pending tasklists (or the names passed as args)
 # ---------------------------------------------------------------------------
@@ -2169,6 +2170,7 @@ stop_release_records() {
   rm -rf "$DRIVER_LOCK" 2>/dev/null || true
   rmdir "$MERGE_LOCK" "$WT_LOCK" 2>/dev/null || true
   rm -f "$RUN_FILE" 2>/dev/null || true
+  admit_close         # a killed run must not leave a marker inviting offers
   return 0
 }
 
@@ -3468,12 +3470,49 @@ reap() {   # collect any finished workers, update state
 IN_SCHEDULER=1     # from here on, on_stop only RECORDS; stop_check does the work
 drain_said=""      # the mid-run "pause armed, draining" notice is said once
 machine_hold_said=""
+# THE ADMISSION WINDOW OPENS HERE (engine/admit.sh) and shuts the moment this loop
+# ends. Those two points are not decoration: while the scheduler is deciding what to
+# launch there is a set to widen, and once it has stopped there is only an outcome
+# being computed — so `chief offer` can tell an operator which of the two they are
+# looking at instead of recording a request into a run that will never read it.
+admit_open "$NAMES"
 while :; do
   stop_check
   # Re-record this run's process tree, once per poll. The cadence IS the bound on
   # what can escape the reaper: anything spawned, orphaned and left behind between
   # two snapshots was never recorded (engine/ledger.sh). One `ps` and one `awk`.
   chief_ledger_snapshot "$CHIEF_RUNS" "$$" "$CHIEF_RUN_ID"
+  # MID-RUN ADMISSION, at the WAVE BOUNDARY: this is the top of the pass that decides
+  # what to launch, so a tasklist admitted here is considered for launch by the very
+  # next launch loop under the unchanged dependency, conflict-domain, -p N and machine
+  # budget rules — and cannot jump a wave, because it joins the same `for n in $NAMES`
+  # every other pending tasklist is read from. In-flight workers are untouched: nothing
+  # below reads or writes a running tasklist's branch, worktree or iteration counter.
+  # The check is RE-RUN here rather than trusted from `chief offer`: between the ask and
+  # this moment the tasklist can be parked, edited or merged by a sibling run.
+  while IFS="$ADMIT_TAB" read -r av an aby aat apark; do
+    [ -n "$an" ] || continue
+    if [ "$av" != take ]; then
+      echo "  ⤬ DROPPED an offer of $an — it was made of a run that has since ended (offered by $aby)"
+      continue
+    fi
+    ADMIT_PARKED_OK="$apark"
+    if admit_check "$an" "$NAMES"; then
+      NAMES="$NAMES $an"
+      set_state "$an" pending
+      admit_open "$NAMES"        # the published set is what the NEXT request is checked against
+      echo "  ＋ ADMITTED $an — offered by $aby; it joins this run's set and is scheduled under the unchanged rules"
+      event_emit tasklist.admitted name="$an" state=pending detail="offered by $aby at $aat"
+    else
+      echo "  ⤬ REFUSED $an — $ADMIT_REASON  (offered by $aby)"
+      # No `state`: a refused tasklist lands in no scheduler state at all — it was
+      # never in this run, and reporting one would invent a transition that did not
+      # happen (events.sh's projection invariant).
+      event_emit tasklist.admission-refused name="$an" detail="$ADMIT_REASON"
+    fi
+  done <<EOF
+$(admit_take_requests)
+EOF
   # Mark tasklists whose dep failed as blocked (they can never run).
   for n in $NAMES; do
     [ "$(get_state "$n")" = "pending" ] || continue
@@ -3590,6 +3629,11 @@ while :; do
   reap
 done
 IN_SCHEDULER=0     # nothing left to wait on — a late signal can tear down inline
+# THE ADMISSION WINDOW SHUTS (engine/admit.sh). From here the run is computing its
+# outcome — the summary, the outcome word and the exit code are all derived from
+# $NAMES — and a set that widened after that would be a finished run half-joined.
+# So the refusal an operator gets from here on is that one, stated.
+admit_close
 reap   # final sweep
 
 # ---------------------------------------------------------------------------
