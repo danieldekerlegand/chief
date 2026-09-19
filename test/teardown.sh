@@ -62,19 +62,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 # indistinguishable from the very bug being tested (it is exactly how this test
 # first failed under `.chief/verify.sh` while passing from a terminal).
 # Only a process that resets the disposition itself can undo it, which bash will
-# not do — so re-exec once through perl, which can, and carry on with SIG_DFL.
-int_catchable() {   # can a child of this shell CATCH SIGINT, or was it ignored on entry?
-  local rc=0
-  bash -c 'trap "exit 7" INT; kill -INT $$; sleep 1; exit 0' >/dev/null 2>&1 || rc=$?
-  [ "$rc" = 7 ]
-}
+# not do — so re-exec once through perl, which can, and carry on with SIG_DFL. That
+# rule lives in test/lib.sh (chief_test_restore_int), because test/signal-cleanup.sh
+# needs the identical one and a second spelling of a signal rule does not degrade,
+# it disagrees.
 INT_SIGNAL=INT; INT_TO_GROUP=1
-if ! int_catchable; then
-  if [ "${TD_INT_RESTORED:-0}" != 1 ] && command -v perl >/dev/null 2>&1; then
-    export TD_INT_RESTORED=1
-    exec perl -e '$SIG{INT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or die "exec: $!\n"' \
-      -- bash "$0" "$@"
-  fi
+if ! chief_test_restore_int "$0" "$@"; then
   # No perl (or the re-exec did not take): say so loudly and stop the run with the
   # other signal it is stopped by — TERM, sent to the DRIVER, exactly as `kill <pid>`
   # or a service manager does. Not to the group: a group-wide TERM reaches the

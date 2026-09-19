@@ -495,7 +495,7 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   input NOBODY THOUGHT ABOUT, and an opt-in rule is exactly the rule
                      #   such a test does not opt into. HERMETIC IN STATE IS NOT HERMETIC IN
                      #   THE HOST — the third register of bystander.sh's sentence (nor in
-                     #   PROCESSES) and suspectlimit.sh's (nor in ENV). FOUR host inputs
+                     #   PROCESSES) and suspectlimit.sh's (nor in ENV). FIVE host inputs
                      #   now, and the FOURTH is the only one that is a WRITE: the per-run
                      #   POINTERS the caller hands us in the environment. `chief verify`
                      #   runs this suite from inside an agent turn, and the driver exports
@@ -635,7 +635,13 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   same victims against a copy of lib.sh with those three trap lines
                      #   deleted must leave the prefix root behind — and PART C pins the
                      #   deferral bound as a FLOOR on elapsed time, which needs no
-                     #   calibration against the host
+                     #   calibration against the host. It also names the FIFTH host
+                     #   input, because it was the file the input made lie: a signal
+                     #   you cannot RECEIVE. `chief_test_restore_int` re-execs
+                     #   through perl for the INT cases, the victim carries its OWN
+                     #   deliverability probe so "it exited 0" can never read as
+                     #   "the trap did not fire", and an unrestorable SIGINT skips
+                     #   those four cases OUT LOUD rather than accusing lib.sh
                      #   bystander.sh — runs the behavioural block with a decoy run from ANOTHER
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
@@ -805,6 +811,29 @@ VERSION              # engine version — bump on any engine/bin/install change
   has been paid, so the engine reads it as ABSENT and the case silently tests the
   fallback instead. Lead such a stamp by the measured cost, and clamp what it can
   cost you with the cap.
+
+- **A SIGNAL DISPOSITION IS A HOST INPUT, AND SIGINT IS THE ONE THE MERGE GATE
+  TAKES AWAY.** A background command started by a non-interactive shell has SIGINT
+  set to `SIG_IGN`; the disposition survives fork AND exec, and bash can neither
+  trap nor reset a signal ignored on entry (`engine/driver.sh`'s `STOP_SIGNALS`
+  block says so — it is why chief's own teardown is stopped with TERM). The suite's
+  most common caller is several frames below a `run_worker … &` subshell, so **every
+  test in the behavioural block runs with SIGINT ignored while the same file from a
+  terminal runs with it deliverable.** Measured 2026-09-19: `test/signal-cleanup.sh`
+  PART A passed standalone and failed inside `chief verify` with `shape 1 signalled
+  with SIGINT exited 0, not 130` — the victim never received the signal, slept out
+  its nap and exited 0, and the red named the three trap lines in `test/lib.sh` that
+  were behaving perfectly. That is the 2026-09-18 false-accusation shape one register
+  down. Only a process that resets the disposition ITSELF can undo it, so the repair
+  is a re-exec through `perl` (`chief_test_restore_int` in `test/lib.sh`, called by
+  `test/signal-cleanup.sh` and `test/teardown.sh` — ONE spelling, because a second
+  signal rule does not degrade, it disagrees). It is **opt-in, never applied to all
+  96 at source time**: `exec` replaces the process and the reap fixtures assert on
+  argv and process identity. And a fixture that stages a signal must carry its own
+  DELIVERABILITY probe (`bash -c 'trap "exit 7" INT; kill -INT $$; …'`, run in the
+  victim), or "the process exited 0" is indistinguishable from "the trap did not
+  fire". `set -m` is **not** a substitute: it covers bash's own async-command rule
+  and does nothing about an ignore inherited from above.
 
 - **A LONG-LIVED FIXTURE'S OWN `sleep N` IS A WALL-CLOCK CEILING TOO — on the whole
   block, hidden inside the fixture.** `test/bystander.sh` stands a decoy run up and

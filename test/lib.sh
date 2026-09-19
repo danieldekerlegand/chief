@@ -17,11 +17,13 @@
 # number that belongs to no run at all — the host's one-minute LOAD AVERAGE — and
 # the caller hands it a fistful of absolute paths into a LIVE RUN'S state besides.
 #
-# FOUR HOST INPUTS, in the order they were found, each with its own section below:
-# the load average · the worktree root · the litter an interrupted run leaves · and
-# the per-run pointers in the environment, which is the only one of the four that is
-# a WRITE. The last is first in the file, because it is the general rule the other
-# three are exceptions to.
+# FIVE HOST INPUTS, in the order they were found, each with its own section below:
+# the load average · the worktree root · the litter an interrupted run leaves · the
+# per-run pointers in the environment, which is the only one of the five that is a
+# WRITE · and the SIGNAL DISPOSITION the caller hands down, which is the one that
+# decides whether the litter rule can fire at all. The WRITE is first in the file,
+# because it is the general rule the others are exceptions to; the disposition is
+# last, because it is the only one that is opt-in and it says why.
 #
 # MEASURED 2026-09-18, on an operator host with three other chief runs live across
 # 14 physical cores. In one verify, tests 1-33 of the 78-test behavioural block took
@@ -294,3 +296,42 @@ _chief_test_on_signal() {
 trap '_chief_test_on_signal INT 130'  INT
 trap '_chief_test_on_signal TERM 143' TERM
 trap '_chief_test_on_signal HUP 129'  HUP
+
+# ── and a signal you cannot RECEIVE is a fifth host input ─────────────────────
+# The three traps above are worth exactly what the signal reaching this process is
+# worth, and for SIGINT that is a property of the CALLER, not of this file. A
+# background command started by a non-interactive shell has SIGINT set to SIG_IGN;
+# the disposition survives fork AND exec, and bash can neither trap nor reset a
+# signal ignored on entry. chief's own driver says so at engine/driver.sh's
+# STOP_SIGNALS block, because it is why its teardown is stopped with TERM — and the
+# suite's most common caller is several frames below one of those `run_worker … &`
+# subshells, so every test in the merge gate's behavioural block runs with SIGINT
+# ignored while the same file from a terminal runs with it deliverable.
+#
+# MEASURED 2026-09-19: test/signal-cleanup.sh PART A passed standalone and failed
+# inside `chief verify` with `shape 1 signalled with SIGINT exited 0, not 130` —
+# the victim never received the signal, so the trap it was asserting on could not
+# fire. That reads as a defect in the three lines above and is nothing of the kind:
+# it is the 2026-09-18 false-accusation shape one register down, a red naming a
+# file that is behaving correctly.
+#
+# Only a process that resets the disposition ITSELF can undo it, which bash will
+# not do, so the re-exec goes through perl. It is OPT-IN — the two tests whose
+# SUBJECT is signals call it — and deliberately not applied to all 96 at source
+# time: `exec` replaces the process, and the reap fixtures assert on argv and on
+# process identity. Same pid across both execs, so $CHIEF_PREFIX above is unchanged
+# and the husk clause keyed on `$$` in the sweep is the one that covers the rest.
+#
+# chief_test_restore_int "$0" "$@" — returns 0 when SIGINT is deliverable to this
+# process and everything it starts (re-execing once to make it so), 1 when it could
+# not be restored, so the caller can say which case it is staging rather than
+# asserting on a signal nobody received.
+chief_test_restore_int() {
+  local rc=0
+  bash -c 'trap "exit 7" INT; kill -INT $$; sleep 1; exit 0' >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 7 ]; then return 0; fi
+  if [ "${CHIEF_TEST_INT_RESTORED:-0}" = 1 ]; then return 1; fi
+  command -v perl >/dev/null 2>&1 || return 1
+  export CHIEF_TEST_INT_RESTORED=1
+  exec perl -e '$SIG{INT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or die "exec: $!\n"' -- bash "$@"
+}

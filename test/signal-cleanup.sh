@@ -44,6 +44,22 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
+
+# ── SIGINT must be DELIVERABLE, or the INT cases assert on nothing ───────────
+# A FIFTH host input, found by this very file going red inside `chief verify` while
+# passing from a terminal: `A: shape 1 signalled with SIGINT exited 0, not 130`. A
+# background command started by a non-interactive shell has SIGINT set to SIG_IGN,
+# the disposition survives fork AND exec, and the merge gate runs this suite several
+# frames below a `run_worker … &` subshell — so the victim below inherited an ignored
+# SIGINT, never received the signal, slept out its nap and exited 0. Nothing in
+# test/lib.sh was wrong; the harness could not stage the case, and said so by naming
+# the file it was testing. chief_test_restore_int re-execs once through perl to get
+# the default disposition back (test/teardown.sh needs the identical rule and calls
+# the same function); when it cannot, the INT cases are the only thing skipped, and
+# they are skipped OUT LOUD.
+INT_OK=1
+chief_test_restore_int "$0" "$@" || INT_OK=0
+
 WORK="$(mktemp -d)"
 VICTIMS=""
 cleanup() { local p; for p in $VICTIMS; do kill -9 "$p" 2>/dev/null || true; done; rm -rf "$WORK"; }
@@ -66,6 +82,8 @@ WORK="\$(mktemp -d)"
 $2
 mkdir -p "\$CHIEF_PREFIX/worktrees"
 printf '%s\n' "\$WORK" > "\$SIG/work"
+_int=0; bash -c 'trap "exit 7" INT; kill -INT \$\$; sleep 1; exit 0' >/dev/null 2>&1 || _int=\$?
+printf '%s\n' "\$_int" > "\$SIG/intrc"
 : > "\$SIG/ready"
 sleep $3
 EOS
@@ -95,6 +113,14 @@ run_victim() {   # $1 = label, $2 = lib, $3 = trap text, $4 = signal, $5 = pid|g
   local i=0
   while [ ! -f "$d/sig/ready" ] && [ "$i" -lt 120 ]; do sleep 0.25; i=$((i+1)); done
   [ -f "$d/sig/ready" ] || { cat "$d/out" >&2; fail "$label: the victim never started"; }
+  # The victim's own disposition, measured in the victim: "it exited 0" must never be
+  # allowed to read as "the trap did not fire" when the truth is that no signal was
+  # ever delivered. PART B's lib has no INT trap, but the DISPOSITION is not the trap
+  # — this probe is about whether the process can receive one at all, so it holds for
+  # both libs.
+  if [ "$sig" = INT ] && [ "$(cat "$d/sig/intrc" 2>/dev/null)" != 7 ]; then
+    fail "$label: the victim inherited an ignored SIGINT and cannot receive one — the harness could not stage this case (nothing is being claimed about test/lib.sh)"
+  fi
   t0="$(date +%s)"
   if [ "$del" = group ]; then
     pg="$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')"
@@ -113,6 +139,10 @@ run_victim() {   # $1 = label, $2 = lib, $3 = trap text, $4 = signal, $5 = pid|g
 # ── A. three signals × four trap shapes, delivered to the group ──────────────
 for sig in INT:130 TERM:143 HUP:129; do
   name="${sig%%:*}"; want="${sig##*:}"
+  if [ "$name" = INT ] && [ "$INT_OK" != 1 ]; then
+    note "SIGINT is ignored on entry and perl could not restore it — SKIPPING the four INT cases (TERM and HUP cover all four shapes below)"
+    continue
+  fi
   n=0
   for shape in "$SHAPE1" "$SHAPE2" "$SHAPE3" "$SHAPE4"; do
     n=$((n+1))
@@ -137,6 +167,7 @@ removed="$(grep -c "^trap '_chief_test_on_signal " "$ROOT/test/lib.sh")"
 ! grep -q "^trap '_chief_test_on_signal " "$WORK/lib-nosig.sh" \
   || fail "B: the mutated copy still installs a signal trap"
 for name in INT TERM HUP; do
+  [ "$name" = INT ] && [ "$INT_OK" != 1 ] && continue
   run_victim "b-$name" "$WORK/lib-nosig.sh" "$SHAPE1" "$name" group 120
   left="$(residue "$V_TMP")"
   # The mktemp tree IS cleaned here, by bash's own courtesy — it runs the EXIT trap on
