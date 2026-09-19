@@ -27,6 +27,39 @@ Coarse domains over-serialize (safe, less parallelism); fine domains parallelize
 more (may cost a wasted rebase if wrong — never correctness). Start coarse, split
 as you learn real file overlaps.
 
+### The work set can widen mid-run; nothing else about the run can
+
+A run's set was frozen at launch for most of chief's life, and `driver.lock` is one
+driver per repo — so work authored while a run was in flight could only be added by
+**killing the run**, discarding an in-flight agent turn. `chief offer` removes that
+trade: an operator hands one or more named tasklists to the live run, and the
+scheduler admits them at its next **wave boundary** — the same point it already
+decides what to launch.
+
+What that changes about the lifecycle is exactly one thing: `$NAMES`, the set every
+downstream reader iterates, is no longer constant for the life of a run. An admitted
+tasklist gets the same launch treatment a name typed on the command line gets (its
+state initialised, stale per-run files cleared, the unmet-dependency pre-check run),
+and is then scheduled under the three conditions above, unchanged. It is **appended**,
+so the launch loop reaches it last: a newcomer takes its place under the existing
+dependency and conflict-domain rules and never jumps a wave.
+
+What does **not** change mid-run:
+
+| Fixed for the life of the run | Why |
+|---|---|
+| the base branch | the merge phase serializes against it; a base that moved under a half-merged wave is the one thing the floor cannot recover from |
+| the provider and model | resolved once at launch, and reported in the dry-run line, `chief ps`, `chief monitor` and every event |
+| `-p N` | the concurrency ceiling the operator chose; admitting work adds to what is *waiting*, never to what may run at once |
+| the host-wide machine budget | see [`concurrency.md`](../reference/concurrency.md) — it is a property of the machine, and a run does not get to raise it by being handed more work |
+| `driver.lock` | still one driver per repo. Admission is not a second driver, and it does not relax the lock |
+
+The window **opens** when the scheduler enters its loop and **shuts** when it leaves
+it. Outside those two points there is no set to widen — only an outcome being
+computed from the set as it then stands — and a request arriving then is refused with
+that reason rather than half-joining a finished run. The rules, the refusals and where
+the request lives are in [`mid-run-admission.md`](../reference/mid-run-admission.md).
+
 ### The under-tagged-`touches` audit
 
 Getting `touches` wrong is asymmetric. Over-tagging shows up immediately in

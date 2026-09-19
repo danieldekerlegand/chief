@@ -104,3 +104,17 @@ dep_verdict_set() {
   DEP_DETAIL="no merged record yet ($rec)"
 }
 dep_verdict() { dep_verdict_set "$1"; printf '%s\t%s\n' "$DEP_CLASS" "$DEP_DETAIL"; }
+
+# dep_key DEP — the SCHEDULER'S key for a dep: the name a run's work set would carry
+# it under. A dep qualified with THIS repo ("chief:310" read from inside chief) is
+# just a local dep, so it can still be satisfied by a tasklist finishing in this run;
+# anything else keys on the spec as written. It lives here rather than in driver.sh
+# because the SCHEDULING layer is this file's subject and the scheduler is no longer
+# the only caller — engine/admit.sh asks the same question of a tasklist offered to a
+# live run, and a second spelling of "is this dep one of ours" would admit work the
+# run then refuses to start.
+dep_key() {
+  local d="$1" rr; rr="$(dep_repo "$d")"
+  [ -n "$rr" ] && rr="$(resolve_repo "$rr")" && [ "$rr" = "$REPO" ] && { dep_task "$d"; return 0; }
+  printf '%s' "$d"
+}

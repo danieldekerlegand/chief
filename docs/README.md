@@ -29,6 +29,7 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 - [Decision tasklists](reference/decision-tasklists.md)
 - [The per-story diff-size budget](reference/diff-budget.md)
 - [The event stream — chief's machine-readable status contract](reference/events.md)
+- [Mid-run admission — offering work to a live run](reference/mid-run-admission.md)
 - [Overlap zones — where a green gate is not enough authority to merge](reference/overlap-zones.md)
 - [Resolution deletions — the hold that stops a merge from erasing merged work](reference/resolution-deletions.md)
 - [Provider unavailability — an iteration that never reached the model](reference/provider-unavailability.md)

@@ -415,6 +415,37 @@ The registry is read-only from the monitor's side — it never touches a run. It
 safe to run `chief ps` as often as you like, from any directory, while runs are in
 flight.
 
+## A row that appears mid-run is not a glitch
+
+A run's set can be **widened while you are watching it**. `chief offer <name>` hands a
+tasklist to the run holding this repo's driver lock; the scheduler admits it at its
+next wave boundary and the run's registry entry is rewritten there, so a new row
+simply appears in `chief ps` / `chief monitor` — pending at first, then running under
+the unchanged dependency, `touches` and `-p N` rules.
+
+```sh
+chief offer 128-the-thing-i-just-wrote     # → ✓ … it joins at the run's next wave boundary
+```
+
+Three things are worth knowing while watching one land:
+
+- **The row is the proof it joined.** Every row those two commands draw comes from the
+  run file's `names=` field, so a tasklist that is running but has no row is a bug, not
+  a display lag. If `chief offer` said `✓` and no row has appeared within a poll
+  interval or two, read the driver's own output — the check is re-run at admission and
+  may have refused it there (`⤬ REFUSED <name> — <reason>`).
+- **Nothing already on screen moves.** Admission happens at a wave boundary, never
+  inside the merge phase and never while a worker is mid-iteration: a running row's
+  branch, worktree and iteration counter are untouched, and a newcomer never jumps work
+  that was already waiting.
+- **`-p N` is unchanged.** The newcomer widens what is *waiting*, not what may run at
+  once, so on a busy run the new row can sit `pending` for a long time. That is the
+  ceiling doing its job, not a stall — and the stall flag above knows the difference.
+
+An offer is refused, with the reason, when there is no run scheduling in this repo,
+and refusing is cheap: nothing is written. Full rules and refusals in
+[`mid-run-admission.md`](../reference/mid-run-admission.md).
+
 ## Subscribing instead of polling
 
 Everything above is a **snapshot** — a table you re-read, or a record you diff. A

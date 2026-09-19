@@ -3,7 +3,15 @@
   "category": "feature",
   "branchName": "chief/127-a-live-run-accepts-new-work",
   "dependsOn": [],
-  "touches": ["engine/driver.sh", "bin/chief", "docs", "test", "VERSION", "README.md", "ROADMAP.md"],
+  "touches": [
+    "engine/driver.sh",
+    "bin/chief",
+    "docs",
+    "test",
+    "VERSION",
+    "README.md",
+    "ROADMAP.md"
+  ],
   "iters": 12,
   "warmup": [
     "sed -n '1700,1745p' engine/driver.sh",
@@ -19,7 +27,7 @@
     {
       "id": "US-1",
       "title": "An operator can offer a tasklist to a live run, and be told yes or why not",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "A subcommand offers one or more named tasklists to the run holding this repo's driver lock, and reports per name: admitted, or refused with the reason (no such file, parked, already in this run, already merged, failed lint, dependency unsatisfiable).",
         "It is refused, with that reason, when no run is live — and refusing is cheap: nothing is written, no state is touched.",
@@ -27,12 +35,13 @@
         "It emits an event a subscriber can act on, distinct from the merge queue's existing `tasklist.queued`, and `docs/reference/events.md` carries it.",
         "README's command table gains its row and `bash test/doc-sync.sh` passes.",
         "`bash test/all.sh` passes (or the documented subset, named in the notes with what was run), and `VERSION` + README + ROADMAP move together."
-      ]
+      ],
+      "notes": "chief offer shipped: engine/admit.sh + cmd_offer + docs/reference/mid-run-admission.md + 3 event rows. Observed: bash test/doc-sync.sh -> DOC-SYNC PASS (README and ROADMAP state v0.9.41; every bin/chief subcommand documented; 53 merged tasklists named). test/smoke.sh PASS, test/ratelimit.sh PASS, test/noworkguard.sh PASS, test/version-bump.sh PASS (VERSION 0.9.41 covers every engine/bin change). scripts/check-doc-links.mjs: 0 dead references. quality ratchet OK (single_use_functions 49 -> 50, tol 2; function_length_max 631 -> 631). Refusals exercised by hand, each with its reason: parked, unknown name, already in this run, already merged, failed lint, a dependency neither merged nor in the run; and with no live run the refusal wrote nothing — .chief/state/ was not even created. End-to-end through the REAL driver with a scripted fake provider: run started with 10-a 11-b, 12-c offered mid-run, admitted at the next wave boundary, launched after 11-b (no wave jumped), MERGED @a8e0f94, present in the run summary, window shut at the end. Full gate verdict recorded separately by chief verify."
     },
     {
       "id": "US-2",
       "title": "An admitted tasklist is indistinguishable from one named at launch",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "At the next wave boundary the newcomer joins `NAMES` and receives the same launch treatment the others got: its per-run state is initialised and stale per-run files cleared exactly as `:3188` does, and it goes through the same unmet-dependency pre-check so an impossible one is `blocked` with a stated reason rather than pending forever.",
         "It is scheduled under the unchanged rules — dependencies, conflict domains/touches, `-p N` and the machine budget — and cannot start ahead of work already waiting on the same constraints.",
@@ -40,19 +49,21 @@
         "In-flight workers are demonstrably untouched: a test with a worker mid-iteration admits a tasklist and asserts the running one's branch, worktree and iteration counter are unchanged.",
         "A hermetic test in the style of `test/concurrency.sh` (scripted fake provider, real driver) proves the end-to-end: a run starts with two tasklists, a third is offered mid-run, and it runs and merges and appears in the summary. Two-sided: the same fixture with the offer never made ends with two.",
         "`bash test/all.sh` passes, and `VERSION` + README + ROADMAP move together."
-      ]
+      ],
+      "notes": "Observed: chief verify -> \"verify: OK (allowing merge)\", exit 0 RECORDED for tree caf3238 (hook = the PROJECT's .chief/verify.sh, cwd this worktree; BYSTANDER PASS over 76 tests). test/mid-run-admission.sh is NOT in that 76 — a branch's own edit to the bystander list does not take effect until it merges — so it was run DIRECTLY: MID-RUN-ADMISSION PASS, 28s, both parts. Mutation-checked: removing the run_file_set_names call reddens only the registry/chief-ps assertion (\"the run's registry entry never listed gamma\"); restoring the bare `set_state \"$an\" pending` reddens the launch-treatment assertions (\"gamma.stalled survived admission\") and the summary then prints the planted stale .why. Measured end-to-end through the real driver: run started alpha beta, gamma offered from inside alpha's first agent turn, ADMITTED at the next wave boundary, merge order alpha beta gamma (no wave jumped), gamma MERGED and retired, present in the end-of-run summary, in the headless JSON summary (3 tasklists, gamma outcome=merged, chief: outcome=merged exit=0), in the run's registry names= and in chief ps (both read while the run was live); the in-flight worker's branch=chief/alpha, worktree and iter=1 identical either side of the admission. Control arm with no offer: 2 tasklists in, 2 out, gamma still in tasks/chief/. Also green: doc-sync (README + ROADMAP v0.9.42), version-bump (VERSION 0.9.42 covers every engine/bin change), smoke, ratelimit, noworkguard, check-doc-links 0 dead references, quality ratchet OK (single_use_functions 50 -> 52, tol 2)."
     },
     {
       "id": "US-3",
       "title": "Every refusal is proven, including the ones that protect the run",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "Tests cover each refusal with its own case: parked, unknown name, already in the run, already merged, lint failure, a dependency that can never be satisfied in the widened run, and a request arriving after the run began computing its outcome.",
         "A sabotage control proves the admission check is load-bearing: disabling it lets a parked or already-merged tasklist join, and exactly the refusal cases redden while the accept cases stay green.",
         "The dependency rule is tested in BOTH directions — a newcomer whose dependency is another tasklist in the same run is admitted and waits for it; one whose dependency can never complete is admitted-and-blocked (or refused) with the reason stated, and the test asserts which of the two chief does rather than accepting either.",
         "`docs/guides/monitoring.md` and whichever explanation page owns the driver's lifecycle state that a run's set can now widen, and what still cannot change mid-run (the base branch, the provider, `-p N`, the machine budget).",
         "`bash test/all.sh` passes, `VERSION` + README + ROADMAP move together, and `scripts/check-roadmap-truth.sh` is green."
-      ]
+      ],
+      "notes": "Observed: chief verify -> \"verify: OK (allowing merge)\", exit 0 RECORDED for tree c3d15dc (hook = the PROJECT's .chief/verify.sh; BYSTANDER PASS over 76 tests, DOC-SYNC PASS, tasklist-categories OK). test/admission-refusals.sh is NOT among those 76 — a branch's own edit to the bystander list does not take effect until it merges — so it was run DIRECTLY, twice: ADMISSION-REFUSALS PASS, 39s, all four parts. PART A: seven refusals at the keyboard, each asserted by its REASON (no such tasklist / parked: held until the schema lands / already in this run / already recorded done / failed lint: branchName is chief/WRONG / \"offer them together: chief offer loner needy\" / dependency \"ghost\" cannot be satisfied in this run), two accept controls green, and the queue held exactly the 2 accepted names and none of the 6 refused; with the window SHUT and its pid still alive (kill -0 succeeded) the offer was refused \"no run in this repo is scheduling\" and nothing was queued, and the same name was accepted again with the window re-opened; with no run at all, refused and .chief/state/admit was not even created. PART B (sabotage, keyboard): with admit_check neutered to return 0 in a copy of the engine, all 7 refused names came back \"✓ … offered\" and each wrote its .req; both accept cases unchanged. PART C (real driver, one run of alpha beta bad, three offers from inside alpha's first agent turn): gamma (dependsOn beta, in the run) ADMITTED and merged AFTER beta — first-parent merge order alpha beta gamma; delta (dependsOn bad, which can never start) ADMITTED then BLOCKED with \"needs \\\"bad\\\", which is itself blocked\", state=blocked, no REFUSED line, nothing on main; parked held refused at the keyboard, state MISSING, still in tasks/chief/. PART D (sabotage, driver): same fixture on the neutered engine — \"＋ ADMITTED held\", state done, out/held.US-1.txt on main. Also green: doc-sync (README + ROADMAP v0.9.42), version-bump (VERSION 0.9.42 covers every engine/bin change — this story touches no engine/bin/scripts/install.sh, so no bump was due), scripts/check-roadmap-truth.sh all three legs (coverage 53/53, stale 0, park 0), check-doc-links.mjs 0 dead references, quality ratchet OK (single_use_functions 50 -> 52, tol 2; function_length_max 631 -> 631). ci.yml re-parsed with yaml.safe_load after the edit."
     }
   ]
 }

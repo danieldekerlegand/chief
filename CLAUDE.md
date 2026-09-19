@@ -74,7 +74,7 @@ Bash (engine + tests) · JSON tasklists. Tooling: `jq`, `shellcheck`.
 ## Layout
 
 ```
-bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [--merge-batch[=N]] [--headless] [--parked] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · events · usage · models · reap · quality · verify · cigate · retire · approve · decide · pause · resume · version · update
+bin/chief            # CLI: init · gen <roadmap.json> · lint · run [-p N] [-n] [--no-merge] [--merge-batch[=N]] [--headless] [--parked] [names…] · list · status [--blocked] [--all] [--json] [--enforce-order] · ps · monitor · logs · events · usage · models · reap · quality · verify · cigate · retire · offer [--parked] · approve · decide · pause · resume · version · update
                      #   (2026-09-04: the seven arms this line had never grown — events · usage ·
                      #   quality · cigate · retire · approve · decide. test/doc-sync.sh gates the
                      #   README's command table against this dispatch and nothing gates THIS line,
@@ -154,6 +154,29 @@ engine/
                      #   (argos:82 · argos/tasks/… · ../pinakes/…) cannot be met from this
                      #   worktree — warns in `chief gen`, fails `chief lint`, and stops a run as
                      #   UNSATISFIABLE before the first agent turn unless "crossRepo" declares it
+  admit.sh           #   MID-RUN ADMISSION: the only way a LIVE run's work set may widen
+                     #   (`chief offer`). A run's set was frozen at launch, so work authored
+                     #   while it ran could only be added by KILLING the run — an operator did
+                     #   exactly that on 2026-09-16, discarding an in-flight agent turn, because
+                     #   driver.lock refuses a second driver. THE RULES ARE THE FEATURE: a
+                     #   tasklist may join only if it would have been legal AT LAUNCH (exists ·
+                     #   not parked · not already in the run · not already merged · passes the
+                     #   same `chief lint` · deps satisfiable by something merged or something in
+                     #   the WIDENED run), and everything else is refused with the reason.
+                     #   CHECKED TWICE, and both askings call ONE function: at the keyboard so
+                     #   the operator hears no immediately, and again at admission because the
+                     #   gap between them is a gap in which the tasklist can be parked, edited or
+                     #   merged by a sibling run. MERGED IS ASKED BEFORE EXISTS, or every
+                     #   already-merged name refuses as "no such tasklist" — a merged tasklist
+                     #   has no live JSON left, it IS the completed/ record. The window OPENS
+                     #   when the scheduler enters its loop and SHUTS when it leaves: outside it
+                     #   there is no set to widen, only an outcome being computed, and a request
+                     #   arriving then is refused with that reason rather than half-joining a
+                     #   finished run. A request is addressed to ONE run by pid, so one made of a
+                     #   run that has since ended is dropped and REPORTED — absorbing it would be
+                     #   the silent auto-scan this refuses to be. Not a second driver, not a
+                     #   watcher, not a reordering, and never a raised ceiling.
+                     #   docs/reference/mid-run-admission.md
   deps.sh            #   DEPENDENCY RESOLUTION, extracted from driver.sh so there is exactly ONE
                      #   answer to "is this tasklist's dependsOn satisfied": deps_of · dep_record ·
                      #   is_recorded_done · the cross-repo <repo>:<stem> resolution. Functions over
@@ -515,6 +538,21 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   escapee was not named" can never read as "the sweep never ran".
                      #   PART B plants the entry the start-time check exists for — alive pid,
                      #   wrong start time — and pins that it is REPORTED and LEFT ALONE
+                     #   admission-refusals.sh — mid-run admission's NOs, where
+                     #   mid-run-admission.sh has its YES: each refusal as its own
+                     #   case (parked · unknown · already in the run · already
+                     #   merged · lint · a dependency neither merged nor in the
+                     #   widened set · a request arriving once the run stopped
+                     #   scheduling), asserted by its REASON and by the QUEUE —
+                     #   a name told no at the keyboard that is recorded anyway
+                     #   is answered again at the run's next boundary. The window
+                     #   case shuts the window while the pid STAYS ALIVE, which
+                     #   is the discrimination the timing rule actually makes and
+                     #   one a test that killed the driver cannot make. SABOTAGE
+                     #   CONTROL in both registers: with admit_check neutered in
+                     #   a copy of the engine every refusal is accepted and
+                     #   queued, and through the real driver the parked tasklist
+                     #   joins and MERGES
                      #   zone-friction.sh — the granularity distinction as an OUTCOME, through
                      #   the real driver, where zone-surface.sh asserts the matcher's own
                      #   output: "the rule did not match" and "the branch merged with nobody
@@ -610,6 +648,41 @@ VERSION              # engine version — bump on any engine/bin/install change
   fallback instead. Lead such a stamp by the measured cost, and clamp what it can
   cost you with the cap.
 
+- **A LONG-LIVED FIXTURE'S OWN `sleep N` IS A WALL-CLOCK CEILING TOO — on the whole
+  block, hidden inside the fixture.** `test/bystander.sh` stands a decoy run up and
+  asserts after EVERY test in the behavioural block that it is still breathing. Both
+  decoys were a `sleep 3600`, so that assertion silently also said "this block finishes
+  within an hour" — and when it does not, the decoy simply EXITS, which `alive` cannot
+  tell apart from the kill the whole file exists to catch. Measured 2026-09-18: the
+  78-test block on a host at load 27 / 14 cores reached test 34 six hours in, and the
+  run failed `test/suspectlimit.sh KILLED the bystander driver` — naming a file that
+  had just printed SUSPECTLIMIT PASS and whose fixtures are scoped nowhere near the
+  decoy. A false accusation is worse than no test: it blocks a merge and sends the
+  reader into an engine that is behaving correctly. A fixture that must outlive an
+  UNBOUNDED block is therefore bounded by the PROCESS that started it, never by a
+  clock — `while kill -0 "$parent"; do sleep 2; done`, `monitor.sh watch`'s own rule
+  one register down — which also cuts the leak a SIGKILLed suite can strand from an
+  hour to two seconds. `exec -a` keeps the marker on argv whatever the process goes
+  on to run, so process discovery is unaffected by what it waits with.
+
+- **A RED verdict is CACHED, so a flaky gate poisons the merge until it is re-earned.**
+  The same block that makes a green verdict free makes a red one STICK: the merge
+  phase reuses `<tree>.<base>.<hook>.<subs>` for any status, so one load-induced
+  failure leaves `exit 1 RECORDED for tree <sha>` and the merge is refused from the
+  record without the gate running again. Re-running **`chief verify`** is the repair —
+  it never reads the cache and its fresh verdict REPLACES the record — but only on an
+  UNCHANGED tree: commit first, or the verdict is earned for a sha that no longer
+  exists. Measured 2026-09-18 on `127`: the 76-test block went red on
+  `test/verify-stream.sh` PART E, whose row read `↳ agent-turn for 40m · iter 1 ·
+  0s ago` — the clobber that file's own comments name (`backdate_settled` confirms the
+  backdate survived, but nothing stops a tick landing between it and the render), seen
+  only under the block's parallelism and with two sibling repos' runs on the host. The
+  same file standalone was `VERIFY-STREAM OK`, PART E included, at load 14.5/14 cores.
+  Before believing such a failure, check whether the branch touches the module at all
+  — this one changed neither `agent.sh` nor `live.sh` — and re-run the file ALONE;
+  a bystander-block red that names a file your diff never touched is the 2026-09-18
+  false-accusation shape one register down.
+
 - **"The gate ran N times" is a RACY assertion, and the verify CACHE is why.**
   `verify_cache_try` (`engine/lib.sh`) serves a merge-phase verify from the verdict the
   AGENT boundary already recorded whenever tree + base + hook are unchanged — which for
@@ -642,10 +715,17 @@ VERSION              # engine version — bump on any engine/bin/install change
   it remains the way to re-earn ONE verdict without changing a whole run.
 - **The driver RE-SEEDS `.chief/state/progress.txt` at run start** — fresh header, plus a
   `⚠️ PRIOR VERIFICATION FAILED` block when the last merge attempt came back red. That
-  file and `.chief/state/prd.json` are the two TRACKED exceptions to the gitignored
-  `.chief/state/`, so committing the re-seeded copy as found DELETES every earlier note
-  from the tree. Restore `git show HEAD:.chief/state/progress.txt` first, then append —
-  the log is append-only by contract and the re-seed does not know that.
+  block is the one thing an all-pass resume may not skip: every story can read
+  `passes:true` and the branch still be one the merge gate refused.
+  **Both it and `.chief/state/prd.json` are UNTRACKED**, and have been since `629aa0f`
+  (2026-09-11) resolved the contradiction of tracking files this repo's own
+  `.gitignore:3` (`.chief/state/`) excludes. So the restore this note used to prescribe
+  no longer has anything to restore — `git show HEAD:.chief/state/progress.txt` exits
+  128, `exists on disk, but not in 'HEAD'` — and appending to the log produces **no
+  commit at all**. An iteration whose only output is a progress note is therefore
+  commit-free, which is exactly what the EMPTY-NO-WORK guard rejects: a resume that
+  only re-earns a verdict has to carry a real change, or it has nothing to report
+  COMPLETE with.
 - **A backtick in an unquoted heredoc RUNS.** Every usage/help block in the engine is a
   `cat <<EOF` (it interpolates `$VERSION`, `${CHIEF_REAP_GRACE:-5}`, `$CHIEF_WT_ROOT_ALL`), and
   chief's prose is full of `` `chief monitor` ``-style backticks. Unescaped, that is command
