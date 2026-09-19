@@ -665,6 +665,24 @@ VERSION              # engine version — bump on any engine/bin/install change
   hour to two seconds. `exec -a` keeps the marker on argv whatever the process goes
   on to run, so process discovery is unaffected by what it waits with.
 
+- **A RED verdict is CACHED, so a flaky gate poisons the merge until it is re-earned.**
+  The same block that makes a green verdict free makes a red one STICK: the merge
+  phase reuses `<tree>.<base>.<hook>.<subs>` for any status, so one load-induced
+  failure leaves `exit 1 RECORDED for tree <sha>` and the merge is refused from the
+  record without the gate running again. Re-running **`chief verify`** is the repair —
+  it never reads the cache and its fresh verdict REPLACES the record — but only on an
+  UNCHANGED tree: commit first, or the verdict is earned for a sha that no longer
+  exists. Measured 2026-09-18 on `127`: the 76-test block went red on
+  `test/verify-stream.sh` PART E, whose row read `↳ agent-turn for 40m · iter 1 ·
+  0s ago` — the clobber that file's own comments name (`backdate_settled` confirms the
+  backdate survived, but nothing stops a tick landing between it and the render), seen
+  only under the block's parallelism and with two sibling repos' runs on the host. The
+  same file standalone was `VERIFY-STREAM OK`, PART E included, at load 14.5/14 cores.
+  Before believing such a failure, check whether the branch touches the module at all
+  — this one changed neither `agent.sh` nor `live.sh` — and re-run the file ALONE;
+  a bystander-block red that names a file your diff never touched is the 2026-09-18
+  false-accusation shape one register down.
+
 - **"The gate ran N times" is a RACY assertion, and the verify CACHE is why.**
   `verify_cache_try` (`engine/lib.sh`) serves a merge-phase verify from the verdict the
   AGENT boundary already recorded whenever tree + base + hook are unchanged — which for
@@ -697,10 +715,17 @@ VERSION              # engine version — bump on any engine/bin/install change
   it remains the way to re-earn ONE verdict without changing a whole run.
 - **The driver RE-SEEDS `.chief/state/progress.txt` at run start** — fresh header, plus a
   `⚠️ PRIOR VERIFICATION FAILED` block when the last merge attempt came back red. That
-  file and `.chief/state/prd.json` are the two TRACKED exceptions to the gitignored
-  `.chief/state/`, so committing the re-seeded copy as found DELETES every earlier note
-  from the tree. Restore `git show HEAD:.chief/state/progress.txt` first, then append —
-  the log is append-only by contract and the re-seed does not know that.
+  block is the one thing an all-pass resume may not skip: every story can read
+  `passes:true` and the branch still be one the merge gate refused.
+  **Both it and `.chief/state/prd.json` are UNTRACKED**, and have been since `629aa0f`
+  (2026-09-11) resolved the contradiction of tracking files this repo's own
+  `.gitignore:3` (`.chief/state/`) excludes. So the restore this note used to prescribe
+  no longer has anything to restore — `git show HEAD:.chief/state/progress.txt` exits
+  128, `exists on disk, but not in 'HEAD'` — and appending to the log produces **no
+  commit at all**. An iteration whose only output is a progress note is therefore
+  commit-free, which is exactly what the EMPTY-NO-WORK guard rejects: a resume that
+  only re-earns a verdict has to carry a real change, or it has nothing to report
+  COMPLETE with.
 - **A backtick in an unquoted heredoc RUNS.** Every usage/help block in the engine is a
   `cat <<EOF` (it interpolates `$VERSION`, `${CHIEF_REAP_GRACE:-5}`, `$CHIEF_WT_ROOT_ALL`), and
   chief's prose is full of `` `chief monitor` ``-style backticks. Unescaped, that is command
