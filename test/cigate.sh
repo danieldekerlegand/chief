@@ -39,7 +39,7 @@
 # CHIEF_PREFIX. No network, no agent, no ~/.chief access.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/chief-cigate.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 export CHIEF_PREFIX="$WORK/prefix" CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos/list"

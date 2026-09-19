@@ -15,7 +15,7 @@
 # neither pending nor dependency-blocked, and used to render as an ordinary running
 # row with nothing said about it — indistinguishable from a slow verify.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export CHIEF_RUNS="$WORK/runs" CHIEF_LOAD_AVERAGE=62

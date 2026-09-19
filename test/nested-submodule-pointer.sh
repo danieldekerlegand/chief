@@ -21,7 +21,7 @@
 # and project's gitlink for sub advanced. Fully offline; deterministic.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=nsp GIT_AUTHOR_EMAIL=nsp@test GIT_COMMITTER_NAME=nsp GIT_COMMITTER_EMAIL=nsp@test

@@ -34,7 +34,7 @@
 # fails on drift.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 cd "$ROOT"
 
 # Overridable so the negative self-checks can point the same logic at doctored

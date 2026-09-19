@@ -17,7 +17,7 @@
 # Hermetic: a scripted fake `claude`, temp prefixes, never touches ~/.chief.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=lr GIT_AUTHOR_EMAIL=lr@test GIT_COMMITTER_NAME=lr GIT_COMMITTER_EMAIL=lr@test

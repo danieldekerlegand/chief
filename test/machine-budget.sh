@@ -2,7 +2,7 @@
 # Two registered runs share one machine-wide agent-turn slot; the second waits
 # until the first driver's live record disappears.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 RUNS="$WORK/runs"; mkdir -p "$RUNS" "$WORK/one/parallel" "$WORK/two/parallel"

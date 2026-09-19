@@ -24,7 +24,7 @@
 # $SELF) and executes nothing. Everything else in it is literal text.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 cd "$ROOT"
 
 fail() { echo "USAGE FAIL: $*" >&2; exit 1; }

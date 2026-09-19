@@ -25,7 +25,7 @@
 # while the dependent points at it, and stamped with a sha when the work IS in main.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=rn GIT_AUTHOR_EMAIL=rn@test GIT_COMMITTER_NAME=rn GIT_COMMITTER_EMAIL=rn@test

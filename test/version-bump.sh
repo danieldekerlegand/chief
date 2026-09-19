@@ -10,7 +10,7 @@
 # last commit that touched VERSION, VERSION is stale. scripts/ counts because install.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 cd "$ROOT"
 
 last_ver_commit="$(git log -1 --format=%H -- VERSION 2>/dev/null || true)"

@@ -7,7 +7,7 @@
 # the second budget: what it counts, that it holds, that it releases, and — the part
 # that matters most — that it cannot wedge the portfolio.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 RUNS="$WORK/runs"; ST="$WORK/st"

@@ -18,7 +18,7 @@
 # work against a broken tree. Fully offline; deterministic.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=nst GIT_AUTHOR_EMAIL=nst@test GIT_COMMITTER_NAME=nst GIT_COMMITTER_EMAIL=nst@test

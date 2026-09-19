@@ -9,7 +9,7 @@
 # switch it off, and — the part that matters most — that foreign load cannot stall
 # the portfolio.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 RUNS="$WORK/runs"; ST="$WORK/st"

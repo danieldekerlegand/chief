@@ -33,7 +33,7 @@
 # accident. Drives bin/chief straight out of this checkout (uncommitted work included).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 PIDS=""
 cleanup() {

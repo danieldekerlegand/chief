@@ -24,7 +24,7 @@
 # --no-lint everywhere so a host with (or without) shellcheck reaches the same verdict.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/quality-ratchet.XXXXXX")" || exit 1
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=qr GIT_AUTHOR_EMAIL=qr@test GIT_COMMITTER_NAME=qr GIT_COMMITTER_EMAIL=qr@test

@@ -30,7 +30,7 @@
 # happened and the configuration this reproduces.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 DECOYS=""
 cleanup() { local p; for p in $DECOYS; do kill -9 "$p" 2>/dev/null || true; done; rm -rf "$WORK"; }

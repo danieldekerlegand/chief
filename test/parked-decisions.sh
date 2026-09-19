@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Decision classes make human-held parks filterable without making park prose closed.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 export CHIEF_PREFIX="$WORK/prefix" CHIEF_REPOS="$WORK/repos"
 export GIT_AUTHOR_NAME=decision GIT_AUTHOR_EMAIL=decision@test GIT_COMMITTER_NAME=decision GIT_COMMITTER_EMAIL=decision@test

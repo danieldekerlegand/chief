@@ -48,7 +48,7 @@
 # changes before trusting a green result.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 
 # ── SIGINT must be DELIVERABLE, or part 1 proves nothing ─────────────────────
 # The same SIG_IGN rule this test exists to pin down applies to the TEST ITSELF.

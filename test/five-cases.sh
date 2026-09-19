@@ -39,7 +39,7 @@
 #                One line of notes is the whole price.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=fc GIT_AUTHOR_EMAIL=fc@test GIT_COMMITTER_NAME=fc GIT_COMMITTER_EMAIL=fc@test

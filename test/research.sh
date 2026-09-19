@@ -29,7 +29,7 @@
 # bin/chief straight out of this checkout, so it tests uncommitted work.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rc=$?; rm -rf "$WORK"; exit "$rc"' EXIT
 export GIT_AUTHOR_NAME=rs GIT_AUTHOR_EMAIL=rs@test GIT_COMMITTER_NAME=rs GIT_COMMITTER_EMAIL=rs@test

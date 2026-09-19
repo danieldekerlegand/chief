@@ -34,7 +34,7 @@
 # tests uncommitted work.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rc=$?; rm -rf "$WORK"; exit "$rc"' EXIT
 export GIT_AUTHOR_NAME=zf GIT_AUTHOR_EMAIL=zf@test GIT_COMMITTER_NAME=zf GIT_COMMITTER_EMAIL=zf@test
