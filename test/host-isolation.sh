@@ -274,4 +274,219 @@ case "$out" in *"$HOSTDECOY"*) ;; *) fail "E: the sweep went outside, but not to
 $out" ;; esac
 echo "host-isolation:   with no prefix the same fixture walks \$HOME/.chief/worktrees, and PART D's check names it"
 
-echo "HOST-ISOLATION PASS — a fixture run ignores the host's load average and walks only its own worktree root"
+# ══ PART F — the caller's per-run pointers do not survive into a fixture ═════
+# The fourth host input, and the only one that is a WRITE. `chief verify` runs this
+# suite from inside an agent turn, and the driver exports that run's own absolute
+# paths into it — the liveliness record, the event stream, the PRD snapshot, the
+# verdict cache, and an ITERATION HOOK that is a real `driver.sh --integrate-base`
+# against the real branch. A test that drives engine/agent.sh directly picks all of
+# them up, because agent.sh reads exactly those names.
+#
+# DERIVED FROM driver.sh, NEVER HAND-COPIED. The defect this file exists for is a
+# host input nobody thought about; a roster maintained by hand here is a roster that
+# stops naming the newest export the day after it lands. Two shapes, because the
+# driver writes two: the agent invocation block's `VAR=… "$ENGINE/agent.sh"` prefix,
+# and the five it exports outright into run_worker — which is also the environment
+# the verify hook, and therefore this suite, is run in.
+echo "host-isolation: part F — the pointers the driver exports into an agent turn"
+driver_exports() {
+  { LC_ALL=C awk '/\( cd "\$wt" && CHIEF_PROJECT=/,/agent\.sh" "\$iters"/' "$ROOT/engine/driver.sh" \
+      | grep -oE 'CHIEF_[A-Z_]+=' | tr -d '='
+    LC_ALL=C grep -hoE 'export +CHIEF_[A-Z_]+([[:space:]]+CHIEF_[A-Z_]+)*' "$ROOT/engine/driver.sh" \
+      | sed 's/export *//' | tr ' ' '\n'
+  } | grep . | sort -u
+}
+EXPORTS="$(driver_exports)"
+n="$(printf '%s\n' "$EXPORTS" | grep -c . || true)"
+[ "${n:-0}" -ge 20 ] \
+  || fail "F: only ${n:-0} exported name(s) parsed out of engine/driver.sh — an anchor moved; repair the parser in this file, do not delete the check"
+# Both anchors, asserted by name: a parser that silently matched only one of the two
+# shapes would still clear the count above and would miss the five that matter most.
+for v in CHIEF_LIVE_FILE CHIEF_ITER_HOOK CHIEF_PRD_SNAPSHOT CHIEF_EVENTS_FILE CHIEF_VERIFY_CACHE_STATE; do
+  printf '%s\n' "$EXPORTS" | grep -qx "$v" || fail "F: the parser missed $v — both anchors need repairing"
+done
+printf '%s\n' "$EXPORTS" | sed 's#^#export #; s#$#="/canary/host-run"#' > "$WORK/f-env.sh"
+survivors="$(bash -c '. "$1"; . "$2/test/lib.sh"; env | LC_ALL=C sed -n "s/^\(CHIEF_[A-Z0-9_]*\)=\(.*\)/\1 \2/p"' \
+              _ "$WORK/f-env.sh" "$ROOT" | grep ' /canary/host-run$' | cut -d' ' -f1 || true)"
+[ -z "$survivors" ] || fail "F: $(printf '%s\n' "$survivors" | tr '\n' ' ')survived lib.sh still naming the caller's run"
+echo "host-isolation:   $n pointer(s) parsed out of driver.sh, none survives lib.sh"
+# The other direction, and it is the one a scrub gets wrong quietly: the list the
+# merge gate hands test/bystander.sh is itself a CHIEF_* variable, and scrubbing it
+# would run the whole behavioural block EMPTY while reporting PASS.
+out="$(CHIEF_BYSTANDER_TESTS='smoke teardown' bash -c '. "$1/test/lib.sh"; printf %s "${CHIEF_BYSTANDER_TESTS:-}"' _ "$ROOT")"
+[ "$out" = 'smoke teardown' ] || fail "F: lib.sh scrubbed the bystander block's own test list (got '$out')"
+echo "host-isolation:   the suite's own variables (CHIEF_TEST_* · CHIEF_BYSTANDER_TESTS · the capacity knobs) are kept"
+
+# ══ PART G — and a real agent.sh run writes none of them ═════════════════════
+# PART F is the property; this is the consequence, which is the thing that was
+# actually measured. Every pointer is aimed at a CANARY laid out exactly as a live
+# run's state root, a fixture test sources lib.sh and drives engine/agent.sh the way
+# twenty-six scripts here do, and nothing under the canary may move.
+echo "host-isolation: part G — a fixture that drives engine/agent.sh, with the canaries armed"
+
+# A provider that refuses. This path is the incident verbatim: it is what wrote
+# `phase=provider-unavailable · noturn=3/3` into a four-story run's record and put a
+# fixture's HTTP 401 into that run's published event stream.
+mkdir -p "$WORK/refusebin"
+cat > "$WORK/refusebin/claude" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+echo 'API Error: 529 Overloaded. This is a server-side issue, usually temporary'
+exit 1
+FAKE
+chmod +x "$WORK/refusebin/claude"
+# ...and one that WORKS, because the refusal arm alone leaves three of the seven
+# writes below unreachable: $CHIEF_PRD_SNAPSHOT is banked and $CHIEF_ITER_HOOK is run
+# at the ITERATION BOUNDARY, and a run that never takes a turn never reaches one. An
+# assertion about a write the fixture could not have made is not an assertion.
+#
+# TWO TURNS, and that is not padding: a turn that reports COMPLETE leaves the loop
+# ABOVE the boundary, so a one-turn fixture never reaches it either. The first turn
+# commits product and says nothing, which carries the loop through one whole boundary
+# and only then ends.
+mkdir -p "$WORK/donebin"
+cat > "$WORK/donebin/claude" <<'FAKE'
+#!/usr/bin/env bash
+set -eu
+cat >/dev/null
+n=0; [ -f .chief/state/turns ] && n="$(cat .chief/state/turns)"
+n=$(( n + 1 )); echo "$n" > .chief/state/turns
+echo "turn $n" > out.txt
+if [ "$n" -ge 2 ]; then
+  t="$(mktemp)"; jq '.userStories |= map(.passes=true | .notes="fixture: green")' \
+    .chief/state/prd.json > "$t" && mv "$t" .chief/state/prd.json
+fi
+git add -A >/dev/null 2>&1 && git commit -q -m "feat: [US-1] - turn $n" >/dev/null 2>&1 || true
+[ "$n" -ge 2 ] && echo "<promise>COMPLETE</promise>"
+exit 0
+FAKE
+chmod +x "$WORK/donebin/claude"
+
+# The fixture, in the shape of a test script: $ROOT is resolved, lib.sh is sourced,
+# and only then is an agent invoked. It names none of the pointers, which is the
+# whole point — the twenty-six scripts that drive agent.sh directly do not either.
+cat > "$WORK/fixture-test.sh" <<'FT'
+#!/usr/bin/env bash
+set -euo pipefail
+LIBROOT="$1"; FREPO="$2"; FBIN="$3"; FAGENT="$4"; FLOG="$5"; FITERS="$6"
+. "$LIBROOT/test/lib.sh"
+cd "$FREPO"
+PATH="$FBIN:$PATH" CHIEF_PROJECT="$FREPO" CHIEF_STATE_DIR=.chief/state \
+  RATE_LIMIT_RETRY=0 STALL_LIMIT=1 PROVIDER_NOTURN_LIMIT=3 PROVIDER_BACKOFF=0 \
+  bash "$FAGENT" "$FITERS" >"$FLOG" 2>&1 || true
+FT
+
+fixrepo() {   # <dir> — the minimum engine/agent.sh will run against
+  mkdir -p "$1/.chief/state"
+  git -C "$1" init -q -b main 2>/dev/null || git -C "$1" init -q
+  git -C "$1" commit -q --allow-empty -m init
+  cat > "$1/.chief/state/prd.json" <<'JSON'
+{ "project":"fix","branchName":"chief/fix","userStories":[
+  {"id":"US-1","title":"one","description":"","acceptanceCriteria":[],"passes":false,"notes":""}] }
+JSON
+  printf '%s\n' '# Chief Progress Log' > "$1/.chief/state/progress.txt"
+}
+
+# The canary: a live run's state root, down to the paths, so a write lands where the
+# incident's did. The live record is written by live_set and not by hand for the
+# reason the decoy above is — a hand-dumped record reads back empty and a clobber of
+# it could not be detected.
+arm_canary() {   # <dir>
+  rm -rf "$1"; mkdir -p "$1/state/parallel" "$1/state/snapshots" "$1/state/research" "$1/runs"
+  live_set "$1/state/parallel/real.live.json" name=real state=running phase=agent-turn \
+    story=US-4 iter=3 passing=3 total=4
+  cp "$1/state/parallel/real.live.json" "$1/live.before"
+  : > "$1/real.events.jsonl"
+  printf '{"branchName":"chief/real","userStories":[{"id":"US-1","passes":true}]}\n' > "$1/state/snapshots/real.json"
+  cp "$1/state/snapshots/real.json" "$1/snap.before"
+}
+# What the driver hands the hook, aimed at the canary. CHIEF_ITER_HOOK is a `touch`
+# rather than the real `driver.sh --integrate-base`: the assertion is that it is not
+# RUN, and a guard that rebases a repository to find that out is not a guard.
+canary_env() {   # <dir> — the exports, ready to eval
+  cat <<ENV
+export CHIEF_LIVE_FILE="$1/state/parallel/real.live.json"
+export CHIEF_EVENTS_FILE="$1/real.events.jsonl"
+export CHIEF_EVENT_REPO="/the/real/repo"
+export CHIEF_RUN_ID="the-real-run"
+export CHIEF_TASKLIST="the-real-tasklist"
+export CHIEF_PRD_SNAPSHOT="$1/state/snapshots/real.json"
+export CHIEF_UNVERIFIED_FILE="$1/state/snapshots/real.unverified.md"
+export CHIEF_RESEARCH_FILE="$1/state/research/real.md"
+export CHIEF_VERIFY_CACHE_STATE="$1/state/parallel"
+export CHIEF_MACHINE_BUDGET_LOG="$1/state/parallel/machine-budget.log"
+export CHIEF_PAUSE_FILE="$1/state/parallel/.paused"
+export CHIEF_ITER_HOOK="touch $1/ITER-HOOK-RAN"
+export CHIEF_RUNS="$1/runs"
+ENV
+}
+# Every way the canary can have moved, in one place, so PART G and PART H are asking
+# the identical question of the identical tree.
+canary_writes() {   # <dir> — prints one line per write; silent when clean
+  cmp -s "$1/live.before" "$1/state/parallel/real.live.json" || echo "the run's live record was rewritten"
+  cmp -s "$1/snap.before" "$1/state/snapshots/real.json"     || echo "the run's PRD snapshot was overwritten"
+  [ ! -s "$1/real.events.jsonl" ]            || echo "$(grep -c . "$1/real.events.jsonl") line(s) appended to the run's event stream"
+  [ ! -e "$1/ITER-HOOK-RAN" ]                || echo "the run's iteration hook was EXECUTED"
+  [ ! -d "$1/state/parallel/verify-cache" ]  || echo "a verdict was recorded into the run's verify cache"
+  [ ! -e "$1/state/research/real.md" ]       || echo "the run's research document was written"
+  [ ! -e "$1/state/snapshots/real.unverified.md" ] || echo "the run's unverified marker was written"
+}
+
+# The two fixtures, and the proof that each reached the arm it is here for. PART G
+# and PART H call this with different FIRST arguments and nothing else.
+drive_fixtures() {   # <libroot> <canary> <tag>
+  fixrepo "$WORK/$3-refuse"; fixrepo "$WORK/$3-done"
+  ( eval "$(canary_env "$2")"
+    bash "$WORK/fixture-test.sh" "$1" "$WORK/$3-refuse" "$WORK/refusebin" "$ROOT/engine/agent.sh" "$WORK/$3-1.log" 1 )
+  ( eval "$(canary_env "$2")"
+    bash "$WORK/fixture-test.sh" "$1" "$WORK/$3-done"   "$WORK/donebin"   "$ROOT/engine/agent.sh" "$WORK/$3-2.log" 3 )
+  LOG="$3-1.log"; grep -q 'refused 3 consecutive requests' "$WORK/$3-1.log" \
+    || fail "$3: the refusing fixture never reached the provider-unavailable arm — it wrote nothing because it did nothing"
+  LOG="$3-2.log"; grep -q 'completed all tasks' "$WORK/$3-2.log" \
+    || fail "$3: the completing fixture never reached an iteration boundary — the snapshot and hook writes are unreachable"
+}
+
+CANARY="$WORK/canary-g"
+arm_canary "$CANARY"
+drive_fixtures "$ROOT" "$CANARY" g
+wrote="$(canary_writes "$CANARY")"
+[ -z "$wrote" ] || fail "G: a fixture wrote into the calling run's state:
+$(printf '%s\n' "$wrote" | sed 's/^/  · /')"
+echo "host-isolation:   one fixture refused 3/3, one completed its story, and the caller's records are untouched"
+
+# ══ PART H — the same fixture with the scrub removed ═════════════════════════
+# The mutation check, and here it has to be a NEUTERED COPY rather than PART B's
+# configuration: what was added is a rule, not a default, so there is no value to
+# set that restores the old reading. The copy is of test/lib.sh alone — nothing else
+# in the file's behaviour depends on the rest of the tree.
+echo "host-isolation: part H — the same fixture against a lib.sh with the scrub deleted"
+mkdir -p "$WORK/nolib/test"
+LC_ALL=C awk 'f && /^unset _chief_test_v$/ { f=0; next } /^_chief_test_v=$/ { f=1 } !f' \
+  "$ROOT/test/lib.sh" > "$WORK/nolib/test/lib.sh"
+grep -q '^_chief_test_v=$' "$ROOT/test/lib.sh" \
+  || fail "H: the scrub's anchor is gone from test/lib.sh — repair this sed, do not delete the control"
+# `! grep … || fail`, never `grep … && fail`: an AND-list whose left side fails
+# returns non-zero, and under `set -e` that ends the script — US-3's cleanup trap,
+# one register up (test/signal-cleanup.sh PART D scans for the shape).
+! grep -q '^_chief_test_v=$' "$WORK/nolib/test/lib.sh" \
+  || fail "H: the scrub survived into the neutered copy — the control is not controlling"
+bash -n "$WORK/nolib/test/lib.sh" || fail "H: the neutered copy does not parse"
+
+CANARY_H="$WORK/canary-h"
+arm_canary "$CANARY_H"
+drive_fixtures "$WORK/nolib" "$CANARY_H" h
+wrote="$(canary_writes "$CANARY_H")"
+[ -n "$wrote" ] || fail "H: the pre-fix lib.sh left the caller's records untouched too — PART G proves nothing"
+# Named, not counted: "something moved" would also be satisfied by the one write that
+# is merely untidy, and the two this rule exists for are the record `chief ps` reads
+# and the snapshot a resumed run is seeded from.
+for want in "live record" "PRD snapshot"; do
+  printf '%s\n' "$wrote" | grep -q "$want" \
+    || fail "H: the control wrote something, but not the $want:
+$wrote"
+done
+echo "host-isolation:   without the scrub the same fixture writes into the caller's run —"
+printf '%s\n' "$wrote" | sed 's/^/host-isolation:     · /'
+
+echo "HOST-ISOLATION PASS — a fixture run ignores the host's load average, walks only its own
+                       worktree root, and writes nothing into the run that called it"

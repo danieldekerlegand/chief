@@ -495,7 +495,36 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   input NOBODY THOUGHT ABOUT, and an opt-in rule is exactly the rule
                      #   such a test does not opt into. HERMETIC IN STATE IS NOT HERMETIC IN
                      #   THE HOST — the third register of bystander.sh's sentence (nor in
-                     #   PROCESSES) and suspectlimit.sh's (nor in ENV). Every fixture already
+                     #   PROCESSES) and suspectlimit.sh's (nor in ENV). FOUR host inputs
+                     #   now, and the FOURTH is the only one that is a WRITE: the per-run
+                     #   POINTERS the caller hands us in the environment. `chief verify`
+                     #   runs this suite from inside an agent turn, and the driver exports
+                     #   that run's own absolute paths into it — 36 CHIEF_* variables, of
+                     #   which agent.sh reads five. MEASURED 2026-09-19, from inside this
+                     #   repo's run of 128, by aiming each at a canary and running three
+                     #   UNMODIFIED tests (ratelimit · provider-unavailable · provider):
+                     #   all three PASSED and between them they rewrote the run's live
+                     #   record to a one-story fixture's shape (`total:1 · noturn:3/3` —
+                     #   the observation 128/US-4 was authored to explain), appended 55
+                     #   event lines carrying the REAL runId, repo and tasklist name
+                     #   (including an HTTP 401 `the credential is wrong, revoked` that a
+                     #   subscriber cannot tell from its own), replaced
+                     #   snapshots/128-….json with `{"branchName":"chief/provider"…}` —
+                     #   the ONLY per-story record a `repo:<sub>` tasklist has — and RAN
+                     #   the iteration hook, a real `driver.sh --integrate-base` against
+                     #   the real branch, worktree and repo. It runs the other way too:
+                     #   agent.sh SEEDS from $CHIEF_PRD_SNAPSHOT, so two tests sharing one
+                     #   inherited snapshot contaminated each other in that measurement.
+                     #   A DENYLIST IS THE WRONG SHAPE — this file exists for inputs nobody
+                     #   thought about and the driver's export set grows — so EVERY CHIEF_*
+                     #   in the environment goes and what stays is NAMED: CHIEF_TEST_* (the
+                     #   suite's own namespace) · CHIEF_BYSTANDER_TESTS (scrub it and the
+                     #   merge gate's behavioural block runs EMPTY, reporting PASS) ·
+                     #   CHIEF_VERIFY_TESTS · the CHIEF_MACHINE_* / CHIEF_LOAD_AVERAGE
+                     #   capacity NUMBERS. With one hand-named exception that proves the
+                     #   family match is a guess: CHIEF_MACHINE_BUDGET_LOG is not a number,
+                     #   it is the live run's hold log, and it was measured surviving.
+                     #   Every fixture already
                      #   points $CHIEF_RUNS/$CHIEF_REPOS/$CHIEF_PREFIX at its own temp tree,
                      #   but a fixture run's SCHEDULER read the host's one-minute LOAD
                      #   AVERAGE: measured 2026-09-18 on a host with three other chief runs
@@ -578,7 +607,25 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   empty root prints a summary and no verdict line, and "nothing fell
                      #   outside" passes loudest on a sweep that judged nothing. The control's
                      #   $HOME is a temp tree of the test's own: a control for "a fixture reads
-                     #   the real ~/.chief" may not itself read the real ~/.chief
+                     #   the real ~/.chief" may not itself read the real ~/.chief. PARTS F/G/H
+                     #   are the fourth input, and F's roster is DERIVED FROM driver.sh rather
+                     #   than copied: two parsers, one per shape the driver uses (the agent
+                     #   invocation block's `VAR=… agent.sh` prefix, and the five it exports
+                     #   outright into run_worker), a floor on the count and five names
+                     #   asserted individually, so an anchor that moves FAILS instead of
+                     #   quietly narrowing. A hand-kept list is a list that stops naming the
+                     #   newest export the day after it lands. G is the consequence — two
+                     #   fixtures drive engine/agent.sh the way twenty-six scripts here do,
+                     #   with every pointer aimed at a canary laid out as a live run's state
+                     #   root — and the SECOND fixture exists because a refusal never reaches
+                     #   an iteration boundary and a turn that reports COMPLETE leaves the
+                     #   loop ABOVE one, so the snapshot and hook writes are unreachable from
+                     #   either alone; it takes TWO turns. H is the mutation control and here
+                     #   it has to be a NEUTERED COPY of lib.sh, not PART B's configuration:
+                     #   what was added is a rule, not a default, so no value restores the old
+                     #   reading. It reproduces all four writes and is asserted BY NAME on the
+                     #   two that matter (live record · PRD snapshot), because "something
+                     #   moved" is also satisfied by the one write that is merely untidy
                      #   signal-cleanup.sh — the same claim for the third input, and it
                      #   asserts the DIRECTORY rather than the trap: three signals × the
                      #   four EXIT-trap shapes that actually occur here, each victim given

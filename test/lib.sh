@@ -12,9 +12,16 @@
 # HERMETIC IN STATE IS NOT HERMETIC IN THE HOST — the third register of a sentence
 # this suite has now written twice (test/bystander.sh: hermetic in state is not
 # hermetic in PROCESSES; test/suspectlimit.sh: nor in ENV). Every fixture here
-# already points $CHIEF_RUNS / $CHIEF_REPOS / $CHIEF_PREFIX at its own temp tree, so
-# nothing it runs writes to ~/.chief. But a fixture run's SCHEDULER reads one number
-# that belongs to no run at all: the host's one-minute LOAD AVERAGE.
+# points $CHIEF_RUNS / $CHIEF_REPOS / $CHIEF_PREFIX at its own temp tree, so nothing
+# it runs writes to ~/.chief BY THAT ROUTE. But a fixture run's SCHEDULER reads one
+# number that belongs to no run at all — the host's one-minute LOAD AVERAGE — and
+# the caller hands it a fistful of absolute paths into a LIVE RUN'S state besides.
+#
+# FOUR HOST INPUTS, in the order they were found, each with its own section below:
+# the load average · the worktree root · the litter an interrupted run leaves · and
+# the per-run pointers in the environment, which is the only one of the four that is
+# a WRITE. The last is first in the file, because it is the general rule the other
+# three are exceptions to.
 #
 # MEASURED 2026-09-18, on an operator host with three other chief runs live across
 # 14 physical cores. In one verify, tests 1-33 of the 78-test behavioural block took
@@ -31,6 +38,92 @@
 # and the cost of it being asked is not a slow test, it is a SIX-HOUR verify whose
 # eventual red (`test/suspectlimit.sh KILLED the bystander driver`) named a file
 # that had already printed PASS.
+
+# ── the run that CALLED us is not a fixture's to write into ───────────────────
+# The fourth host input, and the only one that is a WRITE. The three below are
+# things a fixture READS off the machine; this one is a set of absolute paths
+# INTO A LIVE RUN'S STATE that the caller hands us in the environment, and every
+# test here that drives engine/agent.sh directly picks them up.
+#
+# The suite's most common caller is `chief verify`, which runs inside an agent
+# turn, and the driver exports its own per-run pointers into that turn (driver.sh
+# run_worker + the agent invocation block). Thirty-six CHIEF_* variables arrive,
+# and five of them are loaded:
+#
+#   CHIEF_LIVE_FILE        the run's liveliness record        — WRITTEN by agent.sh
+#   CHIEF_EVENTS_FILE      the run's NDJSON event stream      — APPENDED by agent.sh
+#   CHIEF_PRD_SNAPSHOT     the durable per-story record       — OVERWRITTEN by _prd_promote
+#   CHIEF_VERIFY_CACHE_STATE  the run's verdict cache         — RECORDED into
+#   CHIEF_ITER_HOOK        `driver.sh --integrate-base <the real branch> …` — EXECUTED
+#
+# MEASURED 2026-09-19, from inside this repo's own run of tasklist 128, by pointing
+# each of those at a canary and running three unmodified tests (ratelimit ·
+# provider-unavailable · provider). All three PASSED, and between them they:
+#
+#   · rewrote the live record to `phase=stalled · total=1 · stall=2/2 · noturn=3/3`
+#     — a one-story fixture's shape, stamped over a four-story run that `chief ps`
+#     was at that moment showing in an agent turn. That is the observation this
+#     rule exists for, reproduced on demand;
+#   · appended 55 event lines carrying the REAL run's runId, repo and tasklist
+#     name, so `tasklist.provider-unavailable … HTTP 401 (authentication_error) —
+#     permanent refusal (the credential is wrong, revoked …)` is in this repo's own
+#     stream, attributed to work that never made the request. An event stream is a
+#     PUBLISHED interface (chief-cloud, embedding hosts); a subscriber cannot tell
+#     a fixture's 401 from its own;
+#   · replaced .chief/state/snapshots/128-….json with `{"branchName":
+#     "chief/provider","userStories":[{"id":"US-1","passes":false}]}`. For a
+#     `repo:<sub>` tasklist that file is the ONLY record of which stories passed,
+#     and the driver seeds the next run's worktree from it;
+#   · RAN the iteration hook — a real `driver.sh --integrate-base` against the real
+#     branch, worktree and repo. It was a no-op only because the branch happened to
+#     be current with its base.
+#
+# It runs the other way too, and that half is louder: agent.sh SEEDS from
+# $CHIEF_PRD_SNAPSHOT, so a fixture inherits the caller's PRD. Two tests sharing
+# one inherited snapshot contaminated each other in the measurement above.
+#
+# A DENYLIST IS THE WRONG SHAPE HERE. This file exists for host inputs nobody
+# thought about, and the driver's export set GROWS: of the 28 names it hands an agent
+# turn today, eleven were added in the last five weeks (CHIEF_UNVERIFIED_FILE 08-20 ·
+# five CHIEF_VERIFY_* 08-22 · CHIEF_PRD_SNAPSHOT and CHIEF_RESEARCH_FILE 08-26 ·
+# CHIEF_MACHINE_BUDGET_LOG 09-04), and three of those eleven are among the five loaded
+# ones above. So the rule is the other way round: EVERY CHIEF_* in the environment
+# goes, and what stays is NAMED. A new driver export is covered on the day it is
+# written, by nobody.
+#
+# WHAT STAYS, and why each one is addressed to the SUITE rather than to a run:
+#   CHIEF_TEST_*          the suite's own namespace (CHIEF_TEST_PREFIX below,
+#                         CHIEF_TEST_MODE, CHIEF_TEST_BASE_REPO, …). No driver
+#                         exports one; every use is a person or a fixture
+#                         addressing a test by name.
+#   CHIEF_BYSTANDER_TESTS the list .chief/verify.sh hands test/bystander.sh. Scrub
+#                         it and the merge gate's behavioural block runs EMPTY —
+#                         silently, and reporting PASS.
+#   CHIEF_VERIFY_TESTS    the same block's on/off switch.
+#   CHIEF_MACHINE_* ·     the capacity knobs, which are NUMBERS. They are how the
+#   CHIEF_LOAD_AVERAGE    five capacity tests and this file's own PART A/B inject a
+#                         reading, and PART C asserts that an explicit request
+#                         survives this file; keeping the whole family is what makes
+#                         that promise true of all of it. With ONE exception, and it
+#                         is the exception that proves the rule was written by hand:
+#                         CHIEF_MACHINE_BUDGET_LOG is not a number, it is the live
+#                         run's hold log under its state root, exported beside
+#                         CHIEF_LIVE_FILE and appended to by the very same budget
+#                         code. A family match is a guess about names; this one is
+#                         named, because it was measured surviving.
+#
+# Not `env -i` and not a wrapper: this must hold for a test run straight from a
+# shell, which is how every one of them is run while it is being written.
+_chief_test_v=
+for _chief_test_v in $(env 2>/dev/null | LC_ALL=C sed -n 's/^\(CHIEF_[A-Z0-9_]*\)=.*/\1/p'); do
+  case "$_chief_test_v" in
+    CHIEF_TEST_*|CHIEF_BYSTANDER_TESTS|CHIEF_VERIFY_TESTS) continue ;;
+    CHIEF_MACHINE_BUDGET_LOG) ;;                 # a PATH wearing the capacity prefix
+    CHIEF_MACHINE_*|CHIEF_LOAD_AVERAGE) continue ;;
+  esac
+  unset "$_chief_test_v"
+done
+unset _chief_test_v
 
 # ── the host's load is not a fixture's input ──────────────────────────────────
 # `off` and not a higher ceiling: a number is a bet about the host, and this suite
