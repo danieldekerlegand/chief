@@ -11,7 +11,7 @@
 # still EMPTY-NO-WORK and nothing is merged/retired.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=nw GIT_AUTHOR_EMAIL=nw@test GIT_COMMITTER_NAME=nw GIT_COMMITTER_EMAIL=nw@test

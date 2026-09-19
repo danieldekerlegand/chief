@@ -16,7 +16,7 @@
 # file:// origin, no network.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=ur GIT_AUTHOR_EMAIL=ur@test GIT_COMMITTER_NAME=ur GIT_COMMITTER_EMAIL=ur@test

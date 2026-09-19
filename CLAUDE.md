@@ -478,6 +478,170 @@ templates/           # scaffolded into a repo by `chief init` (config · verify.
 tasks/chief/         # THIS repo's own tasklists (self-hosting), ordered by numeric band
   completed/         #   merged tasklists (each stamped mergedToMain)
 test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git + jq)
+                     #   lib.sh — SOURCED BY ALL 96, folded ONTO the `ROOT=` line itself
+                     #   (`ROOT="$(…)"; . "$ROOT/test/lib.sh"`) rather than added beneath
+                     #   it, because the quality ratchet's duplication window is SIX
+                     #   normalized lines and the suite's copy-pasted preamble (set -e ·
+                     #   ROOT · WORK=mktemp · trap · export GIT_AUTHOR…) was already FIVE:
+                     #   one inserted line took duplicate_blocks 224 -> 235 against a
+                     #   tolerance of 0 and blocked the merge. Folding keeps the line count
+                     #   unchanged, and it is the honest shape anyway — the helper needs
+                     #   $ROOT, so the two are one statement (doc-claims.sh's `; export
+                     #   ROOT` is the same idiom). Adding a SECOND shared preamble line to
+                     #   these files will trip the same gate; the way out is to collapse
+                     #   the preamble into the helper, not to loosen the tolerance. It
+                     #   acts at SOURCE TIME rather than exposing a function a test must
+                     #   remember to call: the defect it exists for is a test reading a host
+                     #   input NOBODY THOUGHT ABOUT, and an opt-in rule is exactly the rule
+                     #   such a test does not opt into. HERMETIC IN STATE IS NOT HERMETIC IN
+                     #   THE HOST — the third register of bystander.sh's sentence (nor in
+                     #   PROCESSES) and suspectlimit.sh's (nor in ENV). FIVE host inputs
+                     #   now, and the FOURTH is the only one that is a WRITE: the per-run
+                     #   POINTERS the caller hands us in the environment. `chief verify`
+                     #   runs this suite from inside an agent turn, and the driver exports
+                     #   that run's own absolute paths into it — 36 CHIEF_* variables, of
+                     #   which agent.sh reads five. MEASURED 2026-09-19, from inside this
+                     #   repo's run of 128, by aiming each at a canary and running three
+                     #   UNMODIFIED tests (ratelimit · provider-unavailable · provider):
+                     #   all three PASSED and between them they rewrote the run's live
+                     #   record to a one-story fixture's shape (`total:1 · noturn:3/3` —
+                     #   the observation 128/US-4 was authored to explain), appended 55
+                     #   event lines carrying the REAL runId, repo and tasklist name
+                     #   (including an HTTP 401 `the credential is wrong, revoked` that a
+                     #   subscriber cannot tell from its own), replaced
+                     #   snapshots/128-….json with `{"branchName":"chief/provider"…}` —
+                     #   the ONLY per-story record a `repo:<sub>` tasklist has — and RAN
+                     #   the iteration hook, a real `driver.sh --integrate-base` against
+                     #   the real branch, worktree and repo. It runs the other way too:
+                     #   agent.sh SEEDS from $CHIEF_PRD_SNAPSHOT, so two tests sharing one
+                     #   inherited snapshot contaminated each other in that measurement.
+                     #   A DENYLIST IS THE WRONG SHAPE — this file exists for inputs nobody
+                     #   thought about and the driver's export set grows — so EVERY CHIEF_*
+                     #   in the environment goes and what stays is NAMED: CHIEF_TEST_* (the
+                     #   suite's own namespace) · CHIEF_BYSTANDER_TESTS (scrub it and the
+                     #   merge gate's behavioural block runs EMPTY, reporting PASS) ·
+                     #   CHIEF_VERIFY_TESTS · the CHIEF_MACHINE_* / CHIEF_LOAD_AVERAGE
+                     #   capacity NUMBERS. With one hand-named exception that proves the
+                     #   family match is a guess: CHIEF_MACHINE_BUDGET_LOG is not a number,
+                     #   it is the live run's hold log, and it was measured surviving.
+                     #   Every fixture already
+                     #   points $CHIEF_RUNS/$CHIEF_REPOS/$CHIEF_PREFIX at its own temp tree,
+                     #   but a fixture run's SCHEDULER read the host's one-minute LOAD
+                     #   AVERAGE: measured 2026-09-18 on a host with three other chief runs
+                     #   live over 14 cores, suspectlimit.sh took SIX HOURS logging `⏸ machine
+                     #   budget hold — machine load: load average 17.04 over 14 core(s)`, and
+                     #   the eventual red named a file that had already printed PASS. So
+                     #   CHIEF_MACHINE_LOAD_LIMIT resolves to `off` — `off` and not a higher
+                     #   number, because a number is a bet about a host that is a 2-core CI
+                     #   runner here and a loaded 14-core workstation there. AN EXPLICIT
+                     #   REQUEST WINS (`${VAR:-}`), which is what makes it safe to apply to
+                     #   all 96: the five tests whose SUBJECT is capacity admission pin their
+                     #   own inputs, and so may an operator. The two budgets that count
+                     #   chief's OWN records are left alone — a fixture's registry is its own
+                     #   temp tree, so those hold only against work it launched itself.
+                     #   The second host input is the WORKTREE ROOT, resolved
+                     #   CHIEF_WORKTREE_ROOT -> $CHIEF_PREFIX/worktrees ->
+                     #   $HOME/.chief/worktrees, of which 27 scripts pinned NEITHER end: their
+                     #   fixture runs walked the operator's real worktrees in the startup sweep
+                     #   (printing a keep-or-reclaim verdict on other repos' live work) and left
+                     #   an empty husk per run, one per fresh mktemp repo path, forever — 136
+                     #   directories on the incident host, 129 of them husks. lib.sh pins the
+                     #   PREFIX and not the worktree root, because the root is the LAST word and
+                     #   would overrule the dozen tests that pin the tree themselves a few lines
+                     #   later (pause · plan-review · overlap-zones read
+                     #   $CHIEF_PREFIX/worktrees/*/<name>; the four reap fixtures BUILD the tree
+                     #   the sweep under test walks). And it pins it UNCONDITIONALLY, which is
+                     #   the one default here that does not wear `${VAR:-}`: the suite's most
+                     #   common caller is `chief verify`, whose driver exports
+                     #   CHIEF_PREFIX=~/.chief into every hook, so the silence a `:-` fills is
+                     #   never silent and the ambient value IS the defect. An explicit request
+                     #   gets a name of its own ($CHIEF_TEST_PREFIX); a test wanting its own
+                     #   prefix just assigns one after sourcing, as 70 already do. Nothing is
+                     #   created — paths.sh resolves and never mkdirs — so a test that starts no
+                     #   driver leaves nothing at all, and the one husk a driver-running test
+                     #   does leave is reclaimed by the NEXT test to source lib.sh (pid-keyed
+                     #   name, owned by us, not a symlink, pid dead) rather than by a trap, since
+                     #   all 96 scripts replace the EXIT trap a line or two below.
+                     #   The THIRD host input is the one the suite GIVES BACK — its litter
+                     #   when it is interrupted, which is the normal end of a long verify.
+                     #   lib.sh traps INT · TERM · HUP once, and each handler restores the
+                     #   default disposition and calls `exit 128+n`: bash then runs the
+                     #   script's OWN EXIT trap, `$?` at its entry is the status `exit` was
+                     #   given, and all 96 cleanups keep doing exactly what they already do.
+                     #   One rule instead of three signals × ninety-six files — and the
+                     #   trap survives their setup for the same reason the exports do, since
+                     #   `trap … EXIT` replaces EXIT and nothing else. WHAT IT IS WORTH HAD
+                     #   TO BE MEASURED: the obvious premise is FALSE for bash — on 3.2.57
+                     #   an untrapped INT/TERM/HUP runs the EXIT trap on its way out, so
+                     #   `$WORK` was never what an interrupted run stranded. Two things
+                     #   were: lib.sh's own PREFIX ROOT, which no test's EXIT trap has heard
+                     #   of (structural, true on every bash), and the STATUS — a
+                     #   pid-addressed SIGINT with nothing trapped exits the shell ZERO, so
+                     #   all.sh, bystander.sh and verify.sh all read a killed test as a
+                     #   PASS. THE BOUND: bash defers a trap handler while a FOREGROUND
+                     #   child runs, so a signal sent to a test's pid alone is acted on when
+                     #   that child returns; a Ctrl-C and a group kill reach the child too,
+                     #   and signalling processes this file did not start is the 2026-08-17
+                     #   incident in miniature. AND A CLEANUP MUST BE ABLE TO REACH ITS
+                     #   `rm -rf`: sixteen of these scripts clean up under `set -euo
+                     #   pipefail`, where an AND-list whose left side fails returns non-zero
+                     #   and ENDS THE SHELL inside the handler — `[ -n "$HOLDER_PID" ] &&
+                     #   kill …` with the holder not yet started was the one tree that
+                     #   survived an interrupted `test/all.sh`. Write `[ -z … ] || …` or end
+                     #   it `|| true`; test/signal-cleanup.sh PART D scans for the shape
+                     #   host-isolation.sh — lib.sh's guard, through the REAL driver, because
+                     #   "the predicate returned 0" and "the run launched with nobody asked"
+                     #   are different claims. PART B is why PART A means anything: the load
+                     #   rule only defers to the machine while CHIEF has a gate in flight, so
+                     #   "no hold in the log" also passes when nothing could ever have held —
+                     #   both parts stage the same live gate and the same synthetic load of
+                     #   62, and the only difference is lib.sh's one line. The mutation check
+                     #   is a CONFIGURATION (CHIEF_MACHINE_LOAD_LIMIT=4 restores the pre-lib.sh
+                     #   reading exactly) rather than a neutered copy of the engine. PARTS D/E
+                     #   are the WORKTREE ROOT on the same terms — every `>> startup:` line the
+                     #   run's sweep printed must name a path inside this test's own temp trees,
+                     #   and PART E takes the prefix away (`env -u CHIEF_PREFIX`, $HOME = a
+                     #   decoy tree) so the same fixture walks $HOME/.chief/worktrees and the
+                     #   check NAMES it. Both halves PLANT a worktree-shaped directory at the
+                     #   <root>/<repo>/<wt> depth the sweep's path verdict accepts, because an
+                     #   empty root prints a summary and no verdict line, and "nothing fell
+                     #   outside" passes loudest on a sweep that judged nothing. The control's
+                     #   $HOME is a temp tree of the test's own: a control for "a fixture reads
+                     #   the real ~/.chief" may not itself read the real ~/.chief. PARTS F/G/H
+                     #   are the fourth input, and F's roster is DERIVED FROM driver.sh rather
+                     #   than copied: two parsers, one per shape the driver uses (the agent
+                     #   invocation block's `VAR=… agent.sh` prefix, and the five it exports
+                     #   outright into run_worker), a floor on the count and five names
+                     #   asserted individually, so an anchor that moves FAILS instead of
+                     #   quietly narrowing. A hand-kept list is a list that stops naming the
+                     #   newest export the day after it lands. G is the consequence — two
+                     #   fixtures drive engine/agent.sh the way twenty-six scripts here do,
+                     #   with every pointer aimed at a canary laid out as a live run's state
+                     #   root — and the SECOND fixture exists because a refusal never reaches
+                     #   an iteration boundary and a turn that reports COMPLETE leaves the
+                     #   loop ABOVE one, so the snapshot and hook writes are unreachable from
+                     #   either alone; it takes TWO turns. H is the mutation control and here
+                     #   it has to be a NEUTERED COPY of lib.sh, not PART B's configuration:
+                     #   what was added is a rule, not a default, so no value restores the old
+                     #   reading. It reproduces all four writes and is asserted BY NAME on the
+                     #   two that matter (live record · PRD snapshot), because "something
+                     #   moved" is also satisfied by the one write that is merely untidy
+                     #   signal-cleanup.sh — the same claim for the third input, and it
+                     #   asserts the DIRECTORY rather than the trap: three signals × the
+                     #   four EXIT-trap shapes that actually occur here, each victim given
+                     #   a $TMPDIR OF ITS OWN so "nothing survived" is counted and not
+                     #   estimated on a shared /tmp, and each delivered TO THE GROUP,
+                     #   which is what a Ctrl-C is. PART B is the mutation control — the
+                     #   same victims against a copy of lib.sh with those three trap lines
+                     #   deleted must leave the prefix root behind — and PART C pins the
+                     #   deferral bound as a FLOOR on elapsed time, which needs no
+                     #   calibration against the host. It also names the FIFTH host
+                     #   input, because it was the file the input made lie: a signal
+                     #   you cannot RECEIVE. `chief_test_restore_int` re-execs
+                     #   through perl for the INT cases, the victim carries its OWN
+                     #   deliverability probe so "it exited 0" can never read as
+                     #   "the trap did not fire", and an unrestorable SIGINT skips
+                     #   those four cases OUT LOUD rather than accusing lib.sh
                      #   bystander.sh — runs the behavioural block with a decoy run from ANOTHER
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
@@ -647,6 +811,29 @@ VERSION              # engine version — bump on any engine/bin/install change
   has been paid, so the engine reads it as ABSENT and the case silently tests the
   fallback instead. Lead such a stamp by the measured cost, and clamp what it can
   cost you with the cap.
+
+- **A SIGNAL DISPOSITION IS A HOST INPUT, AND SIGINT IS THE ONE THE MERGE GATE
+  TAKES AWAY.** A background command started by a non-interactive shell has SIGINT
+  set to `SIG_IGN`; the disposition survives fork AND exec, and bash can neither
+  trap nor reset a signal ignored on entry (`engine/driver.sh`'s `STOP_SIGNALS`
+  block says so — it is why chief's own teardown is stopped with TERM). The suite's
+  most common caller is several frames below a `run_worker … &` subshell, so **every
+  test in the behavioural block runs with SIGINT ignored while the same file from a
+  terminal runs with it deliverable.** Measured 2026-09-19: `test/signal-cleanup.sh`
+  PART A passed standalone and failed inside `chief verify` with `shape 1 signalled
+  with SIGINT exited 0, not 130` — the victim never received the signal, slept out
+  its nap and exited 0, and the red named the three trap lines in `test/lib.sh` that
+  were behaving perfectly. That is the 2026-09-18 false-accusation shape one register
+  down. Only a process that resets the disposition ITSELF can undo it, so the repair
+  is a re-exec through `perl` (`chief_test_restore_int` in `test/lib.sh`, called by
+  `test/signal-cleanup.sh` and `test/teardown.sh` — ONE spelling, because a second
+  signal rule does not degrade, it disagrees). It is **opt-in, never applied to all
+  96 at source time**: `exec` replaces the process and the reap fixtures assert on
+  argv and process identity. And a fixture that stages a signal must carry its own
+  DELIVERABILITY probe (`bash -c 'trap "exit 7" INT; kill -INT $$; …'`, run in the
+  victim), or "the process exited 0" is indistinguishable from "the trap did not
+  fire". `set -m` is **not** a substitute: it covers bash's own async-command rule
+  and does nothing about an ignore inherited from above.
 
 - **A LONG-LIVED FIXTURE'S OWN `sleep N` IS A WALL-CLOCK CEILING TOO — on the whole
   block, hidden inside the fixture.** `test/bystander.sh` stands a decoy run up and

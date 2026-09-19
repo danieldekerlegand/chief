@@ -2,7 +2,7 @@
 # A decision agent may prepare a brief and even try to write a verdict, but the
 # driver must leave the terminal decision to chief decide.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export CHIEF_PREFIX="$WORK/prefix" CHIEF_REPOS="$WORK/repos"

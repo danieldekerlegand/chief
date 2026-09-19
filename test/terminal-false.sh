@@ -28,7 +28,7 @@
 #             this half the field is a way to mark hard stories complete.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=tf GIT_AUTHOR_EMAIL=tf@test GIT_COMMITTER_NAME=tf GIT_COMMITTER_EMAIL=tf@test

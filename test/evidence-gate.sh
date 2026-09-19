@@ -29,7 +29,7 @@ INSTR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/engine/instructions.md"
 grep -qi 'notes' "$INSTR" || { echo "EVIDENCE FAIL: engine/instructions.md never tells the agent to write notes" >&2; exit 1; }
 grep -qiE 'observ|bar' "$INSTR" || { echo "EVIDENCE FAIL: engine/instructions.md never explains the observed-value requirement" >&2; exit 1; }
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=ev GIT_AUTHOR_EMAIL=ev@test GIT_COMMITTER_NAME=ev GIT_COMMITTER_EMAIL=ev@test

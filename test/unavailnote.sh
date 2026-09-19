@@ -24,11 +24,13 @@
 #           the file could pass by restating behaviour that always worked.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 holder=""; mon_pid=""
 cleanup() {
-  [ -n "$mon_pid" ] && { kill "$mon_pid" 2>/dev/null || true; wait "$mon_pid" 2>/dev/null || true; }
+  # `[ -z … ] ||`, never `[ -n … ] &&`: under `set -e` an AND-list whose left side
+  # fails ends the shell inside the handler, and `rm -rf "$WORK"` below never runs.
+  [ -z "$mon_pid" ] || { kill "$mon_pid" 2>/dev/null || true; wait "$mon_pid" 2>/dev/null || true; }
   if [ -n "$holder" ]; then kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true; fi
   rm -rf "$WORK"
 }

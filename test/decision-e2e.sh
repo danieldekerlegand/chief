@@ -23,7 +23,7 @@
 # exist. The verdict, its note and its action land in the event stream on both halves —
 # the operator recording it, and the driver reading it back.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 export CHIEF_PREFIX="$WORK/prefix" CHIEF_REPOS="$WORK/repos" CHIEF_RUNS="$WORK/runs"
 export GIT_AUTHOR_NAME=decision-e2e GIT_AUTHOR_EMAIL=decision-e2e@test

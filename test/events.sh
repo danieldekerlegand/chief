@@ -30,7 +30,7 @@
 # every line must read usage:null / limit:null rather than a hollow object of zeros.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rc=$?; rm -rf "$WORK"; exit "$rc"' EXIT
 fail() { echo "EVENTS FAIL: $*" >&2; exit 1; }

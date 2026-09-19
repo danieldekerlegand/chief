@@ -59,7 +59,7 @@
 # checkout (install.sh git-clones) — commit engine changes before trusting a green run.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 ARM=""
 cleanup() {

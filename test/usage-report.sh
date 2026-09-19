@@ -2,7 +2,7 @@
 # `chief usage` aggregation over real-shaped event-log fixtures.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rc=$?; rm -rf "$WORK"; exit "$rc"' EXIT
 fail() { echo "USAGE-REPORT FAIL: $*" >&2; exit 1; }

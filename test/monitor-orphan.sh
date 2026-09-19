@@ -57,7 +57,7 @@
 # something. Moving it into the gate means accepting merges that fail on load.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 PIDS=""
 # `wait` after the kills reaps this shell's own wrapper jobs, so a failing run does

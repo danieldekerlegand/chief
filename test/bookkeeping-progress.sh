@@ -76,7 +76,7 @@
 #      of the engine with that one condition restored to its pre-change form takes 18.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=bk GIT_AUTHOR_EMAIL=bk@test GIT_COMMITTER_NAME=bk GIT_COMMITTER_EMAIL=bk@test

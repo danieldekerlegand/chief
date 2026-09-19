@@ -32,7 +32,7 @@
 #              run TERMINATES as UNVERIFIED rather than burning to HARD_MAX.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=uv GIT_AUTHOR_EMAIL=uv@test GIT_COMMITTER_NAME=uv GIT_COMMITTER_EMAIL=uv@test

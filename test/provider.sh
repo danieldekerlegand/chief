@@ -2,7 +2,7 @@
 # test/provider.sh — provider/model flags reach the scheduler without starting an agent.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 
 # HERMETIC IN STATE IS NOT HERMETIC IN ENV. This suite may itself be running inside a

@@ -31,7 +31,7 @@
 #           was already being written.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=sa GIT_AUTHOR_EMAIL=sa@test GIT_COMMITTER_NAME=sa GIT_COMMITTER_EMAIL=sa@test

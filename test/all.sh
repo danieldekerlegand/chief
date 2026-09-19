@@ -17,7 +17,7 @@
 # implement→verify→merge) — budget several minutes. Offline and deterministic.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 cd "$ROOT"
 
 pass=0 fail=0 skip=0
@@ -42,7 +42,7 @@ run_sh() {
 # ── 1. The bash engine + packaging suite ─────────────────────────────────────
 # Order mirrors CI (cheap/behavioral first), then the cross-repo and packaging
 BASH_SUITE=(
-  smoke usage usage-report concurrency machine-budget gate-budget load-admission concurrency-monitor mid-run-admission admission-refusals provider provider-conformance ratelimit provider-unavailable provider-backoff provider-credit worktree-pending limitstate limitresume limitmonitor activity-line turn-activity-row pause plan-review research liveliness monitor monitor-orphan ps-all teardown reapscope reapenv reap-escaped sweep bystander noworkguard evidence-gate criteria-scope measured-bars terminal-false repeat-stop retire-negative unverified-resume boundary-demotion bookkeeping-progress five-cases stall-flag suspectlimit unavailnote noworkguard-jsononly headless events container account-env
+  smoke usage usage-report concurrency machine-budget gate-budget load-admission concurrency-monitor host-isolation signal-cleanup mid-run-admission admission-refusals provider provider-conformance ratelimit provider-unavailable provider-backoff provider-credit worktree-pending limitstate limitresume limitmonitor activity-line turn-activity-row pause plan-review research liveliness monitor monitor-orphan ps-all teardown reapscope reapenv reap-escaped sweep bystander noworkguard evidence-gate criteria-scope measured-bars terminal-false repeat-stop retire-negative unverified-resume boundary-demotion bookkeeping-progress five-cases stall-flag suspectlimit unavailnote noworkguard-jsononly headless events container account-env
   status-deps status-scope status-categories status-json status-perf park-reasons parked-decisions decision decision-agent decision-e2e
   stale-resume conflict-forensics rebase-refusal dirty-checkout submodule-gitlink submodule-resume touches-audit
   quality-ratchet overlap-zones zone-surface zone-friction resolution-deletions resolution-incident merge-batch merge-checkout verify-cache verify-stream stream-activity cigate

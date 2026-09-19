@@ -14,7 +14,7 @@
 # loop, and (2) the retire uses `git rm -f` so a dirty file is removed regardless.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=rd GIT_AUTHOR_EMAIL=rd@test GIT_COMMITTER_NAME=rd GIT_COMMITTER_EMAIL=rd@test

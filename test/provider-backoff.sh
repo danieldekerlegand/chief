@@ -32,7 +32,7 @@
 # …and across all the transient ones, the stall counter stays at zero.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 
 # HERMETIC IN STATE IS NOT HERMETIC IN ENV — see test/ratelimit.sh's note.

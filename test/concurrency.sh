@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The registry scan counts live agent/gate records and ignores a stale driver.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 RUNS="$WORK/runs"; mkdir -p "$RUNS" "$WORK/live/parallel" "$WORK/gate/parallel"

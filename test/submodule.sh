@@ -11,7 +11,7 @@
 # bookkeeping leaked into the submodule. Fully offline; deterministic fake agent.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=sub GIT_AUTHOR_EMAIL=sub@test GIT_COMMITTER_NAME=sub GIT_COMMITTER_EMAIL=sub@test

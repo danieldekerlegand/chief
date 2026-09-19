@@ -31,7 +31,7 @@
 #                        the default is a default and not a constant.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=rs GIT_AUTHOR_EMAIL=rs@test GIT_COMMITTER_NAME=rs GIT_COMMITTER_EMAIL=rs@test

@@ -42,7 +42,7 @@
 # reports the race.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 
 # HERMETIC IN STATE IS NOT HERMETIC IN ENV — this suite may itself be running inside a

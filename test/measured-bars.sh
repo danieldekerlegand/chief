@@ -27,7 +27,7 @@
 # not — an unrecorded number is unrecorded whoever typed the pass-flag.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=mb GIT_AUTHOR_EMAIL=mb@test GIT_COMMITTER_NAME=mb GIT_COMMITTER_EMAIL=mb@test

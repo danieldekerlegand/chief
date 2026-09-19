@@ -16,7 +16,7 @@
 # on the declared one, and `chief gen` WARNS while still generating.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=sc GIT_AUTHOR_EMAIL=sc@test GIT_COMMITTER_NAME=sc GIT_COMMITTER_EMAIL=sc@test

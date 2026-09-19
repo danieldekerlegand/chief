@@ -52,7 +52,7 @@
 # engine changes before trusting a green run.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=rr GIT_AUTHOR_EMAIL=rr@test GIT_COMMITTER_NAME=rr GIT_COMMITTER_EMAIL=rr@test
