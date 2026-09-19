@@ -1,0 +1,66 @@
+{
+  "project": "chief",
+  "category": "fix",
+  "branchName": "chief/128-the-suite-leaves-the-host-alone",
+  "dependsOn": [],
+  "touches": [
+    "test",
+    "engine"
+  ],
+  "iters": 12,
+  "warmup": [
+    "sed -n '1,60p' test/suspectlimit.sh",
+    "grep -n 'CHIEF_MACHINE_LOAD_LIMIT' engine/concurrency.sh | head",
+    "grep -n 'CHIEF_WORKTREE_ROOT' engine/paths.sh engine/driver.sh | head",
+    "grep -lE 'trap .* EXIT' test/*.sh | xargs grep -LE 'trap .*(INT|TERM|HUP)' | wc -l"
+  ],
+  "description": "THE BEHAVIOURAL SUITE READS THE HOST IT RUNS ON, AND THAT MADE ONE VERIFY TAKE SIX HOURS.\n\nMEASURED 2026-09-18 on an operator host with three other chief runs live (14 physical cores). In one verify, tests 1–33 of the 78-test behavioural block took twelve minutes; `test/suspectlimit.sh` then took six hours. Its fixture run logged `⏸ machine budget hold — machine load: load average 17.04 over 14 core(s)`: the fixture's `chief run -p 4` launched two of its four tasklists and held the other two until the HOST's load average fell below the ceiling. The host did not sleep (`pmset -g log` shows no sleep or wake in the window). Reproduced on `main` in a scratch worktree the next day with the same hold. 53 of the 96 test scripts start a real `chief run`; only `test/load-admission.sh` and `test/concurrency-monitor.sh` pin the load inputs they depend on.\n\nTHE SAME FIXTURE READ THE HOST'S WORKTREES. Its startup sweep listed the operator's real `~/.chief/worktrees/*` entries (`LEFT ALONE, a live run is behind it`). It left them alone, but a hermetic test has no business enumerating them — that is the class of the 2026-08-17 incident, where a sweep destroyed a run in another repository.\n\nAND IT LEAVES ITS TEMP DIRECTORIES WHEN STOPPED. 92 of 96 test scripts clean up with `trap … EXIT` only. A non-interactive bash killed by SIGTERM or SIGHUP does not run the EXIT trap, so every interrupted verify strands its `mktemp` trees: 385 `tmp.*` directories were found in one operator's `$TMPDIR`.",
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "A fixture run does not wait on the host's load",
+      "description": "Tests that start a real run are isolated from the host's machine budget unless the budget is what they test.",
+      "acceptanceCriteria": [
+        "A shared test helper (or the install step every such test uses) exports `CHIEF_MACHINE_LOAD_LIMIT=off` for fixture runs; the tests that exercise the load or turn budget (`test/load-admission.sh`, `test/concurrency-monitor.sh`, `test/machine-budget.sh`, `test/gate-budget.sh`, `test/concurrency.sh`) keep pinning their own values and still pass.",
+        "Proven by running `test/suspectlimit.sh` with a synthetic high load reading (e.g. `CHIEF_LOAD_AVERAGE=62` exported by the caller): it completes in its normal time, not held. Record both timings in the notes.",
+        "A guard (in `test/bystander.sh` or a new test) fails when a fixture run's log contains `machine budget hold` while the test did not ask for a budget."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-2",
+      "title": "A fixture run never sees the host's worktrees",
+      "description": "Every test that starts a driver gives it a private worktree root.",
+      "acceptanceCriteria": [
+        "Fixture runs set `CHIEF_WORKTREE_ROOT` to a directory inside the test's own temp tree; no test's run log names a path under the real `~/.chief/worktrees`.",
+        "A guard fails a test whose fixture run logs a `>> startup:` line for a path outside the test's temp tree."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-3",
+      "title": "An interrupted suite leaves nothing behind",
+      "description": "Temp directories are removed when a test is interrupted, not only when it exits normally.",
+      "acceptanceCriteria": [
+        "Every test script that creates a temp tree traps INT, TERM and HUP as well as EXIT (by a shared helper rather than 96 copies), so the cleanup runs when the script is signalled.",
+        "Proven by starting `test/all.sh` (or the bystander block), sending SIGTERM mid-run, and listing `$TMPDIR` before and after: no new `tmp.*` tree survives. Record the counts.",
+        "The decoy and bystander lifetimes in `test/bystander.sh` are unchanged (they are bounded by their parent since `127`)."
+      ],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-4",
+      "title": "Find out whether a fixture writes into the host's run records",
+      "description": "Explain one unexplained observation, and fix it if it is real.",
+      "acceptanceCriteria": [
+        "OBSERVED 2026-09-18: while a real run's verify was executing the suite, that real run's `<state>/parallel/<name>.live.json` read `phase: provider-unavailable`, `total: 1`, `noturn: 3/3` — the shape of a fixture scenario — while `chief ps` showed the real run at 3/3 in an agent turn.",
+        "Determine whether any test writes to the host's state directory (for example through an inherited environment variable naming it), and either fix the leak with a guard test, or record in the notes the measured explanation and why it is harmless."
+      ],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

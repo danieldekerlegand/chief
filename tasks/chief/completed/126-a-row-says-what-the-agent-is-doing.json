@@ -98,7 +98,7 @@
       }
     }
   ],
-  "mergedToMain": "f93e14f",
+  "mergedToMain": "ff1969f",
   "gates": {
     "local": {
       "state": "passed",
@@ -108,7 +108,7 @@
       {
         "workflow": "ci",
         "state": "unknown",
-        "detail": "a push of main can start it; whether it RAN for f93e14f is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
+        "detail": "a push of main can start it; whether it RAN for ff1969f is not recorded here — chief makes no network call on the merge path. `chief cigate` is what asks GitHub."
       }
     ]
   }
