@@ -509,7 +509,30 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   all 96: the five tests whose SUBJECT is capacity admission pin their
                      #   own inputs, and so may an operator. The two budgets that count
                      #   chief's OWN records are left alone — a fixture's registry is its own
-                     #   temp tree, so those hold only against work it launched itself
+                     #   temp tree, so those hold only against work it launched itself.
+                     #   The second host input is the WORKTREE ROOT, resolved
+                     #   CHIEF_WORKTREE_ROOT -> $CHIEF_PREFIX/worktrees ->
+                     #   $HOME/.chief/worktrees, of which 27 scripts pinned NEITHER end: their
+                     #   fixture runs walked the operator's real worktrees in the startup sweep
+                     #   (printing a keep-or-reclaim verdict on other repos' live work) and left
+                     #   an empty husk per run, one per fresh mktemp repo path, forever — 136
+                     #   directories on the incident host, 129 of them husks. lib.sh pins the
+                     #   PREFIX and not the worktree root, because the root is the LAST word and
+                     #   would overrule the dozen tests that pin the tree themselves a few lines
+                     #   later (pause · plan-review · overlap-zones read
+                     #   $CHIEF_PREFIX/worktrees/*/<name>; the four reap fixtures BUILD the tree
+                     #   the sweep under test walks). And it pins it UNCONDITIONALLY, which is
+                     #   the one default here that does not wear `${VAR:-}`: the suite's most
+                     #   common caller is `chief verify`, whose driver exports
+                     #   CHIEF_PREFIX=~/.chief into every hook, so the silence a `:-` fills is
+                     #   never silent and the ambient value IS the defect. An explicit request
+                     #   gets a name of its own ($CHIEF_TEST_PREFIX); a test wanting its own
+                     #   prefix just assigns one after sourcing, as 70 already do. Nothing is
+                     #   created — paths.sh resolves and never mkdirs — so a test that starts no
+                     #   driver leaves nothing at all, and the one husk a driver-running test
+                     #   does leave is reclaimed by the NEXT test to source lib.sh (pid-keyed
+                     #   name, owned by us, not a symlink, pid dead) rather than by a trap, since
+                     #   all 96 scripts replace the EXIT trap a line or two below
                      #   host-isolation.sh — lib.sh's guard, through the REAL driver, because
                      #   "the predicate returned 0" and "the run launched with nobody asked"
                      #   are different claims. PART B is why PART A means anything: the load
@@ -518,7 +541,17 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   both parts stage the same live gate and the same synthetic load of
                      #   62, and the only difference is lib.sh's one line. The mutation check
                      #   is a CONFIGURATION (CHIEF_MACHINE_LOAD_LIMIT=4 restores the pre-lib.sh
-                     #   reading exactly) rather than a neutered copy of the engine
+                     #   reading exactly) rather than a neutered copy of the engine. PARTS D/E
+                     #   are the WORKTREE ROOT on the same terms — every `>> startup:` line the
+                     #   run's sweep printed must name a path inside this test's own temp trees,
+                     #   and PART E takes the prefix away (`env -u CHIEF_PREFIX`, $HOME = a
+                     #   decoy tree) so the same fixture walks $HOME/.chief/worktrees and the
+                     #   check NAMES it. Both halves PLANT a worktree-shaped directory at the
+                     #   <root>/<repo>/<wt> depth the sweep's path verdict accepts, because an
+                     #   empty root prints a summary and no verdict line, and "nothing fell
+                     #   outside" passes loudest on a sweep that judged nothing. The control's
+                     #   $HOME is a temp tree of the test's own: a control for "a fixture reads
+                     #   the real ~/.chief" may not itself read the real ~/.chief
                      #   bystander.sh — runs the behavioural block with a decoy run from ANOTHER
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block

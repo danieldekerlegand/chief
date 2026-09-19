@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/host-isolation.sh — A FIXTURE RUN DOES NOT WAIT ON THE HOST'S LOAD.
+# test/host-isolation.sh — WHAT A FIXTURE RUN MAY NOT READ OFF THE HOST.
 #
 # The guard for test/lib.sh. Its subject is not the scheduler — the load ceiling is
 # correct, and engine/concurrency.sh is asserted in full by test/load-admission.sh —
@@ -27,12 +27,29 @@
 # PART B is therefore the mutation check, performed by configuration rather than by
 # neutering a function in a copy of the engine: it restores the pre-lib.sh behaviour
 # exactly and shows this file failing PART A's assertion against it.
+#
+# PART D is the SECOND host input, and it is built the same way. The worktree root
+# resolves CHIEF_WORKTREE_ROOT -> $CHIEF_PREFIX/worktrees -> $HOME/.chief/worktrees,
+# twenty-seven scripts pinned neither end of that chain, and the startup sweep walks
+# whatever it lands on — so a hermetic fixture was enumerating the operator's real
+# worktrees and printing a keep-or-reclaim verdict about each one. Its two halves
+# differ in exactly the same one thing:
+#
+#   PART D   the suite's own prefix  -> every `>> startup:` line is inside the test
+#   PART E   $CHIEF_PREFIX unset,    -> the same fixture walks the decoy home and
+#            $HOME = a decoy tree       names it, so PART D's check is not vacuous
+#
+# Both halves PLANT a worktree in the root the run will walk, because "no line fell
+# outside" also passes when no line was printed at all: an empty root produces a
+# summary and nothing else. The decoy is a temp tree of this test's own — the control
+# for "a fixture reads the real ~/.chief" may not itself read the real ~/.chief.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 drv=""
-cleanup() { [ -z "$drv" ] || { kill "$drv" 2>/dev/null || true; wait "$drv" 2>/dev/null || true; }; rm -rf "$WORK"; }
+HOSTDECOY=""
+cleanup() { [ -z "$drv" ] || { kill "$drv" 2>/dev/null || true; wait "$drv" 2>/dev/null || true; }; rm -rf "$WORK" ${HOSTDECOY:+"$HOSTDECOY"}; }
 trap 'rc=$?; cleanup; exit "$rc"' EXIT
 # Hermetic in ENV as well as in state — this suite may itself be running inside a
 # chief worktree whose driver exported a pause file (test/suspectlimit.sh's note).
@@ -170,4 +187,70 @@ out="$(env -u CHIEF_MACHINE_LOAD_LIMIT bash -c '. "$1/test/lib.sh"; printf %s "$
 [ "$out" = off ] || fail "C: lib.sh did not disable the ceiling in the silence (got '$out')"
 echo "host-isolation:   an explicit ceiling survives lib.sh; silence resolves to off"
 
-echo "HOST-ISOLATION PASS — a fixture run ignores the host's load average (and holds on it when asked to)"
+# ══ PART D — the startup sweep walks a tree this test owns ═══════════════════
+# The suite's default prefix, unmodified: the run resolves its own worktree root and
+# the sweep's verdicts are about directories nobody else has a stake in.
+echo "host-isolation: part D — the startup sweep under the suite's own prefix"
+
+# A worktree-shaped directory at <root>/<repo>/<wt>, which is the only depth the
+# sweep's path verdict accepts. Without one the sweep prints its summary and no
+# `>> startup:` line at all, and the check below would pass on silence.
+plant_stale() { mkdir -p "$1/worktrees/sibling-12345678/tl-x"; : > "$1/worktrees/sibling-12345678/tl-x/marker"; }
+
+# The check itself, and the only copy of it: a `>> startup:` line always carries the
+# path it judged, and every path the sweep can judge is under the root it walked, so
+# "inside" is a substring test against the two temp trees this test owns. Prints the
+# offenders and returns non-zero when there are any; PART E asserts that it does.
+startup_outside() {   # <log> <allowed>…
+  local log="$1"; shift
+  local out root
+  out="$(grep '^>> startup:' "$log" 2>/dev/null || true)"
+  # Emptiness is checked BEFORE each filter and not only after the loop: `printf` of
+  # an empty string is still one blank line, and a blank line contains no root, so a
+  # filter applied to nothing hands back a line and this reports a violation that was
+  # never in the log.
+  for root in "$@"; do
+    [ -n "$out" ] || return 1
+    out="$(printf '%s\n' "$out" | grep -v -F "$root" || true)"
+  done
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"; return 0
+}
+startup_count() { grep -c '^>> startup:' "$1" 2>/dev/null || true; }
+
+[ "$CHIEF_PREFIX" != "${HOME:-}/.chief" ] \
+  || fail "D: the suite is still running on the operator's own prefix ($CHIEF_PREFIX)"
+plant_stale "$CHIEF_PREFIX"
+scaffold "$WORK/repo-d"
+LOG=d.log
+( cd "$WORK/repo-d" && PATH="$WORK/fakebin:$PATH" "$CHIEF" run -p 2 ) >"$WORK/d.log" 2>&1 \
+  || { cat "$WORK/d.log"; fail "D: run exited non-zero"; }
+n="$(startup_count "$WORK/d.log")"
+[ "${n:-0}" -ge 1 ] || fail "D: the startup sweep judged nothing — the plant did not take, so this proves nothing"
+if out="$(startup_outside "$WORK/d.log" "$WORK" "$CHIEF_PREFIX")"; then
+  fail "D: a fixture run's startup sweep walked outside this test's temp trees:
+$out"
+fi
+echo "host-isolation:   $n startup verdict(s), all inside this test's own trees"
+
+# ══ PART E — the same fixture with the prefix taken away ═════════════════════
+# The mutation check, by configuration again: unset the prefix and the chain falls
+# through to $HOME/.chief/worktrees, which is precisely what twenty-seven scripts
+# were doing. $HOME is a decoy tree OUTSIDE $WORK so that the check above has
+# something to catch and the real ~/.chief is never touched.
+echo "host-isolation: part E — the same fixture with \$CHIEF_PREFIX unset (the pre-lib.sh reading)"
+HOSTDECOY="$(mktemp -d)"
+mkdir -p "$HOSTDECOY/.chief"
+plant_stale "$HOSTDECOY/.chief"
+scaffold "$WORK/repo-e"
+LOG=e.log
+( cd "$WORK/repo-e" && PATH="$WORK/fakebin:$PATH" \
+    env -u CHIEF_PREFIX -u CHIEF_TEST_PREFIX HOME="$HOSTDECOY" "$CHIEF" run -p 2 ) >"$WORK/e.log" 2>&1 \
+  || { cat "$WORK/e.log"; fail "E: run exited non-zero"; }
+out="$(startup_outside "$WORK/e.log" "$WORK" "$CHIEF_PREFIX")" \
+  || fail "E: the sweep stayed inside this test's trees with no prefix set — PART D proves nothing"
+case "$out" in *"$HOSTDECOY"*) ;; *) fail "E: the sweep went outside, but not to the decoy home:
+$out" ;; esac
+echo "host-isolation:   with no prefix the same fixture walks \$HOME/.chief/worktrees, and PART D's check names it"
+
+echo "HOST-ISOLATION PASS — a fixture run ignores the host's load average and walks only its own worktree root"
