@@ -47,9 +47,25 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
-drv=""
+drv=""; drvpg=""
 HOSTDECOY=""
-cleanup() { [ -z "$drv" ] || { kill "$drv" 2>/dev/null || true; wait "$drv" 2>/dev/null || true; }; rm -rf "$WORK" ${HOSTDECOY:+"$HOSTDECOY"}; }
+# STOP THE TREE, NOT THE SHIM — and wait for it to be gone before removing anything.
+# `kill "$drv"` ends the subshell that started the run; the driver re-execs itself and
+# its workers are not its children in any way `wait` can see, so they went on writing
+# `runs/<pid>.ledger` and `repo-b/.chief/state` INTO $WORK while the EXIT trap's
+# `rm -rf` was walking it. Measured: three $TMPDIR trees left by this file on one host,
+# each holding exactly the files a still-live descendant recreated after rm had passed.
+# So the run is launched with `set -m`, into a group of its own, and stopped by group.
+stop_run() {
+  [ -n "$drv" ] || return 0
+  [ -z "$drvpg" ] || kill -TERM -"$drvpg" 2>/dev/null || true
+  kill "$drv" 2>/dev/null || true
+  wait "$drv" 2>/dev/null || true
+  local i=0
+  while [ -n "$drvpg" ] && [ "$i" -lt 60 ] && kill -0 -"$drvpg" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
+  drv=""; drvpg=""
+}
+cleanup() { stop_run; rm -rf "$WORK" ${HOSTDECOY:+"$HOSTDECOY"}; }
 trap 'rc=$?; cleanup; exit "$rc"' EXIT
 # Hermetic in ENV as well as in state — this suite may itself be running inside a
 # chief worktree whose driver exported a pause file (test/suspectlimit.sh's note).
@@ -156,9 +172,14 @@ echo "host-isolation:   both tasklists merged, no hold logged"
 echo "host-isolation: part B — the same fixture with CHIEF_MACHINE_LOAD_LIMIT=4 (the pre-lib.sh reading)"
 scaffold "$WORK/repo-b"
 LOG=b.log
+set -m
 ( cd "$WORK/repo-b" && PATH="$WORK/fakebin:$PATH" CHIEF_MACHINE_LOAD_LIMIT=4 "$CHIEF" run -p 2 ) \
   >"$WORK/b.log" 2>&1 &
 drv=$!
+set +m
+drvpg="$(ps -o pgid= -p "$drv" 2>/dev/null | tr -d ' ')"
+[ -n "$drvpg" ] && [ "$drvpg" != "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" ] \
+  || fail "B: the run shares this shell's process group (pgid '$drvpg') — refusing to signal it"
 # Bounded by a POLL, never by a fixed sleep: the hold is the first thing the launch
 # loop does, so this normally returns in well under a second, and the ceiling is only
 # here so a fix that removes the hold entirely fails rather than hangs.
@@ -168,7 +189,7 @@ for _ in $(seq 1 120); do
   kill -0 "$drv" 2>/dev/null || break
   sleep 1
 done
-kill "$drv" 2>/dev/null || true; wait "$drv" 2>/dev/null || true; drv=""
+stop_run
 [ "$held" = 1 ] || fail "B: the host's load ceiling did NOT hold this run — PART A proves nothing"
 grep -q 'machine budget hold — machine load: load average 62 over 4 core(s)' "$WORK/b.log" \
   || fail "B: held, but not on the load: $(grep -m1 'machine budget hold' "$WORK/b.log")"

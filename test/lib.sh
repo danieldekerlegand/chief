@@ -98,15 +98,18 @@ export CHIEF_MACHINE_LOAD_LIMIT="${CHIEF_MACHINE_LOAD_LIMIT:-off}"
 # on macOS and a glob built from the raw value would not match the exported path.
 _chief_test_tmp="${TMPDIR:-/tmp}"; _chief_test_tmp="${_chief_test_tmp%/}"
 
-# Reclaimed by the NEXT test to source this file rather than by a trap, because a
-# trap is the one thing this suite cannot rely on: all 96 scripts install their own
-# `trap … EXIT` a line or two below, which replaces anything set here. (Handing the
-# whole suite one composed trap is US-3's subject; when it lands, this root goes with
-# it and the sweep below becomes the belt to its braces.) Four guards, each for a
-# reason: the name must carry a decimal pid, the entry must be a real directory and
-# not a symlink pointed somewhere else, it must be OURS — $TMPDIR is shared on Linux
-# — and the pid must be gone. A pid that has been reused by an unrelated live process
-# reads as alive and the directory is left; leaving one husk is the failure to prefer.
+# Reclaimed by the NEXT test to source this file rather than by an EXIT trap of our
+# own, because that one trap is the thing this suite cannot rely on: all 96 scripts
+# install their own `trap … EXIT` a line or two below, which replaces anything set
+# here. (The signal section at the foot of this file DOES delete it, because there
+# we know we are leaving and the disposition is ours; this sweep is the belt to that
+# brace, and the only cover for the two exits nobody gets a word in — a normal one,
+# where the script's own EXIT trap has already displaced ours, and a SIGKILL.)
+# Four guards, each for a reason: the name must carry a decimal pid, the entry must
+# be a real directory and not a symlink pointed somewhere else, it must be OURS —
+# $TMPDIR is shared on Linux — and the pid must be gone. A pid that has been reused
+# by an unrelated live process reads as alive and the directory is left; leaving one
+# husk is the failure to prefer.
 _chief_test_sweep_stale() {
   local d pid
   for d in "$_chief_test_tmp"/chief-test-host.*; do
@@ -133,4 +136,68 @@ _chief_test_sweep_stale
 # is something that happens to a test, and it is overruled. (A test that wants its own
 # prefix does what seventy of them already do and assigns one AFTER this file is
 # sourced — later assignment wins outright, and nothing here touches that.)
-export CHIEF_PREFIX="${CHIEF_TEST_PREFIX:-$_chief_test_tmp/chief-test-host.$$}"
+_chief_test_own_root="$_chief_test_tmp/chief-test-host.$$"
+export CHIEF_PREFIX="${CHIEF_TEST_PREFIX:-$_chief_test_own_root}"
+# Only the one we minted is ours to delete on the way out; a prefix a person asked
+# for is theirs, and the sweep above already refuses anything not pid-keyed.
+[ "$CHIEF_PREFIX" = "$_chief_test_own_root" ] || _chief_test_own_root=""
+
+# ── a signal is an exit, and an exit is what all 96 traps already handle ──────────
+# An interrupted verify is the normal end of a long one — Ctrl-C, a closed terminal,
+# a cancelled CI job — and ninety-two of the ninety-six scripts here clean up with
+# `trap … EXIT` and nothing else.
+#
+# THE OBVIOUS PREMISE IS FALSE, AND MEASURING IT MOVED THE TARGET. "An untrapped
+# signal kills the shell before its EXIT trap can run" is true of some shells and
+# not of bash: on bash 3.2.57, the system bash this suite runs under on macOS, an
+# untrapped INT, TERM or HUP runs the EXIT trap on its way out — pid-addressed and
+# group-addressed alike, and whether the shell is in a builtin or blocked in a
+# foreground child (test/signal-cleanup.sh reproduces all of it). So `$WORK` was
+# never what an interrupted run stranded. Two other things were:
+#
+#   THE PREFIX ROOT ABOVE. No test's EXIT trap has heard of it — it is this file's,
+#   reclaimed by the NEXT test to source this file, and on a signal there is no next
+#   test. That one is structural: it holds on every bash, because nothing else in
+#   the process knows the directory exists.
+#
+#   THE STATUS. A SIGINT addressed to the pid of a script blocked in a foreground
+#   child, with nothing trapped, exits the shell ZERO on this bash — so all.sh,
+#   bystander.sh and .chief/verify.sh all read a killed test as a PASS, which is the
+#   worse of the two failures by some distance.
+#
+# THE REPAIR IS NOT NINETY-SIX MORE TRAP LINES. Three signals × ninety-six files,
+# each with its own cleanup body to keep in step, is the shape this file exists to
+# refuse — and US-1 already measured what a suite-wide insert costs: the quality
+# ratchet's duplication window is six normalized lines and the copy-pasted preamble
+# is five, so one more shared line tips eleven file-pairs over it at once.
+#
+# Instead, one rule, stated once: A SIGNAL BECOMES AN EXIT. bash runs the EXIT trap
+# when a handler calls `exit`, and `$?` at the EXIT trap's entry is the status that
+# `exit` was given — so `trap 'rm -rf "$WORK"' EXIT` and
+# `trap 'rc=$?; cleanup; exit "$rc"' EXIT` both keep doing precisely what they
+# already do, the temp tree goes, and the shell reports 143 to whoever asked.
+# Nothing in the ninety-six changes, which is also why this cannot fall out of step
+# with them: there is no second copy of the cleanup here, only the arrival.
+#
+# It survives their traps for the same reason US-1's export survives their setup:
+# `trap … EXIT` replaces the handler for EXIT and for nothing else.
+#
+# `trap - "$sig"` FIRST, so the disposition is back to the default before any of the
+# cleanup runs: a second Ctrl-C has to be able to end a cleanup that is itself stuck
+# (test/teardown.sh's fixtures wedge on purpose), and an operator pressing it twice
+# means it.
+#
+# THE BOUND, stated rather than discovered later: bash defers a trap handler while a
+# FOREGROUND child is running, so a signal addressed to a test's pid ALONE is acted
+# on when the current command returns, not at once. It costs nothing in the case
+# that matters — a Ctrl-C and a `kill` on the process group reach the child too, and
+# the child is what is slow — and the alternative (this file signalling processes
+# it did not start) is the 2026-08-17 incident in miniature.
+_chief_test_on_signal() {
+  trap - "$1"
+  [ -n "$_chief_test_own_root" ] && rm -rf -- "$_chief_test_own_root"
+  exit "$2"          # → the script's own EXIT trap, whatever it happens to be
+}
+trap '_chief_test_on_signal INT 130'  INT
+trap '_chief_test_on_signal TERM 143' TERM
+trap '_chief_test_on_signal HUP 129'  HUP

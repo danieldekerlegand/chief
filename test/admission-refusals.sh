@@ -43,7 +43,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; . "$ROOT/test/lib.sh"
 WORK="$(mktemp -d)"
 HOLDER_PID=""
-trap 'rc=$?; [ -n "$HOLDER_PID" ] && kill "$HOLDER_PID" 2>/dev/null; rm -rf "$WORK"; exit "$rc"' EXIT
+# `[ -z … ] ||` and not `[ -n … ] &&`, and that is not a style choice: this file runs
+# under `set -euo pipefail`, an AND-list whose left side fails returns non-zero, and a
+# non-zero command inside a trap handler ENDS THE SHELL THERE — before `rm -rf`. With
+# $HOLDER_PID still empty (every exit before the holder starts, which is every signal
+# during setup) the cleanup aborted and the tree stayed. Measured 2026-09-19: this file
+# was the one $TMPDIR tree that survived an interrupted `test/all.sh`.
+trap 'rc=$?; [ -z "$HOLDER_PID" ] || kill "$HOLDER_PID" 2>/dev/null || true; rm -rf "$WORK"; exit "$rc"' EXIT
 export GIT_AUTHOR_NAME=ar GIT_AUTHOR_EMAIL=ar@test GIT_COMMITTER_NAME=ar GIT_COMMITTER_EMAIL=ar@test
 export CHIEF_PREFIX="$WORK/ch" CHIEF_RUNS="$WORK/runs" CHIEF_REPOS="$WORK/repos"
 # Either would hold a branch below, and "it merged" would then be asserting something

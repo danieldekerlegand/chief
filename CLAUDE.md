@@ -532,7 +532,34 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   driver leaves nothing at all, and the one husk a driver-running test
                      #   does leave is reclaimed by the NEXT test to source lib.sh (pid-keyed
                      #   name, owned by us, not a symlink, pid dead) rather than by a trap, since
-                     #   all 96 scripts replace the EXIT trap a line or two below
+                     #   all 96 scripts replace the EXIT trap a line or two below.
+                     #   The THIRD host input is the one the suite GIVES BACK — its litter
+                     #   when it is interrupted, which is the normal end of a long verify.
+                     #   lib.sh traps INT · TERM · HUP once, and each handler restores the
+                     #   default disposition and calls `exit 128+n`: bash then runs the
+                     #   script's OWN EXIT trap, `$?` at its entry is the status `exit` was
+                     #   given, and all 96 cleanups keep doing exactly what they already do.
+                     #   One rule instead of three signals × ninety-six files — and the
+                     #   trap survives their setup for the same reason the exports do, since
+                     #   `trap … EXIT` replaces EXIT and nothing else. WHAT IT IS WORTH HAD
+                     #   TO BE MEASURED: the obvious premise is FALSE for bash — on 3.2.57
+                     #   an untrapped INT/TERM/HUP runs the EXIT trap on its way out, so
+                     #   `$WORK` was never what an interrupted run stranded. Two things
+                     #   were: lib.sh's own PREFIX ROOT, which no test's EXIT trap has heard
+                     #   of (structural, true on every bash), and the STATUS — a
+                     #   pid-addressed SIGINT with nothing trapped exits the shell ZERO, so
+                     #   all.sh, bystander.sh and verify.sh all read a killed test as a
+                     #   PASS. THE BOUND: bash defers a trap handler while a FOREGROUND
+                     #   child runs, so a signal sent to a test's pid alone is acted on when
+                     #   that child returns; a Ctrl-C and a group kill reach the child too,
+                     #   and signalling processes this file did not start is the 2026-08-17
+                     #   incident in miniature. AND A CLEANUP MUST BE ABLE TO REACH ITS
+                     #   `rm -rf`: sixteen of these scripts clean up under `set -euo
+                     #   pipefail`, where an AND-list whose left side fails returns non-zero
+                     #   and ENDS THE SHELL inside the handler — `[ -n "$HOLDER_PID" ] &&
+                     #   kill …` with the holder not yet started was the one tree that
+                     #   survived an interrupted `test/all.sh`. Write `[ -z … ] || …` or end
+                     #   it `|| true`; test/signal-cleanup.sh PART D scans for the shape
                      #   host-isolation.sh — lib.sh's guard, through the REAL driver, because
                      #   "the predicate returned 0" and "the run launched with nobody asked"
                      #   are different claims. PART B is why PART A means anything: the load
@@ -552,6 +579,16 @@ test/*.sh            # hermetic behavioral suite (fake claude on PATH; needs git
                      #   outside" passes loudest on a sweep that judged nothing. The control's
                      #   $HOME is a temp tree of the test's own: a control for "a fixture reads
                      #   the real ~/.chief" may not itself read the real ~/.chief
+                     #   signal-cleanup.sh — the same claim for the third input, and it
+                     #   asserts the DIRECTORY rather than the trap: three signals × the
+                     #   four EXIT-trap shapes that actually occur here, each victim given
+                     #   a $TMPDIR OF ITS OWN so "nothing survived" is counted and not
+                     #   estimated on a shared /tmp, and each delivered TO THE GROUP,
+                     #   which is what a Ctrl-C is. PART B is the mutation control — the
+                     #   same victims against a copy of lib.sh with those three trap lines
+                     #   deleted must leave the prefix root behind — and PART C pins the
+                     #   deferral bound as a FLOOR on elapsed time, which needs no
+                     #   calibration against the host
                      #   bystander.sh — runs the behavioural block with a decoy run from ANOTHER
                      #   install alive, and fails the test that signals it (hermetic in STATE is
                      #   not hermetic in PROCESSES); it IS verify.sh's behavioural block
