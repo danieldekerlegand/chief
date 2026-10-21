@@ -124,6 +124,44 @@ def parse_ideas(path: Path) -> list[dict[str, Any]]:
     return data.get("ideas", data) if isinstance(data, dict) else data
 
 
+def gauntlet_compendium(path: Path) -> list[dict[str, Any]]:
+    """Project the human-first compendium index without turning it into a scheduler."""
+    if not path.is_file():
+        return []
+    project, loops = "cross-project", []
+    link = re.compile(r"^\[([^]]+)\]\(([^)#]+)#([^)]+)\)<br>\*([^*]+)\*$")
+    for line_no, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        heading = re.match(r"^###\s+(.+?)\s*$", line)
+        if heading:
+            project = clean(heading.group(1)).lower()
+            continue
+        if not line.startswith("|"):
+            continue
+        cells = [x.strip() for x in line.strip().strip("|").split("|")]
+        if len(cells) != 3:
+            continue
+        match = link.match(cells[0])
+        if not match:
+            continue
+        title, detail_file, anchor, kind = match.groups()
+        status_text = clean(cells[2])
+        lowered = status_text.lower()
+        if "not started" in lowered: status = "proposed"
+        elif lowered.startswith("not completed"): status = "incomplete"
+        elif lowered.startswith("paused"): status = "paused"
+        elif lowered.startswith("in progress"): status = "active"
+        elif lowered.startswith("completed"): status = "complete"
+        else: status = "unknown"
+        outcome = next((v for v in ["request to send", "shrunk", "replacement", "revised loop", "proposed small loop", "proposed loop"] if v in status_text.lower()), "")
+        priority = next((v for v in ["now", "next", "later"] if f"priority {v}" in status_text.lower()), "")
+        loops.append({"id": anchor, "project": project, "title": clean(title), "kind": kind,
+            "summary": clean(cells[1]), "status": status, "statusText": status_text,
+            "proposalOutcome": outcome, "priority": priority, "approvalRequired": kind == "proposed",
+            "factsCheckedAt": "2026-10-15" if kind == "proposed" else "", "refreshedAt": "2026-10-21",
+            "source": str(path.parent / detail_file), "sourceAnchor": anchor, "indexSource": f"{path}:{line_no}"})
+    return loops
+
+
 def external_runs(private_root: Path, pattern: str) -> list[dict[str, Any]]:
     runs = []
     for path in sorted(private_root.glob(pattern)):
@@ -200,6 +238,20 @@ def tracker_runs(root: Path) -> list[dict[str, Any]]:
     return runs
 
 
+def link_gauntlet_runs(gauntlets: list[dict[str, Any]], runs: list[dict[str, Any]]) -> None:
+    def key(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", re.sub(r"\([^)]*\)", "", value.lower()))
+    for gauntlet in gauntlets:
+        wanted = key(gauntlet["title"])
+        matches = [run for run in runs if run.get("project") == gauntlet["project"] and
+                   (key(run.get("title", "")) == wanted or (len(wanted) > 10 and wanted in key(run.get("title", ""))))]
+        gauntlet["linkedRuns"] = [run.get("id", "") for run in matches]
+        active = next((run for run in matches if run.get("status") in {"active", "running", "paused", "blocked"}), None)
+        gauntlet["live"] = ({"runId": active.get("id", ""), "status": active.get("status", "unknown"),
+                             "progress": active.get("progress"), "updated": active.get("updated", ""),
+                             "source": active.get("source", "")} if active else None)
+
+
 def collect(config_path: Path) -> dict[str, Any]:
     config = json.loads(config_path.read_text())
     workspace = config["workspace"]
@@ -214,6 +266,8 @@ def collect(config_path: Path) -> dict[str, Any]:
     ideas_path = private_root / private.get("ideas", "")
     competitors = parse_competitors(competitor_path)
     ideas = parse_ideas(ideas_path)
+    default_gauntlets = "docs/reference/gauntlet-loops/" + "README.md"
+    gauntlets = gauntlet_compendium(private_root / private.get("gauntlets", default_gauntlets)) if private else []
     if private:
         sources.append({"id": "private", "kind": "private-workspace", "location": str(private_root), "status": "ok" if private_root.exists() else "missing"})
     runs = external_runs(private_root, private.get("runs", "portfolio/runs/*.json")) if private else []
@@ -224,7 +278,8 @@ def collect(config_path: Path) -> dict[str, Any]:
         found = tracker_runs(tracker_root)
         runs.extend(found)
         sources.append({"id": f"tracker-{index}", "kind": tracker.get("kind", "tracker"), "location": str(tracker_root), "status": "ok" if tracker_root.exists() else "missing", "message": f"{len(found)} runs"})
-    return {"schemaVersion": "chief.portfolio/v1", "generatedAt": datetime.now(timezone.utc).isoformat(), "workspace": {"name": workspace.get("name", root.name), "root": str(root)}, "projects": projects, "roadmap": roadmap, "competitors": competitors, "ideas": ideas, "runs": runs, "research": research, "sources": sources}
+    link_gauntlet_runs(gauntlets, runs)
+    return {"schemaVersion": "chief.portfolio/v1", "generatedAt": datetime.now(timezone.utc).isoformat(), "workspace": {"name": workspace.get("name", root.name), "root": str(root)}, "projects": projects, "roadmap": roadmap, "competitors": competitors, "ideas": ideas, "runs": runs, "research": research, "gauntlets": gauntlets, "sources": sources}
 
 
 def main() -> None:

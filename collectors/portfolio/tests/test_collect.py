@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from collect import external_runs, roadmap_items, research_sources, tracker_runs
+from collect import external_runs, gauntlet_compendium, link_gauntlet_runs, roadmap_items, research_sources, tracker_runs
 
 class CollectorTests(unittest.TestCase):
     def test_roadmap_statuses(self):
@@ -31,5 +31,28 @@ class CollectorTests(unittest.TestCase):
             sources, research = research_sources(root, "sources/*.json")
             self.assertIn("discovered=3", sources[0]["message"])
             self.assertEqual(research[0]["actions"], ["A"])
+
+    def test_gauntlet_compendium_keeps_proposals_unscheduled(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); path = root / "README.md"
+            path.write_text("### demo\n| Loop | What it does | Completed? |\n|---|---|---|\n| [Do it](demo.md#do-it)<br>*proposed* | Fix it. | Not started (shrunk, priority now) |\n")
+            loops = gauntlet_compendium(path)
+            self.assertEqual(len(loops), 1)
+            self.assertEqual(loops[0]["status"], "proposed")
+            self.assertTrue(loops[0]["approvalRequired"])
+            self.assertEqual(loops[0]["priority"], "now")
+
+    def test_gauntlet_status_does_not_call_not_completed_complete(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "README.md"
+            path.write_text("### demo\n| Loop | What it does | Completed? |\n|---|---|---|\n| [Stopped](existing.md#stopped)<br>*existing* | Tried. | Not completed (stopped) |\n")
+            self.assertEqual(gauntlet_compendium(path)[0]["status"], "incomplete")
+
+    def test_gauntlet_links_matching_live_run(self):
+        loops=[{"id":"x","project":"insimul","title":"Insimul Unreal Round"}]
+        runs=[{"id":"run:x","project":"insimul","title":"Insimul Unreal Round","status":"active","progress":40,"source":"tracker"}]
+        link_gauntlet_runs(loops, runs)
+        self.assertEqual(loops[0]["linkedRuns"], ["run:x"])
+        self.assertEqual(loops[0]["live"]["progress"], 40)
 
 if __name__ == "__main__": unittest.main()

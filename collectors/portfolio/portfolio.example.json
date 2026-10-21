@@ -8,6 +8,7 @@
     "root": "~/Development/rosetta",
     "competitors": "strategy/COMPETITORS.md",
     "ideas": "portfolio/ideas.json",
+    "gauntlets": "<private-compendium-index>",
     "runs": "portfolio/runs/*.json",
     "research": "portfolio/sources/*.json"
   },

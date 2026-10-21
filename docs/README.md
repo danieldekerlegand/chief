@@ -18,6 +18,7 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 - [The local-inference preset — cost avoidance as a supported mode](guides/local-inference-preset.md)
 - [Monitoring active runs](guides/monitoring.md)
 - [Providers — the onboarding recipe](guides/providers.md)
+- [Gauntlets in Chief — native harness execution and portfolio projection](gauntlet-integration.md)
 
 ## Reference
 

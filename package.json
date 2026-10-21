@@ -6,6 +6,8 @@
   "scripts": {
     "portfolio:collect": "python3 collectors/portfolio/collect.py",
     "portfolio:serve": "python3 collectors/portfolio/serve.py",
-    "portfolio:test": "python3 -m unittest discover -s collectors/portfolio/tests"
+    "portfolio:test": "python3 -m unittest discover -s collectors/portfolio/tests",
+    "gauntlet:format": "python3 collectors/gauntlet/format.py",
+    "gauntlet:test": "python3 -m unittest discover -s collectors/gauntlet/tests"
   }
 }
