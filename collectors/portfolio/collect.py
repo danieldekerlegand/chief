@@ -124,6 +124,37 @@ def parse_ideas(path: Path) -> list[dict[str, Any]]:
     return data.get("ideas", data) if isinstance(data, dict) else data
 
 
+def external_runs(private_root: Path, pattern: str) -> list[dict[str, Any]]:
+    runs = []
+    for path in sorted(private_root.glob(pattern)):
+        try:
+            data = json.loads(path.read_text())
+        except (ValueError, OSError):
+            continue
+        for run in data.get("runs", []) if isinstance(data, dict) else []:
+            if not isinstance(run, dict):
+                continue
+            item = dict(run)
+            item.setdefault("progress", None)
+            item.setdefault("updated", str(data.get("updated", "")))
+            item.setdefault("media", [])
+            runs.append(item)
+    return runs
+
+
+def research_sources(private_root: Path, pattern: str) -> list[dict[str, Any]]:
+    sources = []
+    for path in sorted(private_root.glob(pattern)):
+        try:
+            data = json.loads(path.read_text())
+        except (ValueError, OSError):
+            continue
+        coverage = data.get("coverage", {}) if isinstance(data, dict) else {}
+        summary = ", ".join(f"{key}={value}" for key, value in coverage.items())
+        sources.append({"id": data.get("id", f"research:{path.stem}"), "kind": "research", "location": str(path), "status": "ok", "message": summary})
+    return sources
+
+
 def tracker_runs(root: Path) -> list[dict[str, Any]]:
     runs = []
     if not root.is_dir():
@@ -175,7 +206,8 @@ def collect(config_path: Path) -> dict[str, Any]:
     ideas = parse_ideas(ideas_path)
     if private:
         sources.append({"id": "private", "kind": "private-workspace", "location": str(private_root), "status": "ok" if private_root.exists() else "missing"})
-    runs = []
+    runs = external_runs(private_root, private.get("runs", "portfolio/runs/*.json")) if private else []
+    sources.extend(research_sources(private_root, private.get("research", "portfolio/sources/*.json")) if private else [])
     for index, tracker in enumerate(config.get("trackers", [])):
         tracker_root = Path(tracker["root"]).expanduser()
         found = tracker_runs(tracker_root)

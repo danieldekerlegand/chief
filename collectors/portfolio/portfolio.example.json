@@ -7,7 +7,9 @@
   "private": {
     "root": "~/Development/rosetta",
     "competitors": "strategy/COMPETITORS.md",
-    "ideas": "portfolio/ideas.json"
+    "ideas": "portfolio/ideas.json",
+    "runs": "portfolio/runs/*.json",
+    "research": "portfolio/sources/*.json"
   },
   "trackers": [
     {"kind": "vibe-trackers", "root": "~/vibe-trackers"}
