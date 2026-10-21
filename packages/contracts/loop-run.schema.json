@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/loop-run.schema.json",
+  "title": "Chief observed gauntlet loop run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "definitionId", "project", "title", "status", "observedAt", "startedAt", "startedAtPrecision", "runtime", "lanes", "nativeSessions", "findings", "operatorDecisions", "evidence", "events", "followOnWork", "sources"],
+  "properties": {
+    "schemaVersion": {"const": "chief.loop-run/v1"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9:-]*$"},
+    "definitionId": {"type": "string", "minLength": 1},
+    "project": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "status": {"enum": ["queued", "active", "paused", "blocked", "complete", "incomplete", "cancelled", "unknown"]},
+    "observedAt": {"type": "string", "format": "date-time"},
+    "startedAt": {"type": "string", "format": "date-time"},
+    "startedAtPrecision": {"enum": ["exact", "minute", "hour", "day"]},
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activeSeconds", "activeApproximate", "pausedSeconds", "pausedSecondsKnown", "pauseReasons", "summary"],
+      "properties": {
+        "activeSeconds": {"type": "integer", "minimum": 0},
+        "activeApproximate": {"type": "boolean"},
+        "pausedSeconds": {"type": ["integer", "null"], "minimum": 0},
+        "pausedSecondsKnown": {"type": "boolean"},
+        "pauseReasons": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string", "minLength": 1}
+      }
+    },
+    "lanes": {"type": "array", "minItems": 1, "items": {"$ref": "lane.schema.json"}},
+    "nativeSessions": {"type": "array", "items": {"$ref": "native-session.schema.json"}},
+    "findings": {"type": "array", "items": {"$ref": "finding.schema.json"}},
+    "operatorDecisions": {"type": "array", "items": {"$ref": "operator-decision.schema.json"}},
+    "evidence": {"type": "array", "items": {"$ref": "evidence.schema.json"}},
+    "events": {"type": "array", "items": {"$ref": "normalized-event.schema.json"}},
+    "followOnWork": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "status", "estimate", "dependsOn"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "status": {"enum": ["proposed", "queued", "blocked", "active", "complete"]},
+          "estimate": {"type": "string"},
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["laneId", "stageId"],
+              "properties": {"laneId": {"type": "string"}, "stageId": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "object", "additionalProperties": false, "required": ["kind", "ref", "observedAt", "authority"], "properties": {"kind": {"enum": ["tracker", "provider", "operator-report", "git", "chief-legacy"]}, "ref": {"type": "string"}, "observedAt": {"type": "string", "format": "date-time"}, "authority": {"type": "string"}}}
+    },
+    "extensions": {"type": "object"}
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/round.schema.json",
+  "title": "Chief gauntlet round",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "number", "status", "phase"],
+  "properties": {
+    "schemaVersion": {"const": "chief.round/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "number": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["queued", "running", "builder-complete", "judging", "passed", "failed", "void", "capped"]},
+    "phase": {"type": "string", "minLength": 1},
+    "startedAt": {"type": ["string", "null"], "format": "date-time"},
+    "completedAt": {"type": ["string", "null"], "format": "date-time"},
+    "builderSessionIds": {"type": "array", "items": {"type": "string"}},
+    "criticSessionIds": {"type": "array", "items": {"type": "string"}},
+    "findingIds": {"type": "array", "items": {"type": "string"}},
+    "evidenceIds": {"type": "array", "items": {"type": "string"}},
+    "measurements": {"type": "object", "additionalProperties": {"type": ["number", "string", "boolean", "null"]}},
+    "summary": {"type": "string"},
+    "extensions": {"type": "object"}
+  }
+}

@@ -1,6 +1,12 @@
 # Gauntlets in Chief
 
-**Status:** Foundation implemented · **Updated:** 2026-10-21 · **Owner:** chief
+**Status:** Compatibility path · **Updated:** 2026-10-21 · **Owner:** chief
+
+> **Superseded default:** The execution-first workflow below remains supported for existing
+> tasklists, but [Chief now observes native coding harnesses first](decisions/native-harness-observer-first.md).
+> New gauntlets should run inside Claude Code, Codex, OpenCode, or another native harness and
+> publish or expose observations through the versioned contracts. Formatting a gauntlet into
+> Chief tasklists is an optional compatibility export.
 
 Chief already supplies the execution substrate a gauntlet needs: fresh provider turns,
 isolated worktrees, dependency-aware tasklists, host-wide concurrency limits, provider

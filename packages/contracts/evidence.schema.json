@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/evidence.schema.json",
+  "title": "Chief evidence reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "kind", "uri", "title", "capturedAt", "source"],
+  "properties": {
+    "schemaVersion": {"const": "chief.evidence/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["report", "log", "document", "image", "video", "artifact", "commit", "branch", "worktree", "test", "link"]},
+    "uri": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "caption": {"type": "string"},
+    "capturedAt": {"type": "string", "format": "date-time"},
+    "source": {"type": "string", "minLength": 1},
+    "sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "mediaType": {"type": ["string", "null"]},
+    "links": {"type": "object", "additionalProperties": false, "properties": {"laneId": {"type": "string"}, "stageId": {"type": "string"}, "roundId": {"type": "string"}}},
+    "extensions": {"type": "object"}
+  }
+}

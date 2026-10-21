@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/normalized-event.schema.json",
+  "title": "Chief normalized observation event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "eventType", "entityType", "entityId", "observedAt", "source", "data"],
+  "properties": {
+    "schemaVersion": {"const": "chief.normalized-event/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "eventType": {"type": "string", "pattern": "^[a-z][a-z0-9.-]+$"},
+    "entityType": {"enum": ["loop-run", "lane", "stage", "round", "native-session", "finding", "operator-decision", "evidence"]},
+    "entityId": {"type": "string", "minLength": 1},
+    "occurredAt": {"type": ["string", "null"], "format": "date-time"},
+    "observedAt": {"type": "string", "format": "date-time"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter", "attribution"],
+      "properties": {
+        "adapter": {"type": "string", "minLength": 1},
+        "attribution": {"enum": ["provider-api", "provider-cli", "hook", "tracker", "operator-report", "git", "chief-legacy", "inferred"]},
+        "cursor": {"type": ["string", "null"]}
+      }
+    },
+    "data": {"type": "object"},
+    "extensions": {"type": "object"}
+  }
+}

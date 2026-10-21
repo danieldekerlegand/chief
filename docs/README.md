@@ -39,6 +39,7 @@ a sibling repository and no relative link to it resolves from a chief worktree â
 - [Tasklist schema](reference/tasklist-schema.md)
 - [The verify hook (`.chief/verify.sh`)](reference/verify-hook.md)
 - [`chief usage` â€” cost and rate-limit reporting from the event logs](reference/usage.md)
+- [Chief observability contracts â€” loop runs, lanes, stages, sessions, decisions, and evidence](../packages/contracts/README.md)
 
 ## Explanation
 
@@ -55,6 +56,7 @@ a sibling repository and no relative link to it resolves from a chief worktree â
 
 - [Decision: chief stays CLI-only â€” the desktop GUI is chief-cloud's](decisions/desktop-gui-decision.md)
 - [Decision: Chief is the development-operations monorepo](decisions/portfolio-monorepo.md)
+- [Decision: Chief observes native coding harnesses first](decisions/native-harness-observer-first.md)
 - [Decision: chief builds the overlap-zone registry; it does not bind a conflict predictor](decisions/conflict-predictor-adoption-decision.md)
 
 ## Archive
