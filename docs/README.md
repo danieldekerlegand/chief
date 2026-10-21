@@ -53,6 +53,7 @@ a sibling repository and no relative link to it resolves from a chief worktree â
 *immutable; superseded by a successor, never edited in place*
 
 - [Decision: chief stays CLI-only â€” the desktop GUI is chief-cloud's](decisions/desktop-gui-decision.md)
+- [Decision: Chief is the development-operations monorepo](decisions/portfolio-monorepo.md)
 - [Decision: chief builds the overlap-zone registry; it does not bind a conflict predictor](decisions/conflict-predictor-adoption-decision.md)
 
 ## Archive

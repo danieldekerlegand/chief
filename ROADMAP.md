@@ -14,9 +14,26 @@ tasklist is live** — `123`, a `fix` authored 2026-09-11 (a conflict resolution
 work) — and the merge-policy approval-flow rework is still a planned row with no tasklist ·
 **Last updated:** 2026-09-11
 
-This is the single canonical roadmap. Chief is a tool, not a product, and is **self-hosting** — its
+This is the single canonical roadmap. Chief is a development-operations tool and is **self-hosting** — its
 own work is driven by chief against tasklists in [`tasks/chief/`](tasks/chief/); this file tracks
 shipped capabilities vs. planned harness improvements and maps them to those tasklist IDs.
+
+---
+
+## Development-operations monorepo — 🚧 active
+
+The runner remains the dependency-free core. Reusable Chief Cloud and Rosetta capabilities now
+converge here as optional application, contract, and collector packages; private workspace data
+stays in a separately configured source. The boundary and migration rules are recorded in
+[`docs/decisions/portfolio-monorepo.md`](docs/decisions/portfolio-monorepo.md).
+
+| Status | Milestone | Evidence |
+|---|---|---|
+| 🚧 | Portfolio observatory foundation — portable snapshot contract, Git/roadmap/Chief/tracker/private-source collectors, and a local responsive UI | `apps/portfolio`, `packages/contracts`, `collectors/portfolio` |
+| ⬜ | Import the former Chief Cloud control plane behind the engine's existing event and account seams | migration inventory required before source movement |
+| ⬜ | Extract Rosetta's reusable competitor watch and source adapters while preserving its private strategy as workspace data | compatibility collector reads Rosetta in place first |
+| ⬜ | Emit OpenTelemetry-compatible run signals and add optional trace-backend adapters | preserve Chief NDJSON as the local source contract |
+| ⬜ | Make evidence manifests first-class for screenshots, video, logs, documents, hashes, and object-storage references | `packages/contracts/portfolio.schema.json` seeds the record |
 
 ---
 
@@ -30,7 +47,8 @@ its own git worktree, gated by a dependency + conflict-domain scheduler.
 
 **In scope:** the project-agnostic engine (driver/scheduler, per-tasklist agent loop, worktree
 isolation, the safe merge floor, the host-wide run monitor), the `chief` CLI, `chief init`
-scaffolding templates, multi-provider agent support, and the hermetic test suite.
+scaffolding templates, multi-provider agent support, the hermetic test suite, and optional
+development-operations applications and read-only collectors over the engine's data contracts.
 **Out of scope:** product or ecosystem logic (chief runs *other* repos' tasklists; it never
 implements their work) and contract definitions (those live in `koine`).
 

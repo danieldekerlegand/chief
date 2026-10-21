@@ -1,0 +1,19 @@
+{
+  "workspace": {
+    "name": "Development",
+    "root": "~/Development",
+    "output": "apps/portfolio/public/snapshot.json"
+  },
+  "private": {
+    "root": "~/Development/rosetta",
+    "competitors": "strategy/COMPETITORS.md",
+    "ideas": "portfolio/ideas.json"
+  },
+  "trackers": [
+    {"kind": "vibe-trackers", "root": "~/vibe-trackers"}
+  ],
+  "scan": {
+    "exclude": ["AutomatedRetailAssociates", "ensemble", "ensemble-author", "danieldekerlegand.github.io"],
+    "roadmap_names": ["ROADMAP.md", "roadmap.md", "Roadmap.md"]
+  }
+}

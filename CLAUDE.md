@@ -1,6 +1,8 @@
 # CLAUDE.md — chief (autonomous tasklist runner)
 
-Chief is the **harness every sibling repo is built with**, not a product. A Bash engine
+Chief is the **development-operations monorepo**. Its dependency-free Bash runner is the harness
+every sibling repo is built with; applications and collectors provide monitoring and portfolio
+observability without becoming runner dependencies. A Bash engine
 (`bin/chief` + `engine/*.sh`) drives an agent through **implement → verify → commit → merge**,
 one user story at a time, with git-worktree-isolated parallelism. Chief is **self-hosting** — its own roadmap lives in `tasks/chief/*.json`
 and is run with chief itself. The inter-repo picture is in `../CLAUDE.md`; the tasklist schema and
@@ -16,11 +18,16 @@ the parallel-safety model are in `docs/`.
   (`engine/gen.sh`, `chief gen` — input contract in `docs/reference/roadmap-input.md`).
 - The hermetic **test suite** (`test/*.sh`), the `chief init` **templates** (`templates/`), and the
   **docs** (`docs/`).
+- Reusable development-operations applications under `apps/`, portable schemas under `packages/`,
+  and read-only source adapters under `collectors/`. The first application is
+  `apps/portfolio`; its generated workspace snapshot is private local data and never committed.
 
 ## What does NOT belong here
 
-- Product or ecosystem logic. Chief runs other repos' tasklists; it doesn't implement their work.
+- Product or ecosystem logic. Chief observes and runs other repos' work; it doesn't implement it.
 - Contract definitions — those live in `../koine`. Chief only needs to read a tasklist's schema.
+- Workspace-specific strategy, private repository metadata, transcripts, screenshots, or commercial
+  findings. Those are configured data sources, not monorepo source.
 
 ## Your task (per iteration)
 
@@ -53,6 +60,7 @@ those two reads are served from. It records for HEAD's tree only, so commit firs
 | Engine version discipline | editing `bin/`/`engine/`/`install.sh` **must** bump `VERSION` (`test/version-bump.sh`) |
 | Docs vs engine (`README.md`, `ROADMAP.md`, `VERSION`, `bin/chief`, `tasks/chief/completed/`) | README's **and** ROADMAP's bold `**vX.Y.Z**` == `VERSION`; README's command table covers every `bin/chief` subcommand; ROADMAP names every merged tasklist stem in `completed/` (`test/doc-sync.sh`). The roadmap half was added by `114` because `86` gated the README and stopped there — and the roadmap is the file that then rotted, to `v0.8.0` beside a `VERSION` of `0.8.94` with 21 merged bands invisible, while the gated README stayed correct to the patch. **Retiring a tasklist is now a roadmap edit**: a record in `completed/` that `ROADMAP.md` never names fails CI. |
 | Tasklists (`tasks/chief/*.json`) | valid JSON (`jq -e .`); `branchName == chief/NN-slug`; `mergedToMain:false` until merged; no acceptance criterion naming another repo unless `crossRepo` declares it (`chief lint`) |
+| Portfolio (`apps/portfolio`, `collectors/portfolio`, `packages/contracts`) | `python3 -m unittest discover -s collectors/portfolio/tests`; `node --check apps/portfolio/public/app.js`; collect the example configuration and parse the resulting snapshot as JSON |
 
 Notes: the behavioral tests install chief from **`git rev-parse HEAD`**, not from your working
 tree — an uncommitted `engine/` edit is invisible to them. Commit first, then run the test, then

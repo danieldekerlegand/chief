@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/portfolio.schema.json",
+  "title": "Chief portfolio snapshot",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "workspace", "projects", "roadmap", "competitors", "ideas", "runs", "sources"],
+  "properties": {
+    "schemaVersion": {"const": "chief.portfolio/v1"},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "workspace": {"type": "object", "required": ["name", "root"], "properties": {"name": {"type": "string"}, "root": {"type": "string"}}},
+    "projects": {"type": "array", "items": {"$ref": "#/$defs/project"}},
+    "roadmap": {"type": "array", "items": {"$ref": "#/$defs/roadmapItem"}},
+    "competitors": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "ideas": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}}
+  },
+  "$defs": {
+    "project": {
+      "type": "object",
+      "required": ["id", "name", "path", "activity", "roadmap"],
+      "properties": {
+        "id": {"type": "string"}, "name": {"type": "string"}, "path": {"type": "string"},
+        "description": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}},
+        "activity": {"type": "object"}, "roadmap": {"type": "object"}
+      }
+    },
+    "roadmapItem": {"type": "object", "required": ["id", "project", "status", "title", "source"], "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "status": {"enum": ["complete", "active", "planned", "blocked", "unknown"]}, "title": {"type": "string"}, "source": {"type": "string"}, "evidence": {"type": "string"}}},
+    "finding": {"type": "object", "required": ["id", "project", "title", "status", "source"], "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "summary": {"type": "string"}, "source": {"type": "string"}, "url": {"type": "string"}, "features": {"type": "array", "items": {"type": "string"}}}},
+    "run": {"type": "object", "required": ["id", "title", "status", "source"], "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "progress": {"type": ["number", "null"]}, "updated": {"type": "string"}, "summary": {"type": "string"}, "source": {"type": "string"}, "url": {"type": "string"}, "media": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}}},
+    "evidence": {"type": "object", "required": ["kind", "uri"], "properties": {"kind": {"enum": ["image", "video", "document", "log", "link"]}, "uri": {"type": "string"}, "caption": {"type": "string"}, "sha256": {"type": "string"}, "capturedAt": {"type": "string"}}},
+    "source": {"type": "object", "required": ["id", "kind", "location", "status"], "properties": {"id": {"type": "string"}, "kind": {"type": "string"}, "location": {"type": "string"}, "status": {"type": "string"}, "message": {"type": "string"}}}
+  }
+}
