@@ -142,8 +142,8 @@ def external_runs(private_root: Path, pattern: str) -> list[dict[str, Any]]:
     return runs
 
 
-def research_sources(private_root: Path, pattern: str) -> list[dict[str, Any]]:
-    sources = []
+def research_sources(private_root: Path, pattern: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    sources, research = [], []
     for path in sorted(private_root.glob(pattern)):
         try:
             data = json.loads(path.read_text())
@@ -152,7 +152,17 @@ def research_sources(private_root: Path, pattern: str) -> list[dict[str, Any]]:
         coverage = data.get("coverage", {}) if isinstance(data, dict) else {}
         summary = ", ".join(f"{key}={value}" for key, value in coverage.items())
         sources.append({"id": data.get("id", f"research:{path.stem}"), "kind": "research", "location": str(path), "status": "ok", "message": summary})
-    return sources
+        for item in data.get("items", []):
+            analysis = item.get("analysis", {})
+            research.append({
+                "id": f"{data.get('id', path.stem)}:{item.get('id', '')}", "sourceId": data.get("id", path.stem),
+                "position": item.get("positionNewestFirst"), "title": item.get("title", item.get("id", "Untitled")),
+                "url": item.get("url", ""), "thumbnail": item.get("thumbnail", ""), "durationSeconds": item.get("durationSeconds"),
+                "transcript": item.get("transcript", {}), "status": analysis.get("status", "pending"),
+                "summary": analysis.get("summary", ""), "lessons": analysis.get("lessons", []), "actions": analysis.get("actions", []),
+                "visualReview": analysis.get("visualReview", []), "source": str(path),
+            })
+    return sources, research
 
 
 def tracker_runs(root: Path) -> list[dict[str, Any]]:
@@ -207,13 +217,14 @@ def collect(config_path: Path) -> dict[str, Any]:
     if private:
         sources.append({"id": "private", "kind": "private-workspace", "location": str(private_root), "status": "ok" if private_root.exists() else "missing"})
     runs = external_runs(private_root, private.get("runs", "portfolio/runs/*.json")) if private else []
-    sources.extend(research_sources(private_root, private.get("research", "portfolio/sources/*.json")) if private else [])
+    research_sources_found, research = research_sources(private_root, private.get("research", "portfolio/sources/*.json")) if private else ([], [])
+    sources.extend(research_sources_found)
     for index, tracker in enumerate(config.get("trackers", [])):
         tracker_root = Path(tracker["root"]).expanduser()
         found = tracker_runs(tracker_root)
         runs.extend(found)
         sources.append({"id": f"tracker-{index}", "kind": tracker.get("kind", "tracker"), "location": str(tracker_root), "status": "ok" if tracker_root.exists() else "missing", "message": f"{len(found)} runs"})
-    return {"schemaVersion": "chief.portfolio/v1", "generatedAt": datetime.now(timezone.utc).isoformat(), "workspace": {"name": workspace.get("name", root.name), "root": str(root)}, "projects": projects, "roadmap": roadmap, "competitors": competitors, "ideas": ideas, "runs": runs, "sources": sources}
+    return {"schemaVersion": "chief.portfolio/v1", "generatedAt": datetime.now(timezone.utc).isoformat(), "workspace": {"name": workspace.get("name", root.name), "root": str(root)}, "projects": projects, "roadmap": roadmap, "competitors": competitors, "ideas": ideas, "runs": runs, "research": research, "sources": sources}
 
 
 def main() -> None:

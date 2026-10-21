@@ -26,8 +26,10 @@ class CollectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); (root / "runs").mkdir(); (root / "sources").mkdir()
             (root / "runs" / "one.json").write_text(json.dumps({"updated":"now","runs":[{"id":"r","title":"Run","status":"paused","source":"x"}]}))
-            (root / "sources" / "one.json").write_text(json.dumps({"id":"s","coverage":{"discovered":3,"analyzed":1}}))
+            (root / "sources" / "one.json").write_text(json.dumps({"id":"s","coverage":{"discovered":3,"analyzed":1},"items":[{"id":"v","title":"Video","analysis":{"status":"reviewed","lessons":["L"],"actions":["A"]}}]}))
             self.assertIsNone(external_runs(root, "runs/*.json")[0]["progress"])
-            self.assertIn("discovered=3", research_sources(root, "sources/*.json")[0]["message"])
+            sources, research = research_sources(root, "sources/*.json")
+            self.assertIn("discovered=3", sources[0]["message"])
+            self.assertEqual(research[0]["actions"], ["A"])
 
 if __name__ == "__main__": unittest.main()
