@@ -1,0 +1,16 @@
+{
+  "name": "@chief/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "sidecar": "python3 scripts/build_sidecar.py",
+    "check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "predev": "python3 scripts/build_sidecar.py",
+    "dev": "tauri dev",
+    "prebuild": "python3 scripts/build_sidecar.py",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

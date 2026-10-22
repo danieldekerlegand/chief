@@ -3,7 +3,7 @@
   "$id": "https://chief.dev/contracts/portfolio.schema.json",
   "title": "Chief portfolio snapshot",
   "type": "object",
-  "required": ["schemaVersion", "generatedAt", "workspace", "projects", "roadmap", "competitors", "ideas", "runs", "research", "gauntlets", "sources"],
+  "required": ["schemaVersion", "generatedAt", "workspace", "projects", "roadmap", "competitors", "ideas", "runs", "loopRuns", "nativeSessions", "observations", "events", "research", "gauntlets", "sources"],
   "properties": {
     "schemaVersion": {"const": "chief.portfolio/v1"},
     "generatedAt": {"type": "string", "format": "date-time"},
@@ -13,6 +13,10 @@
     "competitors": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
     "ideas": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
     "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+    "loopRuns": {"type": "array", "items": {"$ref": "loop-run.schema.json"}},
+    "nativeSessions": {"type": "array", "items": {"$ref": "native-session.schema.json"}},
+    "observations": {"type": "array", "items": {"type": "object"}},
+    "events": {"type": "array", "items": {"$ref": "normalized-event.schema.json"}},
     "research": {"type": "array", "items": {"$ref": "#/$defs/research"}},
     "gauntlets": {"type": "array", "items": {"$ref": "#/$defs/gauntlet"}},
     "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}}

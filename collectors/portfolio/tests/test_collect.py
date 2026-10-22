@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from collect import external_runs, gauntlet_compendium, link_gauntlet_runs, roadmap_items, research_sources, tracker_runs
+from collect import external_runs, gauntlet_compendium, link_gauntlet_runs, loop_run_manifests, roadmap_items, research_sources, tracker_runs
+from collectors.gauntlet.validate_observation import validate
 
 class CollectorTests(unittest.TestCase):
     def test_roadmap_statuses(self):
@@ -54,5 +55,18 @@ class CollectorTests(unittest.TestCase):
         link_gauntlet_runs(loops, runs)
         self.assertEqual(loops[0]["linkedRuns"], ["run:x"])
         self.assertEqual(loops[0]["live"]["progress"], 40)
+
+    def test_loop_run_manifest(self):
+        with tempfile.TemporaryDirectory() as d:
+            source=Path(__file__).resolve().parents[3]/'packages/contracts/fixtures/insimul-current-lanes.json'
+            root=Path(d); (root/'runs').mkdir(); (root/'runs'/'x.json').write_text(source.read_text())
+            imported=loop_run_manifests(root,'runs/*.json')[0]
+            self.assertEqual(imported['id'],'insimul:dual-native-lanes-2026-10-17')
+            self.assertEqual(validate(imported), [])
+
+    def test_invalid_canonical_loop_run_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); (root/'runs').mkdir(); (root/'runs'/'x.json').write_text(json.dumps({"schemaVersion":"chief.loop-run/v1","id":"x","lanes":[]}))
+            self.assertEqual(loop_run_manifests(root,'runs/*.json'),[])
 
 if __name__ == "__main__": unittest.main()

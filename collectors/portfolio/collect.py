@@ -7,9 +7,22 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from collectors.observers.chief import ChiefAdapter
+from collectors.observers.claude import ClaudeAdapter
+from collectors.observers.codex import CodexAdapter
+from collectors.observers.collect import collect as collect_observations
+from collectors.observers.git import GitAdapter
+from collectors.observers.tracker import TrackerAdapter
+from collectors.gauntlet.validate_observation import validate as validate_loop_run
 
 STATUS = {
     "✅": "complete", "done": "complete", "complete": "complete", "completed": "complete",
@@ -180,6 +193,45 @@ def external_runs(private_root: Path, pattern: str) -> list[dict[str, Any]]:
     return runs
 
 
+def loop_run_manifests(private_root: Path, pattern: str) -> list[dict[str, Any]]:
+    runs = []
+    for path in sorted(private_root.glob(pattern)):
+        try:
+            data = json.loads(path.read_text())
+        except (ValueError, OSError):
+            continue
+        version = data.get("schemaVersion") if isinstance(data, dict) else None
+        if version == "chief.loop-run/v1" and validate_loop_run(data):
+            continue
+        if isinstance(data, dict) and version == "chief.loop-run/v1":
+            item = dict(data)
+            item["extensions"] = dict(item.get("extensions", {}))
+            item["extensions"]["chief.portfolio"] = {"source": str(path)}
+            runs.append(item)
+    return runs
+
+
+def native_observations(settings: dict[str, Any]) -> dict[str, Any]:
+    adapters = []
+    if settings.get("claude"):
+        adapters.append(ClaudeAdapter())
+    if settings.get("codexHome"):
+        adapters.append(CodexAdapter(Path(settings["codexHome"]).expanduser()))
+    if settings.get("chiefRuns"):
+        adapters.append(ChiefAdapter(Path(settings["chiefRuns"]).expanduser()))
+    tracker_roots = [Path(value).expanduser() for value in settings.get("trackerRoots", [])]
+    if tracker_roots:
+        adapters.append(TrackerAdapter(tracker_roots))
+    git_roots = [Path(value).expanduser() for value in settings.get("gitRoots", [])]
+    if git_roots:
+        adapters.append(GitAdapter(git_roots))
+    return collect_observations(adapters) if adapters else {
+        "schema": "chief.observation-collection/1", "observedAt": None, "adapters": [],
+        "observations": [], "nativeSessions": [], "events": [],
+        "summary": {"adapters": 0, "records": 0, "degraded": 0, "unavailable": 0},
+    }
+
+
 def research_sources(private_root: Path, pattern: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     sources, research = [], []
     for path in sorted(private_root.glob(pattern)):
@@ -271,6 +323,7 @@ def collect(config_path: Path) -> dict[str, Any]:
     if private:
         sources.append({"id": "private", "kind": "private-workspace", "location": str(private_root), "status": "ok" if private_root.exists() else "missing"})
     runs = external_runs(private_root, private.get("runs", "portfolio/runs/*.json")) if private else []
+    loop_runs = loop_run_manifests(private_root, private.get("loopRuns", "portfolio/loop-runs/*.json")) if private else []
     research_sources_found, research = research_sources(private_root, private.get("research", "portfolio/sources/*.json")) if private else ([], [])
     sources.extend(research_sources_found)
     for index, tracker in enumerate(config.get("trackers", [])):
@@ -279,7 +332,10 @@ def collect(config_path: Path) -> dict[str, Any]:
         runs.extend(found)
         sources.append({"id": f"tracker-{index}", "kind": tracker.get("kind", "tracker"), "location": str(tracker_root), "status": "ok" if tracker_root.exists() else "missing", "message": f"{len(found)} runs"})
     link_gauntlet_runs(gauntlets, runs)
-    return {"schemaVersion": "chief.portfolio/v1", "generatedAt": datetime.now(timezone.utc).isoformat(), "workspace": {"name": workspace.get("name", root.name), "root": str(root)}, "projects": projects, "roadmap": roadmap, "competitors": competitors, "ideas": ideas, "runs": runs, "research": research, "gauntlets": gauntlets, "sources": sources}
+    observed = native_observations(config.get("observers", {}))
+    for batch in observed["adapters"]:
+        sources.append({"id": f"observer-{batch['adapter']}", "kind": "native-observer", "location": batch["adapter"], "status": batch["status"], "message": "; ".join(batch.get("issues", []))})
+    return {"schemaVersion": "chief.portfolio/v1", "generatedAt": datetime.now(timezone.utc).isoformat(), "workspace": {"name": workspace.get("name", root.name), "root": str(root)}, "projects": projects, "roadmap": roadmap, "competitors": competitors, "ideas": ideas, "runs": runs, "loopRuns": loop_runs, "nativeSessions": observed["nativeSessions"], "observations": observed["observations"], "events": observed["events"], "research": research, "gauntlets": gauntlets, "sources": sources}
 
 
 def main() -> None:

@@ -1,10 +1,13 @@
 # chief
 
-**chief** is an autonomous **tasklist runner** for AI coding agents (Claude Code,
-Devin, OpenCode, and Amp). You write a tasklist — user stories with explicit **acceptance criteria** —
-and `chief` drives an agent through them one story at a time: **implement → verify
-→ commit → mark done**, looping fresh agent instances until the whole tasklist is
-complete, then rebasing, re-verifying, and merging the branch.
+**chief** is a local observatory for AI-assisted development across projects. It discovers work
+owned by Claude Code, Codex, file-based gauntlet trackers, Git worktrees, and legacy Chief runs;
+then presents loops, lanes, stages, critic rounds, decisions, evidence, history, and roadmap context
+without taking control of those native harnesses.
+
+Chief also retains its autonomous **tasklist runner** for compatible workflows. Existing users can
+still ask Chief to drive a provider through implement → verify → commit → merge. That runner is a
+supported execution path rather than the default architecture for native gauntlet loops.
 
 Independent tasklists run **concurrently, each in an isolated git worktree**, gated
 by a dependency + conflict-domain scheduler, with a **serialized rebase → verify →
@@ -15,10 +18,10 @@ all your repos — which repo, which tasklists, and how far along each one is.
 Runs on stock **bash 3.2+ · git · jq** (`node` optional). No build step, no daemon,
 no root. State lives on the filesystem, so an interrupted run just resumes.
 
-The repository also hosts optional development-operations applications that consume the runner's
-stable data surfaces. They do not change the runner's dependency or failure boundary.
+The Bash runner remains dependency-free. The observatory applications, contracts, collectors, and
+local service are optional packages around it.
 
-### Portfolio observatory
+### Observatory quickstart
 
 `apps/portfolio` provides a read-only view across many repositories: roadmap completion, current
 iteration signals, competitor findings, research ideas, agent programmes, and multimedia evidence.
@@ -29,11 +32,23 @@ project manager.
 cp collectors/portfolio/portfolio.example.json collectors/portfolio/portfolio.json
 npm run portfolio:test
 npm run portfolio:collect
-npm run portfolio:serve
+npm run chiefd
 ```
 
 The example indexes `~/Development`, existing private Rosetta records, and `~/vibe-trackers`.
 Local configuration and generated snapshots are ignored by Git.
+
+Native source discovery is read-only:
+
+```sh
+npm run observe -- --claude --codex-home ~/.codex --chief-runs ~/.chief/runs \
+  --tracker-root ~/insimul-loops/trackers --git-root ~/Development --pretty
+```
+
+`apps/desktop` packages the same dashboard as a Tauri 2 macOS/Linux menu-bar application. It starts
+the bundled `chiefd` sidecar, can launch at login, reports status in its tray menu, and emits local
+notifications for notable transitions. See [`services/chiefd/README.md`](services/chiefd/README.md)
+and [`packages/contracts/README.md`](packages/contracts/README.md).
 
 > Named for Chief Wiggum — Ralph's dad. It's a parallel, self-installing evolution
 > of the original [Ralph](https://github.com/snarktank/ralph) loop.
@@ -81,6 +96,8 @@ Installer environment overrides: `CHIEF_REPO`, `CHIEF_VERSION` (branch/tag),
 `opencode`, `amp`, or `codex` provides the actual agent.
 
 ## Quickstart
+
+This quickstart covers the legacy tasklist runner.
 
 ```sh
 cd your-repo

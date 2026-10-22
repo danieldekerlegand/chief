@@ -133,6 +133,9 @@ def validate_semantics(data: dict[str, Any]) -> list[str]:
             errors.append(f"{lane_id}: progress percent should be {expected_percent}")
 
     def check_link(link: dict[str, Any], label: str) -> None:
+        if not isinstance(link, dict):
+            errors.append(f"{label}: expected link object")
+            return
         lane_id, stage_id = link.get("laneId"), link.get("stageId")
         if lane_id not in lanes:
             errors.append(f"{label}: unknown lane {lane_id}")
