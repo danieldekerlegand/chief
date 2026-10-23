@@ -50,7 +50,7 @@
       "acceptanceCriteria": [
         "Against a fixture repo and a stub `claude` on PATH that answers each phase from canned files, `chief console --mode plan` writes .chief/console/<run>/ with brief.md, run.json, map/*.md, architecture.md, plan.md, roadmap.json, critic/<lens>-r<n>.json, decisions.md, final/ and cost.json.",
         "The gauntlet loop stops when every lens returns pass with no blocker or major, or at --rounds; verdicts failing the critic JSON schema are rejected and retried once.",
-        "`--from gauntlet` reuses earlier files; `--rerun map:<subsystem>` redoes one mapper; a phase whose budget would push the total over --budget is not started and the run says so."
+        "`--from gauntlet` reuses earlier files and `--to map` stops after the mappers; `--rerun map:<subsystem>` redoes one mapper; `--lens-file` adds a brief's own critic lens; a phase whose budget would push the total over --budget is not started and the run says so."
       ],
       "notes": "",
       "passes": false

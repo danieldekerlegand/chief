@@ -70,7 +70,7 @@ brief ──► MAP (fan-out) ──► SYNTHESIZE ──► PLAN ──► GAUN
 
 **Lenses** (each a template under `templates/console/lenses/`, chosen per run with `--lenses`):
 `architecture-fit`, `engine-constraints`, `scope-realism`, `what-breaks`, `licensing-and-data`,
-`security`. A brief can add its own.
+`security`. A brief can add its own with `--lens-file <file>` (one or more).
 
 **Critic verdict** (enforced with `--json-schema`):
 `{lens, round, verdict: "pass"|"revise", findings: [{id, severity: "blocker"|"major"|"minor", claim, evidence, suggested_change}], checked: [what was verified against the code]}`.
@@ -106,7 +106,8 @@ chief console <repo>... --brief <file> [--mode plan|execute|plan+execute]
               [--budget <usd>] [--phase-budget map=3,plan=15,critic=4,...]
               [--models map=sonnet,plan=opus,critic=opus,build=opus]
               [--subsystems a,b,c] [--lenses a,b] [--rounds 3]
-              [--account console|subscription] [--lock <cmd>] [--from <phase>] [--dry-run] [--check]
+              [--lens-file <file>...] [--account console|subscription] [--lock <cmd>]
+              [--from <phase>] [--to <phase>] [--dry-run] [--check]
 ```
 
 Several repos may be named (`--add-dir` gives the agents read access to the others); the run record lives
