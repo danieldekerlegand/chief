@@ -1,0 +1,1 @@
+Lens: architecture fit. Does each component sit where the architecture says that responsibility lives? Does it reuse the seams, registries and contracts that exist instead of adding parallel ones? Does it keep each product usable on its own when the brief requires it? Are cross-repo edges real contracts, owned by the right repo?

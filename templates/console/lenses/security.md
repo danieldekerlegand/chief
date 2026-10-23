@@ -1,0 +1,1 @@
+Lens: security. Credentials, authentication between products, permissions on shared data, untrusted inputs (uploaded files, images, maps, documents), and anything that runs code or shells out. Does the plan say how each is handled?

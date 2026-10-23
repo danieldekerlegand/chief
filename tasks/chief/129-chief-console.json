@@ -1,0 +1,90 @@
+{
+  "project": "chief",
+  "branchName": "chief/129-chief-console",
+  "category": "feature",
+  "dependsOn": [],
+  "description": "A CONSOLE RUN: chief drives `claude -p` through map -> synthesize -> plan -> gauntlet <-> revise -> final (and optionally execute) over one or more repos, billed to a Claude Console organization's API credits, every phase a file you can read, correct and rerun. Design: docs/explanation/console-runs.md; prompts: templates/console/. Chief stays a thin layer: it owns prompts, budgets, the run record, sequencing and gates; inside a phase Claude Code manages its own agents and worktrees. Execute mode hands tasklists to chief's existing machinery (chief gen; merging stays with chief run and the operator).",
+  "iters": 16,
+  "touches": [
+    "bin",
+    "engine",
+    "templates",
+    "docs",
+    "test"
+  ],
+  "warmup": [
+    "sed -n '1,80p' docs/explanation/console-runs.md",
+    "ls templates/console templates/console/lenses",
+    "grep -n 'gen' bin/chief | head",
+    "sed -n '1,40p' docs/research-phase.md",
+    "claude --help | grep -E -- '--(max-budget-usd|json-schema|permission-mode|worktree|output-format|settings)'"
+  ],
+  "userStories": [
+    {
+      "id": "US-1",
+      "title": "`chief console --dry-run` prints every phase's prompt and flags and spawns nothing",
+      "description": "The command surface and template filling, with no model call.",
+      "acceptanceCriteria": [
+        "`bin/chief console <repo>... --brief <file> --dry-run` fills each template under templates/console/ (every {{NAME}} from the README's table) and prints, per phase, the exact `claude -p` command line (model, --allowedTools or --permission-mode, --max-budget-usd, --json-schema where used) without starting claude.",
+        "A template left with an unfilled `{{` makes the command exit non-zero naming the placeholder (test/console-dry-run.sh).",
+        "README's command table and docs/reference list the command; the docs gate passes."
+      ],
+      "notes": "",
+      "passes": false
+    },
+    {
+      "id": "US-2",
+      "title": "The credential never reaches a shell environment",
+      "description": "Billing to the Console organization without exporting ANTHROPIC_API_KEY.",
+      "acceptanceCriteria": [
+        "With `--account console`, chief sets CLAUDE_CONFIG_DIR (default ~/.chief/claude-console) or `--settings` with an apiKeyHelper only on the claude processes it starts; `chief console --check` reports which account is active without printing any secret.",
+        "A test proves the parent shell's environment is unchanged after a run and that no *_API_KEY variable is set in chief's own process (test/console-credential.sh)."
+      ],
+      "notes": "",
+      "passes": false
+    },
+    {
+      "id": "US-3",
+      "title": "Plan mode runs end to end on a fixture repo with a stub claude",
+      "description": "The phases, the run record and resumption, without spending credits.",
+      "acceptanceCriteria": [
+        "Against a fixture repo and a stub `claude` on PATH that answers each phase from canned files, `chief console --mode plan` writes .chief/console/<run>/ with brief.md, run.json, map/*.md, architecture.md, plan.md, roadmap.json, critic/<lens>-r<n>.json, decisions.md, final/ and cost.json.",
+        "The gauntlet loop stops when every lens returns pass with no blocker or major, or at --rounds; verdicts failing the critic JSON schema are rejected and retried once.",
+        "`--from gauntlet` reuses earlier files; `--rerun map:<subsystem>` redoes one mapper; a phase whose budget would push the total over --budget is not started and the run says so."
+      ],
+      "notes": "",
+      "passes": false
+    },
+    {
+      "id": "US-4",
+      "title": "Final output generates valid tasklists",
+      "description": "The plan becomes chief work through the existing generator.",
+      "acceptanceCriteria": [
+        "final/roadmap.json passes `chief gen -n` (schema-valid tasklists, NDJSON); a fixture roadmap that fails is reported with the failing items."
+      ],
+      "notes": "",
+      "passes": false
+    },
+    {
+      "id": "US-5",
+      "title": "Execute mode runs one tasklist as builder <-> critic rounds and never merges",
+      "description": "Building through claude -p in a worktree, bounded like the loops.",
+      "acceptanceCriteria": [
+        "`--mode execute --tasklist NN` runs builder then critic rounds (stop: zero blocker and major, at most 5 rounds) with the builder in its own worktree (`claude -p --worktree`, acceptEdits plus the scoped tool list) and the critic read-only with fresh context; with the stub claude a fixture tasklist reaches pass in round 2.",
+        "Heavy commands are wrapped by `--lock <cmd>` when given; no base branch is ever written (asserted in the test); the branch is left for `chief run`'s merge phase."
+      ],
+      "notes": "",
+      "passes": false
+    },
+    {
+      "id": "US-6",
+      "title": "Spend is recorded and reported",
+      "description": "Cost per phase from claude's JSON output, visible in chief usage.",
+      "acceptanceCriteria": [
+        "cost.json records phase, model, session id, usd and tokens per call from `--output-format json`; `chief usage` includes console runs; a run's total never exceeds --budget in the stub test."
+      ],
+      "notes": "",
+      "passes": false
+    }
+  ]
+}

@@ -47,6 +47,7 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 - [Dead-code audit — the inventory, and the searches behind it](explanation/dead-code-audit.md)
 - [The research phase — buying the map once](research-phase.md)
 - [Plan review — the checkpoint between criteria and code](plan-review.md)
+- [Console runs — planning and building with `claude -p` on API credits](explanation/console-runs.md) *(proposed; built by `129-chief-console`)*
 
 ## Decisions
 

@@ -1,0 +1,1 @@
+Lens: scope realism. Is each milestone small enough to be built and verified in a few builder/critic rounds? Are its acceptance criteria checkable? Is anything hiding a research problem behind a feature name? What would you cut to ship the brief's core first?
