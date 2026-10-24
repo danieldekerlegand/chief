@@ -39,6 +39,21 @@ a separately configured source. The boundary and migration rules are recorded in
 | ⬜ | Emit OpenTelemetry-compatible run signals and add optional trace-backend adapters | preserve Chief NDJSON as the local source contract |
 | ⬜ | Make evidence manifests first-class for screenshots, video, logs, documents, hashes, and object-storage references | `packages/contracts/portfolio.schema.json` seeds the record |
 
+### Observatory follow-ups (for a Codex session)
+
+Defects in the observatory code observed on 2026-10-23 while Insimul's loops and the first gauntlet
+runner's manifest were being collected. They are **written up here for a Codex session to fix**
+(operator ruling U32, 2026-10-23): nobody edits this code in parallel with it. No tasklist is authored
+for any of them; each row says what was observed and where.
+
+| Status | Milestone | Evidence |
+|---|---|---|
+| ⬜ | **`loopRuns` accepts absolute and tracker-root globs** — the setting is globbed relative to the private workspace root only. An absolute pattern raises `NotImplementedError: Non-relative patterns are unsupported` from `Path.glob` and aborts the collection, and a `~/…` pattern silently matches nothing, so a manifest written in a run directory or under a tracker root (e.g. `~/vibe-trackers`) cannot be collected without copying or linking it into `portfolio/loop-runs/` | `collectors/portfolio/collect.py` `loop_run_manifests()` (`private_root.glob(pattern)`); default in `services/chiefd/collector.py` |
+| ⬜ | **An invalid loop-run manifest is surfaced, not silently skipped** — a manifest that fails to parse, or is `chief.loop-run/v1` but fails `validate_loop_run`, is dropped with a bare `continue`: no source issue, no degraded status, nothing in the snapshot says a run was lost | `collectors/portfolio/collect.py` `loop_run_manifests()` |
+| ⬜ | **The tracker adapter reads `url` and `href` from `nav.json` items** — `tracker_runs()` maps each nav item's key to `item.get("url")` only, while the tracker pages' menu bar writes `href`; `~/vibe-trackers/nav.json` now carries both on every item as a workaround, and a nav file with `href` alone gives every run an empty link | `collectors/portfolio/collect.py` `tracker_runs()` |
+| ⬜ | **ADR banners and document statuses follow the documentation standard** — `native-harness-observer-first.md` and `portfolio-monorepo.md` open with `**Status:** Accepted · **Date:** …` instead of the `> **Status:** · **Updated:** · **Owner:**` banner; and docs use statuses outside the allowed set (`Current` · `Superseded` · `Archived` · `Draft`): `Accepted` in those two ADRs, `Compatibility path` in `docs/gauntlet-integration.md`, `Implemented` in `docs/reference/observer-first-migration.md` | `docs/decisions/`, `docs/`; standard `rosetta/docs/reference/documentation-standard.md` |
+| ⬜ | **The validator's round summary works when several lens rounds share one round number** — the per-stage loop `break`s at the first round whose `number` equals `roundSummary.current`, so the stage's later rounds are never indexed and every link to them fails as an unknown round. A stage with seven lens rounds per round number (the gauntlet runner's `gauntlet` stage) therefore has to emit `roundSummary.current: null` today, and the first runner's manifest says so in a note | `collectors/gauntlet/validate_observation.py` (the `roundSummary.current` scan); observed in `~/insimul-loops/briefs/console_manifest.py` |
+
 ---
 
 ## Vision & Scope
