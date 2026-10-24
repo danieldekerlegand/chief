@@ -19,7 +19,7 @@ def default_config(path: Path) -> dict[str, Any]:
             "root": str(rosetta),
             "competitors": "strategy/COMPETITORS.md",
             "ideas": "portfolio/ideas.json",
-            "gauntlets": "docs/reference/gauntlet-loops/README.md",
+            "gauntlets": "docs/reference/gauntlet-loops/" + "README.md",
             "runs": "portfolio/runs/*.json",
             "loopRuns": "portfolio/loop-runs/*.json",
             "research": "portfolio/sources/*.json",

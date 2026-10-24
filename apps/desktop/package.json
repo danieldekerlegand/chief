@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "sidecar": "python3 scripts/build_sidecar.py",
-    "check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "check": "python3 scripts/check.py",
     "predev": "python3 scripts/build_sidecar.py",
     "dev": "tauri dev",
     "prebuild": "python3 scripts/build_sidecar.py",
