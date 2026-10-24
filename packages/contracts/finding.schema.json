@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/finding.schema.json",
+  "title": "Chief gauntlet finding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "kind", "severity", "status", "title", "summary", "observedAt", "source", "links"],
+  "properties": {
+    "schemaVersion": {"const": "chief.finding/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["defect", "criterion-gap", "blocker", "risk", "observation"]},
+    "severity": {"enum": ["info", "minor", "major", "critical"]},
+    "status": {"enum": ["open", "resolved", "accepted", "superseded"]},
+    "title": {"type": "string", "minLength": 1},
+    "summary": {"type": "string", "minLength": 1},
+    "observedAt": {"type": "string", "format": "date-time"},
+    "source": {"type": "string", "minLength": 1},
+    "links": {"type": "object", "additionalProperties": false, "properties": {"laneId": {"type": "string"}, "stageId": {"type": "string"}, "roundId": {"type": "string"}}},
+    "evidenceIds": {"type": "array", "items": {"type": "string"}},
+    "extensions": {"type": "object"}
+  }
+}

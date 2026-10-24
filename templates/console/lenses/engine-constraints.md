@@ -1,0 +1,1 @@
+Lens: engine and platform constraints. For every engine, runtime or platform the plan touches: is the change possible within that engine's model (threading, editor vs runtime, packaging, web export limits, native libraries), and does the plan's milestone order respect what each engine can do today?

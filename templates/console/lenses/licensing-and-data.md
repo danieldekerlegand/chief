@@ -1,0 +1,1 @@
+Lens: licensing and data provenance. For every external data source, model, asset or library the plan uses: its licence, whether share-alike or non-commercial terms propagate into a commercial product, attribution duties, and whether the plan tiers data by licence at ingest. Flag anything that needs an operator or legal decision.

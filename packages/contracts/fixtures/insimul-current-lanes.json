@@ -1,0 +1,416 @@
+{
+  "schemaVersion": "chief.loop-run/v1",
+  "id": "insimul:dual-native-lanes-2026-10-17",
+  "definitionId": "insimul-current-native-gauntlets",
+  "project": "insimul",
+  "title": "Insimul asset and Unreal UI gauntlet lanes",
+  "status": "active",
+  "observedAt": "2026-10-21T00:00:00-05:00",
+  "startedAt": "2026-10-17T00:00:00-05:00",
+  "startedAtPrecision": "day",
+  "runtime": {
+    "activeSeconds": 302400,
+    "activeApproximate": true,
+    "pausedSeconds": null,
+    "pausedSecondsKnown": false,
+    "pauseReasons": ["provider usage limits", "operator pauses"],
+    "summary": "About 3.5 days of actual running time; usage limits and pauses account for the remaining wall-clock time since 17 October, but their duration was not reported."
+  },
+  "lanes": [
+    {
+      "schemaVersion": "chief.lane/v1",
+      "id": "assets",
+      "title": "Bring your own assets",
+      "status": "active",
+      "summary": "Six of eight reported stages have passed; B7 is at its final critic round and B8 follows it. The source report did not define a B6 stage.",
+      "estimate": "5–8.5 days total; about 1.5–2 days remain",
+      "progress": {"metric": "passed", "completed": 6, "total": 8, "percent": 75, "passed": 6, "capped": 0},
+      "stages": [
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B0",
+          "title": "Test project with your packs",
+          "status": "passed",
+          "estimate": null,
+          "roundSummary": {"observed": 2, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B1",
+          "title": "Bindings that apply",
+          "status": "passed",
+          "estimate": "0.5 day",
+          "roundSummary": {"observed": 2, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B2",
+          "title": "Buildings that fit",
+          "status": "passed",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 1, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B3",
+          "title": "Characters through bindings",
+          "status": "passed",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 1, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B4",
+          "title": "Animation for any skeleton",
+          "status": "passed",
+          "estimate": "1–2 days",
+          "roundSummary": {"observed": 3, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B5",
+          "title": "Foliage, props and ground",
+          "status": "passed",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 2, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B7",
+          "title": "Haunted-village acceptance",
+          "status": "judging",
+          "estimate": "0.5–1.5 days",
+          "roundSummary": {"observed": 4, "void": 0, "current": 5, "cap": 5},
+          "rounds": [
+            {
+              "schemaVersion": "chief.round/v1",
+              "id": "assets-B7-r5",
+              "number": 5,
+              "status": "builder-complete",
+              "phase": "awaiting-judges",
+              "startedAt": null,
+              "completedAt": null,
+              "builderSessionIds": ["claude:insimul-assets"],
+              "criticSessionIds": [],
+              "findingIds": ["B7-judge-gap"],
+              "evidenceIds": ["operator-report-2026-10-21"],
+              "summary": "Final allowed round. Plugin-controlled criteria pass; judges previously scored 5.0 and partly objected to the clothing criterion."
+            }
+          ],
+          "result": {"summary": "Everything controlled by the plugin passes; only the judges remain below the bar.", "judgeScore": 5.0, "judgeScoreBar": null}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "B8",
+          "title": "Auto-pairing a pack, and starter art",
+          "status": "blocked",
+          "estimate": "1–1.5 days",
+          "dependsOn": [{"laneId": "assets", "stageId": "B7"}],
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started; waits for B7."}
+        }
+      ]
+    },
+    {
+      "schemaVersion": "chief.lane/v1",
+      "id": "unreal-ui",
+      "title": "Unreal UI",
+      "status": "active",
+      "summary": "Four of twelve stages are closed: three passed and E2 capped with recorded gaps. E4 is in round four.",
+      "estimate": "7.5–13 days total; about 4.5–8.5 days remain",
+      "progress": {"metric": "closed", "completed": 4, "total": 12, "percent": 33.3, "passed": 3, "capped": 1},
+      "stages": [
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E0",
+          "title": "Before-captures",
+          "status": "passed",
+          "estimate": null,
+          "roundSummary": {"observed": 3, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E1",
+          "title": "Shell and home",
+          "status": "passed",
+          "estimate": "0.25–1 day",
+          "roundSummary": {"observed": 9, "void": 4, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed after re-judging under U13; four of nine rounds were void."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E3",
+          "title": "World explorer",
+          "status": "passed",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 5, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Passed after re-judging under U13."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E2",
+          "title": "Connect, worlds, create world",
+          "status": "capped",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 5, "void": 0, "current": null, "cap": 5},
+          "rounds": [],
+          "result": {"summary": "Round cap reached; gaps were recorded."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E4",
+          "title": "Recipes, build and update",
+          "status": "running",
+          "estimate": "1–1.5 days",
+          "roundSummary": {"observed": 3, "void": 0, "current": 4, "cap": 5},
+          "rounds": [
+            {
+              "schemaVersion": "chief.round/v1",
+              "id": "unreal-ui-E4-r4",
+              "number": 4,
+              "status": "running",
+              "phase": "builder",
+              "startedAt": null,
+              "completedAt": null,
+              "builderSessionIds": ["claude:insimul-unreal-ui"],
+              "criticSessionIds": [],
+              "findingIds": ["E4-score-gap"],
+              "evidenceIds": ["operator-report-2026-10-21"],
+              "summary": "Round four is active after round three had no major findings but narrowly missed both score bars."
+            }
+          ],
+          "result": {"summary": "Round three had zero majors but missed the mean and judge bars.", "score": 4.27, "scoreBar": 4.30, "judgeScore": 7.33, "judgeScoreBar": 8.0}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E4b",
+          "title": "Ready-to-build recipes",
+          "status": "blocked",
+          "estimate": "0.5–1 day",
+          "dependsOn": [{"laneId": "unreal-ui", "stageId": "E4"}],
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started; follows E4."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E5",
+          "title": "Art and characters",
+          "status": "blocked",
+          "estimate": "0.5–1 day",
+          "dependsOn": [{"laneId": "assets", "stageId": "B8"}],
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started; waits for asset stage B8."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E6",
+          "title": "Play, ship and legacy",
+          "status": "not-started",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E7",
+          "title": "Assistant and shared top bar",
+          "status": "not-started",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "E3b",
+          "title": "Explorer parity with the web app",
+          "status": "not-started",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "acceptance-games",
+          "title": "Journeys, then the four acceptance games",
+          "status": "not-started",
+          "estimate": "1.5–3 days",
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started."}
+        },
+        {
+          "schemaVersion": "chief.stage/v1",
+          "id": "D1",
+          "title": "Fresh-project demo",
+          "status": "not-started",
+          "estimate": "0.5–1 day",
+          "roundSummary": {"observed": 0, "void": 0, "current": null, "cap": null},
+          "rounds": [],
+          "result": {"summary": "Not started."}
+        }
+      ]
+    }
+  ],
+  "nativeSessions": [
+    {
+      "schemaVersion": "chief.native-session/v1",
+      "id": "claude:insimul-assets",
+      "provider": "claude",
+      "externalId": null,
+      "status": "active",
+      "observedAt": "2026-10-21T00:00:00-05:00",
+      "attribution": "operator-report",
+      "worktree": null,
+      "branch": null,
+      "links": [{"laneId": "assets", "stageId": "B7", "roundId": "assets-B7-r5"}],
+      "extensions": {"externalIdentityKnown": false}
+    },
+    {
+      "schemaVersion": "chief.native-session/v1",
+      "id": "claude:insimul-unreal-ui",
+      "provider": "claude",
+      "externalId": null,
+      "status": "active",
+      "observedAt": "2026-10-21T00:00:00-05:00",
+      "attribution": "operator-report",
+      "worktree": null,
+      "branch": null,
+      "links": [{"laneId": "unreal-ui", "stageId": "E4", "roundId": "unreal-ui-E4-r4"}],
+      "extensions": {"externalIdentityKnown": false}
+    }
+  ],
+  "findings": [
+    {
+      "schemaVersion": "chief.finding/v1",
+      "id": "B7-judge-gap",
+      "kind": "criterion-gap",
+      "severity": "major",
+      "status": "open",
+      "title": "B7 judges remain below the acceptance bar",
+      "summary": "Plugin-controlled criteria pass, while judges scored 5.0; the clothing question accounts for part of the gap.",
+      "observedAt": "2026-10-21T00:00:00-05:00",
+      "source": "operator-report-2026-10-21",
+      "links": {"laneId": "assets", "stageId": "B7", "roundId": "assets-B7-r5"},
+      "evidenceIds": ["operator-report-2026-10-21"]
+    },
+    {
+      "schemaVersion": "chief.finding/v1",
+      "id": "E4-score-gap",
+      "kind": "criterion-gap",
+      "severity": "minor",
+      "status": "open",
+      "title": "E4 round three narrowly missed both score bars",
+      "summary": "The round had no major findings, a 4.27 mean against 4.30, and a 7.33 judge score against 8.0.",
+      "observedAt": "2026-10-21T00:00:00-05:00",
+      "source": "operator-report-2026-10-21",
+      "links": {"laneId": "unreal-ui", "stageId": "E4", "roundId": "unreal-ui-E4-r4"},
+      "evidenceIds": ["operator-report-2026-10-21"]
+    }
+  ],
+  "operatorDecisions": [
+    {
+      "schemaVersion": "chief.operator-decision/v1",
+      "id": "B7-clothing-ruling",
+      "status": "pending",
+      "title": "B7 clothing ruling",
+      "question": "Should B7 judges set costume style aside for the final judgment?",
+      "requestedAt": "2026-10-21T00:00:00-05:00",
+      "resolvedAt": null,
+      "links": {"laneId": "assets", "stageId": "B7", "roundId": "assets-B7-r5"},
+      "options": [
+        {
+          "id": "set-aside-costume-style",
+          "label": "Set costume style aside",
+          "description": "Judge the plugin-controlled acceptance criteria without treating costume style as a failure."
+        }
+      ],
+      "selectedOptionId": null,
+      "evidenceIds": ["operator-report-2026-10-21"]
+    }
+  ],
+  "evidence": [
+    {
+      "schemaVersion": "chief.evidence/v1",
+      "id": "operator-report-2026-10-21",
+      "kind": "report",
+      "uri": "urn:chief:operator-report:insimul:2026-10-21",
+      "title": "Operator status report for the Insimul asset and Unreal UI lanes",
+      "caption": "Stage results, round counts, estimates, score gaps, runtime, pauses, and the B7 clothing decision supplied by the operator.",
+      "capturedAt": "2026-10-21T00:00:00-05:00",
+      "source": "operator",
+      "sha256": null,
+      "mediaType": "text/markdown"
+    }
+  ],
+  "events": [
+    {
+      "schemaVersion": "chief.normalized-event/v1",
+      "id": "operator-report-2026-10-21-ingested",
+      "eventType": "run.observed",
+      "entityType": "loop-run",
+      "entityId": "insimul:dual-native-lanes-2026-10-17",
+      "occurredAt": null,
+      "observedAt": "2026-10-21T00:00:00-05:00",
+      "source": {"adapter": "operator-report", "attribution": "operator-report", "cursor": null},
+      "data": {"activeSecondsApproximate": 302400, "pausedSecondsKnown": false}
+    },
+    {
+      "schemaVersion": "chief.normalized-event/v1",
+      "id": "B7-clothing-decision-requested",
+      "eventType": "operator-decision.requested",
+      "entityType": "operator-decision",
+      "entityId": "B7-clothing-ruling",
+      "occurredAt": null,
+      "observedAt": "2026-10-21T00:00:00-05:00",
+      "source": {"adapter": "operator-report", "attribution": "operator-report", "cursor": null},
+      "data": {"before": "B7 final judges"}
+    }
+  ],
+  "followOnWork": [
+    {
+      "id": "unreal-features-waves",
+      "title": "Unreal Features waves",
+      "status": "blocked",
+      "estimate": "2–4 days",
+      "dependsOn": [{"laneId": "assets", "stageId": "B8"}, {"laneId": "unreal-ui", "stageId": "D1"}]
+    },
+    {
+      "id": "related-shared-work",
+      "title": "Related shared work",
+      "status": "blocked",
+      "estimate": "about 1 day",
+      "dependsOn": [{"laneId": "assets", "stageId": "B8"}, {"laneId": "unreal-ui", "stageId": "D1"}]
+    }
+  ],
+  "sources": [
+    {
+      "kind": "operator-report",
+      "ref": "urn:chief:operator-report:insimul:2026-10-21",
+      "observedAt": "2026-10-21T00:00:00-05:00",
+      "authority": "Reported lane, stage, score, estimate, and runtime state; native provider session IDs and pause duration were not supplied."
+    }
+  ],
+  "extensions": {"observedAtPrecision": "day", "fixture": true}
+}

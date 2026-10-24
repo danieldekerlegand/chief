@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/stage.schema.json",
+  "title": "Chief gauntlet stage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "title", "status", "roundSummary", "rounds", "result"],
+  "properties": {
+    "schemaVersion": {"const": "chief.stage/v1"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*$"},
+    "title": {"type": "string", "minLength": 1},
+    "status": {"enum": ["not-started", "queued", "blocked", "running", "judging", "passed", "capped", "failed", "paused", "skipped"]},
+    "estimate": {"type": ["string", "null"]},
+    "dependsOn": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["laneId", "stageId"], "properties": {"laneId": {"type": "string"}, "stageId": {"type": "string"}}}
+    },
+    "roundSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed", "void", "current", "cap"],
+      "properties": {
+        "observed": {"type": "integer", "minimum": 0},
+        "void": {"type": "integer", "minimum": 0},
+        "current": {"type": ["integer", "null"], "minimum": 1},
+        "cap": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "rounds": {"type": "array", "items": {"$ref": "round.schema.json"}},
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {"type": "string"},
+        "score": {"type": ["number", "null"]},
+        "scoreBar": {"type": ["number", "null"]},
+        "judgeScore": {"type": ["number", "null"]},
+        "judgeScoreBar": {"type": ["number", "null"]}
+      }
+    },
+    "extensions": {"type": "object"}
+  }
+}

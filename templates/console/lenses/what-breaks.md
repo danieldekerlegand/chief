@@ -1,0 +1,1 @@
+Lens: what breaks. Which existing behaviour, data, saves, tests, gates, public APIs or other repos' consumers does each change affect? Does the plan say how each stays working (migration, versioning, compatibility shims, feature flags)?
