@@ -1,129 +1,160 @@
-# Console runs — planning and building with `claude -p` on API credits
+# Console runs — an Agent SDK runner that Chief observes
 
-> **Status:** Proposed · **Updated:** 2026-10-23 · **Owner:** chief
+> **Status:** Draft · **Updated:** 2026-10-23 · **Owner:** chief
 
-A **console run** is chief driving Claude Code in print mode (`claude -p`) through a fixed set of phases
-over one or more repos, billed to a **Claude Console organization's API credits** rather than a
-subscription. It exists for work that is worth doing as a *repeatable pipeline* — fanned-out mappers, a
-planner, independent critics, and optionally builders — where every phase writes a file you can read,
-correct and rerun. Built by `129-chief-console` (not yet run).
+A **console run** is a planning (and optionally building) pipeline that a **native runner** on the
+**Claude Agent SDK** drives through fixed phases over one or more repos, billed to a **Claude Console
+organization's API credits**. Map, synthesize, plan, gauntlet ⇄ revise and final each produce a file
+that a person can read, correct and rerun. The first runner of this kind is
+`~/insimul-loops/briefs/console_plan_run.py`, which planned the next Insimul feature set on 2026-10-23.
 
-It follows chief's direction: chief is a **thin project-management layer** over Claude Code (and Codex,
-OpenCode…). Chief owns the prompts, the budgets, the run record, the sequencing and the gates; **inside
-a phase, Claude Code manages its own agents and worktrees**. Chief does not spin up per-story agents
-itself for a console run.
+**Chief observes a console run; it does not schedule one.** This follows
+[Chief observes native coding harnesses first](../decisions/native-harness-observer-first.md): the
+native harness owns sessions, agents, context and its own loop, and Chief discovers and correlates
+that work read-only through the [observation contracts](../../packages/contracts/README.md). The runner
+owns its phases, budgets and prompts. Chief supplies the prompt templates (`templates/console/`) and the
+contract the runner emits (below). A `chief console` command that starts the runner is a **compatibility
+path**, like `chief run`: a convenience for starting the run from Chief. It does not move the loop into
+Chief. Built by `129-chief-console` (not yet run).
 
-## Why `claude -p` can carry real work, and what it cannot do
+> **Naming.** *Console* here means the Claude Console, the organization that holds the API credits. It
+> is unrelated to the **portfolio console** (`apps/portfolio`, Chief's read-only observatory UI). This
+> document says *console run* throughout. Renaming the command or the runner is the operator's call.
 
-`claude -p` is the full Claude Code agent loop with the interactive shell removed: it reads, greps,
-edits, writes, runs Bash and tests, spawns subagents, loads `CLAUDE.md`, settings, MCP servers, skills
-and hooks, and can work in its own git worktree. So a console run can **plan and execute**. What print
-mode lacks is a person mid-run: no permission prompts (anything not pre-authorised is denied), no
-steering, one prompt and one result per call. The design supplies what that person would:
+## Why the Agent SDK, and what it cannot do
+
+The operator's promotional API credit applies to the Agent SDK, the API, Batch, the Playground and Managed
+Agents, **but not to Claude Code itself** (checked 2026-10-23). The Agent SDK runs the same agent loop as
+Claude Code (read, grep, tools, subagents, `CLAUDE.md`, settings), so a console run uses the SDK.
+
+There is no person in the loop mid-run: anything not pre-authorised is denied, nobody steers, and each call
+takes one prompt and returns one result. The runner supplies what that person would do:
 
 | A person would… | A console run instead… |
 |---|---|
-| approve each edit or command | pre-authorises per phase: read-only phases get `--allowedTools Read,Glob,Grep`; builders get `--permission-mode acceptEdits` plus a scoped `--allowedTools` (e.g. `Bash(git:*)`, `Bash(npm test:*)`), or `bypassPermissions` only inside a disposable worktree |
-| stop a run that wanders | caps every call with `--max-budget-usd` (Claude Code 2.1.304 has no `--max-turns`; the dollar cap is the bound) and keeps phases short |
-| read the result and decide | asks critics for a verdict in a fixed shape (`--json-schema`) and loops on it, with a round cap |
-| keep the thread | writes every phase to a file; uses `--output-format json` + `--resume <session>` only where a phase needs its own earlier context |
+| approve each edit or command | pre-authorises per phase through the SDK options: read-only phases get `allowed_tools=["Read","Glob","Grep", read-only git]` with `permission_mode="default"` (everything else is denied); a builder gets `permission_mode="acceptEdits"` plus a scoped `allowed_tools` (e.g. `Bash(git:*)`, `Bash(npm test:*)`), and only inside a disposable worktree |
+| stop a run that wanders | bounds every call with `max_turns`, and applies **the runner's own dollar cap**: before each call it checks that the money spent so far plus that phase's cap stays under the run budget, and refuses the call if not; spend comes from each result's `total_cost_usd` |
+| read the result and decide | asks critics for a verdict in a fixed JSON shape, parses it, and loops on it, with a round cap |
+| keep the thread | writes every phase to a file; a later phase reads the files, not a session's memory |
 
-Flags verified against Claude Code **2.1.304**: `--max-budget-usd`, `--allowedTools`/`--disallowedTools`,
-`--permission-mode` (`acceptEdits`, `auto`, `bypassPermissions`, `manual`), `-w/--worktree`,
-`--json-schema`, `--output-format`, `--resume`, `--agents`, `--settings`, `--add-dir`, `--model`,
-`--fallback-model`, `--append-system-prompt`, `--mcp-config`, `--bare`. Re-check them when Claude Code
-updates; `chief console --check` prints the installed version and refuses a flag it does not offer.
+| SDK option (`ClaudeAgentOptions`) | Use in a console run |
+|---|---|
+| `allowed_tools` | the phase's tool list: read-only phases `Read`, `Glob`, `Grep` and read-only git (`git show`, `log`, `ls-tree`, `grep`, `diff`); builders add scoped edit and test tools |
+| `permission_mode` | `default` for read-only phases (tools outside the list are denied); `acceptEdits` for a builder in its own worktree |
+| `max_turns` | per phase (the first runner: map 60, synthesize 30, plan 80, critic 50, revise 60, final 20) |
+| `cwd` | the subsystem being mapped, the run directory, or the builder's worktree |
+| `add_dirs` | the other repos the agents may read |
+| `model` | per phase: sonnet for map and synthesize, opus for plan, critics, revise and final |
+
+Re-check these against the installed `claude-agent-sdk` when it updates (the first runner used 0.2.173).
+
+**Agents return documents; the runner writes the files.** Read-only phases have no write tool. Each
+prompt ends with an instruction to put the file's complete content in the final answer, split by
+markers (`=== PLAN ===`, `=== ROADMAP ===`, `=== DECISIONS ===`), and the runner writes them under the run
+directory. A template's "return X" means exactly that.
 
 ## Billing without leaking a key
 
-API credits apply when Claude Code authenticates with the Console organization. **Never export
-`ANTHROPIC_API_KEY` in a shell profile**: every process started from that shell inherits it — including
-other loops' editors and their own `claude` children, which some loops forbid (the Insimul loops check
-that no model key exists in an editor's process tree). A console run instead uses one of:
+**Never export `ANTHROPIC_API_KEY` in a shell profile.** Every process started from that shell inherits it,
+including other loops' editors and their own `claude` children, which some loops forbid (the Insimul
+loops check that no model key exists in an editor's process tree). A console run uses one of:
 
 1. **A dedicated config directory** (preferred): `CLAUDE_CONFIG_DIR=~/.chief/claude-console`, signed in
-   once with `claude /login` → *Anthropic Console account* → the organization holding the credits.
-   Chief sets `CLAUDE_CONFIG_DIR` only on the `claude -p` processes it starts.
-2. **`--settings` with an `apiKeyHelper`** that reads the key from the macOS Keychain at call time.
-
-`--account console|subscription` selects which; `console` is the default for console runs. Chief records
-the spend per phase from `--output-format json`'s cost field into the run record, and `chief usage`
-reports it with the rest.
+   once (`claude /login` → *Anthropic Console account* → the organization holding the credits). The
+   variable is set only on the runner's command line (`CLAUDE_CONFIG_DIR=… uv run --with claude-agent-sdk
+   python <runner>`), so the SDK process and its children see it and the shell does not.
+2. **A key from the macOS Keychain**, read at start and passed only to the SDK process (in the `env`
+   the runner hands the SDK). It is never written to a file, a log or the manifest, and never printed.
 
 ## Phases
 
-```
+```text
 brief ──► MAP (fan-out) ──► SYNTHESIZE ──► PLAN ──► GAUNTLET ⇄ REVISE ──► FINAL ──► [EXECUTE]
           sonnet, R/O        sonnet         opus      opus critics, R/O      opus       builder ⇄ critic
           one per subsystem  maps only      + checks  one per lens          + gen     per milestone
 ```
 
-| Phase | Reads | Writes | Tools | Default model · budget |
+| Phase | Reads | Returns (the runner writes) | Tools | Default model · cap |
 |---|---|---|---|---|
-| **map** | the code of one subsystem (from `--subsystems`, or a quick discovery call) | `map/<subsystem>.md` in the research-phase format (`docs/research-phase.md`): purpose, key types, data flow, extension points, coupling, fragile spots, cited paths | Read, Glob, Grep | sonnet · $3 each |
-| **synthesize** | the maps only | `architecture.md`: seams, dependencies, constraints, open questions | Read | sonnet · $5 |
-| **plan** | architecture + brief; may open specific files to check a claim | `plan.md` (components, data-model and API changes, sequencing, risks, acceptance criteria per milestone) and `roadmap.json` in `chief gen`'s input contract | Read, Glob, Grep | opus · $15 |
-| **gauntlet** | plan + architecture + the code | `critic/<lens>-r<n>.json` (verdict schema below) | Read, Glob, Grep | opus · $4 per lens |
-| **revise** | plan + every critic verdict of the round | the next `plan.md`, plus `decisions.md` entries: each change the critics forced and each finding disputed, with evidence | Read, Glob, Grep | opus · $10 |
-| **final** | the last plan and verdicts | `final/plan.md`, `final/decisions.md`, `final/roadmap.json`; runs `chief gen -n` on it to prove it generates valid tasklists | Read, Bash(chief gen:*) | opus · $5 |
-| **execute** *(opt-in)* | one generated tasklist | a branch in its own worktree; `build/<NN>/round-<n>/report.md` | builder: Read, Edit, Write, scoped Bash, worktree; critic: read-only + the repo's tests | builder opus · $10, critic opus · $5, per round |
+| **map** | the code of one subsystem | `map/<subsystem>.md` in the research-phase format (`docs/research-phase.md`) | Read, Glob, Grep, read-only git | sonnet · $3–6 each |
+| **synthesize** | the maps only | `architecture.md`: seams, dependencies, constraints, open questions | Read | sonnet · $5–8 |
+| **plan** | architecture + brief; may open files to check a claim | `plan.md` and `roadmap.json` in `chief gen`'s input contract | Read, Glob, Grep | opus · $15–20 |
+| **gauntlet** | plan + architecture + the code | one verdict per lens: `critic/<lens>-r<n>.json` | Read, Glob, Grep | opus · $4–8 per lens |
+| **revise** | plan + every verdict of the round | the next `plan.md` and `roadmap.json`, plus `decisions.md` entries | Read, Glob, Grep | opus · $10–15 |
+| **final** | the last plan and verdicts | `final/plan.md`, `final/decisions.md`, `final/roadmap.json`; the **runner** then runs `chief gen -n` on the roadmap and writes `final/chief-gen-check.txt` | Read | opus · $5–8 |
+| **execute** *(opt-in)* | one generated tasklist | a branch in its own worktree; `build/<NN>/round-<n>/report.md` | builder: Read, Edit, Write, scoped Bash; critic: read-only + the repo's tests | builder opus · $10, critic opus · $5, per round |
 
-**Lenses** (each a template under `templates/console/lenses/`, chosen per run with `--lenses`):
-`architecture-fit`, `engine-constraints`, `scope-realism`, `what-breaks`, `licensing-and-data`,
-`security`. A brief can add its own with `--lens-file <file>` (one or more).
+**Lenses** (`templates/console/lenses/`): `architecture-fit`, `engine-constraints`, `scope-realism`,
+`what-breaks`, `licensing-and-data`, `security`; a brief can add its own lens files.
 
-**Critic verdict** (enforced with `--json-schema`):
-`{lens, round, verdict: "pass"|"revise", findings: [{id, severity: "blocker"|"major"|"minor", claim, evidence, suggested_change}], checked: [what was verified against the code]}`.
-The loop stops when every lens passes with no blocker or major, or at `--rounds` (default 3; critiques
-tend to get pickier, not better, after that). Leftover minors go to `decisions.md`.
+**Critic verdict** (parsed by the runner; an unparseable answer becomes one `major` finding):
+`{lens, round, verdict: "pass"|"revise", findings: [{id, severity: "blocker"|"major"|"minor", claim, evidence, suggested_change}], checked: [...]}`.
+The loop stops when every lens passes with no blocker or major, or at the round cap. Leftover minors go to
+`decisions.md`.
 
-**Execute** reuses chief's existing machinery rather than inventing a second one: the final roadmap
-becomes tasklists through `chief gen`; each tasklist is run as **builder ⇄ critic rounds** (zero blocker
-and major, at most five rounds — the same bounded stop rule the Insimul loops use), the builder in its
-own worktree (`claude -p --worktree`), the critic with fresh context. Nothing merges to a base branch;
-merging stays with `chief run`'s serialized merge phase and the operator's go. Heavy commands (engine
-builds, bakes) go through whatever machine lock the target repo declares (`--lock <cmd>`, e.g. the
-Insimul loops' `ui/bin/heavy.sh`), so a console run never fights another loop for the machine.
+**Execute** builds one tasklist that the final roadmap generated (`chief gen`), as **builder ⇄ critic rounds**
+(stop at zero blocker and zero major, or after five rounds — the Insimul loops' rule). The builder runs
+through the SDK in its own worktree; the critic runs read-only with fresh context. **Nothing merges to a
+base branch**: the branch is left for the operator, or for `chief run`'s serialized merge phase on the
+compatibility path. Heavy commands go through the machine lock the target repo declares (e.g. the Insimul
+loops' `ui/bin/heavy.sh`).
 
 ## The run record
 
-```
-<repo>/.chief/console/<run-id>/
-  brief.md  run.json            # inputs, flags, models, budgets, Claude Code version, start/end
+```text
+<run-dir>/                      # e.g. ~/insimul-loops/briefs/runs/2026-10-23-1639
+  brief.md  run.json  log.txt   # inputs, budget, rounds, lenses, subsystems, start; the runner's log
   map/  architecture.md  plan.md  roadmap.json  critic/  decisions.md
-  final/  build/                # execute only
-  cost.json                     # per call: phase, model, session id, usd, tokens
+  final/  build/                # build/ in execute mode only
+  cost.jsonl                    # one line per SDK call: label, model, session_id, usd, tokens, secs
+  loop-run.json                 # the chief.loop-run/v1 observation (below)
 ```
 
-Every phase is resumable: `chief console … --from gauntlet` reuses everything before it; `--rerun map:core`
-redoes one mapper. `--dry-run` prints every prompt and flag and spawns nothing. A run stops before a
-phase whose budget would push the total over `--budget`, and says so.
+Every phase can be resumed: a phase whose file exists is reused, so deleting a file reruns that phase. When
+the budget would be exceeded, the runner stops before the next call and says so. When a call fails, for
+example because the credit runs out, the runner stops and keeps everything written so far.
 
-## Command
+## Emitting the observation contract
 
-```
-chief console <repo>... --brief <file> [--mode plan|execute|plan+execute]
-              [--budget <usd>] [--phase-budget map=3,plan=15,critic=4,...]
-              [--models map=sonnet,plan=opus,critic=opus,build=opus]
-              [--subsystems a,b,c] [--lenses a,b] [--rounds 3]
-              [--lens-file <file>...] [--account console|subscription] [--lock <cmd>]
-              [--from <phase>] [--to <phase>] [--dry-run] [--check]
-```
+So Chief can observe the run without understanding the runner, the runner writes **one
+`chief.loop-run/v1` manifest per run** (`loop-run.json` in the run directory) and rewrites it whenever the
+run stops, finishes or pauses. The records:
 
-Several repos may be named (`--add-dir` gives the agents read access to the others); the run record lives
-in the first.
+| Record | One per | Notes |
+|---|---|---|
+| `chief.loop-run/v1` | run | `id` like `console:<project>:<run-dir-name>`; `status` from the run's state; `runtime` from the log's start and stop times (the gaps between invocations are pauses) |
+| `chief.lane/v1` | run | one lane, stages `map`, `synthesize`, `plan`, `gauntlet`, `revise`, `final` (and `execute` in execute mode); `progress` derived from the stage states |
+| `chief.round/v1` | lens round | each critic verdict is a round of the `gauntlet` stage (`number` = gauntlet round, `phase` = the lens), carrying its finding, session and evidence ids and the verdict's counts in `measurements`; the revisions are rounds of the `revise` stage |
+| `chief.finding/v1` | critic finding | severity `blocker` → `critical` (kind `blocker`), `major` → `major`, `minor` → `minor`; findings of a round that a revision answered are `superseded`, the latest round's are `open` |
+| `chief.native-session/v1` | SDK call | `provider: "claude"`, `attribution: "provider-api"`, `externalId` = the result's `session_id`; cost, session id, tokens, model, turns and seconds under `extensions["anthropic.agent-sdk"]`; linked to its lane, stage and round |
+| `chief.evidence/v1` | phase file | every map, plan, roadmap, verdict, decision log and final file, with its `sha256` |
+
+**Running out of credit is a pause, not a failure.** When a call fails because the credit balance is
+exhausted, the run, its lane and the stage that was running are `paused`. The reason (e.g.
+`API credit exhausted 2026-10-24 00:00 UTC`) goes in `runtime.pauseReasons`. The failed call is a
+`failed` session and a `void` round. Topping up the credit and rerunning resumes the run from that phase.
+
+The runner validates the manifest with Chief's dependency-free validator
+(`collectors/gauntlet/validate_observation.py`: schema plus links and derived counts) **before writing
+it**, and writes nothing if the manifest is invalid. Chief then reads it like any other loop-run manifest.
+The portfolio collector reads the manifests its `loopRuns` setting names (by default Rosetta's private
+data, `portfolio/loop-runs/*.json`), so a run directory outside that path is collected once the
+manifest is copied or linked there, or once the setting also names it. Chief never writes to the run
+directory. Live run data wins over the compendium for execution state
+([observer-first decision](../decisions/native-harness-observer-first.md)).
 
 ## Costs, roughly
 
-A planning run over a workspace the size of Insimul (10–12 subsystems): mappers ≈ $30–36, synthesis ≈ $5,
-plan ≈ $15, three to four lenses over two to three rounds ≈ $25–45, final ≈ $5 — **about $60–100 with
-the defaults**, less with fewer lenses or rounds. Run `map` alone first and check the Console's billing
-page before the rest, to calibrate. Executing a large feature set costs far more than a planning run;
-use execute mode for one milestone at a time.
+Measured on the first run (Insimul, 11 subsystems, 7 lenses, 4 gauntlet rounds, 45 calls): mappers
+$5.80, synthesis $0.53, plan $1.49, critics $12–16 per round, revisions $1.8–2.9 each, final $2.73. The
+total was **$71.75** before the credit ran out at revise round 4. Run `map` alone first and check the
+Console's billing page, to calibrate. Executing a feature set costs far more than planning one; execute
+one milestone at a time.
 
 ## What a console run is not
 
-- Not a replacement for `chief run`: tasklists, the story loop, verification and the merge phase stay
-  where they are; a console run *produces* tasklists and can *build* one, and hands merging back.
+- Not a scheduler inside Chief: the runner owns its loop; Chief observes the manifest it emits.
+- Not a replacement for `chief run`: a console run *produces* tasklists and can *build* one on a branch,
+  and leaves merging to the operator (or to `chief run`'s merge phase).
 - Not a way to steer an agent mid-run: if a phase goes wrong, correct its file and rerun from it.
 - Not a key in your environment: the credential lives in a config directory or the Keychain.
