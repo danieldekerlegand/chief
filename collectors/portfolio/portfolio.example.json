@@ -1,0 +1,30 @@
+{
+  "workspace": {
+    "name": "Development",
+    "root": "~/Development",
+    "output": "apps/portfolio/public/snapshot.json"
+  },
+  "private": {
+    "root": "~/Development/rosetta",
+    "competitors": "strategy/COMPETITORS.md",
+    "ideas": "portfolio/ideas.json",
+    "gauntlets": "<private-compendium-index>",
+    "runs": "portfolio/runs/*.json",
+    "loopRuns": "portfolio/loop-runs/*.json",
+    "research": "portfolio/sources/*.json"
+  },
+  "trackers": [
+    {"kind": "vibe-trackers", "root": "~/vibe-trackers"}
+  ],
+  "observers": {
+    "claude": true,
+    "codexHome": "~/.codex",
+    "chiefRuns": "~/.chief/runs",
+    "trackerRoots": ["~/insimul-loops/trackers", "~/vibe-trackers"],
+    "gitRoots": ["~/Development"]
+  },
+  "scan": {
+    "exclude": ["AutomatedRetailAssociates", "ensemble", "ensemble-author", "danieldekerlegand.github.io"],
+    "roadmap_names": ["ROADMAP.md", "roadmap.md", "Roadmap.md"]
+  }
+}

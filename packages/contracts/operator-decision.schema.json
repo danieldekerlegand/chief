@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/operator-decision.schema.json",
+  "title": "Chief operator decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "status", "title", "question", "requestedAt", "links", "options", "selectedOptionId"],
+  "properties": {
+    "schemaVersion": {"const": "chief.operator-decision/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["pending", "resolved", "withdrawn"]},
+    "title": {"type": "string", "minLength": 1},
+    "question": {"type": "string", "minLength": 1},
+    "requestedAt": {"type": "string", "format": "date-time"},
+    "resolvedAt": {"type": ["string", "null"], "format": "date-time"},
+    "links": {"type": "object", "additionalProperties": false, "properties": {"laneId": {"type": "string"}, "stageId": {"type": "string"}, "roundId": {"type": "string"}}},
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "object", "additionalProperties": false, "required": ["id", "label", "description"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "description": {"type": "string"}}}
+    },
+    "selectedOptionId": {"type": ["string", "null"]},
+    "evidenceIds": {"type": "array", "items": {"type": "string"}},
+    "extensions": {"type": "object"}
+  }
+}

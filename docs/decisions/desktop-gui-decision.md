@@ -24,9 +24,9 @@ desktop/GUI surface deliberately somebody else's?**
 
 ## The decision
 
-**chief is the open, CLI-only tasklist runner. It does not ship a desktop app, and the
-`app/` idea is retired rather than deferred.** A monitoring GUI lives in **chief-cloud**,
-the private control plane, whose Tauri desktop app already builds over its `chiefd`
+**Chief's runner is an open, CLI-only component. It does not require or embed a desktop app.**
+A monitoring GUI lives in Chief's application layer, which incorporates the former
+**chief-cloud** control-plane role and builds over `chiefd`
 daemon.
 
 ## The boundary
@@ -39,8 +39,9 @@ daemon.
 | Process model | **no daemon, no root, no build step** — a run is a shell process tree | a long-lived daemon is the point |
 | Data it emits | the on-disk registry + state, and the machine-readable status stream from `chief/81-machine-readable-status-stream` | consumes both; renders, persists, and adds cost/ledger views |
 
-Read as a sentence: **chief provides the CLI and the data a GUI consumes; chief-cloud
-provides the GUI that consumes it.** There is no third place a monitoring GUI belongs.
+Read as a sentence: **the Chief engine provides the CLI and the data a GUI consumes; Chief
+applications provide the GUI that consumes it.** They share a repository and retain separate
+runtime and dependency boundaries.
 
 ## Why
 

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/native-session.schema.json",
+  "title": "Chief native coding-harness session observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "provider", "status", "observedAt", "attribution", "links"],
+  "properties": {
+    "schemaVersion": {"const": "chief.native-session/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "provider": {"enum": ["claude", "codex", "opencode", "chief", "devin", "amp", "other"]},
+    "externalId": {"type": ["string", "null"]},
+    "status": {"enum": ["discovered", "active", "waiting", "paused", "rate-limited", "complete", "failed", "stopped", "unknown"]},
+    "observedAt": {"type": "string", "format": "date-time"},
+    "attribution": {"enum": ["provider-api", "provider-cli", "hook", "tracker", "operator-report", "inferred"]},
+    "worktree": {"type": ["string", "null"]},
+    "branch": {"type": ["string", "null"]},
+    "links": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["laneId"], "properties": {"laneId": {"type": "string"}, "stageId": {"type": ["string", "null"]}, "roundId": {"type": ["string", "null"]}}}
+    },
+    "extensions": {"type": "object"}
+  }
+}

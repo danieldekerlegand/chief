@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chief Observatory</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="identity">
+        <span class="mark">C</span>
+        <div>
+          <strong>Chief Observatory</strong>
+          <small>Native-agent portfolio monitor</small>
+        </div>
+      </div>
+      <div class="controls">
+        <span id="connection" class="connection checking">Connecting to chiefd…</span>
+        <button id="refresh" type="button">Refresh</button>
+        <label><input id="autostart" type="checkbox" /> Launch at login</label>
+      </div>
+    </header>
+    <section id="offline" class="offline" hidden>
+      <strong>chiefd is not available</strong>
+      <span>Start the local observer on <code>127.0.0.1:4174</code>. The desktop app will reconnect automatically.</span>
+    </section>
+    <iframe id="dashboard" title="Chief portfolio dashboard" src="http://127.0.0.1:4174/"></iframe>
+    <script src="main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/portfolio.schema.json",
+  "title": "Chief portfolio snapshot",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "workspace", "projects", "roadmap", "competitors", "ideas", "runs", "loopRuns", "nativeSessions", "observations", "events", "research", "gauntlets", "sources"],
+  "properties": {
+    "schemaVersion": {"const": "chief.portfolio/v1"},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "workspace": {"type": "object", "required": ["name", "root"], "properties": {"name": {"type": "string"}, "root": {"type": "string"}}},
+    "projects": {"type": "array", "items": {"$ref": "#/$defs/project"}},
+    "roadmap": {"type": "array", "items": {"$ref": "#/$defs/roadmapItem"}},
+    "competitors": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "ideas": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+    "loopRuns": {"type": "array", "items": {"$ref": "loop-run.schema.json"}},
+    "nativeSessions": {"type": "array", "items": {"$ref": "native-session.schema.json"}},
+    "observations": {"type": "array", "items": {"type": "object"}},
+    "events": {"type": "array", "items": {"$ref": "normalized-event.schema.json"}},
+    "research": {"type": "array", "items": {"$ref": "#/$defs/research"}},
+    "gauntlets": {"type": "array", "items": {"$ref": "#/$defs/gauntlet"}},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}}
+  },
+  "$defs": {
+    "project": {
+      "type": "object",
+      "required": ["id", "name", "path", "activity", "roadmap"],
+      "properties": {
+        "id": {"type": "string"}, "name": {"type": "string"}, "path": {"type": "string"},
+        "description": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}},
+        "activity": {"type": "object"}, "roadmap": {"type": "object"}
+      }
+    },
+    "roadmapItem": {"type": "object", "required": ["id", "project", "status", "title", "source"], "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "status": {"enum": ["complete", "active", "planned", "blocked", "unknown"]}, "title": {"type": "string"}, "source": {"type": "string"}, "evidence": {"type": "string"}}},
+    "finding": {"type": "object", "required": ["id", "project", "title", "status", "source"], "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "summary": {"type": "string"}, "source": {"type": "string"}, "url": {"type": "string"}, "features": {"type": "array", "items": {"type": "string"}}}},
+    "run": {"type": "object", "required": ["id", "title", "status", "source"], "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"}, "progress": {"type": ["number", "null"]}, "updated": {"type": "string"}, "summary": {"type": "string"}, "source": {"type": "string"}, "url": {"type": "string"}, "media": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}}},
+    "research": {"type": "object", "required": ["id", "title", "status", "source", "lessons", "actions"], "properties": {"id": {"type": "string"}, "sourceId": {"type": "string"}, "position": {"type": ["integer", "null"]}, "title": {"type": "string"}, "status": {"type": "string"}, "summary": {"type": "string"}, "source": {"type": "string"}, "url": {"type": "string"}, "thumbnail": {"type": "string"}, "durationSeconds": {"type": ["number", "null"]}, "transcript": {"type": "object"}, "lessons": {"type": "array", "items": {"type": "string"}}, "actions": {"type": "array", "items": {"type": "string"}}, "visualReview": {"type": "array", "items": {"type": "string"}}}},
+    "gauntlet": {"type": "object", "required": ["id", "project", "title", "kind", "summary", "status", "approvalRequired", "source"], "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"}, "kind": {"enum": ["existing", "proposed"]}, "summary": {"type": "string"}, "status": {"type": "string"}, "statusText": {"type": "string"}, "proposalOutcome": {"type": "string"}, "priority": {"type": "string"}, "approvalRequired": {"type": "boolean"}, "factsCheckedAt": {"type": "string"}, "refreshedAt": {"type": "string"}, "source": {"type": "string"}, "sourceAnchor": {"type": "string"}, "indexSource": {"type": "string"}}},
+    "evidence": {"type": "object", "required": ["kind", "uri"], "properties": {"kind": {"enum": ["image", "video", "document", "log", "link"]}, "uri": {"type": "string"}, "caption": {"type": "string"}, "sha256": {"type": "string"}, "capturedAt": {"type": "string"}}},
+    "source": {"type": "object", "required": ["id", "kind", "location", "status"], "properties": {"id": {"type": "string"}, "kind": {"type": "string"}, "location": {"type": "string"}, "status": {"type": "string"}, "message": {"type": "string"}}}
+  }
+}

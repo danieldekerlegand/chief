@@ -1,3 +1,5 @@
 .DS_Store
 *.log
 .chief/state/
+collectors/portfolio/portfolio.json
+apps/portfolio/public/snapshot.json

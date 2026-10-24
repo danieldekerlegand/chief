@@ -1,0 +1,18 @@
+{
+  "name": "chief-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*", "collectors/*"],
+  "scripts": {
+    "portfolio:collect": "python3 collectors/portfolio/collect.py",
+    "portfolio:serve": "python3 collectors/portfolio/serve.py",
+    "portfolio:test": "python3 -m unittest discover -s collectors/portfolio/tests",
+    "observe": "python3 -m collectors.observers.collect",
+    "observe:test": "python3 -m unittest discover -s collectors/observers/tests",
+    "chiefd": "python3 -m services.chiefd",
+    "chiefd:test": "python3 -m unittest discover -s services/chiefd/tests",
+    "desktop:check": "npm --prefix apps/desktop run check",
+    "gauntlet:format": "python3 collectors/gauntlet/format.py",
+    "gauntlet:test": "python3 -m unittest discover -s collectors/gauntlet/tests"
+  }
+}

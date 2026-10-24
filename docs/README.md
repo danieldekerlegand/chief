@@ -1,8 +1,9 @@
 # chief documentation
 
-> **Status:** Current · **Updated:** 2026-09-04 · **Owner:** chief
+> **Status:** Current · **Updated:** 2026-10-21 · **Owner:** chief
 
-**chief** is the autonomous tasklist runner every repo in this ecosystem is built with: you write `tasks/chief/*.json` and it drives an agent implement → verify → commit → merge, one story at a time, with worktree isolation.
+**chief** is the local observatory for native agent work across the ecosystem. Its legacy tasklist
+runner remains supported for projects that use Chief as their execution harness.
 
 The map. Structured per the ecosystem documentation standard —
 `rosetta/docs/reference/documentation-standard.md`, cited by path because it lives in
@@ -18,6 +19,7 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 - [The local-inference preset — cost avoidance as a supported mode](guides/local-inference-preset.md)
 - [Monitoring active runs](guides/monitoring.md)
 - [Providers — the onboarding recipe](guides/providers.md)
+- [Gauntlets in Chief — native harness execution and portfolio projection](gauntlet-integration.md)
 
 ## Reference
 
@@ -38,6 +40,10 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 - [Tasklist schema](reference/tasklist-schema.md)
 - [The verify hook (`.chief/verify.sh`)](reference/verify-hook.md)
 - [`chief usage` — cost and rate-limit reporting from the event logs](reference/usage.md)
+- [Chief observability contracts — loop runs, lanes, stages, sessions, decisions, and evidence](../packages/contracts/README.md)
+- [Native observation adapters](reference/native-observation-adapters.md)
+- [Observer-first migration ledger](reference/observer-first-migration.md)
+- [`chiefd` local API, SSE stream, and SQLite history](../services/chiefd/README.md)
 
 ## Explanation
 
@@ -54,6 +60,8 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 *immutable; superseded by a successor, never edited in place*
 
 - [Decision: chief stays CLI-only — the desktop GUI is chief-cloud's](decisions/desktop-gui-decision.md)
+- [Decision: Chief is the development-operations monorepo](decisions/portfolio-monorepo.md)
+- [Decision: Chief observes native coding harnesses first](decisions/native-harness-observer-first.md)
 - [Decision: chief builds the overlap-zone registry; it does not bind a conflict predictor](decisions/conflict-predictor-adoption-decision.md)
 
 ## Archive

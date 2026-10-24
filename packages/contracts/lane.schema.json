@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chief.dev/contracts/lane.schema.json",
+  "title": "Chief gauntlet lane",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "title", "status", "progress", "stages"],
+  "properties": {
+    "schemaVersion": {"const": "chief.lane/v1"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "title": {"type": "string", "minLength": 1},
+    "status": {"enum": ["queued", "active", "paused", "blocked", "complete", "incomplete", "cancelled", "unknown"]},
+    "summary": {"type": "string"},
+    "estimate": {"type": "string"},
+    "dependsOn": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["laneId", "stageId"], "properties": {"laneId": {"type": "string"}, "stageId": {"type": "string"}}}
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "completed", "total", "percent", "passed", "capped"],
+      "properties": {
+        "metric": {"enum": ["passed", "closed"]},
+        "completed": {"type": "integer", "minimum": 0},
+        "total": {"type": "integer", "minimum": 1},
+        "percent": {"type": "number", "minimum": 0, "maximum": 100},
+        "passed": {"type": "integer", "minimum": 0},
+        "capped": {"type": "integer", "minimum": 0}
+      }
+    },
+    "stages": {"type": "array", "minItems": 1, "items": {"$ref": "stage.schema.json"}},
+    "extensions": {"type": "object"}
+  }
+}

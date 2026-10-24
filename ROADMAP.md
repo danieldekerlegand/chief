@@ -1,10 +1,9 @@
 # chief — Roadmap
 
-> The autonomous **tasklist runner** every sibling repo is built with: a stock-Bash engine + CLI
-> that drives an AI coding agent through **implement → verify → commit → merge**, one user story at
-> a time, with git-worktree-isolated parallelism and a serialized merge floor. North star: *turn a
-> tasklist of user stories + acceptance criteria into merged, verified work with no silent bad
-> merges — across any repo, any agent provider.*
+> A local observatory for agentic development across projects and native coding harnesses. North
+> star: *show what is running, paused, blocked, proposed, decided, and proved without reimplementing
+> Claude Code, Codex, OpenCode, or their worktree and agent managers.* The stock-Bash tasklist runner
+> remains a supported compatibility engine with its existing merge guarantees.
 
 **Status:** Shipping & self-hosting (**v0.9.42** — [`VERSION`](VERSION) is the source of truth; this
 line is checked against it by `test/doc-sync.sh`) — the built program is **48/48 tasklists merged**
@@ -14,25 +13,47 @@ tasklist is live** — `123`, a `fix` authored 2026-09-11 (a conflict resolution
 work) — and the merge-policy approval-flow rework is still a planned row with no tasklist ·
 **Last updated:** 2026-09-11
 
-This is the single canonical roadmap. Chief is a tool, not a product, and is **self-hosting** — its
+This is the single canonical roadmap. Chief is a development-operations tool and is **self-hosting** — its
 own work is driven by chief against tasklists in [`tasks/chief/`](tasks/chief/); this file tracks
 shipped capabilities vs. planned harness improvements and maps them to those tasklist IDs.
 
 ---
 
+## Development-operations monorepo — 🚧 active
+
+The runner remains a dependency-free package. Reusable Chief Cloud and Rosetta capabilities now
+converge here as observer applications, contracts, and collectors; private workspace data stays in
+a separately configured source. The boundary and migration rules are recorded in
+[`docs/decisions/portfolio-monorepo.md`](docs/decisions/portfolio-monorepo.md).
+
+| Status | Milestone | Evidence |
+|---|---|---|
+| ✅ | Observer-first product boundary supersedes the execution-first gauntlet path while preserving the legacy runner | `docs/decisions/native-harness-observer-first.md` |
+| ✅ | Versioned gauntlet telemetry contracts and the current two-lane Insimul reference run | `packages/contracts`, `packages/contracts/fixtures/insimul-current-lanes.json` |
+| ✅ | Read-only Claude Code, Codex, legacy Chief, tracker, and Git adapters with explicit unknown/freshness semantics | `collectors/observers` |
+| ✅ | Local `chiefd` API, SSE updates, and durable SQLite history | `services/chiefd` |
+| ✅ | Live observatory UI for loops, decisions, backlog, projects, roadmaps, history, research, and sources | `apps/portfolio` |
+| ✅ | Installable macOS/Linux Tauri tray shell with autostart and notifications | `apps/desktop` |
+| ⬜ | Import the former Chief Cloud control plane behind the engine's existing event and account seams | migration inventory required before source movement |
+| ⬜ | Extract Rosetta's reusable competitor watch and source adapters while preserving its private strategy as workspace data | compatibility collector reads Rosetta in place first |
+| ⬜ | Emit OpenTelemetry-compatible run signals and add optional trace-backend adapters | preserve Chief NDJSON as the local source contract |
+| ⬜ | Make evidence manifests first-class for screenshots, video, logs, documents, hashes, and object-storage references | `packages/contracts/portfolio.schema.json` seeds the record |
+
+---
+
 ## Vision & Scope
 
-Chief is the **harness**, not a product. You write a tasklist — an ordered list of `userStories`,
-each with explicit `acceptanceCriteria` — and chief loops fresh agent instances through them:
-implement one story, run the project's `verify.sh` gate, commit, flip `passes:true`, repeat, then
-rebase → re-verify → merge the branch onto the base. Independent tasklists run concurrently, each in
-its own git worktree, gated by a dependency + conflict-domain scheduler.
+Chief is primarily the observation and portfolio layer around native coding harnesses. It discovers
+sessions it did not launch and records only facts each source can support. Definitions, observed
+runs, provider sessions, decisions, and evidence remain separate records. The legacy tasklist runner
+continues to loop fresh agent instances through verified work for projects that already use it.
 
 **In scope:** the project-agnostic engine (driver/scheduler, per-tasklist agent loop, worktree
 isolation, the safe merge floor, the host-wide run monitor), the `chief` CLI, `chief init`
-scaffolding templates, multi-provider agent support, and the hermetic test suite.
-**Out of scope:** product or ecosystem logic (chief runs *other* repos' tasklists; it never
-implements their work) and contract definitions (those live in `koine`).
+scaffolding templates, multi-provider agent support, the hermetic test suite, and optional
+development-operations applications and read-only collectors over the engine's data contracts.
+**Out of scope:** product or ecosystem implementation work. Chief observes other repositories and
+may run their explicitly selected legacy tasklists; it does not implement their product logic.
 
 ## Current State
 
@@ -270,7 +291,7 @@ heading is the two **continuous** bars, which are upkeep and never become taskli
 | Status | Milestone | Tasklist |
 |---|---|---|
 | ✅ | Rebase-refusal vs. real content-conflict disambiguation — the merge phase used to label **any** non-zero `git rebase` as `REBASE-CONFLICT`, so a worktree that merely *refused* / was dirty-or-locked masqueraded as a content collision; the two are now distinguished and a branch is not parked on a false positive · S/M | `chief/78-rebase-refusal-vs-conflict-disambiguation` · `b1303ce` |
-| ✅ | Desktop monitor-app decision — **decided: chief is CLI-only.** No desktop app is planned or referenced here; the GUI monitoring surface (and any cross-host view) is chief-cloud's Tauri app over `chiefd`, which consumes chief's run registry + the `81` status stream. Rationale + reversal clause in [`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md) · S (decision) | `chief/79-desktop-monitor-app-decision` · `0bca7f1` |
+| ✅ | Desktop monitor-app decision — **superseded for the application layer.** The Bash runner remains CLI-only; the observer-first successor permits this monorepo's Tauri observatory over `chiefd`. The original rationale remains in [`docs/decisions/desktop-gui-decision.md`](docs/decisions/desktop-gui-decision.md) and the reversal is recorded in [`docs/decisions/native-harness-observer-first.md`](docs/decisions/native-harness-observer-first.md). | `chief/79-desktop-monitor-app-decision` · `0bca7f1` |
 | ✅ | Provider onboarding harness — [`docs/guides/providers.md`](docs/guides/providers.md) is the 10-item onboarding recipe, and `test/provider-conformance.sh` is the roster-driven scripted-fake harness (argv · prompt channel · model stance · completion, plus a drift guard over both validator lists), so a new agent CLI = one `_run_provider` dispatch case + one `ROSTER` line. **Amp settled: promoted**, first-class on every surface, with `--model` refused rather than ignored · S/M | `chief/85-provider-onboarding-harness` · `f5cc21d` |
 | ✅ | Doc-sync gate — a grep-based, hermetic verify/CI check asserting README's version string == `VERSION` and the README command table covers every `bin/chief` subcommand (the exact drift class re-synced by hand on 2026-08-11, commit `995263c`). Extended in `114` to cover this file · S | `chief/86-doc-sync-gate` · `cb543cd` |
 | 🚧 | Provider breadth — the multi-provider seam dispatches Claude / Devin / OpenCode / Amp / Codex, **all five first-class** (dispatch case · both validators · shorthand · `chief models` · conformance fixture); Amp takes no `--model` (its CLI has no selector, so chief refuses it). Keeping the `--provider` roster + model lists current as agent CLIs evolve is ongoing | — |
