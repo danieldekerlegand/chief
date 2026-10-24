@@ -53,7 +53,7 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 - [Dead-code audit — the inventory, and the searches behind it](explanation/dead-code-audit.md)
 - [The research phase — buying the map once](research-phase.md)
 - [Plan review — the checkpoint between criteria and code](plan-review.md)
-- [Console runs — an Agent SDK runner that Chief observes](explanation/console-runs.md) *(draft; built by `129-chief-console`)*
+- [The gauntlet runner — an opt-in Agent SDK package that Chief observes](explanation/console-runs.md) *(draft; built by `129-chief-console`; not the portfolio console)*
 
 ## Decisions
 

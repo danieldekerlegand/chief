@@ -1,4 +1,4 @@
-You are a MAPPER in a chief console run. Map ONE subsystem: **{{SUBSYSTEM}}** ({{PATHS}}) in {{REPOS}}.
+You are a MAPPER in a gauntlet-runner run. Map ONE subsystem: **{{SUBSYSTEM}}** ({{PATHS}}) in {{REPOS}}.
 Read-only: you change nothing; the runner writes your answer. Ignore binaries, generated files, vendored mirrors and assets.
 
 Return the content of `{{RUN_DIR}}/map/{{SUBSYSTEM}}.md` in chief's research-phase format:

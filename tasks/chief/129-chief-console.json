@@ -3,10 +3,9 @@
   "branchName": "chief/129-chief-console",
   "category": "feature",
   "dependsOn": [],
-  "description": "A CONSOLE RUN is an Agent SDK NATIVE RUNNER that Chief OBSERVES, not a scheduler inside Chief (docs/decisions/native-harness-observer-first.md). A generic runner on the Claude Agent SDK, modelled on ~/insimul-loops/briefs/console_plan_run.py, drives map -> synthesize -> plan -> gauntlet <-> revise -> final (and optionally execute) over one or more repos, billed to a Claude Console organization's API credits (the promotional credit covers the Agent SDK and the API, not Claude Code). Agents return documents and the runner writes every phase to a file you can read, correct and rerun; it emits one chief.loop-run/v1 manifest per run, validated by collectors/gauntlet/validate_observation.py, which Chief's collectors read like any other observation. `chief console` is a compatibility launcher for the runner (like `chief run`); it never owns the loop. Design: docs/explanation/console-runs.md; prompts: templates/console/. Execute mode builds on a branch in a worktree and never merges.",
+  "description": "The GAUNTLET RUNNER is an OPT-IN PACKAGE (apps/console-run) that runs ON ITS OWN on the Claude Agent SDK and that Chief OBSERVES through the gauntlet observation contract; it is not a scheduler inside Chief and NOT a `chief` command (docs/decisions/native-harness-observer-first.md; operator ruling U30, 2026-10-23). There is no `chief console` subcommand, launcher or otherwise: bin/chief does not know the package exists and install.sh does not install it. Modelled on ~/insimul-loops/briefs/console_plan_run.py, it drives map -> synthesize -> plan -> gauntlet <-> revise -> final (and optionally execute) over one or more repos, billed to a Claude Console organization's API credits (the promotional credit covers the Agent SDK and the API, not Claude Code), and is invoked through its own entry point: `uv run --project apps/console-run gauntlet-runner <repo>... --brief <file>`. Agents return documents and the runner writes every phase to a file you can read, correct and rerun; it emits one chief.loop-run/v1 manifest per run, validated by collectors/gauntlet/validate_observation.py, which Chief's collectors read like any other observation. Not to be confused with the portfolio console (apps/portfolio), Chief's read-only observatory UI, which shows these runs and never starts one. Design: docs/explanation/console-runs.md; prompts: templates/console/. Execute mode builds on a branch in a worktree and never merges. The stem keeps its original name (129-chief-console).",
   "iters": 16,
   "touches": [
-    "bin",
     "apps/console-run",
     "templates",
     "docs",
@@ -23,12 +22,12 @@
   "userStories": [
     {
       "id": "US-1",
-      "title": "`chief console --dry-run` prints every phase's prompt and SDK options and calls nothing",
-      "description": "The runner (apps/console-run/) and its compatibility launcher, with no model call and no SDK import needed.",
+      "title": "`gauntlet-runner --dry-run` prints every phase's prompt and SDK options and calls nothing",
+      "description": "The opt-in package (apps/console-run/) and its own entry point, with no model call and no SDK import needed. No `chief` subcommand is added.",
       "acceptanceCriteria": [
-        "`bin/chief console <repo>... --brief <file> --dry-run` starts the runner, which fills each template under templates/console/ (every {{NAME}} from its README's table) and prints, per phase, the prompt and the exact ClaudeAgentOptions it would pass (model, allowed_tools, permission_mode, max_turns, cwd, add_dirs) and the phase's dollar cap, without importing or calling the SDK.",
+        "`uv run --project apps/console-run gauntlet-runner <repo>... --brief <file> --dry-run` fills each template under templates/console/ (every {{NAME}} from its README's table) and prints, per phase, the prompt and the exact ClaudeAgentOptions it would pass (model, allowed_tools, permission_mode, max_turns, cwd, add_dirs) and the phase's dollar cap, without importing or calling the SDK.",
         "A template left with an unfilled `{{` makes the run exit non-zero naming the placeholder (test/console-dry-run.sh).",
-        "README's command table and docs/reference list the command as a compatibility launcher for a native runner; the docs gate passes."
+        "bin/chief gains no subcommand and install.sh installs nothing from apps/console-run (asserted in test/console-dry-run.sh); apps/console-run/README.md documents the package as opt-in and its invocation; the docs gate passes."
       ],
       "notes": "",
       "passes": false
@@ -38,8 +37,8 @@
       "title": "The credential never reaches a shell environment",
       "description": "Billing to the Console organization without exporting ANTHROPIC_API_KEY.",
       "acceptanceCriteria": [
-        "The runner authenticates through CLAUDE_CONFIG_DIR (default ~/.chief/claude-console, a Console sign-in) set only on the SDK process, or a key read from the macOS Keychain and passed only in the env the runner hands the SDK; `chief console --check` reports which credential source is active without printing any secret.",
-        "A test proves the parent shell's environment is unchanged after a run, that no *_API_KEY variable is set in the launcher's own process, and that no key appears in run.json, cost.jsonl, log.txt or loop-run.json (test/console-credential.sh)."
+        "The runner authenticates through CLAUDE_CONFIG_DIR (default ~/.chief/claude-console, a Console sign-in) set only on the SDK process, or a key read from the macOS Keychain and passed only in the env the runner hands the SDK; `gauntlet-runner --check` reports which credential source is active without printing any secret.",
+        "A test proves the parent shell's environment is unchanged after a run, that no *_API_KEY variable is set in the shell that invoked the runner, and that no key appears in run.json, cost.jsonl, log.txt or loop-run.json (test/console-credential.sh)."
       ],
       "notes": "",
       "passes": false

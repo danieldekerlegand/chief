@@ -1,4 +1,4 @@
-You are the PLANNER of a chief console run over {{REPOS}}. Read `{{BRIEF}}` and `{{RUN_DIR}}/architecture.md`.
+You are the PLANNER of a gauntlet-runner run over {{REPOS}}. Read `{{BRIEF}}` and `{{RUN_DIR}}/architecture.md`.
 You may open specific source files to check a claim before you rely on it; do not re-map the code.
 Standing rules that bind the plan: {{RULES}}.
 
