@@ -51,6 +51,7 @@ a sibling repository and no relative link to it resolves from a chief worktree �
 
 - [Drivers, scheduling, and the safety model](explanation/drivers-and-safety.md)
 - [Dead-code audit — the inventory, and the searches behind it](explanation/dead-code-audit.md)
+- [Portable gauntlet observations across native harnesses](explanation/portable-gauntlet-observation.md)
 - [The research phase — buying the map once](research-phase.md)
 - [Plan review — the checkpoint between criteria and code](plan-review.md)
 - [The gauntlet runner — an opt-in Agent SDK package that Chief observes](explanation/console-runs.md) *(draft; built by `129-chief-console`; not the portfolio console)*
