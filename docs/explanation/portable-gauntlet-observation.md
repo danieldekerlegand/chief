@@ -115,7 +115,6 @@ Questions for the operator:
 2. How should the required `runtime.activeSeconds` be handled for sources that do not measure
    active time: retain those as generic tracker observations, or separately approve a contract
    change/approximation rule?
-3. Should Phase 2 begin only after the source survey and these record semantics are approved?
 
 This is a Phase 1 design only. It adds no adapter, UI, runtime behavior, contract change, session
 provider, or synchronization service. It does not change existing loop files or execute a
